@@ -106,7 +106,7 @@ def assist_harness(tmp_path: Path, monkeypatch) -> AssistHarness:
     monkeypatch.setattr(cli_module, "IntentRouter", StubRouter)
     monkeypatch.chdir(repo_root)
 
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     return AssistHarness(repo_root=repo_root, runner=runner, _rules=router_rules, _client_ref=client_ref)
 
 
