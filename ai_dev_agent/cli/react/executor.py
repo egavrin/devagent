@@ -7,7 +7,7 @@ import os
 import time
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Set
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
 import click
 
@@ -48,6 +48,48 @@ from ai_dev_agent.providers.llm.base import Message
 from ..analysis.formatting import _format_enhanced_tool_log
 from ..analysis.research import _handle_question_without_llm
 from ..router import IntentDecision, IntentRouter as _DEFAULT_INTENT_ROUTER
+
+
+def _is_truthy(value: str | None) -> bool:
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if not normalized:
+        return False
+    return normalized not in {"0", "false", "off", "no"}
+
+
+_DEBUG_CONTEXT_ENABLED = _is_truthy(os.getenv("DEVAGENT_DEBUG_REACT_CONTEXT"))
+
+
+def _format_message_preview(message: Message, *, limit: int = 200) -> str:
+    content = message.content
+    if content is None:
+        preview = "<no content>"
+    else:
+        preview = str(content).strip()
+        if len(preview) > limit:
+            preview = preview[: limit - 1] + "…"
+
+    suffix_parts: List[str] = []
+    if message.tool_call_id:
+        suffix_parts.append(f"call_id={message.tool_call_id}")
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        suffix_parts.append(f"tool_calls={len(tool_calls)}")
+    suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
+    return f"[{message.role}] {preview}{suffix}"
+
+
+def _emit_context_snapshot(messages: Sequence[Message], iteration: int) -> None:
+    if not _DEBUG_CONTEXT_ENABLED:
+        return
+
+    iteration_label = "initial context" if iteration == 0 else f"iteration {iteration}"
+    click.echo(f"\n🔎 [debug] ReAct context snapshot before {iteration_label}:")
+    for index, msg in enumerate(messages, start=1):
+        click.echo(f"   {index:02d}. {_format_message_preview(msg)}")
+
 
 
 def _resolve_intent_router():
@@ -371,6 +413,8 @@ def _execute_react_assistant(
             max_history_turns,
         )
 
+    _emit_context_snapshot(messages, 0)
+
     iteration = 0
     tool_history: List[str] = []
     has_symbol_index = False
@@ -397,6 +441,8 @@ def _execute_react_assistant(
         try:
             sanitized_to_entry: Dict[str, Dict[str, Any]] = {}
             sanitized_to_canonical: Dict[str, str] = {}
+
+            _emit_context_snapshot(messages, iteration)
 
             for entry in available_tools:
                 fn = entry.get("function", {})
