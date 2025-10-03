@@ -4,6 +4,16 @@ from ai_dev_agent.session.context_service import ContextPruningConfig, ContextPr
 from ai_dev_agent.session.models import Session
 
 
+class _StubSummarizer:
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.calls = 0
+
+    def summarize(self, messages, *, max_chars: int):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        return self.response[:max_chars]
+
+
 def _make_heavy_messages(count: int) -> list[Message]:
     payload = "x" * 400  # 100 token-equivalent characters per message
     messages: list[Message] = []
@@ -112,3 +122,32 @@ def test_orphan_tool_message_removed() -> None:
 
     sanitized = service._sanitize_tool_sequences(orphan_messages)
     assert not sanitized
+
+
+def test_custom_summarizer_is_used() -> None:
+    session = Session(id="llm-summary")
+    with session.lock:
+        session.history.extend(_make_heavy_messages(8))
+
+    stub = _StubSummarizer("Important summary from LLM")
+    service = ContextPruningService(
+        ContextPruningConfig(
+            max_total_tokens=600,
+            trigger_tokens=400,
+            keep_recent_messages=4,
+            summary_max_chars=120,
+        ),
+        summarizer=stub,
+    )
+
+    service.update_session(session)
+
+    assert stub.calls >= 1
+    with session.lock:
+        summary_messages = [
+            msg.content or ""
+            for msg in session.history
+            if msg.content and msg.content.startswith("[Context summary]")
+        ]
+        assert summary_messages, "Expected summary message"
+        assert "Important summary from LLM" in summary_messages[0]

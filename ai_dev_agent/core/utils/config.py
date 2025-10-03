@@ -98,6 +98,12 @@ class Settings:
     search_max_results: int = 100
     disable_context_pruner: bool = False
     always_use_planning: bool = False
+    context_pruner_max_total_tokens: int = 12_000
+    context_pruner_trigger_tokens: Optional[int] = None
+    context_pruner_trigger_ratio: float = 0.8
+    context_pruner_keep_recent_messages: int = 10
+    context_pruner_summary_max_chars: int = 1_200
+    context_pruner_max_event_history: int = 10
 
     def ensure_state_dir(self) -> None:
         """Ensure the directory for the state file exists."""
@@ -161,9 +167,14 @@ def _load_from_env(prefix: str = "DEVAGENT_") -> Dict[str, Any]:
             "keep_last_assistant_messages",
             "fs_read_default_max_lines",
             "search_max_results",
+            "context_pruner_max_total_tokens",
+            "context_pruner_trigger_tokens",
+            "context_pruner_keep_recent_messages",
+            "context_pruner_summary_max_chars",
+            "context_pruner_max_event_history",
         }:
             env[field] = int(value)
-        elif field in {"patch_coverage_target"}:
+        elif field in {"patch_coverage_target", "context_pruner_trigger_ratio"}:
             env[field] = float(value)
         elif field == "shell_session_timeout":
             env[field] = float(value)

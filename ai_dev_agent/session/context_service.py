@@ -1,6 +1,7 @@
 """Lightweight conversation summarization and pruning service."""
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Iterable, List, Mapping, Sequence, Set
@@ -12,6 +13,7 @@ from ai_dev_agent.core.utils.context_budget import (
     estimate_tokens,
     summarize_text,
 )
+from .summarizer import ConversationSummarizer, HeuristicConversationSummarizer
 
 
 SUMMARY_PREFIX = "[Context summary]"
@@ -51,7 +53,12 @@ class ContextPruningEvent:
 class ContextPruningService:
     """Summarize and prune session history when token usage spikes."""
 
-    def __init__(self, config: ContextPruningConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: ContextPruningConfig | None = None,
+        *,
+        summarizer: ConversationSummarizer | None = None,
+    ) -> None:
         self._config = config or ContextPruningConfig()
         headroom = max(int(self._config.max_total_tokens * 0.1), 0)
         keep_last_assistant = max(self._config.keep_recent_messages // 2, 2)
@@ -63,6 +70,17 @@ class ContextPruningService:
             keep_last_assistant=keep_last_assistant,
         )
         self._last_summarized_count = 0
+        self._summarizer = summarizer or HeuristicConversationSummarizer()
+        self._fallback_summarizer = HeuristicConversationSummarizer()
+        self._logger = logging.getLogger(__name__)
+
+    @property
+    def config(self) -> ContextPruningConfig:
+        return self._config
+
+    @property
+    def summarizer(self) -> ConversationSummarizer:
+        return self._summarizer
 
     # ------------------------------------------------------------------
     # Public API
@@ -159,20 +177,29 @@ class ContextPruningService:
         return split_index
 
     def _build_summary(self, messages: Iterable[Message]) -> str:
-        lines: List[str] = []
-        for msg in messages:
-            if not msg.content:
-                continue
-            role = msg.role.capitalize()
-            content = msg.content.strip()
-            if not content:
-                continue
-            lines.append(f"{role}: {content}")
+        message_list = list(messages)
+        try:
+            summary = self._summarizer.summarize(
+                message_list,
+                max_chars=self._config.summary_max_chars,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            self._logger.exception(
+                "Conversation summarizer raised an exception; falling back",
+                exc_info=exc,
+            )
+            summary = self._fallback_summarizer.summarize(
+                message_list,
+                max_chars=self._config.summary_max_chars,
+            )
+        else:
+            if not summary.strip():
+                summary = self._fallback_summarizer.summarize(
+                    message_list,
+                    max_chars=self._config.summary_max_chars,
+                )
 
-        merged = "\n".join(lines)
-        if not merged:
-            return "(no additional context retained)"
-        return summarize_text(merged, self._config.summary_max_chars)
+        return summary
 
     def _is_summary_message(self, message: Message) -> bool:
         if message.role != "assistant":

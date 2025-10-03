@@ -33,6 +33,9 @@ from ai_dev_agent.providers.llm import (
 from ai_dev_agent.tools import ToolContext, registry as tool_registry
 from ai_dev_agent.tools.code.code_edit.tree_sitter_analysis import extract_symbols_from_outline
 from ai_dev_agent.tools.execution.sandbox import SandboxConfig, SandboxExecutor
+from ai_dev_agent.session import SessionManager
+from ai_dev_agent.session.context_service import ContextPruningConfig
+from ai_dev_agent.session.summarizer import LLMConversationSummarizer
 
 LOGGER = get_logger(__name__)
 
@@ -575,6 +578,11 @@ def get_llm_client(ctx: click.Context):
     wrapped_client = BudgetedLLMClient(client, budget_config, disabled=disabled)
     ctx.obj["_raw_llm_client"] = client
     ctx.obj["llm_client"] = wrapped_client
+
+    session_manager = SessionManager.get_instance()
+    pruning_config = _build_context_pruning_config_from_settings(settings)
+    summarizer = LLMConversationSummarizer(wrapped_client)
+    session_manager.configure_context_service(config=pruning_config, summarizer=summarizer)
     return wrapped_client
 
 __all__ = [
@@ -597,3 +605,32 @@ __all__ = [
     "_prompt_yes_no",
     "_record_invocation",
 ]
+
+
+def _build_context_pruning_config_from_settings(settings: Settings) -> ContextPruningConfig:
+    """Translate CLI settings into a context pruning configuration."""
+
+    max_total = max(int(settings.context_pruner_max_total_tokens or 0), 1)
+
+    trigger_tokens = settings.context_pruner_trigger_tokens
+    if trigger_tokens is None:
+        ratio = settings.context_pruner_trigger_ratio
+        if ratio <= 0:
+            ratio = 0.8
+        # Cap within (0, 1] to keep trigger sensible relative to the max budget.
+        ratio = max(min(ratio, 1.0), 0.05)
+        trigger_tokens = int(max_total * ratio)
+
+    trigger_tokens = max(min(int(trigger_tokens), max_total), 1)
+    keep_recent = max(int(settings.context_pruner_keep_recent_messages or 0), 2)
+    summary_max_chars = max(int(settings.context_pruner_summary_max_chars or 0), 1)
+    max_events = max(int(settings.context_pruner_max_event_history or 0), 1)
+
+    return ContextPruningConfig(
+        max_total_tokens=max_total,
+        trigger_tokens=trigger_tokens,
+        keep_recent_messages=keep_recent,
+        summary_max_chars=summary_max_chars,
+        max_event_history=max_events,
+    )
+

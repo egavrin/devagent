@@ -1,0 +1,3 @@
+setuptools>=65
+tree-sitter==0.20.1
+tree-sitter-languages>=1.10

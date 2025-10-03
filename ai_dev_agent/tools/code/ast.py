@@ -1,7 +1,9 @@
 """AST query tool powered by tree-sitter.
 
-This tool gracefully degrades when tree-sitter is not available by returning
-an empty result set instead of failing the entire tool registry import.
+Tree-sitter is a required dependency for this tool. If the shared parser
+manager cannot provide a parser for the requested file we surface a
+user-facing error so the caller can address the missing prerequisite instead
+of silently returning incomplete results.
 """
 from __future__ import annotations
 
@@ -182,13 +184,19 @@ def _run_query_mode(payload: Mapping[str, Any], context: ToolContext) -> Mapping
 
     source = target.read_text(encoding="utf-8", errors="ignore")
     handle = ensure_parser(target, content=source)
-    if handle is None:  # pragma: no cover - optional dependency path
-        return {"mode": "query", "nodes": []}
+    if handle is None:  # pragma: no cover - defensive guard
+        raise RuntimeError(
+            "tree-sitter parser unavailable. Ensure the tree-sitter bindings are installed "
+            "and configured before using ast.query."
+        )
 
     language_name = handle.language
     language_obj = language_object(language_name)
-    if language_obj is None:  # pragma: no cover - optional dependency path
-        return {"mode": "query", "nodes": []}
+    if language_obj is None:  # pragma: no cover - defensive guard
+        raise RuntimeError(
+            f"tree-sitter language '{language_name}' is unavailable. Verify the language "
+            "grammar is built and registered."
+        )
 
     parser = handle.parser
     source_bytes = slice_bytes(source)
@@ -206,8 +214,7 @@ def _run_query_mode(payload: Mapping[str, Any], context: ToolContext) -> Mapping
             validation_msg = f"Used fallback query '{fallback_query}' due to invalid original: {validation_msg}"
         else:
             raise ValueError(
-                f"Invalid query '{original_query}' for language '{language_name}': {validation_msg}. "
-                "If tree-sitter is not installed, try code.search instead."
+                f"Invalid query '{original_query}' for language '{language_name}': {validation_msg}."
             )
 
     try:
@@ -228,8 +235,7 @@ def _run_query_mode(payload: Mapping[str, Any], context: ToolContext) -> Mapping
                 )
         else:
             raise ValueError(
-                f"Invalid query '{corrected_query}' for language '{language_name}': {str(exc)}. "
-                "If tree-sitter is not installed, try code.search instead."
+                f"Invalid query '{corrected_query}' for language '{language_name}': {str(exc)}."
             )
 
     allowed_captures = set(payload.get("captures") or [])

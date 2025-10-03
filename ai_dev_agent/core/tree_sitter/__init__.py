@@ -26,6 +26,33 @@ from .queries import (
 LOGGER = get_logger(__name__)
 
 try:  # Optional dependency – keep imports lazy-friendly
+    try:
+        import distutils  # type: ignore  # noqa: F401 - ensure legacy module exists
+    except ModuleNotFoundError:  # pragma: no cover - Python 3.12 removed distutils
+        # tree-sitter still imports ``distutils`` in its public module. When running
+        # on Python versions where it was removed we shim the module using the
+        # compatibility package exposed by ``setuptools`` so downstream imports
+        # continue to work without requiring users to install anything else.
+        import importlib
+        import sys
+
+        try:
+            _distutils = importlib.import_module("setuptools._distutils")
+        except ModuleNotFoundError:  # pragma: no cover - setuptools missing
+            raise RuntimeError(
+                "setuptools is required to provide the legacy distutils shim used by "
+                "tree-sitter. Install setuptools before importing the agent."
+            ) from None
+        else:
+            sys.modules.setdefault("distutils", _distutils)
+            # Expose the submodules that tree-sitter currently relies on.
+            for _name in ("ccompiler", "errors", "sysconfig"):
+                try:
+                    _mod = importlib.import_module(f"setuptools._distutils.{_name}")
+                except ModuleNotFoundError:  # pragma: no cover - partial shim
+                    continue
+                sys.modules.setdefault(f"distutils.{_name}", _mod)
+
     from tree_sitter import Parser  # type: ignore
     from tree_sitter_languages import get_language, get_parser  # type: ignore
 except Exception:  # pragma: no cover - dependency is optional in production

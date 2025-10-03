@@ -9,6 +9,9 @@ from ai_dev_agent.providers.llm.base import Message
 
 from .models import Session
 from .context_service import ContextPruningConfig, ContextPruningService
+from .summarizer import ConversationSummarizer
+
+_UNSET = object()
 
 
 class SessionManager:
@@ -21,11 +24,30 @@ class SessionManager:
         self._lock = RLock()
         self._context_service = ContextPruningService()
 
-    def configure_context_service(self, config: ContextPruningConfig | None = None) -> None:
-        """Replace the active context pruning configuration."""
+    def configure_context_service(
+        self,
+        config: ContextPruningConfig | None = None,
+        *,
+        summarizer: ConversationSummarizer | None | object = _UNSET,
+    ) -> None:
+        """Replace the active context pruning configuration or summarizer."""
 
         with self._lock:
-            self._context_service = ContextPruningService(config)
+            if config is None and summarizer is _UNSET:
+                self._context_service = ContextPruningService()
+                return
+
+            if config is not None and summarizer is _UNSET:
+                self._context_service = ContextPruningService(config)
+                return
+
+            base_config = config or getattr(self._context_service, "config", None) or ContextPruningConfig()
+            if summarizer is _UNSET:
+                summarizer_to_use = getattr(self._context_service, "summarizer", None)
+            else:
+                summarizer_to_use = summarizer
+
+            self._context_service = ContextPruningService(base_config, summarizer=summarizer_to_use)
 
     @classmethod
     def get_instance(cls) -> "SessionManager":
