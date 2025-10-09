@@ -19,7 +19,7 @@
           },
           "rule_id": {
             "type": "string",
-            "description": "Rule identifier (e.g., ETS001_DOC_PUBLIC_API)"
+            "description": "Rule identifier (e.g., 001_DOC_PUBLIC_API)"
           },
           "message": {
             "type": "string",

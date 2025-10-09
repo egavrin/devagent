@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from ai_dev_agent.agents import AgentRegistry, AgentSpec
 from ai_dev_agent.cli.utils import build_system_context
 from ai_dev_agent.core.utils.config import Settings
 # Tool metadata is registered directly under canonical names
@@ -18,7 +19,6 @@ from ai_dev_agent.tools import (
     FIND,
     GREP,
     SYMBOLS,
-    PARSE_PATCH,
 )
 from ai_dev_agent.session import SessionManager, build_system_messages
 
@@ -45,20 +45,22 @@ class IntentRouter:
         self,
         client: Optional[LLMClient],
         settings: Settings,
+        agent_type: str = "manager",
         tools: Optional[List[Dict[str, Any]]] = None,
         project_profile: Optional[Dict[str, Any]] = None,
         tool_success_history: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.client = client
         self.settings = settings
+        self.agent_spec = AgentRegistry.get(agent_type)
         self._system_context = build_system_context()
-        self.tools = tools or self._build_tool_list(settings)
+        self.tools = tools or self._build_tool_list(settings, self.agent_spec)
         self.project_profile = project_profile or {}
         self.tool_success_history = tool_success_history or {}
         self._session_manager = SessionManager.get_instance()
         self._session_id = f"router-{uuid4()}"
 
-    def _build_tool_list(self, settings: Settings) -> List[Dict[str, Any]]:
+    def _build_tool_list(self, settings: Settings, agent_spec: AgentSpec) -> List[Dict[str, Any]]:
         """Combine core tools with selected registry tools, avoiding duplicates."""
         combined: List[Dict[str, Any]] = []
         used_names: set[str] = set()
@@ -69,20 +71,17 @@ class IntentRouter:
                 used_names.add(name)
             combined.append(entry)
 
-        combined.extend(self._build_registry_tools(settings, used_names))
+        combined.extend(self._build_registry_tools(settings, agent_spec, used_names))
         return combined
 
-    def _build_registry_tools(self, settings: Settings, used_names: set[str]) -> List[Dict[str, Any]]:
-        """Translate registry specs into LLM tool definitions for a safelist."""
-        safelist = [
-            FIND,             # Simple file finding
-            GREP,             # Simple content search
-            SYMBOLS,          # Simple symbol lookup
-            PARSE_PATCH,      # Structured patch parsing
-            READ,
-            RUN,
-            WRITE,
-        ]
+    def _build_registry_tools(self, settings: Settings, agent_spec: AgentSpec, used_names: set[str]) -> List[Dict[str, Any]]:
+        """Translate registry specs into LLM tool definitions filtered by agent's allowed tools."""
+        # Full safelist of all available tools
+        all_tools = [FIND, GREP, SYMBOLS, READ, RUN, WRITE]
+
+        # Filter to only include tools allowed for this agent
+        safelist = [name for name in all_tools if name in agent_spec.tools]
+
         tools: List[Dict[str, Any]] = []
         for name in safelist:
             try:

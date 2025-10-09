@@ -4,16 +4,18 @@ from __future__ import annotations
 import json
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import click
 
+from ai_dev_agent.agents import AgentRegistry
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.core.utils.logger import configure_logging, get_logger
 from ai_dev_agent.tools.execution.shell_session import ShellSessionError, ShellSessionManager
 from ai_dev_agent.session import SessionManager
 
 from .react.executor import _execute_react_assistant
+from .review import run_review
 from .utils import _build_context, get_llm_client, _record_invocation
 
 LOGGER = get_logger(__name__)
@@ -134,6 +136,7 @@ def cli(ctx: click.Context, config_path: Path | None, verbose: bool, plan: bool,
 @click.argument("prompt", nargs=-1)
 @click.option("--plan", "force_plan", is_flag=True, help="Force planning for this query")
 @click.option("--direct", is_flag=True, help="Force direct execution (no planning)")
+@click.option("--agent", default="manager", help="Agent type: manager, reviewer (default: manager)")
 @click.option("--system", help="System prompt extension (string or file path)")
 @click.option("--prompt", "prompt_file", help="User prompt from file or string")
 @click.option("--format", "format_file", help="Output format JSON schema file path")
@@ -143,6 +146,7 @@ def query(
     prompt: Tuple[str, ...],
     force_plan: bool,
     direct: bool,
+    agent: str,
     system: Optional[str],
     prompt_file: Optional[str],
     format_file: Optional[str],
@@ -169,6 +173,11 @@ def query(
 
     if not pending:
         raise click.UsageError("Provide a request for the assistant.")
+
+    # Validate agent type
+    if not AgentRegistry.has_agent(agent):
+        available = ", ".join(AgentRegistry.list_agents())
+        raise click.UsageError(f"Unknown agent type '{agent}'. Available: {available}")
 
     # Resolve system prompt extension (command option > meta > global)
     if system:
@@ -225,8 +234,45 @@ def query(
         ctx, client, settings, pending,
         use_planning=use_planning,
         system_extension=system_extension,
-        format_schema=format_schema
+        format_schema=format_schema,
+        agent_type=agent
     )
+
+
+@cli.command()
+@click.argument("patch_file", type=click.Path(exists=True))
+@click.option("--rule", type=click.Path(exists=True), required=True, help="Path to coding rule file")
+@click.option("--json", "json_output", is_flag=True, help="Output violations as JSON only")
+@click.pass_context
+def review(
+    ctx: click.Context,
+    patch_file: str,
+    rule: str,
+    json_output: bool,
+) -> None:
+    """Review a patch file against a coding rule.
+
+    This is a specialized command that uses the reviewer agent to analyze
+    patches for violations of coding standards or rules.
+
+    Example:
+        devagent review changes.patch --rule rules/jsdoc-required.md
+        devagent review changes.patch --rule rules/jsdoc-required.md --json
+    """
+    settings: Settings = ctx.obj["settings"]
+
+    validated = run_review(
+        ctx,
+        patch_file=patch_file,
+        rule_file=rule,
+        json_output=json_output,
+        settings=settings,
+    )
+
+    if json_output:
+        click.echo(json.dumps(validated, indent=2))
+    else:
+        click.echo(json.dumps(validated, indent=2))
 
 
 @cli.command()

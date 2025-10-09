@@ -9,7 +9,6 @@ from .names import (
     FIND,
     GREP,
     SYMBOLS,
-    PARSE_PATCH,
     ALL_TOOLS,
 )
 
@@ -24,9 +23,6 @@ from . import find as _find  # noqa: F401
 from . import grep as _grep  # noqa: F401
 from . import symbols as _symbols  # noqa: F401
 
-# Import patch analysis tools (registration happens in module)
-from . import patch_analysis as _patch_analysis  # noqa: F401
-
 __all__ = [
     "ToolContext",
     "ToolSpec",
@@ -37,6 +33,5 @@ __all__ = [
     "FIND",
     "GREP",
     "SYMBOLS",
-    "PARSE_PATCH",
     "ALL_TOOLS",
 ]

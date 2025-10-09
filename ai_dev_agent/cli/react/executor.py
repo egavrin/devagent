@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import click
 
+from ai_dev_agent.agents import AgentRegistry
 from ai_dev_agent.cli.handlers import INTENT_HANDLERS
 from ai_dev_agent.cli.utils import (
     _collect_project_structure_outline,
@@ -354,8 +355,17 @@ def _execute_react_assistant(
     use_planning: bool = False,
     system_extension: Optional[str] = None,
     format_schema: Optional[Dict[str, Any]] = None,
-) -> None:
-    """Execute the CLI ReAct loop using the shared engine primitives."""
+    agent_type: str = "manager",
+    suppress_final_output: bool = False,
+    ) -> Dict[str, Any]:
+    """Execute the CLI ReAct loop using the shared engine primitives.
+
+    Returns a dictionary containing:
+        final_message: Raw assistant text from the last iteration (if any)
+        final_json: Parsed JSON payload when format_schema enforced
+        result: RunResult instance summarizing execution
+        printed_final: Whether JSON/text was already emitted to stdout
+    """
 
     start_time = time.time()
     planning_active = bool(use_planning)
@@ -419,6 +429,7 @@ def _execute_react_assistant(
     router = router_cls(
         client,
         settings,
+        agent_type=agent_type,
         project_profile=project_profile,
         tool_success_history=ctx_obj.get("_tool_success_history"),
     )
@@ -460,6 +471,8 @@ def _execute_react_assistant(
         devagent_cfg = load_devagent_yaml()
         ctx.obj["devagent_config"] = devagent_cfg
 
+    agent_spec = AgentRegistry.get(agent_type)
+
     config_cap = getattr(devagent_cfg, "react_iteration_global_cap", None) if devagent_cfg else None
     settings_cap = getattr(settings, "max_iterations", None)
     iteration_cap = (
@@ -482,6 +495,10 @@ def _execute_react_assistant(
     configured_cap = budget_settings.get("max_iterations")
     if isinstance(configured_cap, int) and configured_cap > 0:
         iteration_cap = min(iteration_cap, configured_cap)
+
+    # Apply agent-specific iteration cap
+    if agent_spec and agent_spec.max_iterations > 0:
+        iteration_cap = min(iteration_cap, agent_spec.max_iterations)
 
     phase_thresholds = budget_settings.get("phases")
     warning_settings = budget_settings.get("warnings")
@@ -611,22 +628,10 @@ def _execute_react_assistant(
         if system_extension:
             prompt += f"\n\n# Custom Instructions\n{system_extension}"
 
-        # Add patch analysis guidance when working with patch files
-        # Detect if user is analyzing a .patch file or if schema expects code review violations
-        is_patch_analysis = (
-            ".patch" in user_query.lower() or
-            (format_schema and "violation" in json.dumps(format_schema).lower())
-        )
-
-        if is_patch_analysis:
-            prompt += "\n\n# Patch Analysis Best Practice\n"
-            prompt += "When analyzing .patch files, use parse_patch tool to get complete patch data in ONE call.\n\n"
-            prompt += "Workflow:\n"
-            prompt += "1. Read rule to get 'Applies To' pattern (e.g., 'stdlib/.*\\.ets$')\n"
-            prompt += "2. result = parse_patch(path='file.patch', filter_pattern='...')\n"
-            prompt += "3. Iterate: for file in result['files']: for hunk in file['hunks']: for line in hunk['added_lines']\n"
-            prompt += "4. Check: line['content'] against rule, report with line['line_number']\n\n"
-            prompt += "The parse_patch result contains ALL lines with accurate numbers - don't re-extract with sed/grep.\n"
+        # Add agent-specific system prompt suffix
+        agent_spec = AgentRegistry.get(agent_type)
+        if agent_spec.system_prompt_suffix:
+            prompt += f"\n\n{agent_spec.system_prompt_suffix}"
 
         # Add format schema instructions when present
         if format_schema:
@@ -706,24 +711,27 @@ def _execute_react_assistant(
     _merge_structure_hints_state(ctx.obj, structure_state)
 
     final_message = action_provider.last_response_text()
+    final_json: Optional[Dict[str, Any]] = None
+    printed_final = False
     if final_message:
         # If format schema provided, extract and validate JSON
         if format_schema:
             extracted_json = _extract_json(final_message)
             if extracted_json:
-                if not silent_mode:
+                final_json = extracted_json
+                if not suppress_final_output and not silent_mode:
                     click.echo("")
-                click.echo(json.dumps(extracted_json, indent=2))
+                    click.echo(json.dumps(extracted_json, indent=2))
+                    printed_final = True
             else:
-                # Fallback: output raw message if no valid JSON found
-                if not silent_mode:
-                    click.echo("")
-                    click.echo(final_message)
-                    click.echo("\n⚠️  Warning: Response does not contain valid JSON", err=True)
+                raise click.ClickException(
+                    "Assistant response did not contain valid JSON matching the required schema."
+                )
         else:
-            if not silent_mode:
+            if not suppress_final_output and not silent_mode:
                 click.echo("")
                 click.echo(final_message)
+                printed_final = True
 
     if budget_integration and budget_integration.cost_tracker:
         session = session_manager.get_session(session_id)
@@ -753,3 +761,10 @@ def _execute_react_assistant(
         status_icon = "✅" if execution_completed else "⚠️"
         message = result.stop_reason or ("Completed" if execution_completed else "Execution stopped")
         click.echo(f"\n{status_icon} {message} in {elapsed:.1f}s ({execution_mode})")
+
+    return {
+        "final_message": final_message,
+        "final_json": final_json,
+        "result": result,
+        "printed_final": printed_final,
+    }

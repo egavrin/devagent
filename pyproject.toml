@@ -34,3 +34,9 @@ include = ["ai_dev_agent*"]
 dev = [
   "pytest>=7.4"
 ]
+
+[tool.pytest.ini_options]
+markers = [
+  "integration: marks tests as integration tests (may require external services)",
+  "slow: marks tests as slow running (taking more than 60 seconds)"
+]

@@ -6,10 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from ai_dev_agent.core.utils.logger import get_logger
-from ai_dev_agent.tools.registry import ToolSpec, ToolContext, registry
 
 LOGGER = get_logger(__name__)
-SCHEMA_DIR = Path(__file__).resolve().parent / "schemas" / "tools"
 
 
 class PatchParser:
@@ -46,14 +44,10 @@ class PatchParser:
         files = []
 
         while self.current_line < len(self.lines):
-            file_entry = self._parse_file()
+            # Pass filter to _parse_file for early filtering
+            file_entry = self._parse_file(filter_pattern=filter_pattern)
             if file_entry:
-                # Apply filter if provided
-                if filter_pattern:
-                    if re.search(filter_pattern, file_entry['path']):
-                        files.append(file_entry)
-                else:
-                    files.append(file_entry)
+                files.append(file_entry)
 
         return {
             "patch_info": patch_info,
@@ -77,8 +71,13 @@ class PatchParser:
                 info['message'] = line[9:].strip()
         return info
 
-    def _parse_file(self) -> Optional[Dict[str, Any]]:
-        """Parse a single file's changes."""
+    def _parse_file(self, filter_pattern: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Parse a single file's changes.
+
+        Args:
+            filter_pattern: Optional regex to filter files - if provided and file doesn't match,
+                          hunks are skipped for performance
+        """
         # Find next diff header
         while self.current_line < len(self.lines):
             line = self.lines[self.current_line]
@@ -126,6 +125,16 @@ class PatchParser:
             actual_path = new_path
         else:
             actual_path = new_path
+
+        # Early filtering: if filter provided and file doesn't match, skip hunk parsing
+        if filter_pattern and not re.search(filter_pattern, actual_path):
+            # Skip to next file by reading until next diff header
+            while self.current_line < len(self.lines):
+                line = self.lines[self.current_line]
+                if self.DIFF_HEADER.match(line):
+                    break
+                self.current_line += 1
+            return None  # File filtered out
 
         # Parse all hunks for this file
         hunks = []
@@ -299,105 +308,4 @@ class PatchParser:
         return summary
 
 
-# Tool function for registry
-def parse_patch_handler(payload: Mapping[str, Any], context: ToolContext) -> Dict[str, Any]:
-    """Parse a unified diff patch file into structured data.
-
-    This tool parses unified diff patches (git format-patch, git diff output)
-    into structured JSON showing added/removed lines per file with accurate
-    line numbers. Use this instead of sed/grep for patch analysis.
-
-    Args:
-        payload: Tool input with 'path', optional 'include_context', 'filter_pattern'
-        context: Tool context (provides repo_root, settings, etc.)
-
-    Returns:
-        Dictionary containing:
-        - success: bool
-        - patch_info: commit metadata (if available)
-        - files: list of file changes with hunks and line-by-line diffs
-        - summary: overall statistics
-        - error: error message (if success=False)
-
-    Example:
-        parse_patch(path="changes.patch", filter_pattern="src/.*\\.py$")
-    """
-    path = payload.get("path", "")
-    include_context = payload.get("include_context", False)
-    filter_pattern = payload.get("filter_pattern")
-
-    # Resolve path relative to repo root if needed
-    patch_path = Path(path)
-    if not patch_path.is_absolute():
-        patch_path = context.repo_root / patch_path
-
-    if not patch_path.exists():
-        return {
-            "success": False,
-            "error": f"Patch file not found: {path}",
-            "files": [],
-            "summary": {
-                "total_files": 0,
-                "files_added": 0,
-                "files_modified": 0,
-                "files_deleted": 0,
-                "total_additions": 0,
-                "total_deletions": 0
-            }
-        }
-
-    try:
-        content = patch_path.read_text(encoding='utf-8')
-        parser = PatchParser(content, include_context=include_context)
-        result = parser.parse(filter_pattern=filter_pattern)
-
-        return {
-            "success": True,
-            **result
-        }
-    except Exception as e:
-        LOGGER.exception("Failed to parse patch file: %s", path)
-        return {
-            "success": False,
-            "error": f"Failed to parse patch: {str(e)}",
-            "files": [],
-            "summary": {
-                "total_files": 0,
-                "files_added": 0,
-                "files_modified": 0,
-                "files_deleted": 0,
-                "total_additions": 0,
-                "total_deletions": 0
-            }
-        }
-
-
-# Register the tool
-registry.register(
-    ToolSpec(
-        name="parse_patch",
-        handler=parse_patch_handler,
-        request_schema_path=SCHEMA_DIR / "parse_patch.request.json",
-        response_schema_path=SCHEMA_DIR / "parse_patch.response.json",
-        description=(
-            "Parse unified diff patches into structured JSON with ALL added/removed lines per file "
-            "and accurate line numbers. This tool COMPLETELY PARSES the patch file - no need for additional "
-            "sed/grep commands to extract content.\n\n"
-            "IMPORTANT: This tool returns the COMPLETE content of every added line in the patch, with:\n"
-            "- Exact line numbers in the new file (after patch is applied)\n"
-            "- Full line content including code, documentation, exports, public/private declarations\n"
-            "- File paths, change types (added/modified/deleted), and language detection\n\n"
-            "Use this tool ONCE instead of dozens of sed/grep commands. The returned data contains everything "
-            "you need to analyze the patch - just iterate through files[].hunks[].added_lines[].\n\n"
-            "Examples:\n"
-            "  parse_patch(path='changes.patch') - get ALL lines from ALL files\n"
-            "  parse_patch(path='changes.patch', filter_pattern='stdlib/.*\\.ets$') - only .ets files in stdlib\n"
-            "  parse_patch(path='changes.patch', include_context=True) - include unchanged lines too\n\n"
-            "After calling this tool, you have the complete patch structure - no further extraction needed."
-        ),
-        category="analysis",
-    )
-)
-
-
-__all__ = ["parse_patch_handler", "PatchParser"]
+__all__ = ["PatchParser"]

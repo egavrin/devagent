@@ -1,28 +1,7 @@
-"""Tests for patch analysis tools."""
+"""Tests for patch analysis utilities."""
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
-import pytest
-
-from ai_dev_agent.tools.patch_analysis import PatchParser, parse_patch_handler
-from ai_dev_agent.tools import ToolContext
-from ai_dev_agent.core.utils.config import Settings
-
-
-def parse_patch(path: str, include_context: bool = False, filter_pattern: str = None, ctx: ToolContext = None):
-    """Helper function for tests that wraps parse_patch_handler with simplified signature."""
-    if ctx is None:
-        ctx = ToolContext(repo_root=Path.cwd(), settings=Settings(), sandbox=None, devagent_config=None)
-
-    payload = {"path": path}
-    if include_context:
-        payload["include_context"] = include_context
-    if filter_pattern:
-        payload["filter_pattern"] = filter_pattern
-
-    return parse_patch_handler(payload, ctx)
+from ai_dev_agent.tools.patch_analysis import PatchParser
 
 
 SIMPLE_PATCH = """diff --git a/foo.py b/foo.py
@@ -328,6 +307,16 @@ class TestPatchParser:
 
         assert result['files'] == []
         assert result['summary']['total_files'] == 0
+        assert result['summary']['total_additions'] == 0
+        assert result['summary']['total_deletions'] == 0
+
+    def test_invalid_patch_content(self):
+        """Test parsing content that is not a valid patch."""
+        parser = PatchParser("This is not a patch")
+        result = parser.parse()
+
+        assert result['files'] == []
+        assert result['summary']['total_files'] == 0
 
     def test_line_number_tracking(self):
         """Test that line numbers are correctly tracked."""
@@ -342,102 +331,3 @@ class TestPatchParser:
 
         # Second hunk starts at line 11
         assert hunks[1]['new_start'] == 11
-
-
-class TestParsePatchTool:
-    """Test the parse_patch tool function."""
-
-    def test_parse_patch_from_file(self):
-        """Test parsing a patch from an actual file."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False) as f:
-            f.write(SIMPLE_PATCH)
-            patch_path = f.name
-
-        try:
-            result = parse_patch(patch_path)
-
-            assert result['success'] is True
-            assert len(result['files']) == 1
-            assert result['files'][0]['path'] == 'foo.py'
-        finally:
-            Path(patch_path).unlink()
-
-    def test_parse_patch_file_not_found(self):
-        """Test handling of non-existent patch file."""
-        result = parse_patch("/nonexistent/patch.patch")
-
-        assert result['success'] is False
-        assert 'not found' in result['error'].lower()
-        assert result['files'] == []
-
-    def test_parse_patch_with_filter(self):
-        """Test parse_patch tool with filter pattern."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False) as f:
-            f.write(MULTIPLE_FILES_PATCH)
-            patch_path = f.name
-
-        try:
-            result = parse_patch(patch_path, filter_pattern=r'.*\.js$')
-
-            assert result['success'] is True
-            assert len(result['files']) == 1
-            assert result['files'][0]['path'] == 'file2.js'
-        finally:
-            Path(patch_path).unlink()
-
-    def test_parse_patch_with_context(self):
-        """Test parse_patch tool with context included."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False) as f:
-            f.write(SIMPLE_PATCH)
-            patch_path = f.name
-
-        try:
-            result = parse_patch(patch_path, include_context=True)
-
-            assert result['success'] is True
-            hunk = result['files'][0]['hunks'][0]
-            assert 'context_lines' in hunk
-        finally:
-            Path(patch_path).unlink()
-
-    def test_parse_patch_invalid_content(self):
-        """Test handling of invalid patch content."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False) as f:
-            f.write("This is not a valid patch")
-            patch_path = f.name
-
-        try:
-            # Should not crash, just return empty results
-            result = parse_patch(patch_path)
-
-            assert result['success'] is True
-            assert result['files'] == []
-        finally:
-            Path(patch_path).unlink()
-
-    def test_parse_patch_with_tool_context(self):
-        """Test parse_patch with ToolContext for path resolution."""
-        from ai_dev_agent.tools import ToolContext
-        from ai_dev_agent.core.utils.config import Settings
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            repo_root = Path(tmpdir)
-            patch_file = repo_root / "test.patch"
-            patch_file.write_text(SIMPLE_PATCH)
-
-            ctx = ToolContext(
-                repo_root=repo_root,
-                settings=Settings(),
-                sandbox=None,
-                devagent_config=None
-            )
-
-            # Use relative path - should resolve via context
-            result = parse_patch("test.patch", ctx=ctx)
-
-            assert result['success'] is True
-            assert len(result['files']) == 1
-
-
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])

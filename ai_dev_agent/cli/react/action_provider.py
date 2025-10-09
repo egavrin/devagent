@@ -53,15 +53,16 @@ class LLMActionProvider:
             "temperature": 0.1,
         }
 
-        # When format_schema present and this is final iteration, enforce JSON output
-        if self.format_schema and self._is_final_iteration:
-            # Only use json_object mode for object-rooted schemas
-            # DeepSeek API doesn't support json_schema type, and json_object only works with objects
+        # When format_schema present, set response_format on all iterations
+        # but only switch to text-only mode on final iteration
+        if self.format_schema:
             schema_root_type = self.format_schema.get("type", "object")
             if schema_root_type == "object":
+                # Always request JSON output when schema present
                 llm_kwargs["response_format"] = {"type": "json_object"}
-            # For arrays or other types, rely on prompt-based guidance (no response_format)
 
+        # On final iteration with format_schema, switch to text-only mode
+        if self.format_schema and self._is_final_iteration:
             # Call complete instead of invoke_tools for JSON-only mode
             if self.budget_integration:
                 content = self.budget_integration.execute_with_retry(

@@ -1,0 +1,62 @@
+diff --git a/stdlib/ets/collections/ArrayList.ets b/stdlib/ets/collections/ArrayList.ets
+index abc1234..def5678 100644
+--- a/stdlib/ets/collections/ArrayList.ets
++++ b/stdlib/ets/collections/ArrayList.ets
+@@ -45,6 +45,23 @@ export class ArrayList<T> implements List<T> {
+     return this.data[index];
+   }
+
++  public insert(index: number, element: T): void {
++    if (index < 0 || index > this.size()) {
++      throw new Error("Index out of bounds");
++    }
++    this.data.splice(index, 0, element);
++  }
++
++  public removeAt(index: number): T {
++    if (index < 0 || index >= this.size()) {
++      throw new Error("Index out of bounds");
++    }
++    const removed = this.data[index];
++    this.data.splice(index, 1);
++    return removed;
++  }
++
+   public size(): number {
+     return this.data.length;
+   }
+diff --git a/stdlib/ets/collections/HashMap.ets b/stdlib/ets/collections/HashMap.ets
+index 111aaaa..222bbbb 100644
+--- a/stdlib/ets/collections/HashMap.ets
++++ b/stdlib/ets/collections/HashMap.ets
+@@ -30,6 +30,15 @@ export class HashMap<K, V> implements Map<K, V> {
+     this.entries.set(key, value);
+   }
+
++  public remove(key: K): boolean {
++    return this.entries.delete(key);
++  }
++
++  public clear(): void {
++    this.entries.clear();
++  }
++
+   public get(key: K): V | undefined {
+     return this.entries.get(key);
+   }
+diff --git a/examples/demo/utils.ets b/examples/demo/utils.ets
+index zzz9999..yyy8888 100644
+--- a/examples/demo/utils.ets
++++ b/examples/demo/utils.ets
+@@ -15,3 +15,11 @@ export function formatDate(timestamp: number): string {
+   const date = new Date(timestamp);
+   return date.toISOString();
+ }
++
++export function calculateDiscount(price: number, percent: number): number {
++  return price * (percent / 100);
++}
++
++export function validateEmail(email: string): boolean {
++  return email.includes("@") && email.includes(".");
++}

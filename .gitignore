@@ -71,3 +71,6 @@ benchmarks/results/*.json
 benchmarks/results/*.csv
 benchmarks/results/*.md
 !benchmarks/results/.gitkeep
+
+# Example artifacts
+examples/**/.devagent/

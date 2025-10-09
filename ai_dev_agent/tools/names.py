@@ -7,7 +7,6 @@ RUN = "run"
 FIND = "find"
 GREP = "grep"
 SYMBOLS = "symbols"
-PARSE_PATCH = "parse_patch"
 
 ALL_TOOLS = (
     READ,
@@ -16,7 +15,6 @@ ALL_TOOLS = (
     FIND,
     GREP,
     SYMBOLS,
-    PARSE_PATCH,
 )
 
 __all__ = [
@@ -26,6 +24,5 @@ __all__ = [
     "FIND",
     "GREP",
     "SYMBOLS",
-    "PARSE_PATCH",
     "ALL_TOOLS",
 ]
