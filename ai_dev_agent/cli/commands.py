@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import click
 
@@ -129,7 +129,16 @@ def cli(ctx: click.Context, config_path: Path | None, verbose: bool, plan: bool,
 
     # If custom options provided but no subcommand, auto-invoke query
     if ctx.invoked_subcommand is None and (system or prompt_global or format_global):
-        ctx.invoke(query)
+        ctx.invoke(
+            query,
+            prompt=(),
+            force_plan=False,
+            direct=False,
+            agent="manager",
+            system=system,
+            prompt_file=prompt_global,
+            format_file=format_global,
+        )
 
 
 @cli.command(name="query")
