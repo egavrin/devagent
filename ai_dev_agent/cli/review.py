@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import click
 
+import re
+
 from ai_dev_agent.agents.schemas import VIOLATION_SCHEMA
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.core.utils.logger import get_logger
@@ -17,16 +19,85 @@ from .utils import _record_invocation, get_llm_client
 
 LOGGER = get_logger(__name__)
 
+# Cache for parsed patches: key=(path, mtime) -> parsed_data
+_PATCH_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
+
+
+def extract_applies_to_pattern(rule_content: str) -> Optional[str]:
+    """Extract the 'Applies To' pattern from rule content.
+
+    Looks for patterns like:
+    - ## Applies To
+      pattern_here
+    - Applies To: pattern_here
+    - scope: pattern_here
+
+    Returns:
+        Regex pattern string or None if not found
+    """
+    # Try multiple patterns to be robust
+    patterns = [
+        r'##\s*Applies\s+To\s*\n\s*([^\n]+)',  # ## Applies To\n  pattern
+        r'Applies\s+To:\s*([^\n]+)',            # Applies To: pattern
+        r'scope:\s*([^\n]+)',                   # scope: pattern
+        r'##\s*Scope\s*\n\s*([^\n]+)',         # ## Scope\n  pattern
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, rule_content, re.IGNORECASE)
+        if match:
+            extracted = match.group(1).strip()
+            # Remove quotes if present
+            extracted = extracted.strip('"\'`')
+            if extracted:
+                LOGGER.debug("Extracted 'Applies To' pattern: %s", extracted)
+                return extracted
+
+    LOGGER.debug("No 'Applies To' pattern found in rule")
+    return None
+
 
 def parse_patch_file(patch_path: Path) -> Dict[str, Any]:
-    """Parse the patch file into structured data for review."""
+    """Parse the patch file into structured data for review.
+
+    Uses caching based on file path and modification time to avoid re-parsing
+    unchanged patches.
+    """
+    # Check cache
+    try:
+        stat = patch_path.stat()
+        cache_key = (str(patch_path), stat.st_mtime)
+
+        if cache_key in _PATCH_CACHE:
+            LOGGER.debug("Using cached parse result for %s", patch_path.name)
+            return _PATCH_CACHE[cache_key]
+    except OSError:
+        pass  # If stat fails, just parse without caching
+
+    # Parse the patch
     try:
         content = patch_path.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:  # pragma: no cover - defensive guard
         raise click.ClickException(f"Failed to read patch file '{patch_path}': {exc}") from exc
 
     parser = PatchParser(content, include_context=False)
-    return parser.parse()
+    parsed = parser.parse()
+
+    # Store in cache
+    try:
+        cache_key = (str(patch_path), stat.st_mtime)
+        _PATCH_CACHE[cache_key] = parsed
+
+        # Limit cache size to prevent unbounded growth
+        if len(_PATCH_CACHE) > 10:
+            # Remove oldest entry (first key)
+            oldest_key = next(iter(_PATCH_CACHE))
+            del _PATCH_CACHE[oldest_key]
+            LOGGER.debug("Cache evicted oldest entry to maintain size limit")
+    except (NameError, OSError):
+        pass  # If caching fails, continue without it
+
+    return parsed
 
 
 def collect_patch_review_data(parsed_patch: Mapping[str, Any]) -> Tuple[Dict[str, Dict[int, str]], Set[str]]:
@@ -56,8 +127,16 @@ def collect_patch_review_data(parsed_patch: Mapping[str, Any]) -> Tuple[Dict[str
     return added_lines, parsed_files
 
 
-def format_patch_dataset(parsed_patch: Mapping[str, Any]) -> str:
-    """Format parsed patch data into a text block for the reviewer."""
+def format_patch_dataset(parsed_patch: Mapping[str, Any], filter_pattern: Optional[str] = None) -> str:
+    """Format parsed patch data into a text block for the reviewer.
+
+    Args:
+        parsed_patch: Parsed patch structure from PatchParser
+        filter_pattern: Optional regex pattern to filter files (e.g., from rule's "Applies To")
+
+    Returns:
+        Formatted text representation of patch data
+    """
     lines: List[str] = []
     files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
 
@@ -65,7 +144,21 @@ def format_patch_dataset(parsed_patch: Mapping[str, Any]) -> str:
         lines.append("No files with additions were detected in this patch.")
         return "\n".join(lines)
 
-    for file_entry in files:
+    # Apply filter if provided
+    filtered_files = files
+    if filter_pattern:
+        try:
+            pattern_re = re.compile(filter_pattern)
+            filtered_files = [f for f in files if f.get("path") and pattern_re.search(f["path"])]
+        except re.error:
+            LOGGER.warning("Invalid filter pattern '%s', showing all files", filter_pattern)
+            filtered_files = files
+
+    if not filtered_files:
+        lines.append(f"No files matching pattern '{filter_pattern}' were found in this patch.")
+        return "\n".join(lines)
+
+    for file_entry in filtered_files:
         path = file_entry.get("path")
         change_type = file_entry.get("change_type", "modified")
         language = file_entry.get("language", "unknown")
@@ -240,8 +333,11 @@ def run_review(
     else:
         patch_rel = patch_path
 
+    # Extract "Applies To" pattern from rule to filter patch dataset
+    filter_pattern = extract_applies_to_pattern(rule_content)
+
     parsed_patch = parse_patch_file(patch_path)
-    patch_dataset = format_patch_dataset(parsed_patch)
+    patch_dataset = format_patch_dataset(parsed_patch, filter_pattern=filter_pattern)
 
     prompt = _build_review_prompt(patch_rel, patch_dataset)
 
