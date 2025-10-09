@@ -59,3 +59,55 @@ def test_validate_review_response_rejects_unknown_paths() -> None:
             added_lines=added_lines,
             parsed_files=parsed_files,
         )
+
+
+def test_validate_review_response_rejects_wrong_line_numbers() -> None:
+    response = {
+        "violations": [
+            {
+                "file": "src/new_file.ts",
+                "line": 99,
+                "message": "Bad ref",
+                "code_snippet": "export const Foo = 1;",
+            }
+        ],
+        "summary": {"total_violations": 1},
+    }
+
+    added_lines = {"src/new_file.ts": {10: "export const Foo = 1;"}}
+    parsed_files = {"src/new_file.ts"}
+
+    with pytest.raises(click.ClickException):
+        validate_review_response(
+            response,
+            added_lines=added_lines,
+            parsed_files=parsed_files,
+        )
+
+
+def test_validate_review_response_allows_matching_violation() -> None:
+    response = {
+        "violations": [
+            {
+                "file": "src/new_file.ts",
+                "line": 10,
+                "message": "Valid violation",
+                "code_snippet": "export const Foo = 1;",
+            }
+        ],
+        "summary": {"total_violations": 10, "files_reviewed": 42},
+    }
+
+    added_lines = {"src/new_file.ts": {10: "export const Foo = 1;"}}
+    parsed_files = {"src/new_file.ts"}
+
+    normalized = validate_review_response(
+        response,
+        added_lines=added_lines,
+        parsed_files=parsed_files,
+    )
+
+    assert normalized["violations"] == response["violations"]
+    summary = normalized["summary"]
+    assert summary["total_violations"] == 1
+    assert summary["files_reviewed"] == 1
