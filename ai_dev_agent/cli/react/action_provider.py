@@ -1,10 +1,13 @@
 """LLM-backed action provider bridging the CLI to the engine ReAct loop."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 from uuid import uuid4
 
 from ai_dev_agent.core.utils.budget_integration import BudgetIntegration
+
+logger = logging.getLogger(__name__)
 from ai_dev_agent.engine.react.types import ActionRequest, StepRecord, TaskSpec, ToolCall
 from ai_dev_agent.providers.llm.base import LLMClient, ToolCallResult
 from ai_dev_agent.session import SessionManager
@@ -24,6 +27,7 @@ class LLMActionProvider:
         tools: Sequence[Dict[str, Any]] | None = None,
         budget_integration: Optional[BudgetIntegration] = None,
         format_schema: Optional[Dict[str, Any]] = None,
+        ctx_obj: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.client = llm_client
         self.session_manager = session_manager
@@ -34,6 +38,7 @@ class LLMActionProvider:
         self._current_phase: str = "exploration"
         self._is_final_iteration: bool = False
         self._last_response: Optional[ToolCallResult] = None
+        self._ctx_obj = ctx_obj or {}
 
     def update_phase(self, phase: str, *, is_final: bool = False) -> None:
         """Record the active behavioural phase for subsequent prompts."""
@@ -45,6 +50,12 @@ class LLMActionProvider:
         """Invoke the LLM to obtain the next tool action."""
 
         iteration_index = len(history) + 1
+
+        # Check if RepoMap refresh is pending and inject before LLM call
+        if self._ctx_obj.get("_repomap_refresh_pending"):
+            self._inject_repomap_update()
+            self._ctx_obj["_repomap_refresh_pending"] = False
+
         conversation = self.session_manager.compose(self.session_id)
         tools = self._get_tools_for_phase(history)
 
@@ -235,6 +246,45 @@ class LLMActionProvider:
             if candidate not in used_ids:
                 used_ids.add(candidate)
                 return candidate
+
+    def _inject_repomap_update(self) -> None:
+        """Inject RepoMap update into session before next LLM call."""
+        from pathlib import Path
+
+        try:
+            # Get context objects
+            dynamic_context = self._ctx_obj.get("_dynamic_context")
+            user_prompt = self._ctx_obj.get("_user_prompt", "")
+            settings = self._ctx_obj.get("settings")
+            repo_root = Path.cwd()
+
+            if not dynamic_context:
+                return
+
+            # Generate fresh RepoMap with accumulated context
+            from ai_dev_agent.cli.context_enhancer import get_context_enhancer
+            enhancer = get_context_enhancer(repo_root, settings)
+            system_msg, _ = enhancer.get_repomap_messages(
+                query=user_prompt,
+                max_files=15,
+                additional_files=dynamic_context.mentioned_files,
+                additional_symbols=dynamic_context.mentioned_symbols
+            )
+
+            if system_msg:
+                # Inject as system message to avoid breaking tool call sequences
+                self.session_manager.add_system_message(
+                    self.session_id,
+                    system_msg,
+                    location="after_initial"  # Add after initial system prompts
+                )
+                if settings and settings.repomap_debug_stdout:
+                    logger.debug("Updated RepoMap injected as system message")
+
+        except Exception as e:
+            settings = self._ctx_obj.get("settings")
+            if settings and settings.repomap_debug_stdout:
+                logger.debug(f"Failed to inject RepoMap update: {e}")
 
     def _record_dummy_tool_messages(self, raw_tool_calls: Optional[Sequence[Any]]) -> None:
         if not raw_tool_calls:

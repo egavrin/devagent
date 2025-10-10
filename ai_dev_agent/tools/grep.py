@@ -15,6 +15,7 @@ def grep(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
     path = payload.get("path", ".")
     regex = payload.get("regex", False)
     limit = min(payload.get("limit", 200), 1000)  # Cap at 1000
+    max_files = payload.get("max_files", 20)  # Limit number of files returned
 
     if not pattern:
         return {"matches": []}
@@ -89,15 +90,26 @@ def grep(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
         # Sort by mtime descending
         files_with_time.sort(key=lambda x: x[1], reverse=True)
 
-        # Build final result
+        # Build final result with file limit
+        total_files = len(files_with_time)
+        truncated = total_files > max_files
+
         result_matches = []
-        for file_path, _ in files_with_time:
+        for file_path, _ in files_with_time[:max_files]:
             result_matches.append({
                 "file": file_path,
                 "matches": files_dict[file_path]
             })
 
-        return {"matches": result_matches}
+        result = {"matches": result_matches}
+
+        # Add truncation info if results were limited
+        if truncated:
+            result["truncated"] = True
+            result["total_files"] = total_files
+            result["message"] = f"Showing {max_files} of {total_files} files with matches. Use more specific search pattern to narrow results."
+
+        return result
 
     except subprocess.TimeoutExpired:
         return {"error": "Search timeout", "matches": []}

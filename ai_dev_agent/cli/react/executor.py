@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -12,6 +13,8 @@ from uuid import uuid4
 
 import click
 
+logger = logging.getLogger(__name__)
+
 from ai_dev_agent.agents import AgentRegistry
 from ai_dev_agent.cli.handlers import INTENT_HANDLERS
 from ai_dev_agent.cli.utils import (
@@ -21,6 +24,7 @@ from ai_dev_agent.cli.utils import (
     _merge_structure_hints_state,
     _update_files_discovered,
 )
+from ai_dev_agent.cli.dynamic_context import DynamicContextTracker
 from ai_dev_agent.core.utils.budget_integration import BudgetIntegration, create_budget_integration
 from ai_dev_agent.core.utils.config import DEFAULT_MAX_ITERATIONS, Settings
 from ai_dev_agent.core.utils.devagent_config import load_devagent_yaml
@@ -376,6 +380,7 @@ def _execute_react_assistant(
     if not isinstance(getattr(ctx, "obj", None), dict):
         ctx.obj = {}
     ctx_obj: Dict[str, Any] = ctx.obj
+    ctx_obj["settings"] = settings  # Store settings for access by action_provider
     silent_mode = ctx_obj.get("silent_mode", False)
 
     should_emit_status = (planning_active or supports_tool_calls or bool(ctx.meta.pop("_emit_status_messages", False))) and not silent_mode
@@ -393,6 +398,19 @@ def _execute_react_assistant(
     history_enabled = isinstance(history_raw, list)
     history_messages: List[Message] = [msg for msg in history_raw or [] if isinstance(msg, Message)] if history_enabled else []
     max_history_turns = max(1, getattr(settings, "keep_last_assistant_messages", 4))
+
+    # Initialize dynamic context tracker for adaptive RepoMap
+    dynamic_context = ctx_obj.get("_dynamic_context")
+    if dynamic_context is None:
+        repo_root = Path.cwd()
+        dynamic_context = DynamicContextTracker(repo_root)
+        ctx_obj["_dynamic_context"] = dynamic_context
+
+    # Inject RepoMap messages before user query (Aider's approach)
+    repomap_messages_raw = ctx_obj.get("_repomap_messages")
+    if repomap_messages_raw:
+        for msg in repomap_messages_raw:
+            history_messages.append(Message(role=msg["role"], content=msg["content"]))
 
     user_message = Message(role="user", content=user_prompt)
 
@@ -571,6 +589,9 @@ def _execute_react_assistant(
         category="assistance",
     )
 
+    # Store user_prompt in ctx_obj for RepoMap refresh
+    ctx_obj["_user_prompt"] = user_prompt
+
     action_provider = LLMActionProvider(
         llm_client=client,
         session_manager=session_manager,
@@ -578,6 +599,7 @@ def _execute_react_assistant(
         tools=available_tools,
         budget_integration=budget_integration,
         format_schema=format_schema,
+        ctx_obj=ctx_obj,
     )
 
     tool_invoker = SessionAwareToolInvoker(
@@ -676,6 +698,27 @@ def _execute_react_assistant(
 
         _record_search_query(record.action, search_queries)
 
+        # Dynamic RepoMap: Track context from this step
+        if dynamic_context:
+            try:
+                dynamic_context.update_from_step(record)
+
+                # Check if RepoMap should be refreshed, but DON'T inject yet
+                if dynamic_context.should_refresh_repomap():
+                    if settings.repomap_debug_stdout:
+                        logger.debug(f"RepoMap refresh scheduled after step {record.step_index}")
+                        summary = dynamic_context.get_context_summary()
+                        logger.debug(f"Context: {summary['total_mentions']} mentions "
+                                   f"({len(summary['files'])} files, {len(summary['symbols'])} symbols)")
+
+                    # Store the pending refresh - will be applied before next LLM call
+                    ctx_obj["_repomap_refresh_pending"] = True
+
+            except Exception as e:
+                # Don't fail the execution if context tracking fails
+                if settings.repomap_debug_stdout:
+                    logger.debug(f"Context tracking error: {e}")
+
     try:
         result = executor.run(
             task=task,
@@ -711,6 +754,13 @@ def _execute_react_assistant(
     _merge_structure_hints_state(ctx.obj, structure_state)
 
     final_message = action_provider.last_response_text()
+
+    # Fallback: if no response text, check for submit_final_answer in last step
+    if not final_message and result.steps:
+        last_step = result.steps[-1]
+        if last_step.observation and last_step.observation.tool == "submit_final_answer":
+            final_message = last_step.observation.raw_output or last_step.observation.formatted_output
+
     final_json: Optional[Dict[str, Any]] = None
     printed_final = False
     if final_message:
@@ -764,6 +814,7 @@ def _execute_react_assistant(
 
     return {
         "final_message": final_message,
+        "final_answer": final_message,  # Alias for consistency
         "final_json": final_json,
         "result": result,
         "printed_final": printed_final,

@@ -14,6 +14,8 @@ from ai_dev_agent.core.utils.logger import configure_logging, get_logger
 from ai_dev_agent.tools.execution.shell_session import ShellSessionError, ShellSessionManager
 from ai_dev_agent.session import SessionManager
 
+logger = get_logger(__name__)
+
 from .react.executor import _execute_react_assistant
 from .review import run_review
 from .utils import _build_context, get_llm_client, _record_invocation
@@ -100,18 +102,22 @@ class NaturalLanguageGroup(click.Group):
 @click.option("--verbose", is_flag=True, help="Enable verbose logging output.")
 @click.option("--plan", is_flag=True, help="Use planning mode for all queries")
 @click.option("--silent", is_flag=True, help="Suppress status messages and tool output (JSON-only mode)")
+@click.option("--repomap-debug", is_flag=True, envvar="DEVAGENT_REPOMAP_DEBUG", help="Enable RepoMap debug logging")
 @click.option("--system", help="System prompt extension (string or file path)")
 @click.option("--prompt", "prompt_global", help="User prompt from file or string")
 @click.option("--format", "format_global", help="Output format JSON schema file path")
 @click.pass_context
 def cli(ctx: click.Context, config_path: Path | None, verbose: bool, plan: bool, silent: bool,
-        system: Optional[str], prompt_global: Optional[str], format_global: Optional[str]) -> None:
+        repomap_debug: bool, system: Optional[str], prompt_global: Optional[str], format_global: Optional[str]) -> None:
     """AI-assisted development agent CLI."""
     from ai_dev_agent.cli import load_settings as _load_settings
 
     settings = _load_settings(config_path)
     if verbose:
         settings.log_level = "DEBUG"
+    if repomap_debug:
+        settings.repomap_debug_stdout = True
+        settings.log_level = "DEBUG"  # Enable DEBUG level when repomap debug is on
     configure_logging(settings.log_level, structured=settings.structured_logging)
     if not settings.api_key:
         LOGGER.warning("No API key configured. Some commands may fail.")
@@ -182,6 +188,25 @@ def query(
 
     if not pending:
         raise click.UsageError("Provide a request for the assistant.")
+
+    # Get RepoMap context as conversation messages (Aider's approach)
+    repomap_messages = None
+    try:
+        from ai_dev_agent.cli.context_enhancer import enhance_query
+        workspace = Path.cwd()
+        original_query, repomap_messages = enhance_query(pending, workspace)
+        if repomap_messages:
+            # Store messages in ctx for executor to inject into conversation
+            ctx.obj["_repomap_messages"] = repomap_messages
+            logger.debug("RepoMap context prepared as conversation messages")
+            # Also print to stderr for visibility during testing
+            import sys
+            print("[DEBUG] RepoMap context prepared as conversation messages", file=sys.stderr)
+    except Exception as e:
+        logger.debug(f"Could not prepare RepoMap context: {e}")
+        import sys
+        print(f"[DEBUG] Could not prepare RepoMap context: {e}", file=sys.stderr)
+        # Continue without RepoMap context
 
     # Validate agent type
     if not AgentRegistry.has_agent(agent):

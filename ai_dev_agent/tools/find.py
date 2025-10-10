@@ -14,7 +14,7 @@ def find(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
     """Find files by pattern using ripgrep."""
     query = payload.get("query", "")
     path = payload.get("path", ".")
-    limit = min(payload.get("limit", 100), 500)  # Cap at 500
+    limit = min(payload.get("limit", 20), 100)  # Reduced default to 20, cap at 100
 
     # Convert path to absolute if relative
     if not os.path.isabs(path):
@@ -61,6 +61,10 @@ def find(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
         # Sort by mtime descending
         files_with_time.sort(key=lambda x: x[1], reverse=True)
 
+        # Track if we're truncating results
+        total_files = len(files_with_time)
+        truncated = total_files > limit
+
         results: List[Dict[str, Any]] = []
         now = datetime.now(timezone.utc).timestamp()
         for rel_path, mtime in files_with_time[:limit]:
@@ -90,7 +94,15 @@ def find(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
                 }
             )
 
-        return {"files": results}
+        result_dict = {"files": results}
+
+        # Add truncation info if results were limited
+        if truncated:
+            result_dict["truncated"] = True
+            result_dict["total_files"] = total_files
+            result_dict["message"] = f"Showing {limit} of {total_files} matching files. Use more specific pattern to narrow results."
+
+        return result_dict
 
     except subprocess.TimeoutExpired:
         return {"error": "Search timeout", "files": []}

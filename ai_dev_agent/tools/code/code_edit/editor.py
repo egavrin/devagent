@@ -155,8 +155,8 @@ class CodeEditor:
         )
 
     def gather_context(
-        self, 
-        files: Iterable[str], 
+        self,
+        files: Iterable[str],
         task_description: Optional[str] = None,
         options: Optional[ContextGatheringOptions] = None
     ) -> List[FileContext]:
@@ -167,11 +167,15 @@ class CodeEditor:
             if task_description
             else None
         )
-        
+
+        # Convert files to Path objects for RepoMap personalization
+        chat_files = [self.repo_root / f for f in files] if files else None
+
         return self.context_gatherer.gather_contexts(
             files=files,
             task_description=task_description,
-            keywords=keywords
+            keywords=keywords,
+            chat_files=chat_files  # Pass files being edited for PageRank personalization
         )
 
     def propose_diff(

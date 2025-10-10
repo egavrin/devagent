@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import pytest
@@ -13,7 +13,7 @@ from ai_dev_agent.session import SessionManager
 @dataclass
 class StubLLMClient:
     model: str = "stub-model"
-    last_tools: List[Dict[str, Any]] | None = None
+    last_tools: Optional[List[Dict[str, Any]]] = None
 
     def invoke_tools(self, messages, *, tools, temperature: float = 0.1):
         self.last_tools = list(tools)

@@ -14,6 +14,13 @@ from collections import defaultdict, Counter
 import logging
 import networkx as nx
 
+# Import tree-sitter parser if available
+try:
+    from ai_dev_agent.core.tree_sitter.parser import TreeSitterParser
+    TREE_SITTER_AVAILABLE = True
+except ImportError:
+    TREE_SITTER_AVAILABLE = False
+
 
 @dataclass
 class FileInfo:
@@ -79,7 +86,8 @@ class RepoMap:
         self,
         root_path: Optional[Path] = None,
         cache_enabled: bool = True,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        use_tree_sitter: bool = True
     ):
         self.root_path = Path(root_path) if root_path else Path.cwd()
         self.cache_enabled = cache_enabled
@@ -87,6 +95,15 @@ class RepoMap:
 
         self.context = RepoContext(root_path=self.root_path)
         self.cache_path = self.root_path / self.CACHE_DIR / "repo_map.json"
+
+        # Initialize tree-sitter parser if available
+        self.tree_sitter_parser = None
+        if use_tree_sitter and TREE_SITTER_AVAILABLE:
+            try:
+                self.tree_sitter_parser = TreeSitterParser()
+                self.logger.info("Tree-sitter parser initialized")
+            except Exception as e:
+                self.logger.debug(f"Could not initialize tree-sitter parser: {e}")
 
         # Load cache if available
         if cache_enabled:
@@ -199,16 +216,55 @@ class RepoMap:
             if time_since_update < 300:  # 5 minutes
                 return
 
-        # Get all Python and TypeScript files
-        extensions = {'.py', '.ts', '.tsx', '.js', '.jsx'}
-        for ext in extensions:
-            for file_path in self.root_path.rglob(f'*{ext}'):
-                # Skip cache and common ignore directories
-                if any(part.startswith('.') or part in {'node_modules', '__pycache__', 'venv', 'dist', 'build'}
-                       for part in file_path.parts):
-                    continue
+        # Get all supported language files
+        extensions = {
+            # Python
+            '.py', '.pyi',
+            # TypeScript/JavaScript
+            '.ts', '.tsx', '.ets', '.sts', '.js', '.jsx', '.mjs', '.cjs',
+            # C/C++
+            '.c', '.h', '.hpp', '.cpp', '.cc', '.cxx', '.hh', '.hxx',
+            # Java
+            '.java',
+            # Go
+            '.go',
+            # Rust
+            '.rs',
+            # Ruby
+            '.rb', '.erb',
+            # Others
+            '.cs', '.swift', '.kt', '.scala', '.lua', '.dart', '.r', '.m', '.mm',
+            '.sh', '.bash', '.zsh', '.proto', '.pa'
+        }
 
+        # Track scanned files to detect deletions
+        scanned_files = set()
+
+        # Scan all files with supported extensions
+        for file_path in self.root_path.rglob('*'):
+            if not file_path.is_file():
+                continue
+
+            # Skip cache and common ignore directories
+            if any(part.startswith('.') or part in {'node_modules', '__pycache__', 'venv', 'dist', 'build', 'target', 'out'}
+                   for part in file_path.parts):
+                continue
+
+            # Check if file has a supported extension
+            if file_path.suffix.lower() in extensions:
                 self._scan_file(file_path)
+                # Track this file as scanned
+                relative_path = str(file_path.relative_to(self.root_path))
+                scanned_files.add(relative_path)
+
+        # Prune files that no longer exist
+        stale_files = set(self.context.files.keys()) - scanned_files
+        for stale_file in stale_files:
+            logger.debug(f"Pruning deleted file: {stale_file}")
+            del self.context.files[stale_file]
+            # Also remove from graph if present
+            if self.graph and self.graph.has_node(stale_file):
+                self.graph.remove_node(stale_file)
 
         self.context.last_updated = current_time
         self._rebuild_indices()
@@ -237,10 +293,19 @@ class RepoMap:
             )
 
             # Extract symbols and imports based on language
-            if language == 'python':
-                self._extract_python_info(file_path, file_info)
-            elif language in {'typescript', 'javascript'}:
-                self._extract_typescript_info(file_path, file_info)
+            # Try tree-sitter first if available
+            if self.tree_sitter_parser and language:
+                tree_sitter_result = self.tree_sitter_parser.extract_symbols(file_path, language)
+                if tree_sitter_result.get('symbols'):
+                    file_info.symbols.extend(tree_sitter_result['symbols'])
+                    file_info.imports.extend(tree_sitter_result.get('imports', []))
+                    file_info.symbols_used.extend(tree_sitter_result.get('references', []))
+                else:
+                    # Fall back to regex-based extraction
+                    self._extract_with_regex(file_path, file_info, language)
+            else:
+                # Use regex-based extraction for languages without tree-sitter
+                self._extract_with_regex(file_path, file_info, language)
 
             self.context.files[relative_path] = file_info
 
@@ -251,12 +316,80 @@ class RepoMap:
         """Detect programming language from file extension."""
         ext = file_path.suffix.lower()
         return {
+            # Python
             '.py': 'python',
+            '.pyi': 'python',
+            # TypeScript/JavaScript
             '.ts': 'typescript',
             '.tsx': 'typescript',
+            '.ets': 'typescript',  # EcmaScript TypeScript
+            '.sts': 'typescript',  # Static TypeScript
             '.js': 'javascript',
-            '.jsx': 'javascript'
+            '.jsx': 'javascript',
+            '.mjs': 'javascript',
+            '.cjs': 'javascript',
+            # C/C++
+            '.c': 'c',
+            '.h': 'c',
+            '.hpp': 'cpp',
+            '.cpp': 'cpp',
+            '.cc': 'cpp',
+            '.cxx': 'cpp',
+            '.c++': 'cpp',
+            '.hh': 'cpp',
+            '.hxx': 'cpp',
+            '.h++': 'cpp',
+            # Java
+            '.java': 'java',
+            # Ruby
+            '.rb': 'ruby',
+            '.erb': 'ruby',
+            # Go
+            '.go': 'go',
+            # Rust
+            '.rs': 'rust',
+            # Assembly
+            '.s': 'assembly',
+            '.asm': 'assembly',
+            # Proto
+            '.proto': 'protobuf',
+            # Pascal/Panda Assembly
+            '.pa': 'panda-assembly',
+            # Others
+            '.php': 'php',
+            '.cs': 'csharp',
+            '.swift': 'swift',
+            '.kt': 'kotlin',
+            '.scala': 'scala',
+            '.lua': 'lua',
+            '.dart': 'dart',
+            '.r': 'r',
+            '.m': 'objc',
+            '.mm': 'objcpp',
+            '.sh': 'bash',
+            '.bash': 'bash',
+            '.zsh': 'bash'
         }.get(ext)
+
+    def _extract_with_regex(self, file_path: Path, file_info: FileInfo, language: Optional[str]) -> None:
+        """Extract symbols using regex-based methods."""
+        if language == 'python':
+            self._extract_python_info(file_path, file_info)
+        elif language in {'typescript', 'javascript'}:
+            self._extract_typescript_info(file_path, file_info)
+        elif language in {'c', 'cpp'}:
+            self._extract_cpp_info(file_path, file_info)
+        elif language == 'java':
+            self._extract_java_info(file_path, file_info)
+        elif language == 'go':
+            self._extract_go_info(file_path, file_info)
+        elif language == 'rust':
+            self._extract_rust_info(file_path, file_info)
+        elif language == 'ruby':
+            self._extract_ruby_info(file_path, file_info)
+        else:
+            # For unsupported languages, try basic pattern matching
+            self._extract_generic_info(file_path, file_info)
 
     def _extract_python_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Python symbols, imports, and references."""
@@ -329,33 +462,281 @@ class RepoMap:
         except Exception:
             pass
 
+    def _extract_cpp_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract C/C++ symbols and includes."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract class definitions
+            class_pattern = r'(?:class|struct)\s+([A-Za-z_]\w*)\s*(?:{|:)'
+            file_info.symbols.extend(re.findall(class_pattern, content))
+
+            # Extract function definitions (basic pattern)
+            # Matches: return_type function_name(params)
+            func_pattern = r'\b(?:void|int|char|float|double|bool|auto|[A-Za-z_]\w*(?:\s*[*&])?)\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:{|;)'
+            potential_funcs = re.findall(func_pattern, content)
+            # Filter out common false positives
+            file_info.symbols.extend([f for f in potential_funcs if f not in {'if', 'while', 'for', 'switch', 'return'}])
+
+            # Extract #include statements
+            include_pattern = r'#include\s*[<"]([^>"]+)[>"]'
+            file_info.imports.extend(re.findall(include_pattern, content))
+
+            # Extract namespaces
+            namespace_pattern = r'namespace\s+([A-Za-z_]\w*)'
+            file_info.symbols.extend(re.findall(namespace_pattern, content))
+
+            # Extract typedefs
+            typedef_pattern = r'typedef\s+.*\s+([A-Za-z_]\w*);'
+            file_info.symbols.extend(re.findall(typedef_pattern, content))
+
+            # Extract using declarations
+            using_pattern = r'using\s+([A-Za-z_]\w*)\s*='
+            file_info.symbols.extend(re.findall(using_pattern, content))
+
+        except Exception:
+            pass
+
+    def _extract_java_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract Java symbols and imports."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract class/interface/enum definitions
+            class_pattern = r'(?:public\s+)?(?:abstract\s+)?(?:final\s+)?(?:class|interface|enum)\s+([A-Za-z_]\w*)'
+            file_info.symbols.extend(re.findall(class_pattern, content))
+
+            # Extract method definitions
+            method_pattern = r'(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?(?:synchronized\s+)?(?:[A-Za-z_]\w*(?:<[^>]+>)?(?:\[\])?)\s+([A-Za-z_]\w*)\s*\([^)]*\)'
+            file_info.symbols.extend(re.findall(method_pattern, content))
+
+            # Extract imports
+            import_pattern = r'import\s+(?:static\s+)?([A-Za-z_][\w.]*);'
+            file_info.imports.extend(re.findall(import_pattern, content))
+
+            # Extract package
+            package_pattern = r'package\s+([A-Za-z_][\w.]*);'
+            packages = re.findall(package_pattern, content)
+            if packages:
+                file_info.imports.append(f"package:{packages[0]}")
+
+        except Exception:
+            pass
+
+    def _extract_go_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract Go symbols and imports."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract function definitions
+            func_pattern = r'func\s+(?:\([^)]+\)\s+)?([A-Za-z_]\w*)\s*\([^)]*\)'
+            file_info.symbols.extend(re.findall(func_pattern, content))
+
+            # Extract type definitions
+            type_pattern = r'type\s+([A-Za-z_]\w*)\s+(?:struct|interface|func)'
+            file_info.symbols.extend(re.findall(type_pattern, content))
+
+            # Extract imports
+            import_pattern = r'import\s+(?:\([^)]+\)|"([^"]+)")'
+            imports_multi = re.findall(r'import\s*\((.*?)\)', content, re.DOTALL)
+            for block in imports_multi:
+                imports = re.findall(r'"([^"]+)"', block)
+                file_info.imports.extend(imports)
+
+            # Single imports
+            file_info.imports.extend(re.findall(r'import\s+"([^"]+)"', content))
+
+            # Extract package
+            package_pattern = r'package\s+([A-Za-z_]\w*)'
+            packages = re.findall(package_pattern, content)
+            if packages:
+                file_info.imports.append(f"package:{packages[0]}")
+
+        except Exception:
+            pass
+
+    def _extract_rust_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract Rust symbols and uses."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract function definitions
+            func_pattern = r'(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*(?:<[^>]+>)?\s*\('
+            file_info.symbols.extend(re.findall(func_pattern, content))
+
+            # Extract struct/enum/trait definitions
+            type_pattern = r'(?:pub\s+)?(?:struct|enum|trait|type)\s+([A-Za-z_]\w*)'
+            file_info.symbols.extend(re.findall(type_pattern, content))
+
+            # Extract impl blocks
+            impl_pattern = r'impl(?:<[^>]+>)?\s+(?:.*?\s+for\s+)?([A-Za-z_]\w*)'
+            file_info.symbols.extend(re.findall(impl_pattern, content))
+
+            # Extract use statements
+            use_pattern = r'use\s+([A-Za-z_][\w:]*)'
+            file_info.imports.extend(re.findall(use_pattern, content))
+
+            # Extract mod declarations
+            mod_pattern = r'(?:pub\s+)?mod\s+([A-Za-z_]\w*)'
+            file_info.symbols.extend(re.findall(mod_pattern, content))
+
+        except Exception:
+            pass
+
+    def _extract_ruby_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract Ruby symbols and requires."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract class definitions
+            class_pattern = r'class\s+([A-Z][A-Za-z0-9_]*)'
+            file_info.symbols.extend(re.findall(class_pattern, content))
+
+            # Extract module definitions
+            module_pattern = r'module\s+([A-Z][A-Za-z0-9_]*)'
+            file_info.symbols.extend(re.findall(module_pattern, content))
+
+            # Extract method definitions
+            method_pattern = r'def\s+([a-z_][a-z0-9_]*[?!]?)'
+            file_info.symbols.extend(re.findall(method_pattern, content))
+
+            # Extract require statements
+            require_pattern = r'require(?:_relative)?\s+[\'"]([^\'"]+)[\'"]'
+            file_info.imports.extend(re.findall(require_pattern, content))
+
+        except Exception:
+            pass
+
+    def _extract_generic_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract basic symbols using generic patterns for unsupported languages."""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            import re
+
+            # Try to find class-like definitions
+            class_patterns = [
+                r'(?:class|struct|interface|trait|type)\s+([A-Z][A-Za-z0-9_]*)',
+                r'(?:public\s+)?class\s+([A-Z][A-Za-z0-9_]*)',
+            ]
+
+            for pattern in class_patterns:
+                file_info.symbols.extend(re.findall(pattern, content))
+
+            # Try to find function-like definitions
+            func_patterns = [
+                r'(?:func|function|def|fn)\s+([a-zA-Z_]\w*)',
+                r'(?:public|private|protected)?\s+\w+\s+([a-zA-Z_]\w*)\s*\([^)]*\)',
+            ]
+
+            for pattern in func_patterns:
+                matches = re.findall(pattern, content)
+                file_info.symbols.extend([m for m in matches if m not in {'if', 'while', 'for', 'switch'}])
+
+            # Try to find import-like statements
+            import_patterns = [
+                r'(?:import|include|require|use)\s+[\'"]?([A-Za-z_][\w./]*)',
+                r'#include\s*[<"]([^>"]+)[>"]',
+            ]
+
+            for pattern in import_patterns:
+                file_info.imports.extend(re.findall(pattern, content))
+
+        except Exception:
+            pass
+
     def get_ranked_files(
         self,
         mentioned_files: Set[str],
         mentioned_symbols: Set[str],
         max_files: int = 20
     ) -> List[Tuple[str, float]]:
-        """Get ranked list of relevant files."""
+        """Get ranked list of relevant files using PageRank and symbol matching."""
+
+        # Ensure PageRank is computed
+        if not self.context.pagerank_scores:
+            # Build dependency graph if needed
+            if not self.context.dependency_graph:
+                self.build_dependency_graph()
+            # Compute PageRank
+            self.compute_pagerank()
 
         rankings = {}
 
         for file_path, file_info in self.context.files.items():
             score = 0.0
 
-            # Direct file mention - highest score
-            if file_path in mentioned_files:
-                score += 10.0
+            # Start with PageRank score as base (normalized to 0-1 range)
+            pagerank_score = self.context.pagerank_scores.get(file_path, 0.0)
+            score = pagerank_score * 100  # Scale up for visibility
 
-            # Symbol matches
+            # NEW: Check for exact filename matches (e.g., "commands.py")
+            file_name = Path(file_path).name
+            for mentioned in mentioned_files:
+                # Exact filename match - MASSIVE boost
+                if Path(mentioned).name == file_name or mentioned == file_path:
+                    score += 1000.0
+                    break
+                # Stem match (filename without extension)
+                if Path(mentioned).stem == Path(file_path).stem and len(Path(file_path).stem) > 3:
+                    score += 500.0
+                    break
+                # NEW: Directory match - boost all files in that directory
+                # e.g., "bytecode_optimizer" boosts all files in bytecode_optimizer/
+                if len(mentioned) > 6 and mentioned in file_path:
+                    score += 200.0
+                    break
+
+            # Direct file path mention - high boost
+            if file_path in mentioned_files:
+                score += 50.0
+
+            # Symbol matches - HUGE boost (this is the most important signal)
             matching_symbols = set(file_info.symbols) & mentioned_symbols
-            score += len(matching_symbols) * 2.0
+            if matching_symbols:
+                # Give massive boost for exact symbol matches (primary signal)
+                # This should dominate PageRank for direct queries
+                symbol_boost = len(matching_symbols) * 100.0
+                score += symbol_boost
+            else:
+                # Check for prefix matches (e.g., "BytecodeOptimizer" matches "BytecodeOptimizerRuntimeAdapter")
+                # This is more conservative than substring matching
+                for mentioned_sym in mentioned_symbols:
+                    if len(mentioned_sym) >= 8:  # Only for meaningful symbols
+                        # Check if mentioned symbol is a prefix of any file symbol
+                        prefix_matches = [s for s in file_info.symbols if s.startswith(mentioned_sym)]
+                        if prefix_matches:
+                            # Give significant boost for prefix matches (less than exact but still high)
+                            score += len(prefix_matches) * 50.0
 
             # Import relationships
             for mentioned in mentioned_files:
                 if mentioned in file_info.dependencies:
-                    score += 1.0
+                    score += 5.0
                 if file_path in self.context.files.get(mentioned, FileInfo('', 0, 0)).dependencies:
-                    score += 1.0
+                    score += 5.0
+
+            # Check if symbols are used (referenced) in the file
+            if file_info.symbols_used:
+                used_symbols = set(file_info.symbols_used) & mentioned_symbols
+                if used_symbols:
+                    score += len(used_symbols) * 3.0
 
             # File size penalty (prefer smaller files)
             if file_info.size > 10000:
@@ -414,7 +795,7 @@ class RepoMap:
             self._save_cache()
 
     def build_dependency_graph(self) -> nx.DiGraph:
-        """Build dependency graph for PageRank computation."""
+        """Build dependency graph for PageRank computation with sophisticated edge weighting."""
         G = nx.DiGraph()
 
         # Add all files as nodes
@@ -429,31 +810,74 @@ class RepoMap:
                 defining_files = self.context.symbol_index.get(symbol, set())
                 for definer in defining_files:
                     if definer != file_path:  # Don't self-reference
-                        # Add edge from user to definer (this file depends on definer)
-                        # Weight based on how many times the symbol is used
+
+                        # Calculate sophisticated weight (inspired by Aider)
                         symbol_count = file_info.symbols_used.count(symbol)
-                        weight = math.sqrt(symbol_count) if symbol_count > 1 else 1.0
+                        base_weight = math.sqrt(symbol_count) if symbol_count > 1 else 1.0
+
+                        # Boost weight for well-named symbols (Aider's approach)
+                        weight_multiplier = 1.0
+
+                        # Check if symbol follows naming conventions
+                        if self._is_well_named_symbol(symbol):
+                            weight_multiplier *= 10.0  # Major boost for good names
+
+                        # Reduce weight for private symbols
+                        if symbol.startswith('_'):
+                            weight_multiplier *= 0.1
+
+                        # Apply length heuristic (longer names are usually more specific)
+                        if len(symbol) >= 8:
+                            weight_multiplier *= 2.0
+
+                        final_weight = base_weight * weight_multiplier
 
                         if G.has_edge(file_path, definer):
-                            G[file_path][definer]['weight'] += weight
+                            G[file_path][definer]['weight'] += final_weight
                             G[file_path][definer]['symbols'].append(symbol)
                         else:
-                            G.add_edge(file_path, definer, weight=weight, symbols=[symbol])
+                            G.add_edge(file_path, definer, weight=final_weight, symbols=[symbol])
 
         self.context.dependency_graph = G
         return G
+
+    def _is_well_named_symbol(self, symbol: str) -> bool:
+        """Check if a symbol follows good naming conventions (camelCase, snake_case, etc)."""
+        import re
+
+        # Check for camelCase
+        if re.match(r'^[a-z]+(?:[A-Z][a-z]+)+$', symbol):
+            return True
+
+        # Check for PascalCase
+        if re.match(r'^[A-Z][a-z]+(?:[A-Z][a-z]+)+$', symbol):
+            return True
+
+        # Check for snake_case
+        if re.match(r'^[a-z]+(?:_[a-z]+)+$', symbol):
+            return True
+
+        # Check for CONSTANT_CASE
+        if re.match(r'^[A-Z]+(?:_[A-Z]+)+$', symbol):
+            return True
+
+        return False
 
     def compute_pagerank(
         self,
         personalization: Optional[Dict[str, float]] = None,
         *,
         cache_results: bool = True,
+        use_edge_distribution: bool = True,
     ) -> Dict[str, float]:
         """Compute PageRank scores for all files.
 
         When ``cache_results`` is True (default), the computed scores are stored on the
         RepoContext for reuse. Callers supplying a personalization vector should set
         ``cache_results`` to False so the base cache remains untouched.
+
+        When ``use_edge_distribution`` is True, we distribute node rank across edges
+        based on edge weights (Aider's approach for more accurate symbol importance).
         """
         # Build or get cached graph
         if self.context.dependency_graph is None:
@@ -480,11 +904,56 @@ class RepoMap:
                 personalization=personalization
             )
 
+        # Apply edge distribution if enabled (Aider's approach)
+        if use_edge_distribution:
+            pagerank_scores = self._distribute_pagerank_to_edges(G, pagerank_scores)
+
         if cache_results and personalization is None:
             self.context.pagerank_scores = pagerank_scores
             self.context.last_pagerank_update = time.time()
 
         return pagerank_scores
+
+    def _distribute_pagerank_to_edges(self, G: nx.DiGraph, node_ranks: Dict[str, float]) -> Dict[str, float]:
+        """Distribute node PageRank scores across edges based on weights.
+
+        This is Aider's approach: instead of just using node scores, we distribute
+        each node's rank across its outgoing edges proportionally by weight.
+        This gives more accurate importance scores for specific symbol relationships.
+        """
+        edge_distributed_ranks = defaultdict(float)
+
+        for node in G.nodes():
+            node_rank = node_ranks.get(node, 0.0)
+
+            # Get all outgoing edges with their weights
+            out_edges = list(G.out_edges(node, data=True))
+            if not out_edges:
+                # No outgoing edges, keep all rank at this node
+                edge_distributed_ranks[node] += node_rank
+                continue
+
+            # Calculate total weight of outgoing edges
+            total_weight = sum(data.get('weight', 1.0) for _, _, data in out_edges)
+
+            # Distribute rank proportionally across edges
+            for source, target, data in out_edges:
+                edge_weight = data.get('weight', 1.0)
+                edge_rank = node_rank * (edge_weight / total_weight)
+
+                # Add distributed rank to target
+                edge_distributed_ranks[target] += edge_rank
+
+                # Also preserve some rank at source (10% retention)
+                edge_distributed_ranks[source] += node_rank * 0.1
+
+        # Normalize scores to sum to 1.0
+        total_rank = sum(edge_distributed_ranks.values())
+        if total_rank > 0:
+            for node in edge_distributed_ranks:
+                edge_distributed_ranks[node] /= total_rank
+
+        return dict(edge_distributed_ranks)
 
     def get_file_rank(self, file_path: str) -> float:
         """Get PageRank score for a single file."""

@@ -10,6 +10,7 @@ from typing import Iterable, List, Optional, Sequence, Set, Tuple
 
 from ai_dev_agent.core.utils.constants import DEFAULT_IGNORED_REPO_DIRS
 from ai_dev_agent.core.utils.logger import get_logger
+from ai_dev_agent.core.repo_map import RepoMapManager
 from .tree_sitter_analysis import TreeSitterProjectAnalyzer, extract_symbols_from_outline
 
 LOGGER = get_logger(__name__)
@@ -38,6 +39,7 @@ class ContextGatheringOptions:
     include_structure_summary: bool = True
     include_related_files: bool = True
     keyword_match_limit: int = 5
+    use_repo_map: bool = True  # NEW: Enable RepoMap ranking
     exclude_patterns: Sequence[str] = (
         "*.pyc",
         "*.pyo",
@@ -64,17 +66,29 @@ class ContextGatherer:
         self._rg_available = self._check_command("rg")
         self._git_available = self._check_command("git")
 
+        # NEW: Initialize RepoMap if enabled
+        if self.options.use_repo_map:
+            try:
+                self.repo_map = RepoMapManager.get_instance(self.repo_root)
+            except Exception as e:
+                LOGGER.debug("RepoMap initialization failed, falling back: %s", e)
+                self.repo_map = None
+        else:
+            self.repo_map = None
+
     def gather_contexts(
         self,
         files: Iterable[str],
         task_description: Optional[str] = None,
         keywords: Optional[List[str]] = None,
+        chat_files: Optional[List[Path]] = None,  # NEW: For PageRank personalization
     ) -> List[FileContext]:
-        """Load requested files and optionally augment with keyword matches."""
+        """Load requested files and optionally augment with keyword matches or RepoMap ranking."""
         requested = {self._normalize_rel_path(path) for path in files}
         contexts: List[FileContext] = []
         loaded_paths = set()
 
+        # Load explicitly requested files first
         for rel_path in requested:
             context = self._load_file_context(rel_path, "explicitly_requested", 1.0)
             if context:
@@ -82,7 +96,25 @@ class ContextGatherer:
                 loaded_paths.add(rel_path)
 
         if self.options.include_related_files:
-            discovered = self._discover_related_files(loaded_paths, task_description, keywords)
+            discovered = []
+
+            # Try keyword-based discovery first (higher priority)
+            if keywords:
+                discovered.extend(self._discover_related_files(
+                    loaded_paths, task_description, keywords
+                ))
+
+            # Then add RepoMap ranking if available (fills remaining slots)
+            if self.repo_map and self.options.use_repo_map:
+                # Update loaded_paths with discovered files
+                current_loaded = loaded_paths.copy()
+                current_loaded.update(rel_path for rel_path, _, _ in discovered)
+
+                repo_map_discovered = self._discover_via_repo_map(
+                    current_loaded, task_description, chat_files
+                )
+                discovered.extend(repo_map_discovered)
+
             for rel_path, reason, score in discovered:
                 if rel_path in loaded_paths:
                     continue
@@ -119,6 +151,55 @@ class ContextGatherer:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _discover_via_repo_map(
+        self,
+        existing: Set[str],
+        task_description: Optional[str],
+        chat_files: Optional[List[Path]],
+    ) -> List[Tuple[str, str, float]]:
+        """Discover related files using RepoMap PageRank ranking."""
+        if not self.repo_map:
+            return []
+
+        discovered: List[Tuple[str, str, float]] = []
+        limit = max(0, self.options.max_files - len(existing))
+        if limit == 0:
+            return []
+
+        # Extract mentioned symbols from task description
+        mentioned_symbols = set()
+        if task_description:
+            # Simple pattern matching for potential symbols
+            import re
+            pattern = r'\b[a-zA-Z_][a-zA-Z0-9_]*\b'
+            potential_symbols = re.findall(pattern, task_description)
+            # Filter out common English words
+            stopwords = {'the', 'this', 'that', 'with', 'from', 'have', 'should', 'could', 'and', 'or', 'but'}
+            mentioned_symbols = {s for s in potential_symbols if s.lower() not in stopwords and len(s) > 2}
+
+        # Get ranked files from RepoMap
+        mentioned_files = set(existing)
+
+        # Add chat files to mentioned_files to boost their connected files
+        if chat_files:
+            for chat_file in chat_files:
+                rel_path = str(chat_file.relative_to(self.repo_root))
+                mentioned_files.add(rel_path)
+
+        # Use the existing RepoMap instance which should already be computed
+        ranked_files = self.repo_map.get_ranked_files(
+            mentioned_files, mentioned_symbols, limit * 2  # Get extra for filtering
+        )
+
+        for file_path, score in ranked_files:
+            # file_path is already a string relative path from RepoMap
+            if file_path not in existing:
+                discovered.append((file_path, f"repomap_rank({score:.2f})", score))
+                if len(discovered) >= limit:
+                    break
+
+        return discovered
 
     def _discover_related_files(
         self,

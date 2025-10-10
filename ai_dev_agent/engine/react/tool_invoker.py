@@ -71,6 +71,18 @@ class RegistryToolInvoker:
         # Single-tool mode (backward compatible)
         payload = action.args or {}
         tool_name = action.tool
+
+        # Intercept submit_final_answer before registry lookup
+        if tool_name == "submit_final_answer":
+            answer = payload.get("answer", "")
+            return Observation(
+                success=True,
+                outcome="success",
+                tool="submit_final_answer",
+                raw_output=answer,
+                display_message="✓ Final answer ready",
+            )
+
         try:
             result = self._invoke_registry(tool_name, payload)
         except KeyError:
@@ -177,6 +189,19 @@ class RegistryToolInvoker:
         start_time = time.time()
         tool_name = call.tool
         payload = call.args or {}
+
+        # Intercept submit_final_answer in batch mode too
+        if tool_name == "submit_final_answer":
+            answer = payload.get("answer", "")
+            return ToolResult(
+                call_id=call.call_id,
+                tool="submit_final_answer",
+                success=True,
+                outcome="success",
+                error=None,
+                metrics={"raw_output": answer},
+                wall_time=time.time() - start_time,
+            )
 
         try:
             result = self._invoke_registry(tool_name, payload)
@@ -444,6 +469,18 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         outcome_text = (observation.outcome or "").strip()
         canonical = canonical_tool_name(action.tool)
 
+        # Special handling for submit_final_answer - show the actual answer
+        if canonical == "submit_final_answer":
+            summary_source = raw_text  # The answer is in raw_output
+            summary_text = raw_text
+            formatted_output = raw_text
+            display_message = self._format_display_message(action, observation, canonical)
+            payload.update(
+                formatted_output=formatted_output,
+                display_message=display_message,
+            )
+            return CLIObservation.model_validate(payload)
+
         if canonical == RUN and raw_text:
             summary_source = raw_text
         else:
@@ -500,6 +537,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             READ: "📖",
             RUN: "⚡",
             "write": "📝",
+            "submit_final_answer": "✅",
         }
         icon = base_icon_map.get(canonical_name, status_ok if success else status_fail)
         status_suffix = status_ok if success else status_fail

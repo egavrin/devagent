@@ -67,6 +67,7 @@ class Settings:
     state_file: Path = Path(".devagent/state.json")
     log_level: str = "INFO"
     structured_logging: bool = False
+    repomap_debug_stdout: bool = False  # Enable RepoMap debug logging
     diff_limit_lines: int = 400
     diff_limit_files: int = 10
     patch_coverage_target: float = 0.8

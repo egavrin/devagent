@@ -62,9 +62,6 @@ Thumbs.db
 # Automation reports
 reports/
 
-# Planning documents (temporary)
-IMPROVEMENT_PLAN.md
-INTEGRATION_PLAN.md
 
 # Benchmark outputs
 benchmarks/results/*.json

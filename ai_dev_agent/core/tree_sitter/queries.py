@@ -1,7 +1,11 @@
 """Shared tree-sitter query templates and helpers."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, Iterable, Optional
+
+# Path to query files directory
+QUERIES_DIR = Path(__file__).parent / "queries"
 
 LANGUAGE_ALIASES = {
     "c++": "cpp",
@@ -194,14 +198,64 @@ def build_field_capture_query(node_type: str, field: str, capture: str = "node")
     return f"({node_type} {field}: (_) @{capture})"
 
 
+def get_scm_file_path(language: str) -> Optional[Path]:
+    """Get path to .scm query file for a language.
+
+    Args:
+        language: Language name
+
+    Returns:
+        Path to .scm file if exists, None otherwise
+    """
+    lang = normalise_language(language)
+    scm_file = QUERIES_DIR / f"{lang}-tags.scm"
+
+    if scm_file.exists():
+        return scm_file
+
+    # Try alternate name patterns
+    alternate_names = [
+        f"{lang}.scm",
+        f"{language}-tags.scm",
+        f"{language}.scm"
+    ]
+
+    for name in alternate_names:
+        alt_file = QUERIES_DIR / name
+        if alt_file.exists():
+            return alt_file
+
+    return None
+
+
+def load_query_from_file(language: str) -> Optional[str]:
+    """Load query text from .scm file.
+
+    Args:
+        language: Language name
+
+    Returns:
+        Query text if file exists, None otherwise
+    """
+    scm_file = get_scm_file_path(language)
+
+    if scm_file:
+        return scm_file.read_text()
+
+    return None
+
+
 __all__ = [
     "AST_QUERY_TEMPLATES",
     "SUMMARY_QUERY_TEMPLATES",
     "LANGUAGE_ALIASES",
+    "QUERIES_DIR",
     "build_capture_query",
     "build_field_capture_query",
     "get_ast_query",
+    "get_scm_file_path",
     "get_summary_queries",
     "iter_ast_queries",
+    "load_query_from_file",
     "normalise_language",
 ]
