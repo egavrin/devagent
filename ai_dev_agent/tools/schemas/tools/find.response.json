@@ -29,5 +29,5 @@
     }
   },
   "required": ["files"],
-  "additionalProperties": false
+  "additionalProperties": true
 }

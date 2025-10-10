@@ -6,6 +6,10 @@
       "type": "string",
       "description": "Pattern to search for (string or regex)"
     },
+    "query": {
+      "type": "string",
+      "description": "Pattern to search for (alias for 'pattern')"
+    },
     "path": {
       "type": "string",
       "description": "Directory or file to search in (default: '.')",
@@ -24,6 +28,9 @@
       "default": 200
     }
   },
-  "required": ["pattern"],
-  "additionalProperties": false
+  "anyOf": [
+    {"required": ["pattern"]},
+    {"required": ["query"]}
+  ],
+  "additionalProperties": true
 }

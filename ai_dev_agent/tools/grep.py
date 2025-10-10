@@ -11,7 +11,8 @@ SCHEMA_DIR = Path(__file__).resolve().parent / "schemas" / "tools"
 
 def grep(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
     """Search content in files using ripgrep."""
-    pattern = payload.get("pattern", "")
+    # Normalize: accept both 'pattern' and 'query'
+    pattern = payload.get("pattern") or payload.get("query", "")
     path = payload.get("path", ".")
     regex = payload.get("regex", False)
     limit = min(payload.get("limit", 200), 1000)  # Cap at 1000
