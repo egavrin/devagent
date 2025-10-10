@@ -108,6 +108,20 @@ class TreeSitterParser:
                 symbols, imports, references = self._extract_go_symbols(tree, content)
             elif language == 'rust':
                 symbols, imports, references = self._extract_rust_symbols(tree, content)
+            elif language == 'php':
+                symbols, imports, references = self._extract_php_symbols(tree, content)
+            elif language == 'c_sharp':
+                symbols, imports, references = self._extract_csharp_symbols(tree, content)
+            elif language == 'ruby':
+                symbols, imports, references = self._extract_ruby_symbols(tree, content)
+            elif language == 'kotlin':
+                symbols, imports, references = self._extract_kotlin_symbols(tree, content)
+            elif language == 'scala':
+                symbols, imports, references = self._extract_scala_symbols(tree, content)
+            elif language == 'bash':
+                symbols, imports, references = self._extract_bash_symbols(tree, content)
+            elif language == 'lua':
+                symbols, imports, references = self._extract_lua_symbols(tree, content)
             else:
                 # Generic extraction for other languages
                 symbols = self._extract_generic_symbols(tree, content)
@@ -436,3 +450,281 @@ class TreeSitterParser:
         except Exception as e:
             logger.debug(f"Generic symbol extraction failed: {e}")
             return []
+
+    def _extract_php_symbols(self, tree, content: bytes) -> Tuple[List[str], List[str], List[str]]:
+        """Extract PHP symbols using tree-sitter."""
+        symbols = []
+        imports = []
+        references = []
+
+        query_text = """
+        (class_declaration name: (name) @class)
+        (interface_declaration name: (name) @interface)
+        (trait_declaration name: (name) @trait)
+        (function_definition name: (name) @function)
+        (method_declaration name: (name) @method)
+        (namespace_definition name: (namespace_name) @namespace)
+        (namespace_use_clause (qualified_name) @use)
+        (function_call_expression function: (name) @function_call)
+        """
+
+        try:
+            cache_key = ('php', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('php')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
+            captures = query.captures(tree.root_node)
+
+            for node, capture_name in captures:
+                text = content[node.start_byte:node.end_byte].decode('utf-8', errors='ignore')
+
+                if capture_name in ['class', 'interface', 'trait', 'namespace']:
+                    symbols.append(text)
+                elif capture_name in ['function', 'method']:
+                    symbols.append(text)
+                elif capture_name == 'use':
+                    imports.append(text)
+                elif capture_name == 'function_call':
+                    references.append(text)
+
+        except Exception as e:
+            pass
+
+        return symbols, imports, references
+
+    def _extract_csharp_symbols(self, tree, content: bytes) -> Tuple[List[str], List[str], List[str]]:
+        """Extract C# symbols using tree-sitter."""
+        symbols = []
+        imports = []
+        references = []
+
+        query_text = """
+        (class_declaration name: (identifier) @class)
+        (interface_declaration name: (identifier) @interface)
+        (struct_declaration name: (identifier) @struct)
+        (enum_declaration name: (identifier) @enum)
+        (method_declaration name: (identifier) @method)
+        (namespace_declaration name: (identifier) @namespace)
+        (using_directive (identifier) @using)
+        (invocation_expression function: (identifier) @function_call)
+        """
+
+        try:
+            cache_key = ('c_sharp', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('c_sharp')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
+            captures = query.captures(tree.root_node)
+
+            for node, capture_name in captures:
+                text = content[node.start_byte:node.end_byte].decode('utf-8', errors='ignore')
+
+                if capture_name in ['class', 'interface', 'struct', 'enum', 'namespace']:
+                    symbols.append(text)
+                elif capture_name == 'method':
+                    symbols.append(text)
+                elif capture_name == 'using':
+                    imports.append(text)
+                elif capture_name == 'function_call':
+                    references.append(text)
+
+        except Exception as e:
+            pass
+
+        return symbols, imports, references
+
+    def _extract_ruby_symbols(self, tree, content: bytes) -> Tuple[List[str], List[str], List[str]]:
+        """Extract Ruby symbols using tree-sitter."""
+        symbols = []
+        imports = []
+        references = []
+
+        query_text = """
+        (class (constant) @class)
+        (module (constant) @module)
+        (method name: (identifier) @method)
+        (singleton_method name: (identifier) @singleton_method)
+        (call method: (identifier) @method_call)
+        """
+
+        try:
+            cache_key = ('ruby', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('ruby')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
+            captures = query.captures(tree.root_node)
+
+            for node, capture_name in captures:
+                text = content[node.start_byte:node.end_byte].decode('utf-8', errors='ignore')
+
+                if capture_name in ['class', 'module']:
+                    symbols.append(text)
+                elif capture_name in ['method', 'singleton_method']:
+                    symbols.append(text)
+                elif capture_name == 'method_call':
+                    references.append(text)
+
+        except Exception as e:
+            pass
+
+        return symbols, imports, references
+
+    def _extract_kotlin_symbols(self, tree, content: bytes) -> Tuple[List[str], List[str], List[str]]:
+        """Extract Kotlin symbols using tree-sitter."""
+        symbols = []
+        imports = []
+        references = []
+
+        query_text = """
+        (class_declaration (type_identifier) @class)
+        (object_declaration (type_identifier) @object)
+        (function_declaration (simple_identifier) @function)
+        (import_header) @import
+        (call_expression (simple_identifier) @function_call)
+        """
+
+        try:
+            cache_key = ('kotlin', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('kotlin')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
+            captures = query.captures(tree.root_node)
+
+            for node, capture_name in captures:
+                text = content[node.start_byte:node.end_byte].decode('utf-8', errors='ignore')
+
+                if capture_name in ['class', 'object']:
+                    # Also treat interface as class since it uses class_declaration
+                    symbols.append(text)
+                elif capture_name == 'function':
+                    symbols.append(text)
+                elif capture_name == 'import':
+                    imports.append(text)
+                elif capture_name == 'function_call':
+                    references.append(text)
+
+        except Exception as e:
+            pass
+
+        return symbols, imports, references
+
+    def _extract_scala_symbols(self, tree, content: bytes) -> Tuple[List[str], List[str], List[str]]:
+        """Extract Scala symbols using tree-sitter."""
+        symbols = []
+        imports = []
+        references = []
+
+        query_text = """
+        (class_definition (identifier) @class)
+        (object_definition (identifier) @object)
+        (trait_definition (identifier) @trait)
+        (function_definition (identifier) @function)
+        (function_declaration (identifier) @function_decl)
+        (import_declaration) @import
+        (call_expression function: (identifier) @function_call)
+        """
+
+        try:
+            cache_key = ('scala', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('scala')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
+            captures = query.captures(tree.root_node)
+
+            for node, capture_name in captures:
+                text = content[node.start_byte:node.end_byte].decode('utf-8', errors='ignore')
+
+                if capture_name in ['class', 'object', 'trait']:
+                    symbols.append(text)
+                elif capture_name in ['function', 'function_decl']:
+                    symbols.append(text)
+                elif capture_name == 'import':
+                    imports.append(text)
+                elif capture_name == 'function_call':
+                    references.append(text)
+
+        except Exception as e:
+            pass
+
+        return symbols, imports, references
+
+    def _extract_bash_symbols(self, tree, content: bytes) -> Tuple[List[str], List[str], List[str]]:
+        """Extract Bash symbols using tree-sitter."""
+        symbols = []
+        imports = []
+        references = []
+
+        query_text = """
+        (function_definition name: (word) @function)
+        (command name: (command_name (word) @command))
+        """
+
+        try:
+            cache_key = ('bash', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('bash')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
+            captures = query.captures(tree.root_node)
+
+            for node, capture_name in captures:
+                text = content[node.start_byte:node.end_byte].decode('utf-8', errors='ignore')
+
+                if capture_name == 'function':
+                    symbols.append(text)
+                elif capture_name == 'command':
+                    # Only include custom commands (not built-ins)
+                    if text not in {'echo', 'cd', 'ls', 'cat', 'grep', 'sed', 'awk', 'source', 'export'}:
+                        references.append(text)
+
+        except Exception as e:
+            pass
+
+        return symbols, imports, references
+
+    def _extract_lua_symbols(self, tree, content: bytes) -> Tuple[List[str], List[str], List[str]]:
+        """Extract Lua symbols using tree-sitter."""
+        symbols = []
+        imports = []
+        references = []
+
+        query_text = """
+        (function_definition_statement (identifier) @function)
+        (local_function_definition_statement (identifier) @local_function)
+        (call (variable (identifier) @function_call))
+        """
+
+        try:
+            cache_key = ('lua', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('lua')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
+            captures = query.captures(tree.root_node)
+
+            for node, capture_name in captures:
+                text = content[node.start_byte:node.end_byte].decode('utf-8', errors='ignore')
+
+                if capture_name in ['function', 'local_function']:
+                    symbols.append(text)
+                elif capture_name == 'function_call':
+                    references.append(text)
+
+        except Exception as e:
+            import traceback
+            logger.debug(f"Lua symbol extraction failed: {e}")
+            logger.debug(traceback.format_exc())
+
+        return symbols, imports, references
