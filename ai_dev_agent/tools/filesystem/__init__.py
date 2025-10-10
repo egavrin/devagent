@@ -25,7 +25,24 @@ def _fs_read(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, A
     byte_range = payload.get("byte_range")
     context_lines = payload.get("context_lines")
 
-    for rel in payload["paths"]:
+    paths_param = payload.get("paths")
+    if paths_param is None:
+        single_path = payload.get("path")
+        if isinstance(single_path, str) and single_path.strip():
+            paths_param = [single_path]
+        else:
+            paths_param = []
+    elif isinstance(paths_param, (str, bytes)):
+        # Allow degenerate inputs that pass validation but provide a single string
+        if isinstance(paths_param, bytes):
+            paths_param = [paths_param.decode("utf-8", errors="ignore")]
+        else:
+            paths_param = [paths_param]
+
+    if not paths_param:
+        raise ValueError("No readable paths provided")
+
+    for rel in paths_param:
         target = _resolve_path(repo_root, rel)
         if not target.exists() or not target.is_file():
             raise ValueError(f"File '{rel}' not found in workspace")
