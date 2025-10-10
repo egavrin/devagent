@@ -92,6 +92,26 @@ class RepoMap:
     MAX_FASTPATH_MENTIONS = 80
     MAX_DIRECTORY_MATCHES = 32
 
+    # Performance optimizations
+    MAX_FILE_SIZE = 1 * 1024 * 1024  # 1MB - skip tree-sitter for larger files
+    LARGE_FILE_SIZE = 100 * 1024  # 100KB - warn for large files
+
+    # Smart filtering - generated/build files to skip
+    GENERATED_FILE_PATTERNS = {
+        '_generated', '.generated', '.gen.',
+        '_pb2.py', '.pb.cc', '.pb.h',  # Protocol buffers
+        '.min.js', '.min.css',  # Minified
+        '-lock.', 'lock.json',  # Lock files
+        '.cache', '.bundle',
+    }
+
+    GENERATED_DIR_PATTERNS = {
+        'generated', '.generated', 'gen', '__generated__',
+        'dist', 'build', 'target', 'out', 'output',
+        '.next', '.nuxt', '.vuepress',  # Framework build dirs
+        'coverage', '.coverage',  # Test coverage
+    }
+
     # Symbol noise filter: common symbols that create noisy dependency edges
     NOISE_SYMBOLS = frozenset({
         # Single-letter variables
@@ -248,6 +268,23 @@ class RepoMap:
         except Exception as e:
             self.logger.warning(f"Failed to save cache: {e}")
 
+    def _should_skip_file(self, file_path: Path) -> Tuple[bool, str]:
+        """Check if a file should be skipped. Returns (should_skip, reason)."""
+        file_name = file_path.name.lower()
+
+        # Check for generated file patterns
+        for pattern in self.GENERATED_FILE_PATTERNS:
+            if pattern in file_name:
+                return True, f"generated file pattern: {pattern}"
+
+        # Check for generated directories
+        for part in file_path.parts:
+            part_lower = part.lower()
+            if part_lower in self.GENERATED_DIR_PATTERNS:
+                return True, f"generated directory: {part}"
+
+        return False, ""
+
     def _rebuild_indices(self) -> None:
         """Rebuild symbol and import indices from file information."""
         self.context.symbol_index.clear()
@@ -299,38 +336,73 @@ class RepoMap:
         # Track scanned files to detect deletions
         scanned_files = set()
 
+        # Statistics for logging
+        stats = {
+            'total': 0,
+            'scanned': 0,
+            'skipped_generated': 0,
+            'skipped_large': 0,
+            'skipped_hidden': 0,
+            'errors': 0
+        }
+
         # Scan all files with supported extensions
         for file_path in self.root_path.rglob('*'):
+            stats['total'] += 1
+
             if not file_path.is_file():
                 continue
 
             # Skip cache and common ignore directories
-            if any(part.startswith('.') or part in {'node_modules', '__pycache__', 'venv', 'dist', 'build', 'target', 'out'}
+            if any(part.startswith('.') or part in {'node_modules', '__pycache__', 'venv'}
                    for part in file_path.parts):
+                stats['skipped_hidden'] += 1
+                continue
+
+            # Smart filtering - skip generated files
+            should_skip, skip_reason = self._should_skip_file(file_path)
+            if should_skip:
+                stats['skipped_generated'] += 1
+                self.logger.debug(f"Skipping {file_path.name}: {skip_reason}")
                 continue
 
             # Check if file has a supported extension
             if file_path.suffix.lower() in extensions:
-                self._scan_file(file_path)
-                # Track this file as scanned
+                result = self._scan_file(file_path)
+                if result == 'scanned':
+                    stats['scanned'] += 1
+                elif result == 'skipped_large':
+                    stats['skipped_large'] += 1
+                elif result == 'error':
+                    stats['errors'] += 1
+
+                # Track this file as scanned (even if skipped for size)
                 relative_path = str(file_path.relative_to(self.root_path))
                 scanned_files.add(relative_path)
 
         # Prune files that no longer exist
         stale_files = set(self.context.files.keys()) - scanned_files
         for stale_file in stale_files:
-            logger.debug(f"Pruning deleted file: {stale_file}")
+            self.logger.debug(f"Pruning deleted file: {stale_file}")
             del self.context.files[stale_file]
-            # Also remove from graph if present
-            if self.graph and self.graph.has_node(stale_file):
-                self.graph.remove_node(stale_file)
 
         self.context.last_updated = current_time
         self._rebuild_indices()
         self._save_cache()
 
-    def _scan_file(self, file_path: Path) -> None:
-        """Scan a single file and extract information."""
+        # Log statistics
+        self.logger.info(
+            f"Repository scan complete: {stats['scanned']} files scanned, "
+            f"{stats['skipped_generated']} generated files skipped, "
+            f"{stats['skipped_large']} large files skipped, "
+            f"{stats['errors']} errors"
+        )
+
+    def _scan_file(self, file_path: Path) -> str:
+        """Scan a single file and extract information.
+
+        Returns: 'scanned', 'skipped_large', 'skipped_cached', or 'error'
+        """
         try:
             stat = file_path.stat()
             relative_path = str(file_path.relative_to(self.root_path))
@@ -338,7 +410,14 @@ class RepoMap:
             # Check if file needs updating
             existing = self.context.files.get(relative_path)
             if existing and existing.modified_time >= stat.st_mtime:
-                return
+                return 'skipped_cached'
+
+            # File size checks
+            if stat.st_size > self.MAX_FILE_SIZE:
+                self.logger.debug(f"Skipping large file {file_path.name}: {stat.st_size / 1024 / 1024:.1f}MB")
+                return 'skipped_large'
+            elif stat.st_size > self.LARGE_FILE_SIZE:
+                self.logger.debug(f"Large file {file_path.name}: {stat.st_size / 1024:.1f}KB")
 
             # Detect language
             language = self._detect_language(file_path)
@@ -367,9 +446,11 @@ class RepoMap:
                 self._extract_with_regex(file_path, file_info, language)
 
             self.context.files[relative_path] = file_info
+            return 'scanned'
 
         except Exception as e:
-            self.logger.debug(f"Failed to scan {file_path}: {e}")
+            self.logger.warning(f"Error scanning {file_path}: {e}")
+            return 'error'
 
     def _detect_language(self, file_path: Path) -> Optional[str]:
         """Detect programming language from file extension."""
