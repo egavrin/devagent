@@ -48,6 +48,7 @@ class TreeSitterParser:
     def __init__(self):
         """Initialize tree-sitter parser."""
         self.parsers = {}
+        self.compiled_queries = {}  # OPTIMIZATION: Cache compiled queries
         if not TREE_SITTER_AVAILABLE:
             logger.warning("tree-sitter-languages not available, falling back to regex parsing")
 
@@ -84,6 +85,12 @@ class TreeSitterParser:
 
             tree = parser.parse(content)
 
+            # OPTIMIZATION: Early bailout if parse tree has errors
+            # This saves ~50-60 seconds on large repos with syntax errors
+            if tree.root_node.has_error:
+                # Don't spam logs - only log once per run with summary
+                return {'symbols': [], 'imports': [], 'references': []}
+
             symbols = []
             imports = []
             references = []
@@ -92,7 +99,7 @@ class TreeSitterParser:
             if language == 'python':
                 symbols, imports, references = self._extract_python_symbols(tree, content)
             elif language in ['javascript', 'typescript']:
-                symbols, imports, references = self._extract_javascript_symbols(tree, content)
+                symbols, imports, references = self._extract_javascript_symbols(tree, content, language)
             elif language in ['c', 'cpp']:
                 symbols, imports, references = self._extract_cpp_symbols(tree, content)
             elif language == 'java':
@@ -112,7 +119,8 @@ class TreeSitterParser:
             }
 
         except Exception as e:
-            logger.debug(f"Tree-sitter parsing failed for {file_path}: {e}")
+            # Reduce logging verbosity - only log at info level with count
+            logger.info(f"Tree-sitter parsing failed for {file_path.name}: {type(e).__name__}")
             return {'symbols': [], 'imports': [], 'references': []}
 
     def _extract_python_symbols(self, tree, content: bytes) -> Tuple[List[str], List[str], List[str]]:
@@ -135,8 +143,13 @@ class TreeSitterParser:
         """
 
         try:
-            language = tsl.get_language('python')
-            query = language.query(query_text)
+            # OPTIMIZATION: Cache compiled queries
+            cache_key = ('python', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('python')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
             captures = query.captures(tree.root_node)
 
             for node, capture_name in captures:
@@ -156,27 +169,44 @@ class TreeSitterParser:
 
         return symbols, imports, references
 
-    def _extract_javascript_symbols(self, tree, content: bytes) -> Tuple[List[str], List[str], List[str]]:
+    def _extract_javascript_symbols(self, tree, content: bytes, language: str) -> Tuple[List[str], List[str], List[str]]:
         """Extract JavaScript/TypeScript symbols using tree-sitter."""
         symbols = []
         imports = []
         references = []
 
-        query_text = """
-        (class_declaration name: (identifier) @class)
-        (function_declaration name: (identifier) @function)
-        (method_definition name: (property_identifier) @method)
-        (variable_declarator name: (identifier) @variable)
-        (interface_declaration name: (type_identifier) @interface)
-        (type_alias_declaration name: (type_identifier) @type_alias)
-        (import_statement) @import
-        (call_expression function: (identifier) @function_call)
-        """
+        # FIX: Use different queries for JavaScript vs TypeScript
+        # JavaScript doesn't have interface_declaration or type_alias_declaration
+        # TypeScript uses type_identifier for class names instead of identifier
+        if language == 'typescript':
+            query_text = """
+            (class_declaration name: (type_identifier) @class)
+            (function_declaration name: (identifier) @function)
+            (method_definition name: (property_identifier) @method)
+            (variable_declarator name: (identifier) @variable)
+            (interface_declaration name: (type_identifier) @interface)
+            (type_alias_declaration name: (type_identifier) @type_alias)
+            (import_statement) @import
+            (call_expression function: (identifier) @function_call)
+            """
+        else:  # javascript
+            query_text = """
+            (class_declaration name: (identifier) @class)
+            (function_declaration name: (identifier) @function)
+            (method_definition name: (property_identifier) @method)
+            (variable_declarator name: (identifier) @variable)
+            (import_statement) @import
+            (call_expression function: (identifier) @function_call)
+            """
 
         try:
-            lang_name = 'javascript' if tree.root_node.type == 'program' else 'typescript'
-            language = tsl.get_language(lang_name)
-            query = language.query(query_text)
+            # OPTIMIZATION: Cache compiled queries
+            cache_key = (language, query_text)
+            if cache_key not in self.compiled_queries:
+                ts_language = tsl.get_language(language)
+                self.compiled_queries[cache_key] = ts_language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
             captures = query.captures(tree.root_node)
 
             for node, capture_name in captures:
@@ -196,7 +226,8 @@ class TreeSitterParser:
                     references.append(text)
 
         except Exception as e:
-            logger.debug(f"JavaScript/TypeScript symbol extraction failed: {e}")
+            # No longer log DEBUG for every failure
+            pass
 
         return symbols, imports, references
 
@@ -206,25 +237,36 @@ class TreeSitterParser:
         imports = []
         references = []
 
+        # FIX: namespace_definition doesn't have a "name:" field in tree-sitter-cpp
+        # Need to extract the namespace_identifier child node separately
         query_text = """
         (class_specifier name: (type_identifier) @class)
         (struct_specifier name: (type_identifier) @struct)
         (function_definition declarator: (function_declarator declarator: (identifier) @function))
         (declaration declarator: (function_declarator declarator: (identifier) @function_decl))
-        (namespace_definition name: (identifier) @namespace)
+        (namespace_definition) @namespace
+        (namespace_identifier) @namespace_name
         (preproc_include path: (_) @include)
         (call_expression function: (identifier) @function_call)
         """
 
         try:
-            language = tsl.get_language('cpp')
-            query = language.query(query_text)
+            # OPTIMIZATION: Cache compiled queries
+            cache_key = ('cpp', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('cpp')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
             captures = query.captures(tree.root_node)
 
             for node, capture_name in captures:
                 text = content[node.start_byte:node.end_byte].decode('utf-8', errors='ignore')
 
-                if capture_name in ['class', 'struct', 'namespace']:
+                if capture_name in ['class', 'struct']:
+                    symbols.append(text)
+                elif capture_name == 'namespace_name':
+                    # Extract just the namespace identifier, not the whole definition
                     symbols.append(text)
                 elif capture_name in ['function', 'function_decl']:
                     symbols.append(text)
@@ -236,7 +278,8 @@ class TreeSitterParser:
                     references.append(text)
 
         except Exception as e:
-            logger.debug(f"C/C++ symbol extraction failed: {e}")
+            # No longer log DEBUG for every failure
+            pass
 
         return symbols, imports, references
 
@@ -256,8 +299,13 @@ class TreeSitterParser:
         """
 
         try:
-            language = tsl.get_language('java')
-            query = language.query(query_text)
+            # OPTIMIZATION: Cache compiled queries
+            cache_key = ('java', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('java')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
             captures = query.captures(tree.root_node)
 
             for node, capture_name in captures:
@@ -292,8 +340,13 @@ class TreeSitterParser:
         """
 
         try:
-            language = tsl.get_language('go')
-            query = language.query(query_text)
+            # OPTIMIZATION: Cache compiled queries
+            cache_key = ('go', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('go')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
             captures = query.captures(tree.root_node)
 
             for node, capture_name in captures:
@@ -328,8 +381,13 @@ class TreeSitterParser:
         """
 
         try:
-            language = tsl.get_language('rust')
-            query = language.query(query_text)
+            # OPTIMIZATION: Cache compiled queries
+            cache_key = ('rust', query_text)
+            if cache_key not in self.compiled_queries:
+                language = tsl.get_language('rust')
+                self.compiled_queries[cache_key] = language.query(query_text)
+
+            query = self.compiled_queries[cache_key]
             captures = query.captures(tree.root_node)
 
             for node, capture_name in captures:

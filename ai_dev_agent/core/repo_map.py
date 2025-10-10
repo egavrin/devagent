@@ -89,6 +89,9 @@ class RepoMap:
     CACHE_DIR = ".devagent_cache"
     CACHE_VERSION = "1.0"
 
+    MAX_FASTPATH_MENTIONS = 80
+    MAX_DIRECTORY_MATCHES = 32
+
     # Symbol noise filter: common symbols that create noisy dependency edges
     NOISE_SYMBOLS = frozenset({
         # Single-letter variables
@@ -717,11 +720,101 @@ class RepoMap:
         except Exception:
             pass
 
+    def _normalize_mentions(
+        self,
+        mentioned_files: Set[str]
+    ) -> Tuple[Set[str], Set[str], Set[str], Tuple[str, ...]]:
+        """Normalize mentioned file strings for fast lookup."""
+        if not mentioned_files:
+            return set(), set(), set(), tuple()
+
+        mention_list = list(mentioned_files)
+        original_count = len(mention_list)
+        if original_count > self.MAX_FASTPATH_MENTIONS:
+            mention_list = sorted(mention_list)[:self.MAX_FASTPATH_MENTIONS]
+            self.logger.debug(
+                "Trimming mentioned_files from %d to %d entries for ranking safety",
+                original_count,
+                len(mention_list)
+            )
+
+        trimmed_set = set(mention_list)
+        mentioned_names: Set[str] = set()
+        mentioned_stems: Set[str] = set()
+        directory_mentions: List[str] = []
+
+        for raw in mention_list:
+            stripped = raw.strip()
+            if not stripped:
+                continue
+
+            path_obj = Path(stripped)
+            suffix = path_obj.suffix
+            if suffix:
+                mentioned_names.add(path_obj.name)
+                stem = path_obj.stem
+                if len(stem) > 3:
+                    mentioned_stems.add(stem)
+            else:
+                candidate = stripped.split('/')[-1]
+                if '.' in candidate:
+                    mentioned_names.add(candidate)
+                    stem = Path(candidate).stem
+                    if len(stem) > 3:
+                        mentioned_stems.add(stem)
+
+            if ('/' in stripped or '\\' in stripped) and len(stripped) > 6:
+                directory_mentions.append(stripped)
+
+        if len(directory_mentions) > self.MAX_DIRECTORY_MATCHES:
+            directory_mentions = directory_mentions[:self.MAX_DIRECTORY_MATCHES]
+
+        return trimmed_set, mentioned_names, mentioned_stems, tuple(directory_mentions)
+
+    def _symbol_match_score(
+        self,
+        file_info: FileInfo,
+        mentioned_symbols: Set[str],
+        long_symbol_prefixes: Tuple[str, ...]
+    ) -> float:
+        """Compute symbol-based score contributions for a file."""
+        if not mentioned_symbols:
+            return 0.0
+
+        direct_matches = 0
+        prefix_matches = 0
+
+        for symbol in file_info.symbols:
+            if symbol in mentioned_symbols:
+                direct_matches += 1
+            elif long_symbol_prefixes:
+                for prefix in long_symbol_prefixes:
+                    if symbol.startswith(prefix):
+                        prefix_matches += 1
+                        break
+
+        score = 0.0
+        if direct_matches:
+            score += direct_matches * 100.0
+        elif prefix_matches:
+            score += prefix_matches * 50.0
+
+        if file_info.symbols_used:
+            used_matches = sum(1 for sym in file_info.symbols_used if sym in mentioned_symbols)
+            if used_matches:
+                score += used_matches * 3.0
+
+        return score
+
     def _quick_rank_by_symbols(
         self,
         mentioned_files: Set[str],
         mentioned_symbols: Set[str],
-        max_files: int = 20
+        max_files: int,
+        mentioned_names: Set[str],
+        mentioned_stems: Set[str],
+        directory_mentions: Tuple[str, ...],
+        long_symbol_prefixes: Tuple[str, ...]
     ) -> List[Tuple[str, float]]:
         """Quick ranking based on direct symbol/file matches (no PageRank).
 
@@ -731,48 +824,35 @@ class RepoMap:
         Returns: List of (file_path, score) tuples, sorted by score descending.
         """
         rankings = {}
+        mentioned_symbols = set(mentioned_symbols)
 
         for file_path, file_info in self.context.files.items():
             score = 0.0
 
-            # Check for exact filename matches
-            file_name = Path(file_path).name
-            for mentioned in mentioned_files:
-                # Exact filename match - MASSIVE boost
-                if Path(mentioned).name == file_name or mentioned == file_path:
+            matched_name_or_stem = False
+            if mentioned_names or mentioned_stems or directory_mentions:
+                path_obj = Path(file_path)
+                file_name = path_obj.name
+                file_stem = path_obj.stem
+
+                if mentioned_names and file_name in mentioned_names:
                     score += 1000.0
-                    break
-                # Stem match (filename without extension)
-                if Path(mentioned).stem == Path(file_path).stem and len(Path(file_path).stem) > 3:
+                    matched_name_or_stem = True
+                elif mentioned_stems and len(file_stem) > 3 and file_stem in mentioned_stems:
                     score += 500.0
-                    break
-                # Directory match - modest boost, only for specific paths
-                # Require at least 2 path components to avoid broad matches
-                if len(mentioned) > 10 and mentioned.count('/') >= 1 and mentioned in file_path:
-                    score += 50.0  # Reduced from 200 to avoid bypassing PageRank
-                    break
+                    matched_name_or_stem = True
+
+                if not matched_name_or_stem and directory_mentions:
+                    for fragment in directory_mentions:
+                        if fragment in file_path:
+                            score += 50.0  # modest boost to avoid bypassing PageRank
+                            break
 
             # Direct file path mention
             if file_path in mentioned_files:
                 score += 50.0
 
-            # Symbol matches - HUGE boost (primary signal)
-            matching_symbols = set(file_info.symbols) & mentioned_symbols
-            if matching_symbols:
-                score += len(matching_symbols) * 100.0
-            else:
-                # Prefix matches for longer symbols
-                for mentioned_sym in mentioned_symbols:
-                    if len(mentioned_sym) >= 8:
-                        prefix_matches = [s for s in file_info.symbols if s.startswith(mentioned_sym)]
-                        if prefix_matches:
-                            score += len(prefix_matches) * 50.0
-
-            # Check if symbols are used (referenced) in the file
-            if file_info.symbols_used:
-                used_symbols = set(file_info.symbols_used) & mentioned_symbols
-                if used_symbols:
-                    score += len(used_symbols) * 3.0
+            score += self._symbol_match_score(file_info, mentioned_symbols, long_symbol_prefixes)
 
             # File size penalty (prefer smaller files)
             if file_info.size > 10000:
@@ -803,12 +883,20 @@ class RepoMap:
         matches), not just directory matches, to avoid ranking regression.
         """
 
+        mentioned_symbols = set(mentioned_symbols)
+        mentioned_files, mentioned_names, mentioned_stems, directory_mentions = self._normalize_mentions(mentioned_files)
+        long_symbol_prefixes = tuple(sym for sym in mentioned_symbols if len(sym) >= 8)
+
         # OPTIMIZATION: Try fast-path ranking first (no PageRank needed)
         if mentioned_files or mentioned_symbols:
             quick_results = self._quick_rank_by_symbols(
                 mentioned_files,
                 mentioned_symbols,
-                max_files
+                max_files,
+                mentioned_names,
+                mentioned_stems,
+                directory_mentions,
+                long_symbol_prefixes
             )
 
             # Use fast-path ONLY if we have strong evidence of relevance:
@@ -830,10 +918,7 @@ class RepoMap:
 
                 # However, we should check: did we get a symbol or file match?
                 has_symbol_match = bool(mentioned_symbols)
-                has_exact_file_match = any(
-                    Path(m).name == Path(top_file).name or m == top_file
-                    for m in mentioned_files
-                ) if mentioned_files else False
+                has_exact_file_match = top_file in mentioned_files or Path(top_file).name in mentioned_names
 
                 # Use fast-path if we have explicit symbol or file evidence
                 if has_symbol_match or has_exact_file_match or top_score >= 500:
@@ -867,57 +952,40 @@ class RepoMap:
             pagerank_score = self.context.pagerank_scores.get(file_path, 0.0)
             score = pagerank_score * 100  # Scale up for visibility
 
-            # NEW: Check for exact filename matches (e.g., "commands.py")
-            file_name = Path(file_path).name
-            for mentioned in mentioned_files:
-                # Exact filename match - MASSIVE boost
-                if Path(mentioned).name == file_name or mentioned == file_path:
-                    score += 1000.0
-                    break
-                # Stem match (filename without extension)
-                if Path(mentioned).stem == Path(file_path).stem and len(Path(file_path).stem) > 3:
-                    score += 500.0
-                    break
-                # NEW: Directory match - boost all files in that directory
-                # e.g., "bytecode_optimizer" boosts all files in bytecode_optimizer/
-                if len(mentioned) > 6 and mentioned in file_path:
-                    score += 200.0
-                    break
+            matched_name_or_stem = False
+            if mentioned_names or mentioned_stems or directory_mentions:
+                path_obj = Path(file_path)
+                file_name = path_obj.name
+                file_stem = path_obj.stem
 
-            # Direct file path mention - high boost
+                if mentioned_names and file_name in mentioned_names:
+                    score += 1000.0
+                    matched_name_or_stem = True
+                elif mentioned_stems and len(file_stem) > 3 and file_stem in mentioned_stems:
+                    score += 500.0
+                    matched_name_or_stem = True
+
+                if not matched_name_or_stem and directory_mentions:
+                    for fragment in directory_mentions:
+                        if fragment in file_path:
+                            score += 200.0
+                            break
+
             if file_path in mentioned_files:
                 score += 50.0
 
-            # Symbol matches - HUGE boost (this is the most important signal)
-            matching_symbols = set(file_info.symbols) & mentioned_symbols
-            if matching_symbols:
-                # Give massive boost for exact symbol matches (primary signal)
-                # This should dominate PageRank for direct queries
-                symbol_boost = len(matching_symbols) * 100.0
-                score += symbol_boost
-            else:
-                # Check for prefix matches (e.g., "BytecodeOptimizer" matches "BytecodeOptimizerRuntimeAdapter")
-                # This is more conservative than substring matching
-                for mentioned_sym in mentioned_symbols:
-                    if len(mentioned_sym) >= 8:  # Only for meaningful symbols
-                        # Check if mentioned symbol is a prefix of any file symbol
-                        prefix_matches = [s for s in file_info.symbols if s.startswith(mentioned_sym)]
-                        if prefix_matches:
-                            # Give significant boost for prefix matches (less than exact but still high)
-                            score += len(prefix_matches) * 50.0
+            score += self._symbol_match_score(file_info, mentioned_symbols, long_symbol_prefixes)
 
-            # Import relationships
-            for mentioned in mentioned_files:
-                if mentioned in file_info.dependencies:
-                    score += 5.0
-                if file_path in self.context.files.get(mentioned, FileInfo('', 0, 0)).dependencies:
-                    score += 5.0
+            if mentioned_files and file_info.dependencies:
+                dependency_hits = file_info.dependencies & mentioned_files
+                if dependency_hits:
+                    score += len(dependency_hits) * 5.0
 
-            # Check if symbols are used (referenced) in the file
-            if file_info.symbols_used:
-                used_symbols = set(file_info.symbols_used) & mentioned_symbols
-                if used_symbols:
-                    score += len(used_symbols) * 3.0
+            if mentioned_files:
+                for mentioned in mentioned_files:
+                    mentioned_info = self.context.files.get(mentioned)
+                    if mentioned_info and file_path in mentioned_info.dependencies:
+                        score += 5.0
 
             # File size penalty (prefer smaller files)
             if file_info.size > 10000:

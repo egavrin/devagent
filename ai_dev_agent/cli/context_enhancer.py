@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 class ContextEnhancer:
     """Automatically enhances queries with RepoMap context, like Aider does."""
 
+    FILE_MENTION_LIMIT = 40
+    DIRECTORY_MENTION_LIMIT = 8
+
     def __init__(self, workspace: Optional[Path] = None, settings: Optional[Settings] = None):
         self.workspace = workspace or Path.cwd()
         self.settings = settings or Settings()
@@ -39,8 +42,10 @@ class ContextEnhancer:
 
     def extract_symbols_and_files(self, text: str) -> Tuple[Set[str], Set[str]]:
         """Extract symbols and file mentions from text."""
-        symbols = set()
-        files = set()
+        symbols: Set[str] = set()
+        files_in_order: List[str] = []
+        files_seen: Set[str] = set()
+        directory_mentions = 0
 
         # Common English words to exclude
         stop_words = {'what', 'where', 'when', 'how', 'why', 'who', 'which', 'the',
@@ -60,7 +65,9 @@ class ContextEnhancer:
         potential_files = re.findall(r'[\w./\-]+\.\w+', text)
         for pf in potential_files:
             if '.' in pf and not pf.startswith('http'):
-                files.add(pf)
+                if pf not in files_seen:
+                    files_seen.add(pf)
+                    files_in_order.append(pf)
 
         # NEW: Extract bare filenames (e.g., "commands.py", "helpers.h")
         # This catches filenames mentioned without paths
@@ -69,7 +76,9 @@ class ContextEnhancer:
             if '.' in word:
                 parts = word.split('.')
                 if len(parts) == 2 and parts[1].lower() in FILE_EXTENSIONS:
-                    files.add(word)
+                    if word not in files_seen:
+                        files_seen.add(word)
+                        files_in_order.append(word)
 
         # NEW: Match against actual repo files (most powerful)
         if self._initialized and self.repo_map.context.files:
@@ -80,7 +89,9 @@ class ContextEnhancer:
 
                 # Check if exact filename is mentioned
                 if file_name in text_lower:
-                    files.add(file_path)
+                    if file_path not in files_seen:
+                        files_seen.add(file_path)
+                        files_in_order.append(file_path)
                     if self.settings.repomap_debug_stdout:
                         logger.debug(f"Matched repo file: {file_path} (from filename: {file_name})")
                     continue
@@ -90,7 +101,9 @@ class ContextEnhancer:
                 if len(stem) > 3 and stem in text_lower:
                     # Only if stem appears as a word boundary
                     if re.search(r'\b' + re.escape(stem) + r'\b', text_lower):
-                        files.add(file_path)
+                        if file_path not in files_seen:
+                            files_seen.add(file_path)
+                            files_in_order.append(file_path)
                         if self.settings.repomap_debug_stdout:
                             logger.debug(f"Matched repo file: {file_path} (from stem: {stem})")
 
@@ -102,7 +115,10 @@ class ContextEnhancer:
                     if len(part_lower) > 6 and part_lower in text_lower:
                         if re.search(r'\b' + re.escape(part_lower) + r'\b', text_lower):
                             # Add this as a "directory mention" - will boost all files in that dir
-                            files.add(part)  # Just add the directory name
+                            if part not in files_seen and directory_mentions < self.DIRECTORY_MENTION_LIMIT:
+                                files_seen.add(part)
+                                files_in_order.append(part)
+                                directory_mentions += 1
                             if self.settings.repomap_debug_stdout:
                                 logger.debug(f"Matched directory: {part} (matches files in {file_path})")
                             break
@@ -126,7 +142,24 @@ class ContextEnhancer:
         single_caps = re.findall(r'\b[A-Z][a-z]{2,}\b', text)
         symbols.update(w for w in single_caps if w.lower() not in stop_words)
 
-        return symbols, files
+        prioritized_files: List[str]
+        if self._initialized and self.repo_map.context.files:
+            repo_files: List[str] = []
+            extra_entries: List[str] = []
+            repo_index = self.repo_map.context.files
+            for entry in files_in_order:
+                if entry in repo_index:
+                    repo_files.append(entry)
+                else:
+                    extra_entries.append(entry)
+            prioritized_files = repo_files + extra_entries
+        else:
+            prioritized_files = files_in_order
+
+        if len(prioritized_files) > self.FILE_MENTION_LIMIT:
+            prioritized_files = prioritized_files[:self.FILE_MENTION_LIMIT]
+
+        return symbols, set(prioritized_files)
 
     def enhance_query_with_context(self, query: str, max_files: int = 15) -> str:
         """Enhance a query with automatic RepoMap context."""
