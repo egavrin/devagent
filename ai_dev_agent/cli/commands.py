@@ -480,6 +480,245 @@ def _load_json_schema(path: str) -> Optional[Dict[str, Any]]:
         raise click.ClickException(f"Failed to read schema file '{path}': {exc}") from exc
 
 
+# =============================================================================
+# Work Planning Commands
+# =============================================================================
+
+@cli.group(name="plan")
+def plan_group():
+    """Manage work plans and tasks."""
+    pass
+
+
+def _resolve_plan_id(agent, partial_id: str):
+    """
+    Resolve a partial plan ID to a full plan, checking for ambiguity.
+
+    Returns:
+        tuple: (plan, error_message)
+        - If successful: (WorkPlan, None)
+        - If failed: (None, error_string)
+    """
+    plans = agent.storage.list_plans()
+    matching_plans = [p for p in plans if p.id.startswith(partial_id)]
+
+    if not matching_plans:
+        return None, f"❌ Plan not found: {partial_id}"
+
+    if len(matching_plans) > 1:
+        error = f"❌ Ambiguous plan ID. Multiple plans match '{partial_id}':\n"
+        for p in matching_plans:
+            error += f"   - {p.id}: {p.goal}\n"
+        error += "Please provide a longer prefix to uniquely identify the plan."
+        return None, error
+
+    return matching_plans[0], None
+
+
+@plan_group.command(name="create")
+@click.argument("goal")
+@click.option("--context", "-c", help="Additional context for the plan")
+@click.pass_context
+def plan_create(ctx: click.Context, goal: str, context: Optional[str]):
+    """Create a new work plan.
+
+    Example:
+        devagent plan create "Implement user authentication" --context "JWT-based auth with refresh tokens"
+    """
+    from ai_dev_agent.agents.work_planner import WorkPlanningAgent
+
+    agent = WorkPlanningAgent()
+    plan = agent.create_plan(
+        goal=goal,
+        context={"description": context} if context else {}
+    )
+
+    click.echo(f"✓ Created work plan: {plan.id}")
+    click.echo(f"  Goal: {plan.goal}")
+    click.echo(f"  Tasks: {len(plan.tasks)}")
+    click.echo(f"\nUse 'devagent plan show {plan.id}' to view the plan")
+    click.echo(f"Use 'devagent plan next {plan.id}' to get the next task")
+    click.echo(f"Use 'devagent plan start {plan.id} <task_id>' to start a task")
+
+
+@plan_group.command(name="list")
+def plan_list():
+    """List all work plans."""
+    from ai_dev_agent.agents.work_planner import WorkPlanningAgent
+
+    agent = WorkPlanningAgent()
+    plans = agent.storage.list_plans()
+
+    if not plans:
+        click.echo("No work plans found.")
+        return
+
+    click.echo(f"Found {len(plans)} work plan(s):\n")
+    for i, plan in enumerate(plans, 1):
+        progress = plan.get_completion_percentage()
+        status = "✅" if progress == 100 else "🔄" if progress > 0 else "⏳"
+        click.echo(f"{i}. {status} {plan.id[:8]}... - {plan.goal}")
+        click.echo(f"   Progress: {progress:.0f}% ({len([t for t in plan.tasks if t.status.value == 'completed'])}/{len(plan.tasks)} tasks)")
+
+
+@plan_group.command(name="show")
+@click.argument("plan_id")
+def plan_show(plan_id: str):
+    """Show details of a work plan.
+
+    Example:
+        devagent plan show abc123
+    """
+    from ai_dev_agent.agents.work_planner import WorkPlanningAgent
+
+    agent = WorkPlanningAgent()
+
+    # Try to find plan by partial ID
+    plans = agent.storage.list_plans()
+    matching_plans = [p for p in plans if p.id.startswith(plan_id)]
+
+    if not matching_plans:
+        click.echo(f"❌ Plan not found: {plan_id}")
+        return
+
+    if len(matching_plans) > 1:
+        click.echo(f"❌ Ambiguous plan ID. Multiple plans match '{plan_id}':")
+        for p in matching_plans:
+            click.echo(f"   - {p.id}: {p.goal}")
+        return
+
+    plan = matching_plans[0]
+    summary = agent.get_plan_summary(plan.id)
+    click.echo(summary)
+
+
+@plan_group.command(name="next")
+@click.argument("plan_id")
+def plan_next(plan_id: str):
+    """Get the next task to work on.
+
+    Example:
+        devagent plan next abc123
+    """
+    from ai_dev_agent.agents.work_planner import WorkPlanningAgent
+
+    agent = WorkPlanningAgent()
+
+    # Resolve plan ID with ambiguity check
+    plan, error = _resolve_plan_id(agent, plan_id)
+    if error:
+        click.echo(error)
+        return
+
+    next_task = agent.get_next_task(plan.id)
+
+    if not next_task:
+        click.echo("✅ No more tasks available - plan complete!")
+        return
+
+    click.echo(f"Next task: {next_task.title}")
+    click.echo(f"  Priority: {next_task.priority.value}")
+    click.echo(f"  Effort: {next_task.effort_estimate}")
+    click.echo(f"  Description: {next_task.description}")
+    if next_task.acceptance_criteria:
+        click.echo(f"  Acceptance criteria:")
+        for criterion in next_task.acceptance_criteria:
+            click.echo(f"    - {criterion}")
+    click.echo(f"\nTask ID: {next_task.id}")
+    click.echo(f"Use 'devagent plan start {plan.id} {next_task.id}' to begin")
+
+
+@plan_group.command(name="start")
+@click.argument("plan_id")
+@click.argument("task_id")
+def plan_start(plan_id: str, task_id: str):
+    """Mark a task as started.
+
+    Example:
+        devagent plan start abc123 def456
+    """
+    from ai_dev_agent.agents.work_planner import WorkPlanningAgent
+
+    agent = WorkPlanningAgent()
+
+    # Resolve plan ID with ambiguity check
+    plan, error = _resolve_plan_id(agent, plan_id)
+    if error:
+        click.echo(error)
+        return
+
+    # Find task
+    task = plan.get_task(task_id) or next((t for t in plan.tasks if t.id.startswith(task_id)), None)
+
+    if not task:
+        click.echo(f"❌ Task not found: {task_id}")
+        return
+
+    agent.mark_task_started(plan.id, task.id)
+    click.echo(f"✓ Started task: {task.title}")
+
+
+@plan_group.command(name="complete")
+@click.argument("plan_id")
+@click.argument("task_id")
+def plan_complete(plan_id: str, task_id: str):
+    """Mark a task as completed.
+
+    Example:
+        devagent plan complete abc123 def456
+    """
+    from ai_dev_agent.agents.work_planner import WorkPlanningAgent
+
+    agent = WorkPlanningAgent()
+
+    # Resolve plan ID with ambiguity check
+    plan, error = _resolve_plan_id(agent, plan_id)
+    if error:
+        click.echo(error)
+        return
+
+    # Find task
+    task = plan.get_task(task_id) or next((t for t in plan.tasks if t.id.startswith(task_id)), None)
+
+    if not task:
+        click.echo(f"❌ Task not found: {task_id}")
+        return
+
+    agent.mark_task_complete(plan.id, task.id)
+
+    # Show progress
+    updated_plan = agent.storage.load_plan(plan.id)
+    progress = updated_plan.get_completion_percentage()
+
+    click.echo(f"✓ Completed task: {task.title}")
+    click.echo(f"  Overall progress: {progress:.0f}%")
+
+
+@plan_group.command(name="delete")
+@click.argument("plan_id")
+@click.confirmation_option(prompt="Are you sure you want to delete this plan?")
+def plan_delete(plan_id: str):
+    """Delete a work plan.
+
+    Example:
+        devagent plan delete abc123
+    """
+    from ai_dev_agent.agents.work_planner import WorkPlanningAgent
+
+    agent = WorkPlanningAgent()
+
+    # Resolve plan ID with ambiguity check
+    plan, error = _resolve_plan_id(agent, plan_id)
+    if error:
+        click.echo(error)
+        return
+
+    if agent.storage.delete_plan(plan.id):
+        click.echo(f"✓ Deleted plan: {plan.goal}")
+    else:
+        click.echo(f"❌ Failed to delete plan")
+
+
 def main() -> None:
     cli(prog_name="devagent")
 

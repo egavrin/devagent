@@ -62,7 +62,6 @@ Thumbs.db
 # Automation reports
 reports/
 
-
 # Benchmark outputs
 benchmarks/results/*.json
 benchmarks/results/*.csv

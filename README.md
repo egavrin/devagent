@@ -137,11 +137,57 @@ devagent query \
 - **Generic mechanism**: Works for any workflow - code review, data extraction, test generation, etc.
 - **Composable**: Combine with existing `--plan`, `--direct` flags
 
+### `--plan`: Work Planning with LLM Intelligence
+
+DevAgent can analyze query complexity and create structured work plans:
+
+```bash
+# LLM assesses complexity and routes appropriately
+devagent --plan "how many lines in commands.py"
+# Result: DIRECT execution (simple query, no planning overhead)
+
+devagent --plan "implement user authentication with tests"
+# Result: Creates plan with multiple tasks, executes sequentially
+```
+
+**Key Features:**
+- **LLM-driven complexity assessment**: Automatically determines if planning is needed
+- **Smart task breakdown**: Creates minimal necessary tasks (1 for simple, 3-5 for complex)
+- **Early termination**: Stops when query is answered (no redundant verification)
+- **Progress tracking**: Shows completion percentage and task status
+
+**Manual Plan Management:**
+```bash
+# Create and manage plans manually
+devagent plan create "Add logging system"
+devagent plan list
+devagent plan show <plan-id>
+devagent plan next <plan-id>
+devagent plan start <plan-id> <task-id>
+devagent plan complete <plan-id> <task-id>
+```
+
+See [WORK_PLANNING.md](docs/WORK_PLANNING.md) for detailed documentation.
+
 ## Testing
 
 ```bash
 pip install -e .[dev]
+
+# Fast tests only (default, ~5 seconds)
 pytest
+
+# Full suite including slow integration tests (~3 minutes)
+pytest -m ""
 ```
+
+See [TESTING.md](TESTING.md) for detailed testing guide.
+
+## Documentation
+
+- **[AGENTS.md](AGENTS.md)** - AI agent guide and development process
+- **[TESTING.md](TESTING.md)** - Complete testing guide with markers and workflows
+- **[docs/WORK_PLANNING.md](docs/WORK_PLANNING.md)** - Work planning system documentation
+- **[docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)** - Development process and safe implementation plan
 
 That's it. This PoC demonstrates how LLMs can assist development workflows while keeping humans in control.

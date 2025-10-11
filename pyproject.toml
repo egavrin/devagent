@@ -40,3 +40,5 @@ markers = [
   "integration: marks tests as integration tests (may require external services)",
   "slow: marks tests as slow running (taking more than 60 seconds)"
 ]
+# By default, skip slow tests (override with: pytest --run-slow or pytest -m slow)
+addopts = "-m 'not slow'"

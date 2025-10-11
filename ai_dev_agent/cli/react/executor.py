@@ -557,6 +557,17 @@ def _execute_react_assistant(
         printed_final: Whether JSON/text was already emitted to stdout
     """
 
+    # If planning mode is enabled, use the Work Planning Agent
+    if use_planning:
+        from ai_dev_agent.cli.react.plan_executor import execute_with_planning
+        return execute_with_planning(
+            ctx, client, settings, user_prompt,
+            system_extension=system_extension,
+            format_schema=format_schema,
+            agent_type=agent_type,
+            suppress_final_output=suppress_final_output,
+        )
+
     start_time = time.time()
     planning_active = bool(use_planning)
     supports_tool_calls = hasattr(client, "invoke_tools")
