@@ -17,7 +17,7 @@ def test_agent_registry_get_manager():
     assert "read" in manager.tools
     assert "write" in manager.tools
     assert "run" in manager.tools
-    assert manager.max_iterations == 25
+    assert manager.max_iterations == 40  # Updated from 25 for complex queries
     assert manager.system_prompt_suffix is None
 
 

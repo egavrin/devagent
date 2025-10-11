@@ -199,13 +199,8 @@ def query(
             # Store messages in ctx for executor to inject into conversation
             ctx.obj["_repomap_messages"] = repomap_messages
             logger.debug("RepoMap context prepared as conversation messages")
-            # Also print to stderr for visibility during testing
-            import sys
-            print("[DEBUG] RepoMap context prepared as conversation messages", file=sys.stderr)
     except Exception as e:
         logger.debug(f"Could not prepare RepoMap context: {e}")
-        import sys
-        print(f"[DEBUG] Could not prepare RepoMap context: {e}", file=sys.stderr)
         # Continue without RepoMap context
 
     # Validate agent type

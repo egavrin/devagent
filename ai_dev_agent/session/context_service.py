@@ -34,6 +34,7 @@ class ContextPruningConfig:
     keep_recent_messages: int = 10
     summary_max_chars: int = 1_200
     max_event_history: int = 10
+    max_tool_messages: int = 10  # How many tool messages to keep (was hardcoded to 3!)
 
     def __post_init__(self) -> None:
         if self.trigger_tokens is None:
@@ -42,6 +43,9 @@ class ContextPruningConfig:
         if self.keep_recent_messages < 2:
             # Always keep at least the latest user/assistant turn.
             self.keep_recent_messages = 2
+        if self.max_tool_messages < 3:
+            # Keep at least 3 tool messages for basic context
+            self.max_tool_messages = 3
 
 
 @dataclass
@@ -70,7 +74,7 @@ class ContextPruningService:
         self._budget = ContextBudgetConfig(
             max_tokens=self._config.max_total_tokens,
             headroom_tokens=headroom,
-            max_tool_messages=3,
+            max_tool_messages=self._config.max_tool_messages,  # Use config value, not hardcoded 3!
             max_tool_output_chars=self._config.summary_max_chars,
             keep_last_assistant=keep_last_assistant,
         )

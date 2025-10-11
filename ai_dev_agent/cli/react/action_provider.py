@@ -57,6 +57,24 @@ class LLMActionProvider:
             self._ctx_obj["_repomap_refresh_pending"] = False
 
         conversation = self.session_manager.compose(self.session_id)
+
+        # In final iteration, add synthesis instructions to the conversation
+        if self._is_final_iteration:
+            from ai_dev_agent.providers.llm.base import Message
+            synthesis_instruction = Message(
+                role="system",
+                content=(
+                    "FINAL ITERATION: You must now provide your comprehensive answer.\n\n"
+                    "Based on your investigation:\n"
+                    "1. Summarize all findings related to the user's query\n"
+                    "2. Include specific code examples and file references discovered\n"
+                    "3. Provide actionable recommendations\n"
+                    "4. Answer the original question completely\n\n"
+                    "Do NOT attempt to search further. Provide your COMPLETE SYNTHESIS now."
+                )
+            )
+            conversation = conversation + [synthesis_instruction]
+
         tools = self._get_tools_for_phase(history)
 
         # Build kwargs for LLM call
@@ -136,6 +154,21 @@ class LLMActionProvider:
                     used_call_ids.add(existing)
 
         if not result.calls:
+            # In final iteration with no tool calls, treat the text response as the final answer
+            if self._is_final_iteration and result.message_content:
+                # Create a synthetic submit_final_answer action with the text response
+                return ActionRequest(
+                    step_id=f"S{iteration_index}",
+                    thought="Final synthesis",
+                    tool="submit_final_answer",
+                    args={"answer": result.message_content.strip()},
+                    metadata={
+                        "iteration": iteration_index,
+                        "phase": "synthesis",
+                        "synthesized_from_text": True
+                    }
+                )
+
             self._record_dummy_tool_messages(normalized_tool_calls)
             raise StopIteration("No tool calls - synthesis complete")
 
@@ -160,11 +193,19 @@ class LLMActionProvider:
         )
 
     def last_response_text(self) -> Optional[str]:
-        """Return the most recent assistant message content, if available."""
+        """Return the most recent assistant message content, if available.
+
+        Filters out context summary messages which are internal bookkeeping.
+        """
 
         if not self._last_response or self._last_response.message_content is None:
             return None
         text = self._last_response.message_content.strip()
+
+        # Skip context summary messages (internal bookkeeping from context pruning)
+        if text.startswith('[Context summary]') or text.startswith('['):
+            return None
+
         return text or None
 
     # ------------------------------------------------------------------
@@ -173,6 +214,9 @@ class LLMActionProvider:
 
     def _get_tools_for_phase(self, _history: Sequence[StepRecord]) -> List[Dict[str, Any]]:
         if self._is_final_iteration:
+            # Return only submit_final_answer tool to force synthesis
+            # Use the proper format from create_text_only_tool
+            from .budget_control import create_text_only_tool
             return [create_text_only_tool()]
         return list(self._base_tools)
 

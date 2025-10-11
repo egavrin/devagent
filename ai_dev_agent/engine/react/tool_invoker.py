@@ -343,12 +343,22 @@ class RegistryToolInvoker:
             matches = result.get("matches", [])
             success = bool(matches)
             outcome = f"Found matches in {len(matches)} file(s)"
-            metrics = {"files": len(matches)}
-            artifacts = [
-                group.get("file")
-                for group in matches
-                if isinstance(group, Mapping) and group.get("file")
-            ]
+
+            # Extract file paths and match counts for better context
+            artifacts = []
+            match_counts = {}
+            for group in matches:
+                if isinstance(group, Mapping) and group.get("file"):
+                    file_path = group.get("file")
+                    artifacts.append(file_path)
+                    # Count matches in this file
+                    file_matches = group.get("matches", [])
+                    match_counts[file_path] = len(file_matches) if isinstance(file_matches, list) else 0
+
+            metrics = {
+                "files": len(matches),
+                "match_counts": match_counts  # Add match counts to metrics
+            }
             raw_output = json.dumps(matches[:10], indent=2)
         elif tool_name == "symbols":
             symbols = result.get("symbols", [])
@@ -501,8 +511,58 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
                 summary_text = summary_source
 
         formatted_output = summary_text or outcome_text or None
-        if canonical in {"find", "grep"}:
-            formatted_output = None
+
+        # For find/grep, provide file lists to LLM (not just display message)
+        if canonical == "find" and observation.artifacts:
+            # Dynamic limit based on total results
+            total_files = len(observation.artifacts)
+            if total_files <= 10:
+                limit = total_files  # Show all for small sets
+            elif total_files <= 50:
+                limit = 30  # Standard limit for medium sets
+            else:
+                limit = 20  # Smaller limit for large sets
+
+            file_list = observation.artifacts[:limit]
+            formatted_output = "Files found:\n" + "\n".join(f"- {f}" for f in file_list)
+            if total_files > limit:
+                remaining = total_files - limit
+                formatted_output += f"\n... and {remaining} more files"
+                if total_files > 50:
+                    formatted_output += "\n(Tip: Use more specific pattern to narrow results)"
+            import os
+            if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
+                print(f"[DEBUG-FIND] Formatted output for LLM: {len(file_list)}/{total_files} files", flush=True)
+        elif canonical == "grep" and observation.artifacts:
+            # For grep, show file list with match counts for better context
+            total_files = len(observation.artifacts)
+            if total_files <= 10:
+                limit = total_files
+            elif total_files <= 50:
+                limit = 30
+            else:
+                limit = 20
+
+            file_list = observation.artifacts[:limit]
+            match_counts = observation.metrics.get("match_counts", {})
+
+            formatted_lines = []
+            for f in file_list:
+                count = match_counts.get(f, 0)
+                if count > 0:
+                    formatted_lines.append(f"- {f} ({count} match{'es' if count != 1 else ''})")
+                else:
+                    formatted_lines.append(f"- {f}")
+
+            formatted_output = "Files with matches:\n" + "\n".join(formatted_lines)
+            if total_files > limit:
+                remaining = total_files - limit
+                formatted_output += f"\n... and {remaining} more files"
+                if total_files > 50:
+                    formatted_output += "\n(Tip: Use more specific pattern to narrow results)"
+            import os
+            if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
+                print(f"[DEBUG-GREP] Formatted output for LLM: {len(file_list)}/{total_files} files with counts", flush=True)
 
         display_message = self._format_display_message(action, observation, canonical)
 
@@ -673,6 +733,13 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             content_parts.append(observation.display_message)
         elif observation.outcome:
             content_parts.append(observation.outcome)
+
+        # For find/grep, include the formatted file list for LLM
+        if canonical in {"find", "grep"} and observation.formatted_output:
+            content_parts.append(observation.formatted_output)
+            import os
+            if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
+                print(f"[DEBUG-{canonical.upper()}] Sending to LLM: {len(content_parts[-1])} chars", flush=True)
 
         if canonical == RUN:
             stdout_preview = observation.metrics.get("stdout_tail")

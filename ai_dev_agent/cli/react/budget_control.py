@@ -271,35 +271,61 @@ def auto_generate_summary(
     files_examined: Iterable[str] | None = None,
     searches_performed: Iterable[str] | None = None,
 ) -> str:
-    """Best-effort summary based on available signals."""
+    """Generate a comprehensive summary when the LLM doesn't provide submit_final_answer.
+
+    This fallback should provide useful information about what was investigated,
+    not just say "no answer found".
+    """
 
     files = sorted({str(item) for item in files_examined or [] if item})
     searches = sorted({str(item) for item in searches_performed or [] if item})
 
-    findings: List[str] = []
+    # Extract ALL substantive assistant messages (observations, findings, etc.)
+    observations: List[str] = []
     for message in reversed(conversation):
         role = getattr(message, "role", "")
         content = getattr(message, "content", None)
-        if role == "assistant" and isinstance(content, str) and content.strip():
-            findings.append(content.strip())
-        if len(findings) >= 2:
-            break
+        if role == "assistant" and isinstance(content, str):
+            text = content.strip()
+            # Skip empty, context summaries, and very short messages
+            if not text or text.startswith('[') or len(text) < 15:
+                continue
+            # Skip pure action descriptions
+            if text.lower().startswith(('let me', 'i will', 'i\'ll', 'searching for', 'looking for')):
+                continue
+            # Include messages ending with : if they're long enough (might be explanations)
+            if text.endswith(':') and len(text) < 40:
+                continue
+            observations.append(text)
 
+    # Build comprehensive summary
     summary_parts: List[str] = []
-    if files:
-        summary_parts.append("Files examined: " + ", ".join(files[:8]))
-        if len(files) > 8:
-            summary_parts[-1] += f" (+{len(files) - 8} more)"
-    if searches:
-        summary_parts.append(
-            "Searches performed: "
-            + ", ".join(searches[:5])
-            + (f" (+{len(searches) - 5} more)" if len(searches) > 5 else "")
-        )
-    if findings:
-        summary_parts.append("Key insights: " + " | ".join(reversed(findings)))
-    else:
-        summary_parts.append("Key insights: Model did not provide explicit findings before stopping.")
+
+    summary_parts.append("Based on the investigation:")
+    summary_parts.append("")
+
+    # Include key observations
+    if observations:
+        # Take up to 3 most recent substantial observations
+        for i, obs in enumerate(observations[:3]):
+            # Truncate if very long
+            if len(obs) > 300:
+                obs = obs[:297] + "..."
+            summary_parts.append(f"• {obs}")
+        summary_parts.append("")
+
+    # Add investigation scope
+    if files or searches:
+        summary_parts.append(f"Investigation scope: {len(files)} file(s) examined, {len(searches)} search(es) performed.")
+
+    # If no observations, at least list what was checked
+    if not observations and files:
+        summary_parts.append("")
+        summary_parts.append("Files examined:")
+        for f in files[:10]:
+            summary_parts.append(f"• {f}")
+        if len(files) > 10:
+            summary_parts.append(f"• ... and {len(files) - 10} more")
 
     return "\n".join(summary_parts)
 

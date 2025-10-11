@@ -693,10 +693,14 @@ def _build_context_pruning_config_from_settings(settings: Settings) -> ContextPr
     summary_max_chars = max(int(settings.context_pruner_summary_max_chars or 0), 1)
     max_events = max(int(settings.context_pruner_max_event_history or 0), 1)
 
+    # Get max_tool_messages from settings (defaults to 10 if not set)
+    max_tool_msgs = max(int(getattr(settings, 'max_tool_messages_kept', 10)), 3)
+
     return ContextPruningConfig(
         max_total_tokens=max_total,
         trigger_tokens=trigger_tokens,
         keep_recent_messages=keep_recent,
         summary_max_chars=summary_max_chars,
         max_event_history=max_events,
+        max_tool_messages=max_tool_msgs,  # Now configurable!
     )

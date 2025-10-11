@@ -43,6 +43,9 @@ class FileInfo:
     dependencies: Set[str] = field(default_factory=set)
     references: Dict[str, List[Tuple[str, int]]] = field(default_factory=dict)  # symbol -> [(file, line)]
     symbols_used: List[str] = field(default_factory=list)  # Symbols referenced/used in this file
+    file_name: Optional[str] = None
+    file_stem: Optional[str] = None
+    path_parts: Tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -150,7 +153,7 @@ class RepoMap:
         if use_tree_sitter and TREE_SITTER_AVAILABLE:
             try:
                 self.tree_sitter_parser = TreeSitterParser()
-                self.logger.info("Tree-sitter parser initialized")
+                self.logger.debug("Tree-sitter parser initialized")
             except Exception as e:
                 self.logger.debug(f"Could not initialize tree-sitter parser: {e}")
 
@@ -194,6 +197,7 @@ class RepoMap:
 
             # Restore files
             for file_data in data.get('files', []):
+                file_parts = tuple(Path(file_data['path']).parts)
                 file_info = FileInfo(
                     path=file_data['path'],
                     size=file_data['size'],
@@ -204,7 +208,10 @@ class RepoMap:
                     exports=file_data.get('exports', []),
                     dependencies=set(file_data.get('dependencies', [])),
                     references=file_data.get('references', {}),
-                    symbols_used=file_data.get('symbols_used', [])
+                    symbols_used=file_data.get('symbols_used', []),
+                    file_name=file_data.get('file_name') or Path(file_data['path']).name,
+                    file_stem=file_data.get('file_stem') or Path(file_data['path']).stem,
+                    path_parts=tuple(file_data.get('path_parts', file_parts))
                 )
                 self.context.files[file_data['path']] = file_info
 
@@ -249,7 +256,10 @@ class RepoMap:
                     'exports': file_info.exports,
                     'dependencies': list(file_info.dependencies),
                     'references': file_info.references,
-                    'symbols_used': file_info.symbols_used
+                    'symbols_used': file_info.symbols_used,
+                    'file_name': file_info.file_name,
+                    'file_stem': file_info.file_stem,
+                    'path_parts': list(file_info.path_parts)
                 })
 
             # Use msgpack if available (5-10x faster than JSON)
@@ -391,7 +401,7 @@ class RepoMap:
         self._save_cache()
 
         # Log statistics
-        self.logger.info(
+        self.logger.debug(
             f"Repository scan complete: {stats['scanned']} files scanned, "
             f"{stats['skipped_generated']} generated files skipped, "
             f"{stats['skipped_large']} large files skipped, "
@@ -422,12 +432,17 @@ class RepoMap:
             # Detect language
             language = self._detect_language(file_path)
 
+            path_obj = Path(relative_path)
+
             # Create file info
             file_info = FileInfo(
                 path=relative_path,
                 size=stat.st_size,
                 modified_time=stat.st_mtime,
-                language=language
+                language=language,
+                file_name=path_obj.name,
+                file_stem=path_obj.stem,
+                path_parts=tuple(path_obj.parts)
             )
 
             # Extract symbols and imports based on language
@@ -892,10 +907,10 @@ class RepoMap:
         mentioned_files: Set[str],
         mentioned_symbols: Set[str],
         max_files: int,
-        mentioned_names: Set[str],
-        mentioned_stems: Set[str],
-        directory_mentions: Tuple[str, ...],
-        long_symbol_prefixes: Tuple[str, ...]
+        mentioned_names: Optional[Set[str]] = None,
+        mentioned_stems: Optional[Set[str]] = None,
+        directory_mentions: Optional[Tuple[str, ...]] = None,
+        long_symbol_prefixes: Optional[Tuple[str, ...]] = None
     ) -> List[Tuple[str, float]]:
         """Quick ranking based on direct symbol/file matches (no PageRank).
 
@@ -904,6 +919,16 @@ class RepoMap:
 
         Returns: List of (file_path, score) tuples, sorted by score descending.
         """
+        # Initialize optional parameters
+        if mentioned_names is None:
+            mentioned_names = set()
+        if mentioned_stems is None:
+            mentioned_stems = set()
+        if directory_mentions is None:
+            directory_mentions = tuple()
+        if long_symbol_prefixes is None:
+            long_symbol_prefixes = tuple()
+
         rankings = {}
         mentioned_symbols = set(mentioned_symbols)
 
@@ -912,9 +937,8 @@ class RepoMap:
 
             matched_name_or_stem = False
             if mentioned_names or mentioned_stems or directory_mentions:
-                path_obj = Path(file_path)
-                file_name = path_obj.name
-                file_stem = path_obj.stem
+                file_name = file_info.file_name or Path(file_path).name
+                file_stem = file_info.file_stem or Path(file_path).stem
 
                 if mentioned_names and file_name in mentioned_names:
                     score += 1000.0
@@ -924,8 +948,11 @@ class RepoMap:
                     matched_name_or_stem = True
 
                 if not matched_name_or_stem and directory_mentions:
+                    parts = file_info.path_parts or tuple(Path(file_path).parts)
+                    parts_lower = {part.lower() for part in parts}
                     for fragment in directory_mentions:
-                        if fragment in file_path:
+                        fragment_lower = fragment.lower()
+                        if any(fragment_lower in part for part in parts_lower):
                             score += 50.0  # modest boost to avoid bypassing PageRank
                             break
 
@@ -999,7 +1026,13 @@ class RepoMap:
 
                 # However, we should check: did we get a symbol or file match?
                 has_symbol_match = bool(mentioned_symbols)
-                has_exact_file_match = top_file in mentioned_files or Path(top_file).name in mentioned_names
+                top_file_info = self.context.files.get(top_file)
+                top_file_name = (
+                    top_file_info.file_name if top_file_info else Path(top_file).name
+                )
+                has_exact_file_match = (
+                    top_file in mentioned_files or top_file_name in mentioned_names
+                )
 
                 # Use fast-path if we have explicit symbol or file evidence
                 if has_symbol_match or has_exact_file_match or top_score >= 500:
@@ -1017,7 +1050,7 @@ class RepoMap:
 
         # OPTIMIZATION: Only compute PageRank for ambiguous queries
         if not self.context.pagerank_scores:
-            self.logger.info("Computing PageRank for comprehensive ranking...")
+            self.logger.debug("Computing PageRank for comprehensive ranking...")
             # Build dependency graph if needed
             if not self.context.dependency_graph:
                 self.build_dependency_graph()
@@ -1035,9 +1068,8 @@ class RepoMap:
 
             matched_name_or_stem = False
             if mentioned_names or mentioned_stems or directory_mentions:
-                path_obj = Path(file_path)
-                file_name = path_obj.name
-                file_stem = path_obj.stem
+                file_name = file_info.file_name or Path(file_path).name
+                file_stem = file_info.file_stem or Path(file_path).stem
 
                 if mentioned_names and file_name in mentioned_names:
                     score += 1000.0
@@ -1047,8 +1079,11 @@ class RepoMap:
                     matched_name_or_stem = True
 
                 if not matched_name_or_stem and directory_mentions:
+                    parts = file_info.path_parts or tuple(Path(file_path).parts)
+                    parts_lower = {part.lower() for part in parts}
                     for fragment in directory_mentions:
-                        if fragment in file_path:
+                        fragment_lower = fragment.lower()
+                        if any(fragment_lower in part for part in parts_lower):
                             score += 200.0
                             break
 

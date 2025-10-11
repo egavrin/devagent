@@ -79,5 +79,9 @@ def test_llm_action_provider_stop_iteration():
 
     task = TaskSpec(identifier="T-stop", goal="Stop test")
 
-    with pytest.raises(StopIteration):
-        provider(task, history=[])
+    # In final iteration with message_content but no tool calls,
+    # it now returns a submit_final_answer action instead of raising StopIteration
+    action = provider(task, history=[])
+    assert action.tool == "submit_final_answer"
+    assert action.args["answer"] == "Done"
+    assert action.metadata["synthesized_from_text"] is True

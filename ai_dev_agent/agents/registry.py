@@ -140,7 +140,7 @@ def _register_default_agents() -> None:
         AgentSpec(
             name="manager",
             tools=["find", "grep", "symbols", "read", "run", "write"],
-            max_iterations=25,
+            max_iterations=40,  # Increased from 25 for complex queries
             description="General-purpose coding assistant with full tool access",
         )
     )

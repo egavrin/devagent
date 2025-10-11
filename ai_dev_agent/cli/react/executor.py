@@ -36,12 +36,15 @@ from ai_dev_agent.session.context_synthesis import ContextSynthesizer
 from ai_dev_agent.engine.react.loop import ReactiveExecutor
 from ai_dev_agent.engine.react.tool_invoker import SessionAwareToolInvoker
 from ai_dev_agent.engine.react.types import (
+    ActionRequest,
     EvaluationResult,
     MetricsSnapshot,
+    Observation,
     RunResult,
     StepRecord,
     TaskSpec,
 )
+from ai_dev_agent.core.failure_detector import FailurePatternDetector
 
 from ..router import IntentDecision, IntentRouter as _DEFAULT_INTENT_ROUTER
 from .action_provider import LLMActionProvider
@@ -120,6 +123,45 @@ class BudgetAwareExecutor(ReactiveExecutor):
     def __init__(self, budget_manager: BudgetManager) -> None:
         super().__init__(evaluator=None)
         self.budget_manager = budget_manager
+        self.failure_detector = FailurePatternDetector()
+
+    def _invoke_tool(self, invoker, action):
+        """Override to add failure pattern detection."""
+        observation = super()._invoke_tool(invoker, action)
+
+        # Track failures for pattern detection
+        if not observation.success:
+            # Extract target from action parameters
+            target = ""
+            if hasattr(action, 'parameters') and action.parameters:
+                target = (
+                    action.parameters.get('pattern') or
+                    action.parameters.get('file_path') or
+                    action.parameters.get('path') or
+                    action.parameters.get('query') or
+                    str(action.parameters)[:50]
+                )
+
+            reason = observation.error or observation.outcome or "Unknown failure"
+
+            self.failure_detector.record_failure(
+                action.tool,
+                target,
+                reason
+            )
+
+            # Check if we should give up
+            should_stop, message = self.failure_detector.should_give_up(
+                action.tool,
+                target
+            )
+
+            if should_stop:
+                # Inject helpful message into observation outcome
+                current_output = observation.outcome or ""
+                observation.outcome = f"{current_output}\n\n{message}"
+
+        return observation
 
     def run(
         self,
@@ -143,13 +185,70 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 stop_condition = "budget_exhausted"
                 break
 
+
             action_provider.update_phase(context.phase, is_final=context.is_final)
             if iteration_hook:
                 iteration_hook(context, history + steps)
 
             try:
                 action_payload = action_provider(task, history + steps)
-            except StopIteration:
+            except StopIteration as e:
+                # The LLM stopped without calling a tool (usually submit_final_answer)
+                # We need to force a synthesis response to give the user a comprehensive answer
+                # This can happen in the final iteration OR if the LLM stops early
+
+                # Always force a synthesis response when LLM stops
+                # Get the LLM to produce a text response without tools
+                # Access session_manager and session_id from action_provider
+                conversation = action_provider.session_manager.compose(action_provider.session_id)
+
+                try:
+                    if hasattr(action_provider.client, 'complete'):
+                        final_text = action_provider.client.complete(conversation, temperature=0.1)
+                    else:
+                        # Fallback: try with invoke_tools with empty tools
+                        from ai_dev_agent.providers.llm import ToolCallResult
+                        result = action_provider.client.invoke_tools(conversation, tools=[], temperature=0.1)
+                        final_text = result.message_content if isinstance(result, ToolCallResult) else str(result)
+
+
+                    if final_text and final_text.strip():
+                        # Create a synthetic submit_final_answer action
+                        action = ActionRequest(
+                            step_id=f"S{len(history) + len(steps) + 1}",
+                            thought="Forced synthesis after no tool call",
+                            tool="submit_final_answer",
+                            args={"answer": final_text.strip()},
+                            metadata={"iteration": len(history) + len(steps) + 1, "phase": context.phase, "forced": True},
+                        )
+                        observation = Observation(
+                            success=True,
+                            outcome="Synthesis complete",
+                            tool="submit_final_answer",
+                            raw_output=final_text.strip(),
+                        )
+                        record = StepRecord(
+                            action=action,
+                            observation=observation,
+                            metrics=MetricsSnapshot(),
+                            evaluation=EvaluationResult(
+                                gates={}, required_gates={}, should_stop=True,
+                                stop_reason="Forced synthesis", status="success"
+                            ),
+                            step_index=len(history) + len(steps) + 1,
+                        )
+                        steps.append(record)
+                        if step_hook:
+                            step_hook(record, context)
+                    else:
+                        import sys
+                        print(f"ERROR: LLM returned empty response in forced synthesis!", file=sys.stderr)
+                except Exception as fallback_error:
+                    import sys
+                    print(f"ERROR: Failed to force synthesis: {fallback_error}", file=sys.stderr)
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+
                 stop_condition = "provider_stop"
                 natural_stop = True
                 break
@@ -185,8 +284,92 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 stop_condition = "next_iteration"
 
         runtime = time.perf_counter() - start_time
+
+        # Check if we need to force synthesis after loop exit
+        # This happens when the final iteration ran a tool instead of submit_final_answer
         last_record = steps[-1] if steps else None
         last_observation = last_record.observation if last_record else None
+
+        if last_observation and last_observation.tool != "submit_final_answer":
+
+            # Force synthesis response
+            try:
+                # Get the conversation and add synthesis instructions
+                conversation = action_provider.session_manager.compose(action_provider.session_id)
+
+                # Add a system message to force synthesis
+                from ai_dev_agent.providers.llm.base import Message
+                synthesis_prompt = Message(
+                    role="system",
+                    content=(
+                        "CRITICAL: The investigation phase is complete. You MUST now provide a comprehensive answer.\n\n"
+                        "Based on ALL the information you've collected during your investigation:\n"
+                        "1. Summarize what you found about the user's query\n"
+                        "2. Provide specific findings from the codebase\n"
+                        "3. Include code examples and file references where relevant\n"
+                        "4. Give actionable recommendations or answers\n\n"
+                        "DO NOT attempt to use any tools. DO NOT search further.\n"
+                        "Provide your COMPLETE ANSWER NOW based on what you've learned."
+                    )
+                )
+
+                # Also add a user message to reinforce the synthesis requirement
+                synthesis_user_prompt = Message(
+                    role="user",
+                    content=(
+                        "Based on your investigation, please provide a comprehensive answer to my original question. "
+                        "Include all relevant findings, code examples, and recommendations. "
+                        "Do not search further - synthesize what you've learned."
+                    )
+                )
+
+                # Append synthesis prompts to conversation
+                enhanced_conversation = conversation + [synthesis_prompt, synthesis_user_prompt]
+
+
+                if hasattr(action_provider.client, 'complete'):
+                    final_text = action_provider.client.complete(enhanced_conversation, temperature=0.1)
+                else:
+                    from ai_dev_agent.providers.llm import ToolCallResult
+                    # Pass empty tools to prevent any tool calls
+                    result = action_provider.client.invoke_tools(enhanced_conversation, tools=[], temperature=0.1)
+                    final_text = result.message_content if isinstance(result, ToolCallResult) else str(result)
+
+
+                if final_text and final_text.strip():
+                    # Create synthetic submit_final_answer
+                    action = ActionRequest(
+                        step_id=f"S{len(history) + len(steps) + 1}",
+                        thought="Final synthesis",
+                        tool="submit_final_answer",
+                        args={"answer": final_text.strip()},
+                        metadata={"iteration": len(history) + len(steps) + 1, "phase": "forced_synthesis", "forced": True},
+                    )
+                    observation = Observation(
+                        success=True,
+                        outcome="Synthesis complete",
+                        tool="submit_final_answer",
+                        raw_output=final_text.strip(),
+                    )
+                    record = StepRecord(
+                        action=action,
+                        observation=observation,
+                        metrics=MetricsSnapshot(),
+                        evaluation=EvaluationResult(
+                            gates={}, required_gates={}, should_stop=True,
+                            stop_reason="Forced synthesis", status="success"
+                        ),
+                        step_index=len(history) + len(steps) + 1,
+                    )
+                    steps.append(record)
+                    # Update last_record and last_observation
+                    last_record = record
+                    last_observation = observation
+            except Exception as e:
+                import sys
+                print(f"ERROR: Failed to force post-loop synthesis: {e}", file=sys.stderr)
+                import traceback
+                traceback.print_exc(file=sys.stderr)
 
         successful_result = False
         if last_observation is not None:
@@ -316,7 +499,7 @@ def _build_synthesis_prompt(
 ) -> str:
     guidance = PHASE_PROMPTS.get("synthesis", "Provide your final response.")
     prompt = [
-        "📋 FINAL SYNTHESIS ONLY",
+        "📋 FINAL SYNTHESIS REQUIRED",
         "",
         f"Task: {user_query}",
         "",
@@ -327,13 +510,16 @@ def _build_synthesis_prompt(
         "Investigation Summary:",
         context if context else "No prior findings recorded.",
         "",
-        "Instructions:",
-        "- Respond with a complete, self-contained answer.",
-        "- Cite specific files, paths, and relevant context.",
-        "- Call out open questions or risks still unresolved.",
-        "- DO NOT request more iterations or attempt tool usage.",
+        "CRITICAL INSTRUCTIONS:",
+        "- You MUST call the submit_final_answer tool with your complete answer",
+        "- Provide a comprehensive, well-structured response",
+        "- Include ALL relevant findings from your investigation",
+        "- Cite specific files, functions, and code locations you examined",
+        "- Explain what you found and what you couldn't find",
+        "- If the exact answer isn't available, explain what related information you discovered",
+        "- This is your ONLY chance to respond - make it comprehensive",
         "",
-        "Begin your final answer now.",
+        "Call submit_final_answer now with your complete analysis.",
     ]
     return "\n".join(prompt)
 
@@ -681,6 +867,15 @@ def _execute_react_assistant(
     def iteration_hook(context, _history):
         _update_system_prompt(context.phase, context.is_final)
 
+        # Debug: Log iteration details
+        if not silent_mode and os.environ.get("DEVAGENT_DEBUG"):
+            logger.debug(f"\n{'='*60}")
+            logger.debug(f"ITERATION {context.number}/{context.total}")
+            logger.debug(f"{'='*60}")
+            logger.debug(f"Phase: {context.phase}")
+            logger.debug(f"Is final: {context.is_final}")
+            logger.debug(f"Remaining: {context.remaining}")
+
     def step_hook(record: StepRecord, context) -> None:
         observation = record.observation
         if not silent_mode:
@@ -688,8 +883,13 @@ def _execute_react_assistant(
             if display_message:
                 click.echo(display_message)
             elif observation.outcome:
+                # Filter out internal warning messages (for LLM only)
+                outcome = observation.outcome
                 tool_name = observation.tool or record.action.tool
-                click.echo(f"{tool_name}: {observation.outcome}")
+                # Skip failure detector warnings (they're meant for the LLM, not the user)
+                # Skip submit_final_answer synthesis messages (internal bookkeeping)
+                if not ("⚠️ **" in outcome and "Detected**" in outcome) and tool_name != "submit_final_answer":
+                    click.echo(f"{tool_name}: {outcome}")
 
         metrics_payload = observation.metrics if isinstance(observation.metrics, Mapping) else {}
         _update_files_discovered(files_discovered, metrics_payload if isinstance(metrics_payload, Dict) else {})
@@ -753,13 +953,68 @@ def _execute_react_assistant(
     _commit_shell_history()
     _merge_structure_hints_state(ctx.obj, structure_state)
 
-    final_message = action_provider.last_response_text()
+    final_message = None
 
-    # Fallback: if no response text, check for submit_final_answer in last step
-    if not final_message and result.steps:
+    # Debug: Log execution result details
+    if os.environ.get("DEVAGENT_DEBUG"):
+        import sys
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"DEBUG: FINAL OUTPUT EXTRACTION", file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+        print(f"DEBUG: Result status: {result.status}", file=sys.stderr)
+        print(f"DEBUG: Result stop_reason: {result.stop_reason}", file=sys.stderr)
+        print(f"DEBUG: Number of steps: {len(result.steps)}", file=sys.stderr)
+        print(f"DEBUG: silent_mode: {silent_mode}", file=sys.stderr)
+
+    # First priority: check for submit_final_answer in last step (contains the full answer)
+    if result.steps:
         last_step = result.steps[-1]
+
+        # Debug: log what the last tool was
+        if os.environ.get("DEVAGENT_DEBUG"):
+            import sys
+            last_tool = last_step.observation.tool if last_step.observation else "no observation"
+            last_action_tool = last_step.action.tool if last_step.action else "no action"
+            print(f"DEBUG: Last step observation.tool: {last_tool}", file=sys.stderr)
+            print(f"DEBUG: Last step action.tool: {last_action_tool}", file=sys.stderr)
+
         if last_step.observation and last_step.observation.tool == "submit_final_answer":
-            final_message = last_step.observation.raw_output or last_step.observation.formatted_output
+            # Extract the full answer from submit_final_answer
+            raw_out = getattr(last_step.observation, 'raw_output', None)
+            formatted_out = getattr(last_step.observation, 'formatted_output', None)
+            final_message = raw_out or formatted_out
+
+            # Debug logging
+            if not silent_mode and os.environ.get("DEVAGENT_DEBUG"):
+                logger.debug(f"✓ submit_final_answer detected")
+                logger.debug(f"  raw_output length: {len(raw_out) if raw_out else 0}")
+                logger.debug(f"  formatted_output length: {len(formatted_out) if formatted_out else 0}")
+                logger.debug(f"  final_message length: {len(final_message) if final_message else 0}")
+
+    # Fallback: use the last response text if no submit_final_answer
+    if not final_message:
+        candidate_message = action_provider.last_response_text()
+
+        if not silent_mode and os.environ.get("DEVAGENT_DEBUG"):
+            logger.debug(f"\n✗ No submit_final_answer found")
+            logger.debug(f"Checking action_provider.last_response_text()...")
+            logger.debug(f"  Candidate message: {candidate_message[:200] if candidate_message else 'None'}...")
+
+        # Check if the candidate message looks incomplete
+        is_incomplete = False
+        if candidate_message:
+            stripped = candidate_message.strip()
+            # Message looks incomplete if it's very short, ends with ":", or ends mid-sentence
+            if len(stripped) < 50 or stripped.endswith(':') or stripped.endswith('...'):
+                is_incomplete = True
+
+        # Use the candidate if it looks complete, otherwise we'll use auto_generate_summary later
+        if candidate_message and not is_incomplete:
+            final_message = candidate_message
+
+        if not silent_mode and os.environ.get("DEVAGENT_DEBUG"):
+            logger.debug(f"  is_incomplete: {is_incomplete}")
+            logger.debug(f"  Using as final_message: {final_message is not None}")
 
     final_json: Optional[Dict[str, Any]] = None
     printed_final = False
@@ -795,16 +1050,14 @@ def _execute_react_assistant(
             "model_costs": budget_integration.cost_tracker.model_costs,
         }
 
-    if result.status != "success" and auto_summary_enabled and not silent_mode:
-        conversation = session_manager.compose(session_id)
-        fallback = auto_generate_summary(
-            conversation,
-            files_examined=files_discovered,
-            searches_performed=search_queries,
-        )
-        if fallback:
-            click.echo("")
-            click.echo(fallback)
+    # Last resort: if somehow we still don't have a final message, show error
+    # This should NOT happen with the forced synthesis above
+    if not final_message and not printed_final:
+        if not silent_mode:
+            import sys
+            print(f"\n⚠️ WARNING: No final answer was generated by the LLM.", file=sys.stderr)
+            print(f"This is unexpected - please report this issue.", file=sys.stderr)
+            print(f"\nPartial findings may be available in the conversation history.", file=sys.stderr)
 
     if should_emit_status and not silent_mode:
         elapsed = time.time() - start_time

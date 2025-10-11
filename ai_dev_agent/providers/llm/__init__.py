@@ -13,6 +13,8 @@ from .base import (
     Message,
     RetryConfig,
     StreamHooks,
+    ToolCall,
+    ToolCallResult,
 )
 from .deepseek import DeepSeekClient, DEFAULT_BASE_URL as DEEPSEEK_DEFAULT_BASE_URL
 from .openrouter import OpenRouterClient, DEFAULT_BASE_URL as OPENROUTER_DEFAULT_BASE_URL
@@ -77,6 +79,8 @@ __all__ = [
     "Message",
     "StreamHooks",
     "RetryConfig",
+    "ToolCall",
+    "ToolCallResult",
     "DEEPSEEK_DEFAULT_BASE_URL",
     "OPENROUTER_DEFAULT_BASE_URL",
 ]

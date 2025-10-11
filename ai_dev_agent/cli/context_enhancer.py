@@ -51,7 +51,31 @@ class ContextEnhancer:
         stop_words = {'what', 'where', 'when', 'how', 'why', 'who', 'which', 'the',
                       'find', 'files', 'related', 'implement', 'implements', 'for',
                       'all', 'about', 'with', 'from', 'that', 'this', 'does', 'have',
-                      'many', 'lines', 'line', 'file'}
+                      'many', 'lines', 'line', 'file', 'any', 'type', 'types',
+                      'check', 'case', 'cases', 'could', 'please', 'tell', 'there',
+                      'some', 'more', 'will', 'emit', 'emitted', 'union', 'generics',
+                      'without', 'such', 'fragile', 'constructs', 'variants', 'cover',
+                      'covers', 'these', 'those', 'like'}
+
+        generic_symbols = {
+            'any', 'type', 'types', 'check', 'checking', 'case', 'cases',
+            'generic', 'generics', 'union', 'optional', 'undefined', 'please',
+            'could', 'would', 'should', 'tell', 'these', 'those', 'this', 'that',
+            'where', 'when', 'what', 'with', 'emit', 'emitted', 'emitting',
+            'cover', 'covers', 'fragile', 'construct', 'constructs', 'variants'
+        }
+
+        def _should_keep_symbol(token: str) -> bool:
+            if not token:
+                return False
+            lowered = token.lower()
+            if lowered in stop_words or lowered in generic_symbols:
+                return False
+            if lowered.isnumeric():
+                return False
+            if len(lowered) <= 2 and lowered not in {'c', 'go', 'js', 'ts', 'py'}:
+                return False
+            return True
 
         # Common file extensions
         FILE_EXTENSIONS = {
@@ -84,8 +108,11 @@ class ContextEnhancer:
         if self._initialized and self.repo_map.context.files:
             text_lower = text.lower()
 
-            for file_path in self.repo_map.context.files.keys():
-                file_name = Path(file_path).name.lower()
+            # Iterate with items() to get FileInfo for potential caching
+            for file_path, file_info in self.repo_map.context.files.items():
+                # Create Path object once and reuse (aider's approach)
+                path_obj = Path(file_path)
+                file_name = path_obj.name.lower()
 
                 # Check if exact filename is mentioned
                 if file_name in text_lower:
@@ -97,7 +124,7 @@ class ContextEnhancer:
                     continue
 
                 # Check if stem (without extension) is mentioned
-                stem = Path(file_path).stem.lower()
+                stem = path_obj.stem.lower()  # Reuse path_obj
                 if len(stem) > 3 and stem in text_lower:
                     # Only if stem appears as a word boundary
                     if re.search(r'\b' + re.escape(stem) + r'\b', text_lower):
@@ -109,7 +136,7 @@ class ContextEnhancer:
 
                 # NEW: Check if directory name is mentioned (e.g., "bytecode_optimizer")
                 # This helps with queries like "files in bytecode_optimizer"
-                parts = Path(file_path).parts
+                parts = path_obj.parts  # Reuse path_obj
                 for part in parts:
                     part_lower = part.lower()
                     if len(part_lower) > 6 and part_lower in text_lower:
@@ -124,23 +151,30 @@ class ContextEnhancer:
                             break
 
         # Extract CamelCase and snake_case identifiers
+        # Pattern-based extraction filters out English prose automatically
         # CamelCase (at least 2 capital letters or mixed case)
         camel_matches = re.findall(r'\b[A-Z][a-z]*[A-Z][A-Za-z]*\b', text)
-        symbols.update(camel_matches)
+        symbols.update(match for match in camel_matches if _should_keep_symbol(match))
 
         # PascalCase (Capital followed by lowercase)
         pascal_matches = re.findall(r'\b[A-Z][a-z]+(?:[A-Z][a-z]+)*\b', text)
         # Filter out common English words
-        symbols.update(w for w in pascal_matches if w.lower() not in stop_words)
+        symbols.update(w for w in pascal_matches if _should_keep_symbol(w))
 
         # snake_case
-        symbols.update(re.findall(r'\b[a-z]+(?:_[a-z]+)+\b', text))
+        symbols.update(
+            token for token in re.findall(r'\b[a-z]+(?:_[a-z]+)+\b', text)
+            if _should_keep_symbol(token)
+        )
         # CONSTANT_CASE
-        symbols.update(re.findall(r'\b[A-Z]+(?:_[A-Z]+)+\b', text))
+        symbols.update(
+            token for token in re.findall(r'\b[A-Z]+(?:_[A-Z]+)+\b', text)
+            if _should_keep_symbol(token)
+        )
 
         # Single uppercase words that are likely class names (but not stop words)
         single_caps = re.findall(r'\b[A-Z][a-z]{2,}\b', text)
-        symbols.update(w for w in single_caps if w.lower() not in stop_words)
+        symbols.update(w for w in single_caps if _should_keep_symbol(w))
 
         prioritized_files: List[str]
         if self._initialized and self.repo_map.context.files:
@@ -174,6 +208,18 @@ class ContextEnhancer:
             if not symbols and not mentioned_files:
                 return query
 
+            repo_files = self.repo_map.context.files
+            repo_file_names = {
+                info.file_name.lower()
+                for info in repo_files.values()
+                if info.file_name
+            }
+            repo_file_stems = {
+                info.file_stem.lower()
+                for info in repo_files.values()
+                if info.file_stem
+            }
+
             # Get relevant files from RepoMap
             relevant_files = self.repo_map.get_ranked_files(
                 mentioned_files=mentioned_files,
@@ -181,7 +227,36 @@ class ContextEnhancer:
                 max_files=max_files
             )
 
+            unmatched_mentions: List[str] = []
+            for candidate in mentioned_files:
+                candidate_lower = candidate.lower()
+                if candidate in repo_files:
+                    continue
+                name_lower = Path(candidate).name.lower()
+                stem_lower = Path(candidate).stem.lower()
+                if name_lower in repo_file_names or (stem_lower and stem_lower in repo_file_stems):
+                    continue
+                unmatched_mentions.append(candidate)
+
+            missing_symbols = [
+                sym for sym in symbols
+                if sym not in self.repo_map.context.symbol_index
+            ]
+
             if not relevant_files:
+                notice_lines = []
+                if unmatched_mentions:
+                    notice_lines.append(
+                        "[RepoMap Notice] No files in this workspace match: "
+                        + ", ".join(sorted(unmatched_mentions)[:8])
+                    )
+                if missing_symbols:
+                    notice_lines.append(
+                        "[RepoMap Notice] No symbols found for: "
+                        + ", ".join(sorted(missing_symbols)[:8])
+                    )
+                if notice_lines:
+                    return query + "\n" + "\n".join(notice_lines)
                 return query
 
             # Build context string
@@ -226,6 +301,17 @@ class ContextEnhancer:
             if low_relevance and len(high_relevance) < 5:
                 context_lines.append("\nOther relevant files:")
                 context_lines.extend(low_relevance[:3])
+
+            if unmatched_mentions or missing_symbols:
+                context_lines.append("\nRepoMap diagnostic:")
+                if unmatched_mentions:
+                    context_lines.append(
+                        "  • No files matched: " + ", ".join(sorted(unmatched_mentions)[:8])
+                    )
+                if missing_symbols:
+                    context_lines.append(
+                        "  • Unknown symbols: " + ", ".join(sorted(missing_symbols)[:8])
+                    )
 
             # Add the context to the query
             enhanced = query + "\n" + "\n".join(context_lines)
