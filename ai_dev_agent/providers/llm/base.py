@@ -135,8 +135,23 @@ class LLMClient(Protocol):
         tool_choice: str | Dict[str, Any] | None = "auto",
         extra_headers: Dict[str, str] | None = None,
         response_format: Dict[str, Any] | None = None,
+        parallel_tool_calls: bool = True,
     ) -> "ToolCallResult":
-        """Run a chat completion with tool definitions and return parsed tool calls."""
+        """Run a chat completion with tool definitions and return parsed tool calls.
+
+        Args:
+            messages: Conversation history
+            tools: Tool definitions in OpenAI format
+            temperature: Sampling temperature (0.0-2.0)
+            max_tokens: Maximum tokens in response
+            tool_choice: Control which tool is called ("auto", "none", or specific tool)
+            extra_headers: Additional HTTP headers
+            response_format: Response format specification
+            parallel_tool_calls: Enable parallel tool calling (default: True)
+
+        Returns:
+            ToolCallResult containing parsed tool calls and message content
+        """
         ...
 
 
@@ -144,6 +159,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
     """Common HTTP/JSON client functionality shared by provider implementations."""
 
     _COMPLETIONS_PATH = "/chat/completions"
+    _SUPPORTS_PARALLEL_TOOL_CALLS = True  # Override in subclasses if not supported
 
     def __init__(
         self,
@@ -368,10 +384,14 @@ class HTTPChatLLMClient(LLMClient, ABC):
         tool_choice: str | Dict[str, Any] | None = "auto",
         extra_headers: Dict[str, str] | None = None,
         response_format: Dict[str, Any] | None = None,
+        parallel_tool_calls: bool = True,
     ) -> ToolCallResult:
         payload = self._prepare_payload(messages, temperature, max_tokens)
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice
+        # Only include parallel_tool_calls if provider supports it
+        if self._SUPPORTS_PARALLEL_TOOL_CALLS:
+            payload["parallel_tool_calls"] = parallel_tool_calls
         if response_format:
             payload["response_format"] = response_format
         data = self._post(payload, extra_headers=extra_headers)

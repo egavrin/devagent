@@ -30,6 +30,7 @@ class FakeClient:
         max_tokens: Optional[int] = None,
         tool_choice: str | dict | None = "auto",
         extra_headers: dict | None = None,
+        parallel_tool_calls: bool = True,
     ) -> ToolCallResult:
         captured = list(messages)
         self.last_messages = captured

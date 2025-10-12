@@ -416,12 +416,14 @@ class BudgetedLLMClient:
         tool_choice: str | dict | None = "auto",
         extra_headers: dict | None = None,
         response_format: dict | None = None,
+        parallel_tool_calls: bool = True,
     ) -> ToolCallResult:
         prepared = self._prepare_messages(messages)
         kwargs = {
             "temperature": temperature,
             "max_tokens": max_tokens,
             "tool_choice": tool_choice,
+            "parallel_tool_calls": parallel_tool_calls,
         }
         if extra_headers is not None:
             kwargs["extra_headers"] = extra_headers

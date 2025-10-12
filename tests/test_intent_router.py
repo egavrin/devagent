@@ -12,7 +12,7 @@ class DummyClient:
         self.captured_messages = None
         self.captured_tools = None
 
-    def invoke_tools(self, messages, tools, temperature=0.2, max_tokens=None, tool_choice="auto", extra_headers=None):
+    def invoke_tools(self, messages, tools, temperature=0.2, max_tokens=None, tool_choice="auto", extra_headers=None, **kwargs):
         self.captured_messages = messages
         self.captured_tools = tools
         return self.result

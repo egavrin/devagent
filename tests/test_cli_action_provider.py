@@ -15,7 +15,7 @@ class StubLLMClient:
     model: str = "stub-model"
     last_tools: Optional[List[Dict[str, Any]]] = None
 
-    def invoke_tools(self, messages, *, tools, temperature: float = 0.1):
+    def invoke_tools(self, messages, *, tools, temperature: float = 0.1, **kwargs):
         self.last_tools = list(tools)
         call = ToolCall(name="run", arguments={"cmd": "echo hi"}, call_id="call-1")
         return ToolCallResult(
@@ -57,7 +57,7 @@ def test_llm_action_provider_returns_action():
 
 def test_llm_action_provider_stop_iteration():
     class EmptyLLM(StubLLMClient):
-        def invoke_tools(self, messages, *, tools, temperature: float = 0.1):
+        def invoke_tools(self, messages, *, tools, temperature: float = 0.1, **kwargs):
             return ToolCallResult(
                 calls=[],
                 message_content="Done",

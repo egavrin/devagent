@@ -465,7 +465,15 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
     def __call__(self, action: ActionRequest) -> CLIObservation:
         base_observation = super().__call__(action)
         cli_observation = self._to_cli_observation(action, base_observation)
-        self._record_tool_message(action, cli_observation)
+
+        # For batch execution, record a tool message for each result
+        if cli_observation.results:
+            for result in cli_observation.results:
+                self._record_batch_tool_message(result)
+        else:
+            # Single tool mode - record the primary action
+            self._record_tool_message(action, cli_observation)
+
         return cli_observation
 
     # ------------------------------------------------------------------
@@ -771,6 +779,26 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
         except Exception:  # noqa: BLE001 - do not fail loop for logging issues
             LOGGER.debug("Failed to record tool message for %s", action.tool, exc_info=True)
+
+    def _record_batch_tool_message(self, result: ToolResult) -> None:
+        """Record a tool message for a single result from batch execution."""
+        if not self.session_manager or not self.session_id:
+            return
+
+        # Build content from result
+        content_parts = []
+        if result.outcome:
+            content_parts.append(result.outcome)
+
+        if result.error:
+            content_parts.append(f"Error: {result.error}")
+
+        content = "\n".join(content_parts) or f"{result.tool} completed"
+
+        try:
+            self.session_manager.add_tool_message(self.session_id, result.call_id, content)
+        except Exception:  # noqa: BLE001 - do not fail loop for logging issues
+            LOGGER.debug("Failed to record batch tool message for %s", result.tool, exc_info=True)
 
 
 

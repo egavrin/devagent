@@ -13,6 +13,9 @@ DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 class DeepSeekClient(HTTPChatLLMClient):
     """Chat-completions client for the DeepSeek API with retry and streaming support."""
 
+    # DeepSeek does not support parallel_tool_calls parameter (as of 2025-01)
+    _SUPPORTS_PARALLEL_TOOL_CALLS = False
+
     def __init__(
         self,
         api_key: str,

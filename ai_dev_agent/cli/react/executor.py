@@ -1029,6 +1029,7 @@ def _execute_react_assistant(
 
     final_json: Optional[Dict[str, Any]] = None
     printed_final = False
+
     if final_message:
         # If format schema provided, extract and validate JSON
         if format_schema:

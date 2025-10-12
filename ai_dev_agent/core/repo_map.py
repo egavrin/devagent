@@ -115,6 +115,19 @@ class RepoMap:
         'coverage', '.coverage',  # Test coverage
     }
 
+    # File priority heuristics (all tokens lowercased for comparison)
+    TEST_KEYWORDS = frozenset({'test', 'tests', 'spec', 'specs', 'fixture', 'fixtures'})
+    TEST_FILENAME_MARKERS = frozenset({'test', 'tests', 'spec', 'specs'})
+    TEMPLATE_KEYWORDS = frozenset({'template', 'templates', 'scaffold', 'scaffolds'})
+    TEMPLATE_EXTENSIONS = frozenset({
+        '.erb', '.ejs', '.jinja', '.jinja2', '.mustache', '.hbs', '.tpl', '.template'
+    })
+    EXAMPLE_KEYWORDS = frozenset({'example', 'examples', 'demo', 'demos', 'sample', 'samples', 'playground'})
+    BENCHMARK_KEYWORDS = frozenset({'benchmark', 'benchmarks', 'perf', 'performance'})
+    SOURCE_KEYWORDS = frozenset({'src', 'source', 'lib', 'include', 'app', 'services'})
+    CORE_KEYWORDS = frozenset({'core', 'engine', 'runtime', 'kernel', 'internal'})
+    PLUGIN_KEYWORDS = frozenset({'plugin', 'plugins', 'extension', 'extensions', 'addon', 'addons'})
+
     # Symbol noise filter: common symbols that create noisy dependency edges
     NOISE_SYMBOLS = frozenset({
         # Single-letter variables
@@ -536,12 +549,24 @@ class RepoMap:
             self._extract_cpp_info(file_path, file_info)
         elif language == 'java':
             self._extract_java_info(file_path, file_info)
+        elif language == 'kotlin':
+            self._extract_kotlin_info(file_path, file_info)
+        elif language == 'scala':
+            self._extract_scala_info(file_path, file_info)
         elif language == 'go':
             self._extract_go_info(file_path, file_info)
         elif language == 'rust':
             self._extract_rust_info(file_path, file_info)
         elif language == 'ruby':
             self._extract_ruby_info(file_path, file_info)
+        elif language == 'swift':
+            self._extract_swift_info(file_path, file_info)
+        elif language == 'dart':
+            self._extract_dart_info(file_path, file_info)
+        elif language == 'lua':
+            self._extract_lua_info(file_path, file_info)
+        elif language == 'php':
+            self._extract_php_info(file_path, file_info)
         else:
             # For unsupported languages, try basic pattern matching
             self._extract_generic_info(file_path, file_info)
@@ -618,41 +643,92 @@ class RepoMap:
             pass
 
     def _extract_cpp_info(self, file_path: Path, file_info: FileInfo) -> None:
-        """Extract C/C++ symbols and includes."""
+        """Extract C/C++ symbols and includes with comprehensive pattern matching."""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
             import re
 
-            # Extract class definitions
-            class_pattern = r'(?:class|struct)\s+([A-Za-z_]\w*)\s*(?:{|:)'
-            file_info.symbols.extend(re.findall(class_pattern, content))
+            # Remove comments to avoid false positives
+            # Remove single-line comments
+            content_no_comments = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
+            # Remove multi-line comments
+            content_no_comments = re.sub(r'/\*.*?\*/', '', content_no_comments, flags=re.DOTALL)
 
-            # Extract function definitions (basic pattern)
-            # Matches: return_type function_name(params)
-            func_pattern = r'\b(?:void|int|char|float|double|bool|auto|[A-Za-z_]\w*(?:\s*[*&])?)\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:{|;)'
-            potential_funcs = re.findall(func_pattern, content)
-            # Filter out common false positives
-            file_info.symbols.extend([f for f in potential_funcs if f not in {'if', 'while', 'for', 'switch', 'return'}])
+            # Extract class/struct definitions (including templates)
+            # Matches: template<...> class Foo, class Bar : public Base, struct Baz {
+            class_pattern = r'(?:template\s*<[^>]*>\s*)?(?:class|struct)\s+(?:__attribute__\s*\([^)]*\)\s*)?([A-Z][A-Za-z0-9_]*)\s*(?:[:{<]|final|$)'
+            file_info.symbols.extend(re.findall(class_pattern, content_no_comments))
 
-            # Extract #include statements
-            include_pattern = r'#include\s*[<"]([^>"]+)[>"]'
-            file_info.imports.extend(re.findall(include_pattern, content))
+            # Extract function/method definitions (more comprehensive)
+            # Handle various C++ function patterns - now more permissive
+            func_patterns = [
+                # Regular functions with PascalCase/camelCase names: Type FunctionName(...)
+                r'\b(?:virtual\s+|static\s+|inline\s+|constexpr\s+|explicit\s+|extern\s+)*(?:void|bool|int|char|float|double|size_t|uint\w*|int\d+_t|auto|const\s+|[A-Z][A-Za-z0-9_]*(?:\s*[*&<])?)\s+([A-Z][A-Za-z0-9_]{2,})\s*\(',
+                # Methods with qualifiers: Type ClassName::MethodName(...)
+                r'\b[A-Za-z_]\w*::\s*([A-Z][A-Za-z0-9_]{2,})\s*\(',
+                # Methods in header files without return type specified
+                r'^\s*([A-Z][A-Za-z0-9_]{3,})\s*\([^)]*\)\s*(?:const|override|final)?\s*;',
+                # Operators: operator+, operator==
+                r'\boperator\s*([+\-*/=<>!&|^~\[\]]+)\s*\(',
+                # Destructors: ~ClassName()
+                r'~([A-Z][A-Za-z0-9_]*)\s*\(',
+            ]
+
+            for pattern in func_patterns:
+                matches = re.findall(pattern, content_no_comments, flags=re.MULTILINE)
+                file_info.symbols.extend([m for m in matches if m not in {'if', 'while', 'for', 'switch', 'return', 'sizeof', 'typeof', 'decltype', 'static_cast', 'dynamic_cast', 'const_cast', 'reinterpret_cast'}])
+
+            # Extract template parameters and type aliases
+            # Matches: using AnyType = ..., template<typename T>
+            using_pattern = r'using\s+([A-Z][A-Za-z0-9_]*)\s*='
+            file_info.symbols.extend(re.findall(using_pattern, content_no_comments))
+
+            # Extract typedefs
+            typedef_pattern = r'typedef\s+(?:struct\s+)?[^;]+\s+([A-Z][A-Za-z0-9_]*)\s*;'
+            file_info.symbols.extend(re.findall(typedef_pattern, content_no_comments))
+
+            # Extract enum definitions
+            enum_pattern = r'enum\s+(?:class\s+)?([A-Z][A-Za-z0-9_]*)\s*[:{]'
+            file_info.symbols.extend(re.findall(enum_pattern, content_no_comments))
 
             # Extract namespaces
             namespace_pattern = r'namespace\s+([A-Za-z_]\w*)'
-            file_info.symbols.extend(re.findall(namespace_pattern, content))
+            file_info.symbols.extend(re.findall(namespace_pattern, content_no_comments))
 
-            # Extract typedefs
-            typedef_pattern = r'typedef\s+.*\s+([A-Za-z_]\w*);'
-            file_info.symbols.extend(re.findall(typedef_pattern, content))
+            # Extract macros/defines (important for C++)
+            # Matches: #define MACRO_NAME, #define FunctionMacro(...)
+            define_pattern = r'#\s*define\s+([A-Z_][A-Z0-9_]*)'
+            file_info.symbols.extend(re.findall(define_pattern, content))
 
-            # Extract using declarations
-            using_pattern = r'using\s+([A-Za-z_]\w*)\s*='
-            file_info.symbols.extend(re.findall(using_pattern, content))
+            # Extract #include statements
+            include_pattern = r'#\s*include\s*[<"]([^>"]+)[>"]'
+            file_info.imports.extend(re.findall(include_pattern, content))
 
-        except Exception:
+            # Extract symbols used (for references)
+            # Look for CamelCase/PascalCase identifiers (method calls, type references)
+            # More permissive pattern that captures function calls and type usage
+            ref_patterns = [
+                # CamelCase identifiers (class names, type names, function names)
+                r'(?<!class )(?<!struct )(?<!enum )(?<!namespace )(?<!using )(?<!typedef )\b([A-Z][A-Za-z0-9_]{2,})\b',
+                # Function calls with parentheses: SomeFunction(...)
+                r'\b([A-Z][a-z][A-Za-z0-9_]*)\s*\(',
+                # Scope resolution: SomeClass::SomeMethod
+                r'([A-Z][A-Za-z0-9_]+)::[A-Za-z_]',
+            ]
+
+            # Add unique references
+            seen = set(file_info.symbols)
+            for pattern in ref_patterns:
+                potential_refs = re.findall(pattern, content_no_comments)
+                for ref in potential_refs:
+                    if ref not in seen and ref not in file_info.symbols_used and len(ref) > 2:
+                        file_info.symbols_used.append(ref)
+                        seen.add(ref)
+
+        except Exception as e:
+            self.logger.debug(f"Error extracting C++ info from {file_path}: {e}")
             pass
 
     def _extract_java_info(self, file_path: Path, file_info: FileInfo) -> None:
@@ -772,6 +848,188 @@ class RepoMap:
 
             # Extract require statements
             require_pattern = r'require(?:_relative)?\s+[\'"]([^\'"]+)[\'"]'
+            file_info.imports.extend(re.findall(require_pattern, content))
+
+        except Exception:
+            pass
+
+    def _extract_kotlin_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract Kotlin symbols and imports."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract class/interface/object/data class definitions
+            class_pattern = r'(?:data\s+|sealed\s+|abstract\s+|open\s+)?(?:class|interface|object)\s+([A-Z][A-Za-z0-9_]*)'
+            file_info.symbols.extend(re.findall(class_pattern, content))
+
+            # Extract function definitions
+            func_pattern = r'(?:suspend\s+|inline\s+|infix\s+)?fun\s+(?:<[^>]+>\s+)?([a-z][A-Za-z0-9_]*)\s*\('
+            file_info.symbols.extend(re.findall(func_pattern, content))
+
+            # Extract val/var declarations (top-level properties)
+            prop_pattern = r'(?:const\s+)?(?:val|var)\s+([a-z][A-Za-z0-9_]*)\s*[:=]'
+            file_info.symbols.extend(re.findall(prop_pattern, content))
+
+            # Extract imports
+            import_pattern = r'import\s+([A-Za-z_][\w.]*)'
+            file_info.imports.extend(re.findall(import_pattern, content))
+
+            # Extract package
+            package_pattern = r'package\s+([A-Za-z_][\w.]*)'
+            packages = re.findall(package_pattern, content)
+            if packages:
+                file_info.imports.append(f"package:{packages[0]}")
+
+        except Exception:
+            pass
+
+    def _extract_scala_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract Scala symbols and imports."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract class/trait/object definitions
+            class_pattern = r'(?:case\s+|sealed\s+|abstract\s+)?(?:class|trait|object)\s+([A-Z][A-Za-z0-9_]*)'
+            file_info.symbols.extend(re.findall(class_pattern, content))
+
+            # Extract def (method/function) definitions
+            func_pattern = r'def\s+([a-z][A-Za-z0-9_]*)\s*(?:\[|\()'
+            file_info.symbols.extend(re.findall(func_pattern, content))
+
+            # Extract val/var declarations
+            val_pattern = r'(?:val|var)\s+([a-z][A-Za-z0-9_]*)\s*[:=]'
+            file_info.symbols.extend(re.findall(val_pattern, content))
+
+            # Extract imports
+            import_pattern = r'import\s+([A-Za-z_][\w.]*)'
+            file_info.imports.extend(re.findall(import_pattern, content))
+
+            # Extract package
+            package_pattern = r'package\s+([A-Za-z_][\w.]*)'
+            packages = re.findall(package_pattern, content)
+            if packages:
+                file_info.imports.append(f"package:{packages[0]}")
+
+        except Exception:
+            pass
+
+    def _extract_swift_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract Swift symbols and imports."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract class/struct/enum/protocol definitions
+            class_pattern = r'(?:public\s+|private\s+|internal\s+|fileprivate\s+)?(?:class|struct|enum|protocol|actor)\s+([A-Z][A-Za-z0-9_]*)'
+            file_info.symbols.extend(re.findall(class_pattern, content))
+
+            # Extract function definitions
+            func_pattern = r'(?:public\s+|private\s+|internal\s+)?func\s+([a-z][A-Za-z0-9_]*)\s*(?:<[^>]+>)?\s*\('
+            file_info.symbols.extend(re.findall(func_pattern, content))
+
+            # Extract var/let declarations
+            var_pattern = r'(?:public\s+|private\s+)?(?:var|let)\s+([a-z][A-Za-z0-9_]*)\s*[:=]'
+            file_info.symbols.extend(re.findall(var_pattern, content))
+
+            # Extract imports
+            import_pattern = r'import\s+(?:class\s+|struct\s+|enum\s+|protocol\s+)?([A-Za-z_]\w*)'
+            file_info.imports.extend(re.findall(import_pattern, content))
+
+        except Exception:
+            pass
+
+    def _extract_dart_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract Dart symbols and imports."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract class/abstract class/mixin definitions
+            class_pattern = r'(?:abstract\s+)?(?:class|mixin|enum)\s+([A-Z][A-Za-z0-9_]*)'
+            file_info.symbols.extend(re.findall(class_pattern, content))
+
+            # Extract function definitions (top-level and methods)
+            func_pattern = r'(?:Future\s*<[^>]+>|[A-Za-z_]\w*(?:<[^>]+>)?)\s+([a-z][A-Za-z0-9_]*)\s*\('
+            file_info.symbols.extend(re.findall(func_pattern, content))
+
+            # Extract imports
+            import_pattern = r'import\s+[\'"]([^\'"]+)[\'"]'
+            file_info.imports.extend(re.findall(import_pattern, content))
+
+            # Extract exports
+            export_pattern = r'export\s+[\'"]([^\'"]+)[\'"]'
+            file_info.exports.extend(re.findall(export_pattern, content))
+
+        except Exception:
+            pass
+
+    def _extract_lua_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract Lua symbols and requires."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract function definitions
+            # Matches: function name(...), function module.name(...), local function name(...)
+            func_patterns = [
+                r'function\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(',
+                r'local\s+function\s+([A-Za-z_]\w*)\s*\(',
+                r'([A-Za-z_]\w*)\s*=\s*function\s*\('
+            ]
+            for pattern in func_patterns:
+                file_info.symbols.extend(re.findall(pattern, content))
+
+            # Extract table/module definitions
+            table_pattern = r'(?:local\s+)?([A-Za-z_]\w*)\s*=\s*\{'
+            file_info.symbols.extend(re.findall(table_pattern, content))
+
+            # Extract require statements
+            require_pattern = r'require\s*\(?[\'"]([^\'"]+)[\'"]\)?'
+            file_info.imports.extend(re.findall(require_pattern, content))
+
+        except Exception:
+            pass
+
+    def _extract_php_info(self, file_path: Path, file_info: FileInfo) -> None:
+        """Extract PHP symbols and includes."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            import re
+
+            # Extract class/interface/trait definitions
+            class_pattern = r'(?:abstract\s+|final\s+)?(?:class|interface|trait)\s+([A-Z][A-Za-z0-9_]*)'
+            file_info.symbols.extend(re.findall(class_pattern, content))
+
+            # Extract function definitions
+            func_pattern = r'function\s+([a-z_][A-Za-z0-9_]*)\s*\('
+            file_info.symbols.extend(re.findall(func_pattern, content))
+
+            # Extract namespace
+            namespace_pattern = r'namespace\s+([A-Za-z_][\w\\]*)'
+            namespaces = re.findall(namespace_pattern, content)
+            if namespaces:
+                file_info.symbols.extend(namespaces)
+
+            # Extract use statements (imports)
+            use_pattern = r'use\s+([A-Za-z_][\w\\]*)'
+            file_info.imports.extend(re.findall(use_pattern, content))
+
+            # Extract require/include statements
+            require_pattern = r'(?:require|include)(?:_once)?\s*\(?[\'"]([^\'"]+)[\'"]\)?'
             file_info.imports.extend(re.findall(require_pattern, content))
 
         except Exception:
@@ -962,6 +1220,10 @@ class RepoMap:
 
             score += self._symbol_match_score(file_info, mentioned_symbols, long_symbol_prefixes)
 
+            # Apply file priority multiplier (boost impl files, demote tests/templates)
+            priority_mult = self._get_file_priority_multiplier(file_path)
+            score *= priority_mult
+
             # File size penalty (prefer smaller files)
             if file_info.size > 10000:
                 score *= 0.9
@@ -1103,6 +1365,10 @@ class RepoMap:
                     if mentioned_info and file_path in mentioned_info.dependencies:
                         score += 5.0
 
+            # Apply file priority multiplier (boost impl files, demote tests/templates)
+            priority_mult = self._get_file_priority_multiplier(file_path)
+            score *= priority_mult
+
             # File size penalty (prefer smaller files)
             if file_info.size > 10000:
                 score *= 0.9
@@ -1174,6 +1440,51 @@ class RepoMap:
             return True
 
         return False
+
+    def _get_file_priority_multiplier(self, file_path: str) -> float:
+        """Get a generic priority multiplier based on common repository conventions."""
+        path_obj = Path(file_path)
+        parts_lower = [part.lower() for part in path_obj.parts]
+
+        # Build token sets so we can match broad categories regardless of separators.
+        path_tokens: Set[str] = set()
+        for part in parts_lower:
+            normalized = part.replace('-', '_')
+            path_tokens.add(normalized)
+            path_tokens.update(token for token in normalized.split('_') if token)
+
+        filename_lower = path_obj.name.lower()
+        normalized_name = filename_lower.replace('-', '_').replace('.', '_')
+        name_tokens = {token for token in normalized_name.split('_') if token}
+        suffixes = [suffix.lower() for suffix in path_obj.suffixes]
+
+        # Demote common low-signal categories first.
+        if (self.TEST_KEYWORDS & path_tokens) or (self.TEST_FILENAME_MARKERS & name_tokens):
+            return 0.1
+
+        if (self.TEMPLATE_KEYWORDS & path_tokens) or any(
+            suffix in self.TEMPLATE_EXTENSIONS for suffix in suffixes
+        ):
+            return 0.2
+
+        if (self.EXAMPLE_KEYWORDS & path_tokens) or (self.EXAMPLE_KEYWORDS & name_tokens):
+            return 0.3
+
+        if (self.BENCHMARK_KEYWORDS & path_tokens) or (self.BENCHMARK_KEYWORDS & name_tokens):
+            return 0.4
+
+        multiplier = 1.0
+
+        if self.CORE_KEYWORDS & path_tokens:
+            multiplier = max(multiplier, 1.5)
+
+        if self.SOURCE_KEYWORDS & path_tokens:
+            multiplier = max(multiplier, 1.3)
+
+        if self.PLUGIN_KEYWORDS & path_tokens:
+            multiplier = max(multiplier, 1.2)
+
+        return multiplier
 
     def build_dependency_graph(self) -> nx.DiGraph:
         """Build dependency graph for PageRank computation with sophisticated edge weighting.

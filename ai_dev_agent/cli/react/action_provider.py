@@ -108,6 +108,8 @@ class LLMActionProvider:
             result = ToolCallResult(calls=[], message_content=content)
         else:
             llm_kwargs["tools"] = tools
+            # Enable parallel tool calls for efficiency (LLM can call multiple tools at once)
+            llm_kwargs["parallel_tool_calls"] = True
             if self.budget_integration:
                 result: ToolCallResult = self.budget_integration.execute_with_retry(
                     self.client.invoke_tools,
