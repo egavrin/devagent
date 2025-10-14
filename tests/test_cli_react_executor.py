@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from typing import Any, List, Sequence
 
+from ai_dev_agent.agents.schemas import VIOLATION_SCHEMA
 from ai_dev_agent.cli.react.executor import BudgetAwareExecutor, BudgetManager, _record_search_query
 from ai_dev_agent.engine.react.types import ActionRequest, Observation, TaskSpec
+from ai_dev_agent.providers.llm.base import Message
 
 
 class _DummyActionProvider:
@@ -51,6 +54,53 @@ def _make_observation(success: bool, outcome: str) -> Observation:
     )
 
 
+class _RecordingClient:
+    def __init__(self) -> None:
+        self.captured_conversation: Sequence[Message] | None = None
+
+    def complete(self, conversation: Sequence[Message], *, temperature: float = 0.1) -> str:
+        self.captured_conversation = conversation
+        return json.dumps(
+            {
+                "violations": [],
+                "summary": {
+                    "total_violations": 0,
+                    "files_reviewed": 0,
+                    "rule_name": "TEST_RULE",
+                },
+            }
+        )
+
+
+class _MockSessionManager:
+    def __init__(self) -> None:
+        self._base_conversation = [
+            Message(role="system", content="base-system"),
+            Message(role="user", content="base-user"),
+        ]
+
+    def compose(self, session_id: str) -> List[Message]:
+        return list(self._base_conversation)
+
+
+class _ForcedStopActionProvider:
+    def __init__(self, session_manager: _MockSessionManager, client: _RecordingClient) -> None:
+        self.session_manager = session_manager
+        self.session_id = "session-1"
+        self.client = client
+
+    def update_phase(self, phase: str, *, is_final: bool = False) -> None:  # pragma: no cover - no-op stub
+        return None
+
+    def __call__(self, task: TaskSpec, history: Sequence[Any]) -> ActionRequest:
+        raise StopIteration("No tool calls - synthesis complete")
+
+
+class _NoopToolInvoker:
+    def __call__(self, action: ActionRequest) -> Observation:  # pragma: no cover - defensive guard
+        raise AssertionError("Tool invoker should not be called during forced synthesis")
+
+
 def test_budget_executor_marks_failure_when_last_observation_fails() -> None:
     manager = BudgetManager(1)
     executor = BudgetAwareExecutor(manager)
@@ -89,3 +139,22 @@ def test_record_search_query_prefers_query_and_pattern() -> None:
     _record_search_query(action, recorded)
 
     assert "TODO" in recorded
+
+
+def test_forced_synthesis_enforces_json_schema_instructions() -> None:
+    manager = BudgetManager(1)
+    client = _RecordingClient()
+    session_manager = _MockSessionManager()
+    action_provider = _ForcedStopActionProvider(session_manager, client)
+    executor = BudgetAwareExecutor(manager, format_schema=VIOLATION_SCHEMA)
+    task = TaskSpec(identifier="T3", goal="Force synthesis", category="assist")
+
+    result = executor.run(task, action_provider, _NoopToolInvoker())
+
+    assert result.status == "success"
+    assert client.captured_conversation is not None
+    instructions_message = client.captured_conversation[-1]
+    assert instructions_message.role == "system"
+    instructions_text = instructions_message.content
+    assert "OUTPUT FORMAT ENFORCEMENT" in instructions_text
+    assert json.dumps(VIOLATION_SCHEMA, indent=2) in instructions_text

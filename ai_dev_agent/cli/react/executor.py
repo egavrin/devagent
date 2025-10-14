@@ -53,6 +53,19 @@ from .budget_control import AdaptiveBudgetManager, BudgetManager, PHASE_PROMPTS,
 __all__ = ["_execute_react_assistant"]
 
 
+def _build_json_enforcement_instructions(format_schema: Dict[str, Any]) -> str:
+    """Build strict JSON-only instructions for forced synthesis paths."""
+    return (
+        "OUTPUT FORMAT ENFORCEMENT:\n"
+        "You MUST respond with raw JSON that exactly matches the schema below.\n"
+        "Do NOT include markdown, code fences, natural language, or any additional text.\n"
+        "Start the response with '{' and end with '}'.\n"
+        "If you cannot find any violations, return an object with an empty 'violations' array.\n\n"
+        "Required JSON Schema:\n"
+        f"{json.dumps(format_schema, indent=2)}"
+    )
+
+
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     """Extract JSON from text, handling markdown code fences and surrounding text."""
     if not text:
@@ -120,10 +133,11 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 class BudgetAwareExecutor(ReactiveExecutor):
     """Thin wrapper around the engine executor that honours the CLI budget manager."""
 
-    def __init__(self, budget_manager: BudgetManager) -> None:
+    def __init__(self, budget_manager: BudgetManager, format_schema: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(evaluator=None)
         self.budget_manager = budget_manager
         self.failure_detector = FailurePatternDetector()
+        self.format_schema = format_schema
 
     def _invoke_tool(self, invoker, action):
         """Override to add failure pattern detection."""
@@ -201,6 +215,13 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 # Get the LLM to produce a text response without tools
                 # Access session_manager and session_id from action_provider
                 conversation = action_provider.session_manager.compose(action_provider.session_id)
+
+                if self.format_schema:
+                    json_instruction_message = Message(
+                        role="system",
+                        content=_build_json_enforcement_instructions(self.format_schema),
+                    )
+                    conversation = conversation + [json_instruction_message]
 
                 try:
                     if hasattr(action_provider.client, 'complete'):
@@ -298,7 +319,6 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 conversation = action_provider.session_manager.compose(action_provider.session_id)
 
                 # Add a system message to force synthesis
-                from ai_dev_agent.providers.llm.base import Message
                 synthesis_prompt = Message(
                     role="system",
                     content=(
@@ -325,6 +345,13 @@ class BudgetAwareExecutor(ReactiveExecutor):
 
                 # Append synthesis prompts to conversation
                 enhanced_conversation = conversation + [synthesis_prompt, synthesis_user_prompt]
+
+                if self.format_schema:
+                    json_instruction_message = Message(
+                        role="system",
+                        content=_build_json_enforcement_instructions(self.format_schema),
+                    )
+                    enhanced_conversation = enhanced_conversation + [json_instruction_message]
 
 
                 if hasattr(action_provider.client, 'complete'):
@@ -808,7 +835,7 @@ def _execute_react_assistant(
         shell_session_id=ctx.obj.get("_shell_session_id"),
     )
 
-    executor = BudgetAwareExecutor(budget_manager)
+    executor = BudgetAwareExecutor(budget_manager, format_schema=format_schema)
 
     synthesizer = ContextSynthesizer()
     files_discovered: set[str] = set()
