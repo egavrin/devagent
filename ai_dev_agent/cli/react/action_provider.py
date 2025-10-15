@@ -310,22 +310,32 @@ class LLMActionProvider:
             # Generate fresh RepoMap with accumulated context
             from ai_dev_agent.cli.context_enhancer import get_context_enhancer
             enhancer = get_context_enhancer(repo_root, settings)
-            system_msg, _ = enhancer.get_repomap_messages(
+            original_query, repomap_messages = enhancer.get_repomap_messages(
                 query=user_prompt,
                 max_files=15,
                 additional_files=dynamic_context.mentioned_files,
                 additional_symbols=dynamic_context.mentioned_symbols
             )
 
-            if system_msg:
-                # Inject as system message to avoid breaking tool call sequences
-                self.session_manager.add_system_message(
-                    self.session_id,
-                    system_msg,
-                    location="after_initial"  # Add after initial system prompts
-                )
+            if repomap_messages:
+                # Inject the repomap messages into the conversation
+                # Following the same pattern as the initial injection
+                for msg in repomap_messages:
+                    if msg["role"] == "user":
+                        # Add as user message to maintain conversation flow
+                        self.session_manager.add_user_message(
+                            self.session_id,
+                            msg["content"]
+                        )
+                    elif msg["role"] == "assistant":
+                        # Add assistant acknowledgment
+                        self.session_manager.add_assistant_message(
+                            self.session_id,
+                            msg["content"]
+                        )
+
                 if settings and settings.repomap_debug_stdout:
-                    logger.debug("Updated RepoMap injected as system message")
+                    logger.debug(f"Updated RepoMap injected: {len(repomap_messages)} messages")
 
         except Exception as e:
             settings = self._ctx_obj.get("settings")

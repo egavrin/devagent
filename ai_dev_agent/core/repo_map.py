@@ -1233,9 +1233,22 @@ class RepoMap:
             if score > 0:
                 rankings[file_path] = score
 
-        # Sort and return top results
+        # Sort and validate results
         sorted_files = sorted(rankings.items(), key=lambda x: x[1], reverse=True)
-        return sorted_files[:max_files]
+
+        # Validate files exist before returning (filter out stale cache entries)
+        validated_files = []
+        for file_path, score in sorted_files[:max_files * 2]:  # Check extra files in case some are missing
+            full_path = self.root_path / file_path
+            if full_path.exists():
+                validated_files.append((file_path, score))
+                if len(validated_files) >= max_files:
+                    break
+            else:
+                # Log stale cache entry
+                self.logger.debug(f"Fast-path skipping non-existent cached file: {file_path}")
+
+        return validated_files
 
     def get_ranked_files(
         self,
@@ -1380,7 +1393,20 @@ class RepoMap:
 
         # Sort by score
         sorted_files = sorted(rankings.items(), key=lambda x: x[1], reverse=True)
-        return sorted_files[:max_files]
+
+        # Validate files exist before returning (filter out stale cache entries)
+        validated_files = []
+        for file_path, score in sorted_files[:max_files * 2]:  # Check extra files in case some are missing
+            full_path = self.root_path / file_path
+            if full_path.exists():
+                validated_files.append((file_path, score))
+                if len(validated_files) >= max_files:
+                    break
+            else:
+                # Log stale cache entry
+                self.logger.debug(f"Skipping non-existent cached file: {file_path}")
+
+        return validated_files
 
     def get_file_summary(self, file_path: str) -> Optional[str]:
         """Get a summary of a file."""

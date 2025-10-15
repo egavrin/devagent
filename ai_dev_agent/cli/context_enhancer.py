@@ -40,6 +40,111 @@ class ContextEnhancer:
                 self._initialized = True
         return self._repo_map
 
+    def _get_important_files(self, all_files: List[str], max_files: int) -> List[Tuple[str, float]]:
+        """Get important files using Aider-style prioritization.
+
+        Returns files with scores based on their importance in typical codebases.
+        """
+        # Comprehensive list of important file patterns (inspired by Aider)
+        important_patterns = {
+            # Documentation (highest priority)
+            'README.md': 20.0, 'readme.md': 20.0, 'README.rst': 20.0, 'README.txt': 20.0,
+            'README': 18.0, 'CONTRIBUTING.md': 15.0, 'CHANGELOG.md': 12.0, 'CHANGES.md': 12.0,
+            'AUTHORS.md': 10.0, 'LICENSE': 15.0, 'LICENSE.md': 15.0, 'LICENSE.txt': 15.0,
+
+            # Python configuration
+            'pyproject.toml': 18.0, 'setup.py': 18.0, 'setup.cfg': 16.0,
+            'requirements.txt': 15.0, 'requirements.in': 14.0,
+            'Pipfile': 14.0, 'poetry.lock': 12.0,
+            'tox.ini': 10.0, 'pytest.ini': 10.0, '.coveragerc': 8.0,
+
+            # JavaScript/TypeScript configuration
+            'package.json': 18.0, 'tsconfig.json': 16.0, 'webpack.config.js': 14.0,
+            'babel.config.js': 12.0, 'jest.config.js': 10.0, '.eslintrc.js': 8.0,
+            'vite.config.js': 12.0, 'next.config.js': 12.0, 'nuxt.config.js': 12.0,
+
+            # Build files
+            'Makefile': 16.0, 'makefile': 16.0, 'CMakeLists.txt': 16.0,
+            'build.gradle': 14.0, 'pom.xml': 14.0, 'Cargo.toml': 14.0,
+            'go.mod': 14.0, 'go.sum': 12.0,
+
+            # Docker/Containers
+            'Dockerfile': 16.0, 'docker-compose.yml': 14.0, 'docker-compose.yaml': 14.0,
+            '.dockerignore': 8.0, 'kubernetes.yml': 12.0,
+
+            # CI/CD
+            '.github/workflows/ci.yml': 12.0, '.github/workflows/main.yml': 12.0,
+            '.gitlab-ci.yml': 12.0, '.travis.yml': 10.0, 'azure-pipelines.yml': 10.0,
+            'Jenkinsfile': 10.0, '.circleci/config.yml': 10.0,
+
+            # Entry points (lower than config but still important)
+            'main.py': 10.0, 'app.py': 10.0, 'server.py': 10.0, 'index.py': 9.0,
+            'index.js': 10.0, 'index.ts': 10.0, 'main.js': 10.0, 'main.ts': 10.0,
+            'app.js': 9.0, 'app.ts': 9.0, 'server.js': 9.0, 'server.ts': 9.0,
+            'cli.py': 8.0, '__main__.py': 8.0, '__init__.py': 6.0,
+
+            # Configuration files
+            '.env.example': 8.0, 'config.py': 8.0, 'settings.py': 8.0,
+            'config.json': 7.0, 'config.yaml': 7.0, 'config.yml': 7.0,
+            '.editorconfig': 5.0, '.gitignore': 5.0, '.gitattributes': 5.0,
+        }
+
+        # Also check for patterns in paths (not just exact names)
+        path_patterns = {
+            'src/index': 9.0, 'src/main': 9.0, 'src/app': 8.0,
+            'lib/index': 9.0, 'lib/main': 9.0,
+            'cmd/main': 9.0,  # Go entry points
+            'bin/': 7.0,  # Binary/script directories
+            'scripts/': 6.0,
+        }
+
+        important_files = []
+        seen_files = set()
+
+        # First pass: exact filename matches
+        for file_path in all_files:
+            file_name = Path(file_path).name
+            if file_name in important_patterns and file_path not in seen_files:
+                score = important_patterns[file_name]
+                important_files.append((file_path, score))
+                seen_files.add(file_path)
+                if len(important_files) >= max_files:
+                    break
+
+        # Second pass: path pattern matches
+        if len(important_files) < max_files:
+            for file_path in all_files:
+                if file_path in seen_files:
+                    continue
+                for pattern, score in path_patterns.items():
+                    if pattern in file_path:
+                        important_files.append((file_path, score))
+                        seen_files.add(file_path)
+                        break
+                if len(important_files) >= max_files:
+                    break
+
+        # Third pass: implementation files (non-test, non-generated)
+        if len(important_files) < max_files:
+            for file_path in all_files:
+                if file_path in seen_files:
+                    continue
+                # Skip test files, generated files, vendored code
+                lower_path = file_path.lower()
+                if any(skip in lower_path for skip in
+                       ['test', 'spec', 'vendor', 'node_modules', '.min.',
+                        'dist/', 'build/', '__pycache__', '.egg-info']):
+                    continue
+                # Add with lower score
+                important_files.append((file_path, 3.0))
+                seen_files.add(file_path)
+                if len(important_files) >= max_files:
+                    break
+
+        # Sort by score (highest first) and return
+        important_files.sort(key=lambda x: x[1], reverse=True)
+        return important_files[:max_files]
+
     def extract_symbols_and_files(self, text: str) -> Tuple[Set[str], Set[str]]:
         """Extract symbols and file mentions from text."""
         symbols: Set[str] = set()
@@ -374,51 +479,126 @@ class ContextEnhancer:
             if additional_symbols:
                 symbols.update(additional_symbols)
 
-            if not symbols and not mentioned_files:
-                return query, None
+            # Implement Aider-style 3-tier fallback
+            fallback_tier = 1
+            effective_max_files = max_files  # May be expanded for exploratory queries
 
-            # Get relevant files from RepoMap
+            # Tier 1: Standard approach with mentioned files/symbols
             relevant_files = self.repo_map.get_ranked_files(
                 mentioned_files=mentioned_files,
                 mentioned_symbols=symbols,
-                max_files=max_files
-            )
+                max_files=effective_max_files
+            ) if (symbols or mentioned_files) else []
+
+            # Tier 2: If no results, try with important files boosted
+            if not relevant_files and (symbols or mentioned_files):
+                fallback_tier = 2
+                # Expand budget moderately for broader search
+                effective_max_files = min(max_files * 2, 30)  # 2x expansion, cap at 30
+
+                if self.settings.repomap_debug_stdout:
+                    logger.debug(f"Tier 1 failed, trying Tier 2 with important files boost (max_files={effective_max_files})")
+
+                # Get important files to boost their priority
+                all_files_list = list(self.repo_map.context.files.keys())
+                important = self._get_important_files(all_files_list, effective_max_files // 2)
+                important_set = {f for f, _ in important}
+
+                # Combine with mentioned files for personalization
+                boosted_files = mentioned_files | important_set
+
+                relevant_files = self.repo_map.get_ranked_files(
+                    mentioned_files=boosted_files,  # Include important files
+                    mentioned_symbols=symbols,       # Still use symbols for weighting
+                    max_files=effective_max_files
+                )
+
+            # Tier 3: Only for TRULY exploratory queries where we have additional context
+            # Don't use Tier 3 for initial queries with no context - return None instead
+            if not relevant_files and (additional_files or additional_symbols):
+                fallback_tier = 3
+                # Aider-style: 8x expansion for exploratory queries (no direct matches)
+                effective_max_files = min(max_files * 8, 120)  # 8x expansion like Aider, cap at 120
+                if self.settings.repomap_debug_stdout:
+                    logger.debug(f"Tier 2 failed, trying Tier 3 with pure PageRank (max_files={effective_max_files})")
+                # Get top files by pure PageRank (no personalization)
+                all_files = list(self.repo_map.context.files.keys())
+                if all_files:
+                    # Get PageRank scores for all files
+                    from ai_dev_agent.core.repo_map import RepoMap
+                    # Create a minimal RepoMap call with no hints
+                    relevant_files = self.repo_map.get_ranked_files(
+                        mentioned_files=set(),  # No file hints
+                        mentioned_symbols=set(), # No symbol hints
+                        max_files=effective_max_files  # Use expanded budget
+                    )
+
+                    # If still nothing (shouldn't happen), fall back to important files
+                    if not relevant_files:
+                        # Get important files first using Aider-style patterns
+                        important_files = self._get_important_files(all_files, effective_max_files)
+                        relevant_files = important_files
 
             if not relevant_files:
+                # No relevant files found - return None (don't force context)
                 return query, None
 
             # Build context string (Aider's style - more direct)
-            context_lines = [
-                "Here are the relevant files in the git repository:",
-                ""
-            ]
+            if fallback_tier == 3:
+                # Exploratory context with many files
+                context_lines = [
+                    "Here is an overview of the repository structure (showing key files):",
+                    ""
+                ]
+            else:
+                context_lines = [
+                    "Here are the relevant files in the git repository:",
+                    ""
+                ]
 
-            # Group by score ranges
-            high_relevance = []
-            medium_relevance = []
+            # Group by score ranges and display based on tier
+            if fallback_tier == 3:
+                # For exploratory queries, show all files (no filtering)
+                for file_path, score in relevant_files:
+                    entry = f"  • {file_path}"
+                    context_lines.append(entry)
+            else:
+                # For targeted queries, group by relevance
+                high_relevance = []
+                medium_relevance = []
+                low_relevance = []
 
-            for file_path, score in relevant_files:
-                file_info = self.repo_map.context.files.get(file_path)
-                lang = file_info.language if file_info else "unknown"
+                for file_path, score in relevant_files:
+                    file_info = self.repo_map.context.files.get(file_path)
+                    lang = file_info.language if file_info else "unknown"
 
-                # Show full relative path
-                entry = f"  • {file_path}"
+                    # Show full relative path
+                    entry = f"  • {file_path}"
 
-                if score > 10:
-                    high_relevance.append((entry, score))
-                elif score > 3:
-                    medium_relevance.append((entry, score))
+                    if score > 10:
+                        high_relevance.append((entry, score))
+                    elif score > 3:
+                        medium_relevance.append((entry, score))
+                    else:
+                        low_relevance.append((entry, score))
 
-            # Show high relevance files prominently
-            if high_relevance:
-                for entry, score in high_relevance:
-                    context_lines.append(f"{entry}")
+                # Show high relevance files prominently
+                if high_relevance:
+                    for entry, score in high_relevance:
+                        context_lines.append(f"{entry}")
 
-            # Add medium relevance if there's space
-            if medium_relevance and len(high_relevance) < 10:
-                context_lines.append("")
-                for entry, score in medium_relevance[:5]:
-                    context_lines.append(f"{entry}")
+                # Add medium relevance if there's space
+                if medium_relevance and len(high_relevance) < 10:
+                    context_lines.append("")
+                    for entry, score in medium_relevance[:10]:
+                        context_lines.append(f"{entry}")
+
+                # In Tier 2, also include some low relevance files
+                if fallback_tier == 2 and low_relevance and len(high_relevance) + len(medium_relevance) < 20:
+                    context_lines.append("")
+                    remaining = 20 - len(high_relevance) - len(medium_relevance)
+                    for entry, score in low_relevance[:remaining]:
+                        context_lines.append(f"{entry}")
 
             repomap_content = "\n".join(context_lines)
 
@@ -436,8 +616,15 @@ class ContextEnhancer:
                     logger.debug(f"  {line}")
 
             # Return as conversation messages (Aider's approach)
-            # Make the assistant response more actionable
-            if len(high_relevance) <= 3:
+            # Make the assistant response appropriate for the tier
+            if fallback_tier == 3:
+                # No direct matches - provide exploratory context like Aider
+                assistant_msg = (
+                    "I can see a high-level view of your repository structure. "
+                    "Tell me which files you'd like me to examine for this task, "
+                    "or I can search for relevant code based on your query."
+                )
+            elif len(high_relevance) <= 3:
                 assistant_msg = f"I can see the relevant files. I'll read them directly to answer your question."
             else:
                 assistant_msg = f"I can see {len(high_relevance)} relevant files. I'll focus on the most relevant ones."
