@@ -18,8 +18,7 @@ class ContextSynthesizer:
     def synthesize_previous_steps(
         self,
         history: List[Message],
-        current_step: int,
-        include_tools: bool = True
+        current_step: int
     ) -> str:
         """Extract and summarize key findings from previous steps.
 

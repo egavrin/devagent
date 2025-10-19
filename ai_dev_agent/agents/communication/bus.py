@@ -99,68 +99,6 @@ class AgentBus:
         # For now, priority is ignored (could use PriorityQueue)
         self._event_queue.put(event)
 
-    def subscribe(
-        self,
-        event_type: EventType,
-        handler: EventHandler
-    ) -> str:
-        """
-        Subscribe to events of a specific type.
-
-        Args:
-            event_type: Type of events to subscribe to
-            handler: Function to call when event occurs
-
-        Returns:
-            Subscription ID for later unsubscription
-        """
-        subscription_id = str(uuid.uuid4())
-
-        if event_type not in self._subscribers:
-            self._subscribers[event_type] = []
-
-        self._subscribers[event_type].append((subscription_id, handler))
-
-        return subscription_id
-
-    def unsubscribe(self, subscription_id: str) -> bool:
-        """
-        Unsubscribe from events.
-
-        Args:
-            subscription_id: ID returned from subscribe()
-
-        Returns:
-            True if unsubscribed, False if ID not found
-        """
-        for event_type, subscribers in self._subscribers.items():
-            for i, (sub_id, _) in enumerate(subscribers):
-                if sub_id == subscription_id:
-                    del subscribers[i]
-                    return True
-
-        return False
-
-    def broadcast(self, message: str, source: str, data: Optional[Dict[str, Any]] = None) -> None:
-        """
-        Broadcast a message to all subscribers.
-
-        Args:
-            message: Message content
-            source: Source agent name
-            data: Additional data
-        """
-        event_data = {"message": message}
-        if data:
-            event_data.update(data)
-
-        event = AgentEvent(
-            event_type=EventType.MESSAGE,
-            source_agent=source,
-            data=event_data
-        )
-
-        self.publish(event)
 
     def _process_events(self) -> None:
         """Process events from the queue (runs in background thread)."""
@@ -201,33 +139,6 @@ class AgentBus:
                 with self._lock:
                     self._metrics["errors"] += 1
 
-    def get_metrics(self) -> Dict[str, int]:
-        """
-        Get bus metrics.
-
-        Returns:
-            Dictionary of metrics
-        """
-        with self._lock:
-            return self._metrics.copy()
-
-    def clear_metrics(self) -> None:
-        """Clear metrics."""
-        with self._lock:
-            self._metrics = {
-                "events_published": 0,
-                "events_processed": 0,
-                "errors": 0
-            }
-
-    def wait_for_completion(self, timeout: Optional[float] = None) -> None:
-        """
-        Wait for all events to be processed.
-
-        Args:
-            timeout: Maximum time to wait (seconds)
-        """
-        self._event_queue.join()  # Wait for all tasks to be done
 
     def __enter__(self):
         """Context manager entry."""

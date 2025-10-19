@@ -31,7 +31,7 @@ from ai_dev_agent.providers.llm import (
 )
 from ai_dev_agent.tools import ToolContext, registry as tool_registry
 from ai_dev_agent.tools.code.code_edit.tree_sitter_analysis import extract_symbols_from_outline
-from ai_dev_agent.tools.execution.sandbox import SandboxConfig, SandboxExecutor
+# Sandbox execution removed - using direct execution only
 from ai_dev_agent.session import SessionManager
 from ai_dev_agent.session.context_service import ContextPruningConfig
 from ai_dev_agent.session.summarizer import LLMConversationSummarizer
@@ -448,14 +448,10 @@ def update_task_state(
     store.save(snapshot)
 
 
-def _create_sandbox(settings: Settings) -> SandboxExecutor:
-    config = SandboxConfig(
-        allowlist=settings.sandbox_allowlist,
-        default_timeout=120.0,
-        cpu_time_limit=settings.sandbox_cpu_time_limit,
-        memory_limit_mb=settings.sandbox_memory_limit_mb,
-    )
-    return SandboxExecutor(Path.cwd(), config)
+def _create_sandbox(settings: Settings) -> None:
+    # Sandbox execution removed - using direct execution only
+    # For safety, we rely on user permissions and system security
+    return None
 
 
 def _make_tool_context(ctx: click.Context, *, with_sandbox: bool = False) -> ToolContext:

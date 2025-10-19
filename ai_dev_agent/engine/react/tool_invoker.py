@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from ai_dev_agent.tools.code.code_edit.editor import CodeEditor
-from ai_dev_agent.engine.react.pipeline import PipelineCommands
+# Pipeline module removed - functionality integrated into tool invoker
 from ai_dev_agent.tools.execution.testing.local_tests import TestRunner
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
 from ai_dev_agent.tools import ToolContext, registry, READ, WRITE, RUN
@@ -38,7 +38,7 @@ class RegistryToolInvoker:
         test_runner: Optional[TestRunner] = None,
         sandbox=None,
         collector: Optional[MetricsCollector] = None,
-        pipeline_commands: Optional[PipelineCommands] = None,
+        pipeline_commands: Optional[Any] = None,  # Removed - kept for compatibility
         devagent_cfg: Optional[DevAgentConfig] = None,
         shell_session_manager: Optional[ShellSessionManager] = None,
         shell_session_id: Optional[str] = None,
@@ -521,7 +521,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         test_runner: Optional[TestRunner] = None,
         sandbox=None,
         collector: Optional[MetricsCollector] = None,
-        pipeline_commands: Optional[PipelineCommands] = None,
+        pipeline_commands: Optional[Any] = None,  # Removed - kept for compatibility
         devagent_cfg: Optional[DevAgentConfig] = None,
         *,
         session_manager: Optional[SessionManager] = None,
@@ -901,7 +901,7 @@ def create_tool_invoker(
     test_runner: Optional[TestRunner] = None,
     sandbox=None,
     collector: Optional[MetricsCollector] = None,
-    pipeline_commands: Optional[PipelineCommands] = None,
+    pipeline_commands: Optional[Any] = None,  # Removed - kept for compatibility
     devagent_cfg: Optional[DevAgentConfig] = None,
 ) -> RegistryToolInvoker:
     """Factory to create a configured tool invoker."""

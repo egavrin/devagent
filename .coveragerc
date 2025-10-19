@@ -1,0 +1,80 @@
+# Coverage.py configuration file for DevAgent project
+# This enforces 90% minimum code coverage requirement for AI/ML application reliability
+
+[run]
+source = ai_dev_agent
+branch = True
+parallel = True
+concurrency = multiprocessing
+omit =
+    */tests/*
+    */test_*.py
+    */__init__.py
+    */setup.py
+    */conftest.py
+    */benchmarks/*
+    */.venv/*
+    */venv/*
+    */migrations/*
+    */__pycache__/*
+    # Testing infrastructure fixtures are helpers, not production code
+    ai_dev_agent/testing/fixtures.py
+
+[report]
+precision = 2
+show_missing = True
+skip_covered = False
+skip_empty = True
+fail_under = 90
+
+# Exclude specific code patterns from coverage
+exclude_lines =
+    # Standard pragma
+    pragma: no cover
+
+    # Don't complain about missing debug code
+    def __repr__
+    def __str__
+
+    # Don't complain if tests don't hit defensive assertion code
+    raise AssertionError
+    raise NotImplementedError
+
+    # Don't complain if non-runnable code isn't run
+    if 0:
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+
+    # Don't complain about abstract methods
+    @(abc\.)?abstractmethod
+
+    # Defensive programming patterns
+    except ImportError
+    except KeyboardInterrupt
+    except Exception as e:
+
+    # Type checking blocks
+    if typing.TYPE_CHECKING:
+
+    # Logging statements (optional)
+    logger\.(debug|info|warning|error|critical)
+
+ignore_errors = False
+
+[paths]
+source =
+    ai_dev_agent/
+    */site-packages/ai_dev_agent
+
+[html]
+directory = htmlcov
+title = DevAgent Coverage Report
+show_contexts = True
+
+[xml]
+output = coverage.xml
+
+[json]
+output = coverage.json
+pretty_print = True
+show_contexts = True

@@ -22,8 +22,6 @@ from . import analysis as _analysis  # noqa: F401
 from . import find as _find  # noqa: F401
 from . import grep as _grep  # noqa: F401
 from . import symbols as _symbols  # noqa: F401
-from . import agent_delegate as _agent_delegate  # noqa: F401
-from . import planning as _planning  # noqa: F401
 
 __all__ = [
     "ToolContext",

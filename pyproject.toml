@@ -34,7 +34,22 @@ include = ["ai_dev_agent*"]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=7.4"
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "pytest-xdist>=3.5",
+  "pytest-timeout>=2.2",
+  "pytest-mock>=3.12",
+  "coverage[toml]>=7.4"
+]
+test = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "pytest-xdist>=3.5",
+  "pytest-timeout>=2.2",
+  "pytest-mock>=3.12",
+  "coverage[toml]>=7.4",
+  "pytest-benchmark>=4.0",
+  "pytest-asyncio>=0.23"
 ]
 
 [tool.pytest.ini_options]
@@ -51,3 +66,47 @@ addopts = "-m 'not slow and not integration and not llm'"
 testpaths = [
   "tests"
 ]
+timeout = 60
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  "ignore::PendingDeprecationWarning"
+]
+
+[tool.coverage.run]
+source = ["ai_dev_agent"]
+branch = true
+parallel = true
+omit = [
+  "*/tests/*",
+  "*/test_*.py",
+  "*/__init__.py",
+  "*/setup.py",
+  "*/conftest.py",
+  "*/benchmarks/*"
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+skip_empty = true
+fail_under = 90.0
+exclude_lines = [
+  "pragma: no cover",
+  "def __repr__",
+  "def __str__",
+  "raise AssertionError",
+  "raise NotImplementedError",
+  "if 0:",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+  "@(abc\\.)?abstractmethod"
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+title = "DevAgent Coverage Report"
+
+[tool.coverage.json]
+output = "coverage.json"
+pretty_print = true
