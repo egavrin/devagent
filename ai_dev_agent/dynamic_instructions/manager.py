@@ -159,7 +159,11 @@ class DynamicInstructionManager:
         snapshots_path: Optional[Path] = None,
         confidence_threshold: float = 0.5,
         auto_rollback_on_error: bool = True,
-        max_history: int = 1000
+        max_history: int = 1000,
+        analysis_interval: int = 15,
+        auto_apply_threshold: float = 0.8,
+        proposal_min_queries: int = 10,
+        max_auto_apply_per_cycle: int = 3
     ):
         """Initialize the dynamic instruction manager.
 
@@ -169,12 +173,20 @@ class DynamicInstructionManager:
             confidence_threshold: Minimum confidence to apply updates automatically
             auto_rollback_on_error: Whether to auto-rollback on errors
             max_history: Maximum update history entries to keep
+            analysis_interval: Number of queries between pattern analysis
+            auto_apply_threshold: Confidence threshold for auto-applying proposals
+            proposal_min_queries: Minimum queries before proposing instructions
+            max_auto_apply_per_cycle: Maximum auto-applied instructions per analysis
         """
         self.history_path = history_path or self.DEFAULT_HISTORY_PATH
         self.snapshots_path = snapshots_path or self.DEFAULT_SNAPSHOTS_PATH
         self.confidence_threshold = confidence_threshold
         self.auto_rollback_on_error = auto_rollback_on_error
         self.max_history = max_history
+        self.analysis_interval = analysis_interval
+        self.auto_apply_threshold = auto_apply_threshold
+        self.proposal_min_queries = proposal_min_queries
+        self.max_auto_apply_per_cycle = max_auto_apply_per_cycle
 
         # Thread safety
         self._lock = threading.RLock()
@@ -187,6 +199,14 @@ class DynamicInstructionManager:
         # Active session tracking
         self._active_session_id: Optional[str] = None
         self._session_updates: Dict[str, List[str]] = {}  # session_id -> update_ids
+
+        # Pattern tracking for automatic proposals
+        from .pattern_tracker import PatternTracker
+        patterns_path = self.history_path.parent / "patterns.json"
+        self._pattern_tracker = PatternTracker(storage_path=patterns_path)
+
+        # Rollback tracking for safety
+        self._recent_rollbacks: List[str] = []  # Recent rollback timestamps
 
         # Load existing data
         self._load_data()
@@ -427,6 +447,9 @@ class DynamicInstructionManager:
             update.rolled_back = True
             update.rolled_back_at = datetime.now().isoformat()
 
+            # Record rollback for safety tracking
+            self._record_rollback()
+
             logger.info(f"Rolled back update {update_id}")
             self._save_data()
             return True
@@ -582,3 +605,237 @@ class DynamicInstructionManager:
         with self._lock:
             self._load_data()
             logger.debug("Dynamic instruction state reloaded from disk")
+
+    # =============================================================================
+    # Pattern Tracking & Automatic Proposals
+    # =============================================================================
+
+    def record_query_outcome(
+        self,
+        session_id: str,
+        success: bool,
+        tools_used: List[str],
+        task_type: str = "general",
+        error_type: Optional[str] = None,
+        duration_seconds: Optional[float] = None
+    ) -> None:
+        """Record a query outcome for pattern analysis.
+
+        Args:
+            session_id: Unique session identifier
+            success: Whether query was successful
+            tools_used: List of tools used in order
+            task_type: Type of task (e.g., "debugging", "feature")
+            error_type: Type of error if failed
+            duration_seconds: Query duration in seconds
+        """
+        self._pattern_tracker.record_query(
+            session_id=session_id,
+            success=success,
+            tools_used=tools_used,
+            task_type=task_type,
+            error_type=error_type,
+            duration_seconds=duration_seconds
+        )
+
+    def should_analyze_patterns(self) -> bool:
+        """Check if pattern analysis should be triggered.
+
+        Returns:
+            True if analysis interval is reached and enough data exists
+        """
+        query_count = self._pattern_tracker.get_query_count()
+
+        # Check if analysis interval is reached
+        if query_count > 0 and query_count % self.analysis_interval == 0:
+            # Check if enough data exists
+            return self._pattern_tracker.has_significant_patterns(
+                min_queries=self.proposal_min_queries
+            )
+
+        return False
+
+    def get_pattern_statistics(self) -> Dict[str, Any]:
+        """Get statistics about recorded patterns.
+
+        Returns:
+            Dictionary of pattern statistics
+        """
+        return self._pattern_tracker.get_statistics()
+
+    def _check_rollback_safety(self) -> bool:
+        """Check if it's safe to auto-apply instructions based on rollback history.
+
+        Returns:
+            True if safe to auto-apply (< 3 rollbacks in last 50 queries)
+        """
+        # Keep only recent rollbacks (last 50 queries worth)
+        query_count = self._pattern_tracker.get_query_count()
+        recent_threshold = max(0, query_count - 50)
+
+        # Count recent rollbacks
+        recent_count = len([ts for ts in self._recent_rollbacks if query_count - int(ts.split('_')[-1]) <= 50])
+
+        # Safe if < 3 recent rollbacks
+        return recent_count < 3
+
+    def _record_rollback(self) -> None:
+        """Record a rollback event for safety tracking."""
+        query_count = self._pattern_tracker.get_query_count()
+        self._recent_rollbacks.append(f"{datetime.now().isoformat()}_{query_count}")
+
+        # Keep only last 100 rollback records
+        if len(self._recent_rollbacks) > 100:
+            self._recent_rollbacks = self._recent_rollbacks[-100:]
+
+    def analyze_and_propose_instructions(
+        self,
+        playbook_manager: Any,  # PlaybookManager instance
+        settings: Any = None  # Settings instance
+    ) -> Dict[str, Any]:
+        """Analyze patterns and generate/apply instruction proposals.
+
+        Args:
+            playbook_manager: PlaybookManager instance to apply instructions to
+            settings: Settings instance for LLM configuration
+
+        Returns:
+            Dictionary with analysis results:
+            - patterns_detected: Number of patterns found
+            - proposals_generated: Number of proposals created
+            - auto_applied: Number of proposals auto-applied
+            - pending_review: Number of proposals pending review
+            - proposals: List of proposal details
+        """
+        from .proposal_generator import ProposalGenerator
+
+        logger.info("Analyzing query patterns for instruction proposals")
+
+        # Detect patterns
+        patterns = self._pattern_tracker.detect_patterns(
+            min_sample_size=5,
+            min_success_rate=0.7
+        )
+
+        if not patterns:
+            logger.info("No significant patterns detected")
+            return {
+                "patterns_detected": 0,
+                "proposals_generated": 0,
+                "auto_applied": 0,
+                "pending_review": 0,
+                "proposals": []
+            }
+
+        logger.info(f"Detected {len(patterns)} significant patterns")
+
+        # Generate proposals using LLM
+        generator = ProposalGenerator(settings=settings)
+        proposals = generator.generate_proposals(patterns, max_proposals=5)
+
+        if not proposals:
+            logger.info("No proposals generated from patterns")
+            return {
+                "patterns_detected": len(patterns),
+                "proposals_generated": 0,
+                "auto_applied": 0,
+                "pending_review": 0,
+                "proposals": []
+            }
+
+        # Validate proposal quality
+        valid_proposals = [p for p in proposals if generator.validate_proposal_quality(p)]
+
+        logger.info(f"Generated {len(valid_proposals)} valid proposals")
+
+        # Check safety (rollback history)
+        safety_ok = self._check_rollback_safety()
+
+        # Process proposals
+        auto_applied = 0
+        pending_review = 0
+        proposal_details = []
+
+        for proposal in valid_proposals[:self.max_auto_apply_per_cycle]:
+            detail = {
+                "type": proposal.update_type.value,
+                "content": proposal.new_content,
+                "reasoning": proposal.reasoning,
+                "confidence": proposal.confidence,
+                "action": "none"
+            }
+
+            # Auto-apply if high confidence and safe
+            if (
+                proposal.confidence >= self.auto_apply_threshold
+                and safety_ok
+                and auto_applied < self.max_auto_apply_per_cycle
+            ):
+                # Add instruction to playbook
+                try:
+                    from ..playbook.manager import PlaybookInstruction
+
+                    instruction = PlaybookInstruction(
+                        content=proposal.new_content or "",
+                        category="auto_generated",
+                        priority=5,  # Medium priority
+                        tags=["auto_proposal"],
+                        enabled=True
+                    )
+
+                    playbook_manager.add_instruction(instruction)
+
+                    # Mark as applied
+                    proposal.instruction_id = instruction.instruction_id
+                    proposal.applied = True
+                    proposal.applied_at = datetime.now().isoformat()
+
+                    # Add to history
+                    self._update_history.append(proposal)
+
+                    auto_applied += 1
+                    detail["action"] = "auto_applied"
+
+                    logger.info(
+                        f"Auto-applied instruction (confidence={proposal.confidence:.2f}): "
+                        f"{proposal.new_content[:60]}..."
+                    )
+
+                except Exception as e:
+                    logger.error(f"Failed to auto-apply instruction: {e}")
+                    detail["action"] = "failed"
+
+            elif proposal.confidence >= 0.5:
+                # Queue for review
+                self._pending_updates[proposal.update_id] = proposal
+                pending_review += 1
+                detail["action"] = "pending_review"
+
+                logger.info(
+                    f"Queued instruction for review (confidence={proposal.confidence:.2f}): "
+                    f"{proposal.new_content[:60]}..."
+                )
+            else:
+                # Confidence too low
+                detail["action"] = "discarded"
+                logger.debug(f"Discarded low-confidence proposal ({proposal.confidence:.2f})")
+
+            proposal_details.append(detail)
+
+        # Save updated state
+        self._save_data()
+
+        result = {
+            "patterns_detected": len(patterns),
+            "proposals_generated": len(valid_proposals),
+            "auto_applied": auto_applied,
+            "pending_review": pending_review,
+            "proposals": proposal_details
+        }
+
+        logger.info(
+            f"Proposal analysis complete: {auto_applied} auto-applied, "
+            f"{pending_review} pending review"
+        )
+
+        return result

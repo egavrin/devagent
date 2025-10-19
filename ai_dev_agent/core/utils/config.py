@@ -148,6 +148,12 @@ class Settings:
     instruction_rollback_on_error: bool = True  # Rollback failed instructions
     instruction_max_history: int = 100       # Maximum instruction history
 
+    # Automatic proposal settings (Pattern-Based Learning)
+    instruction_analysis_interval: int = 15  # Analyze patterns every N queries
+    instruction_auto_apply_threshold: float = 0.8  # Auto-apply if confidence > threshold
+    instruction_proposal_min_queries: int = 10  # Minimum queries before proposing
+    instruction_max_auto_apply_per_cycle: int = 3  # Max auto-applied per analysis
+
     def ensure_state_dir(self) -> None:
         """Ensure the directory for the state file exists."""
         if not self.state_file.parent.exists():

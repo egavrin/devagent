@@ -1174,6 +1174,32 @@ def _execute_react_assistant(
                         )
                         logger.debug(f"Tracked effectiveness for {len(retrieved_memory_ids)} retrieved memories")
 
+                # Record query outcome for pattern tracking (Automatic Proposals)
+                if context_enhancer:
+                    # Extract tools used from result steps
+                    tools_used = []
+                    for step in result.steps:
+                        if hasattr(step, 'action') and hasattr(step.action, 'tool'):
+                            tools_used.append(step.action.tool)
+
+                    # Determine error type if failed
+                    error_type = None
+                    if not execution_completed or result.status != "success":
+                        if result.stop_reason:
+                            error_type = result.stop_reason
+                        else:
+                            error_type = "unknown_failure"
+
+                    # Record the query outcome
+                    context_enhancer.record_query_outcome(
+                        session_id=session_id,
+                        success=(result.status == "success" and execution_completed),
+                        tools_used=tools_used,
+                        task_type=task_type,
+                        error_type=error_type,
+                        duration_seconds=None  # Could add timing if needed
+                    )
+
                 # Save dynamic instruction state (Phase 3: Dynamic Instructions)
                 if context_enhancer and context_enhancer._dynamic_instruction_manager:
                     context_enhancer._dynamic_instruction_manager.save_state()

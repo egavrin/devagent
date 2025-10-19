@@ -94,7 +94,11 @@ class ContextEnhancer:
                     snapshots_path=dynamic_snapshots_path,
                     confidence_threshold=getattr(settings, 'instruction_update_confidence', 0.8),
                     auto_rollback_on_error=getattr(settings, 'instruction_rollback_on_error', True),
-                    max_history=getattr(settings, 'instruction_max_history', 100)
+                    max_history=getattr(settings, 'instruction_max_history', 100),
+                    analysis_interval=getattr(settings, 'instruction_analysis_interval', 15),
+                    auto_apply_threshold=getattr(settings, 'instruction_auto_apply_threshold', 0.8),
+                    proposal_min_queries=getattr(settings, 'instruction_proposal_min_queries', 10),
+                    max_auto_apply_per_cycle=getattr(settings, 'instruction_max_auto_apply_per_cycle', 3)
                 )
                 self._ab_test_manager = ABTestManager(auto_conclude=True)
                 logger.debug("Dynamic instructions initialized (project-scoped)")
@@ -1155,6 +1159,89 @@ class ContextEnhancer:
             )
         except Exception as e:
             logger.warning(f"Failed to record A/B test result: {e}")
+
+    # =============================================================================
+    # Automatic Proposal Generation (Pattern-Based)
+    # =============================================================================
+
+    def record_query_outcome(
+        self,
+        session_id: str,
+        success: bool,
+        tools_used: List[str],
+        task_type: str = "general",
+        error_type: Optional[str] = None,
+        duration_seconds: Optional[float] = None
+    ) -> None:
+        """Record a query outcome for pattern tracking and automatic proposals.
+
+        Args:
+            session_id: Unique session identifier
+            success: Whether query was successful
+            tools_used: List of tools used in order
+            task_type: Type of task (e.g., "debugging", "feature")
+            error_type: Type of error if failed
+            duration_seconds: Query duration in seconds
+        """
+        if not self._dynamic_instruction_manager:
+            return
+
+        try:
+            self._dynamic_instruction_manager.record_query_outcome(
+                session_id=session_id,
+                success=success,
+                tools_used=tools_used,
+                task_type=task_type,
+                error_type=error_type,
+                duration_seconds=duration_seconds
+            )
+
+            # Check if analysis should be triggered
+            if self._dynamic_instruction_manager.should_analyze_patterns():
+                logger.info("Query pattern analysis threshold reached, triggering analysis")
+                self._analyze_and_propose_instructions()
+
+        except Exception as e:
+            logger.warning(f"Failed to record query outcome: {e}")
+
+    def _analyze_and_propose_instructions(self) -> None:
+        """Analyze patterns and generate/apply instruction proposals (internal)."""
+        if not self._dynamic_instruction_manager or not self._playbook_manager:
+            return
+
+        try:
+            result = self._dynamic_instruction_manager.analyze_and_propose_instructions(
+                playbook_manager=self._playbook_manager,
+                settings=self.settings
+            )
+
+            if result["auto_applied"] > 0:
+                logger.info(
+                    f"📚 Auto-applied {result['auto_applied']} new instructions based on query patterns"
+                )
+
+            if result["pending_review"] > 0:
+                logger.info(
+                    f"💭 {result['pending_review']} instruction proposals pending review"
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to analyze patterns and propose instructions: {e}")
+
+    def get_pattern_statistics(self) -> Optional[Dict[str, Any]]:
+        """Get statistics about recorded query patterns.
+
+        Returns:
+            Pattern statistics dictionary or None
+        """
+        if not self._dynamic_instruction_manager:
+            return None
+
+        try:
+            return self._dynamic_instruction_manager.get_pattern_statistics()
+        except Exception as e:
+            logger.warning(f"Failed to get pattern statistics: {e}")
+            return None
 
     def get_dynamic_instruction_statistics(self) -> Optional[Dict[str, Any]]:
         """Get statistics about dynamic instruction updates.
