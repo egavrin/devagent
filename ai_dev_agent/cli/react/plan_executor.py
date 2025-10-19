@@ -361,6 +361,9 @@ def _execute_task(
     """
     Execute a single task from the work plan.
 
+    The manager agent will automatically select and delegate to specialized agents
+    as needed based on the task requirements.
+
     Args:
         ctx: Click context
         client: LLM client
@@ -373,20 +376,28 @@ def _execute_task(
         Dict with task execution results
     """
     # Build task-specific prompt
+    # The manager agent will analyze this and delegate to appropriate specialized agents
     task_prompt = f"""[Task: {task.title}]
 
 Original query: {original_query}
 
 Task description: {task.description}
 
-Execute this specific task. Be focused and concise."""
+Available specialized agents:
+- design_agent: Creates technical designs and architecture
+- test_agent: Generates tests following TDD workflow
+- implementation_agent: Implements code from designs using TDD
+- review_agent: Reviews code for quality and security (read-only)
 
-    # Execute using the standard React executor
+Execute this task. If this requires specialized skills (design, testing, implementation, or review),
+consider delegating to the appropriate specialized agent. Otherwise, handle it directly."""
+
+    # Execute using the manager agent (it will delegate if needed)
     from .executor import _execute_react_assistant
 
     # Remove parameters we're explicitly setting to avoid conflicts
     task_kwargs = {k: v for k, v in kwargs.items()
-                   if k not in ['use_planning', 'suppress_final_output']}
+                   if k not in ['use_planning', 'suppress_final_output', 'agent_type']}
 
     result = _execute_react_assistant(
         ctx,
@@ -395,6 +406,7 @@ Execute this specific task. Be focused and concise."""
         task_prompt,
         use_planning=False,  # Don't nest planning
         suppress_final_output=False,  # Show task output
+        agent_type="manager",  # Use manager agent - it will delegate if needed
         **task_kwargs
     )
 

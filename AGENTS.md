@@ -4,9 +4,10 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 
 ## Core Expectations
 - **Obey the four critical rules**: do not break existing behavior, study reference repos before coding, keep coverage ≥90%, and follow the documented development process (`docs/DEVELOPMENT_PROCESS.md`, `docs/SAFE_IMPLEMENTATION_PLAN.md`).
+- **Never create new `.md` files unless the user explicitly asks**: capture notes in the conversation or update existing Markdown files instead.
 - **Front-load situational awareness**: run `pytest tests/test_backward_compatibility.py`, gather coverage with `pytest --cov=ai_dev_agent --cov-report=term`, and read `docs/IMPLEMENTATION_STATUS.md` before touching code.
-- **Inspect references first**: pull patterns from `/Users/eg/Documents/aider`, `cline-1`, `codex`, `claude-code`, and `opencode`; capture findings in `docs/reference_analysis/<feature>_analysis.md`.
-- **Design before implementation**: create `docs/design/<feature>_design.md` summarizing references, planned approach, compatibility safeguards, and test strategy.
+- **Inspect references first**: pull patterns from `/Users/eg/Documents/aider`, `cline-1`, `codex`, `claude-code`, and `opencode`; summarize findings inline unless the user explicitly asks for a new `.md` file.
+- **Design before implementation**: draft the approach in the conversation or update existing docs, and never create new `.md` design files unless the user explicitly requests them.
 - **Work in tight loops**: write tests before code, keep functionality changes tiny, and update component status via `python -m ai_dev_agent.status.update` while leaving git commits to the user.
 
 ## Implementation Loop
@@ -15,10 +16,10 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 - **Commit handoff**: never run `git commit` or otherwise write to git history; prepare commit-ready diffs and message suggestions so the user can apply them when satisfied.
 - **Continuous status updates**: log each milestone with the status updater module so parallel efforts stay synchronized.
 - **Judge and gate checks**: after features stabilize, run `python -m ai_dev_agent.judges.verify --feature "<feature>"`, `pytest --cov=ai_dev_agent --cov-fail-under=90`, targeted compatibility suites under `tests/compatibility/`, performance benchmarks, and the full test battery before concluding the task.
-- **Documentation upkeep**: refresh `docs/IMPLEMENTATION_STATUS.md`, expand the README when commands change, and add usage examples for new functionality.
+- **Documentation upkeep**: refresh existing docs such as `docs/IMPLEMENTATION_STATUS.md` when needed, but do not add new `.md` files unless the user explicitly asks.
 
 ## Priority Roadmap
-- **Work Planning Tools** (Priority #1) – ✅ **COMPLETE** - Fully integrated into CLI with `devagent plan` commands (create, list, show, next, start, complete, delete). See `docs/WORK_PLANNING.md` for usage.
+- **Work Planning Tools** (Priority #1) – ✅ **COMPLETE** - Fully integrated into CLI with `devagent plan` commands (create, list, show, next, start, complete, delete). See `docs/design/work_planning_design.md` for usage.
 - **Memory System** (Priority #2) – study Aider’s `RepoMap` and Cline’s persistence model.
 - **Multi-Agent Coordination** (Priority #3) – extract orchestration ideas from Cline and OpenCode.
 - **Testing Infrastructure** (Priority #4) – mirror Aider’s large-suite discipline and enforce the 90 % threshold.
@@ -98,7 +99,7 @@ devagent plan next 296f3e           # Get: Task 2 (dependency met)
 - ✅ Persistent storage (~/.devagent/plans/)
 - ✅ Partial ID matching for convenience
 
-**Documentation**: `docs/WORK_PLANNING.md`
+**Documentation**: `docs/design/work_planning_design.md`
 
 ## Verification Checklist
 - Run `pytest --cov=ai_dev_agent --cov-fail-under=90` and any required compatibility suites before declaring the task complete; surface key results in the handoff.

@@ -860,6 +860,8 @@ def _execute_react_assistant(
         session_id=session_id,
         shell_session_manager=ctx.obj.get("_shell_session_manager"),
         shell_session_id=ctx.obj.get("_shell_session_id"),
+        cli_context=ctx,
+        llm_client=client,
     )
 
     executor = BudgetAwareExecutor(budget_manager, format_schema=format_schema)

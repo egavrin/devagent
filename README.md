@@ -167,7 +167,7 @@ devagent plan start <plan-id> <task-id>
 devagent plan complete <plan-id> <task-id>
 ```
 
-See [WORK_PLANNING.md](docs/WORK_PLANNING.md) for detailed documentation.
+See [Work Planning Design](docs/design/work_planning_design.md) for details.
 
 ## Testing
 
@@ -181,13 +181,13 @@ pytest
 pytest -m ""
 ```
 
-See [TESTING.md](TESTING.md) for detailed testing guide.
+See [Development Process](docs/DEVELOPMENT_PROCESS.md) for testing guidance.
 
 ## Documentation
 
 - **[AGENTS.md](AGENTS.md)** - AI agent guide and development process
-- **[TESTING.md](TESTING.md)** - Complete testing guide with markers and workflows
-- **[docs/WORK_PLANNING.md](docs/WORK_PLANNING.md)** - Work planning system documentation
+- **[Development Process](docs/DEVELOPMENT_PROCESS.md)** - Testing and workflow guidance
+- **[Work Planning Design](docs/design/work_planning_design.md)** - Work planning system documentation
 - **[docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)** - Development process and safe implementation plan
 
 That's it. This PoC demonstrates how LLMs can assist development workflows while keeping humans in control.

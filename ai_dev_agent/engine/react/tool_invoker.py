@@ -276,6 +276,14 @@ class RegistryToolInvoker:
             extra["shell_session_manager"] = self.shell_session_manager
             extra["shell_session_id"] = self.shell_session_id
 
+        # Pass cli_context and llm_client for agent delegation (set by SessionAwareToolInvoker)
+        if hasattr(self, "cli_context") and self.cli_context is not None:
+            extra["cli_context"] = self.cli_context
+        if hasattr(self, "llm_client") and self.llm_client is not None:
+            extra["llm_client"] = self.llm_client
+        if hasattr(self, "session_id") and self.session_id is not None:
+            extra["session_id"] = self.session_id
+
         ctx = ToolContext(
             repo_root=self.workspace,
             settings=self.settings,
@@ -520,6 +528,8 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         session_id: Optional[str] = None,
         shell_session_manager: Optional[ShellSessionManager] = None,
         shell_session_id: Optional[str] = None,
+        cli_context: Optional[Any] = None,
+        llm_client: Optional[Any] = None,
     ) -> None:
         super().__init__(
             workspace=workspace,
@@ -535,6 +545,8 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         )
         self.session_manager = session_manager or (SessionManager.get_instance() if session_id else None)
         self.session_id = session_id
+        self.cli_context = cli_context
+        self.llm_client = llm_client
         setting_value = getattr(settings, "max_tool_output_chars", DEFAULT_MAX_TOOL_OUTPUT_CHARS)
         try:
             parsed_setting = int(setting_value)

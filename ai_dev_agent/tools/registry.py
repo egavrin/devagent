@@ -32,8 +32,8 @@ class ToolSpec:
 
     name: str
     handler: Callable[[Mapping[str, Any], ToolContext], Mapping[str, Any]]
-    request_schema_path: Path
-    response_schema_path: Path
+    request_schema_path: Optional[Path]
+    response_schema_path: Optional[Path]
     description: str = ""
     display_name: Optional[str] = None
     category: Optional[str] = None
@@ -64,17 +64,25 @@ class ToolRegistry:
 
     def invoke(self, name: str, payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
         spec = self.get(name)
-        validator = _load_validator(spec.request_schema_path)
-        errors = sorted(validator.iter_errors(payload), key=lambda exc: exc.path)
-        if errors:
-            first = errors[0]
-            raise ValueError(f"Invalid input for {name}: {first.message}")
+
+        # Validate request payload if schema is provided
+        if spec.request_schema_path is not None:
+            validator = _load_validator(spec.request_schema_path)
+            errors = sorted(validator.iter_errors(payload), key=lambda exc: exc.path)
+            if errors:
+                first = errors[0]
+                raise ValueError(f"Invalid input for {name}: {first.message}")
+
         result = spec.handler(payload, context)
-        validator_out = _load_validator(spec.response_schema_path)
-        errors_out = sorted(validator_out.iter_errors(result), key=lambda exc: exc.path)
-        if errors_out:
-            first_out = errors_out[0]
-            raise ValueError(f"Tool {name} returned invalid response: {first_out.message}")
+
+        # Validate response if schema is provided
+        if spec.response_schema_path is not None:
+            validator_out = _load_validator(spec.response_schema_path)
+            errors_out = sorted(validator_out.iter_errors(result), key=lambda exc: exc.path)
+            if errors_out:
+                first_out = errors_out[0]
+                raise ValueError(f"Tool {name} returned invalid response: {first_out.message}")
+
         return result
 
     # Metadata helpers --------------------------------------------------

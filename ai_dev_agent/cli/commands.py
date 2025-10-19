@@ -19,6 +19,8 @@ logger = get_logger(__name__)
 from .react.executor import _execute_react_assistant
 from .review import run_review
 from .utils import _build_context, get_llm_client, _record_invocation
+from .agent_commands import agent_group
+from .auto_agent_query import auto_agent_command
 
 LOGGER = get_logger(__name__)
 
@@ -717,6 +719,17 @@ def plan_delete(plan_id: str):
         click.echo(f"✓ Deleted plan: {plan.goal}")
     else:
         click.echo(f"❌ Failed to delete plan")
+
+
+# =============================================================================
+# Multi-Agent System Commands
+# =============================================================================
+
+# Register the agent command group from agent_commands.py
+cli.add_command(agent_group)
+
+# Register the auto agent command for automatic agent spawning
+cli.add_command(auto_agent_command)
 
 
 def main() -> None:

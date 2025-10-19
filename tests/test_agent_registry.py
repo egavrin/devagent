@@ -18,7 +18,9 @@ def test_agent_registry_get_manager():
     assert "write" in manager.tools
     assert "run" in manager.tools
     assert manager.max_iterations == 40  # Updated from 25 for complex queries
-    assert manager.system_prompt_suffix is None
+    assert manager.system_prompt_suffix is not None  # Manager has enhanced prompt
+    assert "Intelligent Task Router" in manager.system_prompt_suffix
+    assert "delegate" in manager.system_prompt_suffix.lower()
 
 
 def test_agent_registry_get_reviewer():

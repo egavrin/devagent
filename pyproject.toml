@@ -40,7 +40,14 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
   "integration: marks tests as integration tests (may require external services)",
-  "slow: marks tests as slow running (taking more than 60 seconds)"
+  "slow: marks tests as slow running (taking more than 60 seconds)",
+  "llm: marks tests that require LLM API access"
 ]
-# By default, skip slow tests (override with: pytest --run-slow or pytest -m slow)
-addopts = "-m 'not slow'"
+# By default, skip slow and integration tests
+# Run all: pytest -m ''
+# Run integration: pytest -m integration
+# Run slow: pytest -m slow
+addopts = "-m 'not slow and not integration and not llm'"
+testpaths = [
+  "tests"
+]
