@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from threading import RLock
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 from uuid import uuid4
 
 from ai_dev_agent.providers.llm.base import Message
@@ -120,7 +120,9 @@ class SessionManager:
         return message
 
     def add_tool_message(self, session_id: str, tool_call_id: str | None, content: str) -> Message:
-        message = Message(role="tool", content=content, tool_call_id=tool_call_id)
+        session = self.get_session(session_id)
+        normalized_id = self._normalize_tool_call_id(session, tool_call_id)
+        message = Message(role="tool", content=content, tool_call_id=normalized_id)
         self._append_history(session_id, message)
         return message
 
@@ -152,3 +154,24 @@ class SessionManager:
         with session.lock:
             session.history.append(message)
             self._context_service.update_session(session)
+
+    def _normalize_tool_call_id(self, session: Session, tool_call_id: str | None) -> str:
+        if isinstance(tool_call_id, str):
+            stripped = tool_call_id.strip()
+            if stripped:
+                return stripped
+
+        return self._generate_tool_call_id(session)
+
+    def _generate_tool_call_id(self, session: Session) -> str:
+        with session.lock:
+            used: Set[str] = {
+                msg.tool_call_id
+                for msg in session.history
+                if msg.role == "tool" and msg.tool_call_id
+            }
+
+        while True:
+            candidate = f"tool-{uuid4().hex[:8]}"
+            if candidate not in used:
+                return candidate

@@ -28,3 +28,16 @@ def test_remove_system_messages():
     manager.remove_system_messages(session.id, lambda msg: msg.content and msg.content.startswith("Tool performance"))
     remaining = [msg for msg in manager.compose(session.id) if msg.role == "system"]
     assert remaining and all(not msg.content.startswith("Tool performance") for msg in remaining)
+
+
+def test_add_tool_message_generates_identifier_when_missing():
+    manager = SessionManager.get_instance()
+    session_id = f"test-session-tool-id-{uuid4()}"
+    session = manager.ensure_session(session_id)
+
+    message = manager.add_tool_message(session.id, None, "tool output placeholder")
+
+    assert message.tool_call_id, "Expected tool_call_id to be generated when missing"
+    composed = manager.compose(session.id)
+    tool_entries = [msg for msg in composed if msg.role == "tool"]
+    assert tool_entries and all(msg.tool_call_id for msg in tool_entries)

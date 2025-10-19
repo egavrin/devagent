@@ -7,13 +7,14 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 - **Front-load situational awareness**: run `pytest tests/test_backward_compatibility.py`, gather coverage with `pytest --cov=ai_dev_agent --cov-report=term`, and read `docs/IMPLEMENTATION_STATUS.md` before touching code.
 - **Inspect references first**: pull patterns from `/Users/eg/Documents/aider`, `cline-1`, `codex`, `claude-code`, and `opencode`; capture findings in `docs/reference_analysis/<feature>_analysis.md`.
 - **Design before implementation**: create `docs/design/<feature>_design.md` summarizing references, planned approach, compatibility safeguards, and test strategy.
-- **Work in tight loops**: write tests before code, commit incrementally, and update component status via `python -m ai_dev_agent.status.update`.
+- **Work in tight loops**: write tests before code, keep functionality changes tiny, and update component status via `python -m ai_dev_agent.status.update` while leaving git commits to the user.
 
 ## Implementation Loop
-- **TDD**: add or extend tests in `tests/` before adjusting production modules; ensure each failing test is the prompt for one focused change.
-- **Incremental commits**: prefer single-concern commits such as `test(feature): ...` followed by `feat(feature): ...`.
+- **Tests-first TDD**: add or extend tests in `tests/` before touching production modules; ensure the new tests fail for the expected reason before editing functionality.
+- **Implement after failing tests**: once the tests define the behavior and fail, update production code in minimal increments to make them pass without breaking prior capabilities.
+- **Commit handoff**: never run `git commit` or otherwise write to git history; prepare commit-ready diffs and message suggestions so the user can apply them when satisfied.
 - **Continuous status updates**: log each milestone with the status updater module so parallel efforts stay synchronized.
-- **Judge and gate checks**: after features stabilize, run `python -m ai_dev_agent.judges.verify --feature "<feature>"`, `pytest --cov=ai_dev_agent --cov-fail-under=90`, targeted compatibility suites under `tests/compatibility/`, performance benchmarks, and the full test battery.
+- **Judge and gate checks**: after features stabilize, run `python -m ai_dev_agent.judges.verify --feature "<feature>"`, `pytest --cov=ai_dev_agent --cov-fail-under=90`, targeted compatibility suites under `tests/compatibility/`, performance benchmarks, and the full test battery before concluding the task.
 - **Documentation upkeep**: refresh `docs/IMPLEMENTATION_STATUS.md`, expand the README when commands change, and add usage examples for new functionality.
 
 ## Priority Roadmap
@@ -24,8 +25,8 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 
 ## Daily Rhythm
 - **Morning**: pull latest changes, run the test suite, review `docs/IMPLEMENTATION_STATUS.md`, confirm daily goals.
-- **During development**: revisit references, drive via tests, ship small commits, refresh status tracking.
-- **End of day**: rerun full tests, record progress, commit outstanding work, log the next plan.
+- **During development**: revisit references, drive via tests, keep changes minimal, refresh status tracking.
+- **End of day**: rerun full tests, record progress, draft commit guidance for the user (do not commit), log the next plan.
 
 ## Emergency Playbooks
 - **Breakage**: stop, inspect `git status`/`git diff`, undo the faulty change set, restart with smaller steps.
@@ -100,9 +101,9 @@ devagent plan next 296f3e           # Get: Task 2 (dependency met)
 **Documentation**: `docs/WORK_PLANNING.md`
 
 ## Verification Checklist
+- Run `pytest --cov=ai_dev_agent --cov-fail-under=90` and any required compatibility suites before declaring the task complete; surface key results in the handoff.
+- Run `python -m ai_dev_agent.judges.verify` (feature-scoped or full) until GPT-4, Claude, and a third model approve before completion.
 - Confirm reference analysis artifacts exist via `grep -r "reference" docs/reference_analysis/`.
-- Ensure `pytest --cov=ai_dev_agent --cov-fail-under=90` passes without regression.
-- Run `python -m ai_dev_agent.judges.verify` (feature-scoped or full) until GPT-4, Claude, and a third model approve.
 - Scan recent history with `git log --oneline -5` for commit format compliance.
 - Validate priority tasks progress by reviewing `docs/IMPLEMENTATION_STATUS.md`.
 

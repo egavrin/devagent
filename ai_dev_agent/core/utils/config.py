@@ -130,6 +130,24 @@ class Settings:
     agent_context_synthesis: bool = True    # Synthesize context from previous steps
     agent_max_context_chars: int = 2000     # Max chars for context synthesis
 
+    # Memory Bank settings (ReasoningBank pattern)
+    enable_memory_bank: bool = True         # Enable memory system
+    memory_retrieval_limit: int = 5         # Max memories to retrieve
+    memory_similarity_threshold: float = 0.3  # Minimum similarity for retrieval
+    memory_prune_threshold: float = 0.2     # Prune memories below this effectiveness
+    memory_max_per_type: int = 100          # Max memories per task type
+
+    # Playbook settings (ACE pattern)
+    enable_playbook: bool = True            # Enable evolving playbook
+    playbook_max_bullets: int = 50          # Maximum instruction bullets
+    playbook_dedup_threshold: float = 0.9   # Deduplication similarity threshold
+
+    # Dynamic instruction settings (ILWS pattern)
+    enable_dynamic_instructions: bool = True  # Enable instruction updates
+    instruction_update_confidence: float = 0.8  # Minimum confidence for updates
+    instruction_rollback_on_error: bool = True  # Rollback failed instructions
+    instruction_max_history: int = 100       # Maximum instruction history
+
     def ensure_state_dir(self) -> None:
         """Ensure the directory for the state file exists."""
         if not self.state_file.parent.exists():
@@ -172,6 +190,10 @@ def _load_from_env(prefix: str = "DEVAGENT_") -> Dict[str, Any]:
             "disable_context_pruner",
             "always_use_planning",
             "agent_context_synthesis",
+            "enable_memory_bank",
+            "enable_playbook",
+            "enable_dynamic_instructions",
+            "instruction_rollback_on_error",
         }:
             env[field] = _cast_bool(value)
         elif field in {
@@ -199,9 +221,15 @@ def _load_from_env(prefix: str = "DEVAGENT_") -> Dict[str, Any]:
             "context_pruner_summary_max_chars",
             "context_pruner_max_event_history",
             "agent_max_context_chars",
+            "memory_retrieval_limit",
+            "memory_max_per_type",
+            "playbook_max_bullets",
+            "instruction_max_history",
         }:
             env[field] = int(value)
-        elif field in {"patch_coverage_target", "context_pruner_trigger_ratio"}:
+        elif field in {"patch_coverage_target", "context_pruner_trigger_ratio",
+                       "memory_similarity_threshold", "memory_prune_threshold",
+                       "playbook_dedup_threshold", "instruction_update_confidence"}:
             env[field] = float(value)
         elif field == "shell_session_timeout":
             env[field] = float(value)

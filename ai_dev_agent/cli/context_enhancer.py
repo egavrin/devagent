@@ -1,14 +1,43 @@
-"""Automatic context enhancement using RepoMap for all queries."""
+"""Automatic context enhancement using RepoMap and Memory Bank for all queries."""
 
 import re
 from pathlib import Path
-from typing import Set, List, Optional, Tuple
+from typing import Set, List, Optional, Tuple, Dict, Any
 import logging
+
+logger = logging.getLogger(__name__)
 
 from ai_dev_agent.core.repo_map import RepoMapManager
 from ai_dev_agent.core.utils.config import Settings
 
-logger = logging.getLogger(__name__)
+# Import memory system if available
+try:
+    from ai_dev_agent.memory import MemoryStore, MemoryDistiller
+    MEMORY_SYSTEM_AVAILABLE = True
+except ImportError:
+    MEMORY_SYSTEM_AVAILABLE = False
+    logger.debug("Memory system not available")
+
+# Import playbook system if available
+try:
+    from ai_dev_agent.playbook import PlaybookManager, PlaybookCurator, InstructionCategory
+    PLAYBOOK_SYSTEM_AVAILABLE = True
+except ImportError:
+    PLAYBOOK_SYSTEM_AVAILABLE = False
+    logger.debug("Playbook system not available")
+
+# Import dynamic instructions if available
+try:
+    from ai_dev_agent.dynamic_instructions import (
+        DynamicInstructionManager,
+        ABTestManager,
+        UpdateType,
+        UpdateSource
+    )
+    DYNAMIC_INSTRUCTIONS_AVAILABLE = True
+except ImportError:
+    DYNAMIC_INSTRUCTIONS_AVAILABLE = False
+    logger.debug("Dynamic instructions not available")
 
 
 class ContextEnhancer:
@@ -22,6 +51,57 @@ class ContextEnhancer:
         self.settings = settings or Settings()
         self._repo_map = None
         self._initialized = False
+
+        # Initialize memory store if available and enabled
+        self._memory_store = None
+        if MEMORY_SYSTEM_AVAILABLE and getattr(settings, 'enable_memory_bank', True):
+            try:
+                # Use project-scoped storage: <workspace>/.devagent/memory/
+                memory_path = self.workspace / ".devagent" / "memory" / "reasoning_bank.json"
+                self._memory_store = MemoryStore(store_path=memory_path)
+                logger.debug("Memory bank initialized with %d memories from %s",
+                           len(self._memory_store._memories), memory_path)
+            except Exception as e:
+                logger.warning(f"Failed to initialize memory store: {e}")
+                self._memory_store = None
+
+        # Initialize playbook manager if available and enabled
+        self._playbook_manager = None
+        self._playbook_curator = None
+        if PLAYBOOK_SYSTEM_AVAILABLE and getattr(settings, 'enable_playbook', True):
+            try:
+                # Use project-scoped storage: <workspace>/.devagent/playbook/
+                playbook_path = self.workspace / ".devagent" / "playbook" / "instructions.json"
+                self._playbook_manager = PlaybookManager(playbook_path=playbook_path)
+                self._playbook_curator = PlaybookCurator(self._playbook_manager)
+                logger.debug("Playbook initialized with %d instructions from %s",
+                           len(self._playbook_manager.get_all_instructions()), playbook_path)
+            except Exception as e:
+                logger.warning(f"Failed to initialize playbook: {e}")
+                self._playbook_manager = None
+                self._playbook_curator = None
+
+        # Initialize dynamic instruction manager if available and enabled
+        self._dynamic_instruction_manager = None
+        self._ab_test_manager = None
+        if DYNAMIC_INSTRUCTIONS_AVAILABLE and getattr(settings, 'enable_dynamic_instructions', True):
+            try:
+                # Use project-scoped storage: <workspace>/.devagent/dynamic_instructions/
+                dynamic_history_path = self.workspace / ".devagent" / "dynamic_instructions" / "update_history.json"
+                dynamic_snapshots_path = self.workspace / ".devagent" / "dynamic_instructions" / "snapshots.json"
+                self._dynamic_instruction_manager = DynamicInstructionManager(
+                    history_path=dynamic_history_path,
+                    snapshots_path=dynamic_snapshots_path,
+                    confidence_threshold=getattr(settings, 'instruction_update_confidence', 0.8),
+                    auto_rollback_on_error=getattr(settings, 'instruction_rollback_on_error', True),
+                    max_history=getattr(settings, 'instruction_max_history', 100)
+                )
+                self._ab_test_manager = ABTestManager(auto_conclude=True)
+                logger.debug("Dynamic instructions initialized (project-scoped)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize dynamic instructions: {e}")
+                self._dynamic_instruction_manager = None
+                self._ab_test_manager = None
 
     @property
     def repo_map(self):
@@ -647,6 +727,452 @@ class ContextEnhancer:
             if self.settings.repomap_debug_stdout:
                 logger.debug(f"Failed to get RepoMap messages: {e}")
             return query, None
+
+
+    def get_memory_context(
+        self,
+        query: str,
+        task_type: Optional[str] = None,
+        limit: int = 5,
+        threshold: float = 0.3
+    ) -> Tuple[List[Dict[str, Any]], Optional[List[str]]]:
+        """Retrieve relevant memories for the query.
+
+        Args:
+            query: The user query
+            task_type: Optional task type filter
+            limit: Maximum memories to retrieve
+            threshold: Minimum similarity threshold
+
+        Returns:
+            Tuple of (memory_messages, memory_ids_used)
+        """
+        if not self._memory_store:
+            return [], None
+
+        try:
+            # Search for relevant memories
+            similar_memories = self._memory_store.search_similar(
+                query=query,
+                task_type=task_type,
+                limit=limit,
+                threshold=threshold
+            )
+
+            if not similar_memories:
+                return [], None
+
+            # Build memory context messages
+            memory_messages = []
+            memory_ids_used = []
+
+            # Add memories as context
+            memory_content_parts = ["[Memory Bank - Past Experience]"]
+            memory_content_parts.append(f"Found {len(similar_memories)} relevant memories:\n")
+
+            for memory, similarity in similar_memories:
+                memory_ids_used.append(memory.memory_id)
+
+                # Format memory for context
+                memory_text = [f"\n📚 {memory.title} (similarity: {similarity:.2f})"]
+
+                # Add strategies
+                if memory.strategies:
+                    memory_text.append("  Successful approaches:")
+                    for strategy in memory.strategies[:2]:
+                        memory_text.append(f"    • {strategy.description}")
+                        if strategy.steps:
+                            memory_text.append(f"      Steps: {'; '.join(strategy.steps[:3])}")
+
+                # Add lessons
+                if memory.lessons:
+                    memory_text.append("  Lessons learned:")
+                    for lesson in memory.lessons[:2]:
+                        memory_text.append(f"    ⚠️ {lesson.mistake}")
+                        memory_text.append(f"      → {lesson.correction}")
+
+                memory_content_parts.extend(memory_text)
+
+            # Create memory message
+            memory_messages.append({
+                "role": "system",
+                "content": "\n".join(memory_content_parts)
+            })
+
+            # Add a brief acknowledgment
+            memory_messages.append({
+                "role": "assistant",
+                "content": f"I've retrieved {len(similar_memories)} relevant memories from past experiences that may help with this task."
+            })
+
+            if self.settings.repomap_debug_stdout:
+                logger.debug(f"Retrieved {len(similar_memories)} memories for query")
+
+            return memory_messages, memory_ids_used
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve memory context: {e}")
+            return [], None
+
+    def track_memory_effectiveness(
+        self,
+        memory_ids: List[str],
+        success: bool,
+        feedback: Optional[str] = None
+    ) -> None:
+        """Track the effectiveness of used memories.
+
+        Args:
+            memory_ids: IDs of memories that were used
+            success: Whether the task was successful
+            feedback: Optional feedback about memory usefulness
+        """
+        if not self._memory_store or not memory_ids:
+            return
+
+        try:
+            # Update effectiveness scores
+            score_delta = 0.1 if success else -0.05
+
+            for memory_id in memory_ids:
+                self._memory_store.update_effectiveness(
+                    memory_id=memory_id,
+                    score_delta=score_delta,
+                    usage_feedback=feedback
+                )
+
+            if self.settings.repomap_debug_stdout:
+                logger.debug(f"Updated effectiveness for {len(memory_ids)} memories")
+
+        except Exception as e:
+            logger.warning(f"Failed to track memory effectiveness: {e}")
+
+    def distill_and_store_memory(
+        self,
+        session_id: str,
+        messages: List[Any],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
+        """Distill and store a memory from a completed session.
+
+        Args:
+            session_id: Session identifier
+            messages: Conversation messages
+            metadata: Optional metadata
+
+        Returns:
+            Memory ID if stored successfully
+        """
+        if not self._memory_store or not MEMORY_SYSTEM_AVAILABLE:
+            return None
+
+        try:
+            # Create distiller
+            distiller = MemoryDistiller()
+
+            # Distill memory from session
+            memory = distiller.distill_from_session(
+                session_id=session_id,
+                messages=messages,
+                metadata=metadata
+            )
+
+            # Store the memory
+            memory_id = self._memory_store.add_memory(memory)
+
+            # Periodically prune ineffective memories (every 10 memories added)
+            total_memories = self._memory_store.get_statistics().get("total_memories", 0)
+            if total_memories % 10 == 0 and total_memories > 0:
+                threshold = self.settings.memory_prune_threshold
+                pruned = self._memory_store.prune_ineffective(threshold=threshold)
+                if pruned > 0:
+                    logger.info(f"Pruned {pruned} ineffective memories (threshold={threshold})")
+
+            logger.debug(f"Distilled and stored memory: {memory.title}")
+            return memory_id
+
+        except Exception as e:
+            logger.warning(f"Failed to distill/store memory: {e}")
+            return None
+
+    def get_playbook_context(
+        self,
+        task_type: Optional[str] = None,
+        max_instructions: int = 10
+    ) -> Optional[str]:
+        """Get relevant playbook instructions for the current task.
+
+        Args:
+            task_type: Optional task type to filter instructions
+            max_instructions: Maximum number of instructions to include
+
+        Returns:
+            Formatted playbook instructions or None if not available
+        """
+        if not self._playbook_manager:
+            return None
+
+        try:
+            # Map task_type to instruction categories if provided
+            categories = None
+            if task_type:
+                # Map common task types to categories
+                task_to_category = {
+                    "debugging": InstructionCategory.DEBUGGING,
+                    "testing": InstructionCategory.TESTING,
+                    "refactoring": InstructionCategory.REFACTORING,
+                    "optimization": InstructionCategory.OPTIMIZATION,
+                    "security": InstructionCategory.SECURITY,
+                    "documentation": InstructionCategory.DOCUMENTATION,
+                    "code_review": InstructionCategory.CODE_REVIEW,
+                    "error_handling": InstructionCategory.ERROR_HANDLING,
+                    "api_design": InstructionCategory.API_DESIGN,
+                    "database": InstructionCategory.DATABASE,
+                }
+                if task_type in task_to_category:
+                    categories = [task_to_category[task_type]]
+
+            # Get formatted instructions
+            context = self._playbook_manager.format_for_context(
+                categories=categories,
+                max_instructions=max_instructions
+            )
+
+            return context
+
+        except Exception as e:
+            logger.warning(f"Failed to get playbook context: {e}")
+            return None
+
+    def track_playbook_effectiveness(
+        self,
+        instruction_ids: List[str],
+        success: bool
+    ) -> None:
+        """Track effectiveness of used playbook instructions.
+
+        Args:
+            instruction_ids: IDs of instructions that were used
+            success: Whether the task was successful
+        """
+        if not self._playbook_manager:
+            return
+
+        try:
+            for instruction_id in instruction_ids:
+                self._playbook_manager.track_usage(
+                    instruction_id=instruction_id,
+                    success=success
+                )
+
+            logger.debug(f"Tracked {len(instruction_ids)} instruction usages")
+
+        except Exception as e:
+            logger.warning(f"Failed to track playbook effectiveness: {e}")
+
+    def optimize_playbook(self, dry_run: bool = True) -> Optional[Dict[str, Any]]:
+        """Run playbook optimization to remove duplicates and improve quality.
+
+        Args:
+            dry_run: If True, only report what would be done
+
+        Returns:
+            Optimization results or None if not available
+        """
+        if not self._playbook_curator:
+            return None
+
+        try:
+            results = self._playbook_curator.optimize_playbook(dry_run=dry_run)
+            logger.info(f"Playbook optimization: {results}")
+            return results
+
+        except Exception as e:
+            logger.warning(f"Failed to optimize playbook: {e}")
+            return None
+
+    def start_instruction_session(self, session_id: str) -> None:
+        """Start tracking dynamic instruction updates for a session.
+
+        Args:
+            session_id: Unique session identifier
+        """
+        if not self._dynamic_instruction_manager:
+            return
+
+        try:
+            self._dynamic_instruction_manager.start_session(session_id)
+            logger.debug(f"Started instruction tracking for session: {session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to start instruction session: {e}")
+
+    def end_instruction_session(
+        self,
+        session_id: str,
+        success: bool = True
+    ) -> Optional[List[Any]]:
+        """End instruction tracking session.
+
+        Args:
+            session_id: Session identifier
+            success: Whether the session was successful
+
+        Returns:
+            List of updates made during session or None
+        """
+        if not self._dynamic_instruction_manager:
+            return None
+
+        try:
+            updates = self._dynamic_instruction_manager.end_session(
+                session_id=session_id,
+                success=success
+            )
+            logger.info(f"Ended instruction session {session_id}: {len(updates)} updates")
+            return updates
+        except Exception as e:
+            logger.warning(f"Failed to end instruction session: {e}")
+            return None
+
+    def propose_instruction_update(
+        self,
+        instruction_id: str,
+        update_type: str,
+        confidence: float,
+        reasoning: str,
+        new_content: Optional[str] = None,
+        new_priority: Optional[int] = None,
+        task_context: Optional[str] = None
+    ) -> Optional[Any]:
+        """Propose a dynamic instruction update.
+
+        Args:
+            instruction_id: ID of instruction to update
+            update_type: Type of update (add, modify, remove, etc.)
+            confidence: Confidence score (0-1)
+            reasoning: Why this update is proposed
+            new_content: New instruction content
+            new_priority: New priority
+            task_context: Task context
+
+        Returns:
+            InstructionUpdate object or None
+        """
+        if not self._dynamic_instruction_manager or not DYNAMIC_INSTRUCTIONS_AVAILABLE:
+            return None
+
+        try:
+            update = self._dynamic_instruction_manager.propose_update(
+                instruction_id=instruction_id,
+                update_type=UpdateType(update_type),
+                update_source=UpdateSource.EXECUTION_FEEDBACK,
+                confidence=confidence,
+                reasoning=reasoning,
+                new_content=new_content,
+                new_priority=new_priority,
+                task_context=task_context
+            )
+
+            # Auto-apply if confidence is high enough
+            if confidence >= self._dynamic_instruction_manager.confidence_threshold:
+                self._dynamic_instruction_manager.apply_update(update.update_id)
+
+            return update
+
+        except Exception as e:
+            logger.warning(f"Failed to propose instruction update: {e}")
+            return None
+
+    def create_ab_test(
+        self,
+        name: str,
+        instruction_id: str,
+        content_a: str,
+        content_b: str,
+        description: str = "",
+        target_sample_size: int = 100
+    ) -> Optional[Any]:
+        """Create an A/B test for instruction variants.
+
+        Args:
+            name: Test name
+            instruction_id: Instruction being tested
+            content_a: Variant A content
+            content_b: Variant B content
+            description: Test description
+            target_sample_size: Samples needed per variant
+
+        Returns:
+            ABTest object or None
+        """
+        if not self._ab_test_manager:
+            return None
+
+        try:
+            test = self._ab_test_manager.create_test(
+                name=name,
+                instruction_id=instruction_id,
+                content_a=content_a,
+                content_b=content_b,
+                description=description,
+                target_sample_size=target_sample_size
+            )
+
+            # Auto-start the test
+            self._ab_test_manager.start_test(test.test_id)
+
+            logger.info(f"Created and started A/B test: {name}")
+            return test
+
+        except Exception as e:
+            logger.warning(f"Failed to create A/B test: {e}")
+            return None
+
+    def record_ab_test_result(
+        self,
+        instruction_id: str,
+        variant_id: str,
+        success: bool,
+        time_ms: float = 0.0
+    ) -> None:
+        """Record a result for an A/B test variant.
+
+        Args:
+            instruction_id: Instruction ID
+            variant_id: Variant ID
+            success: Whether task was successful
+            time_ms: Execution time
+        """
+        if not self._ab_test_manager:
+            return
+
+        try:
+            self._ab_test_manager.record_result(
+                instruction_id=instruction_id,
+                variant_id=variant_id,
+                success=success,
+                time_ms=time_ms
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record A/B test result: {e}")
+
+    def get_dynamic_instruction_statistics(self) -> Optional[Dict[str, Any]]:
+        """Get statistics about dynamic instruction updates.
+
+        Returns:
+            Statistics dictionary or None
+        """
+        if not self._dynamic_instruction_manager:
+            return None
+
+        try:
+            stats = self._dynamic_instruction_manager.get_statistics()
+            if self._ab_test_manager:
+                stats["ab_tests"] = self._ab_test_manager.get_statistics()
+            return stats
+        except Exception as e:
+            logger.warning(f"Failed to get dynamic instruction statistics: {e}")
+            return None
 
 
 # Singleton instance

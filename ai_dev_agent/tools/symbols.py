@@ -17,7 +17,7 @@ def symbols(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, An
     limit = min(payload.get("limit", 100), 500)  # Cap at 500
 
     if not name:
-        return {"symbols": []}
+        return {"success": True, "symbols": []}
 
     # Convert path to absolute if relative
     if not os.path.isabs(path):
@@ -33,7 +33,7 @@ def symbols(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, An
         try:
             subprocess.run([ctags_cmd, "--version"], capture_output=True, timeout=1)
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return {"error": "ctags not found. Install universal-ctags.", "symbols": []}
+            return {"success": False, "error": "ctags not found. Install universal-ctags.", "symbols": []}
 
     # Generate or update tags file
     tags_file = os.path.join(context.repo_root, ".tags")
@@ -55,9 +55,9 @@ def symbols(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, An
                 timeout=30
             )
         except subprocess.TimeoutExpired:
-            return {"error": "ctags generation timeout", "symbols": []}
+            return {"success": False, "error": "ctags generation timeout", "symbols": []}
         except Exception as e:
-            return {"error": f"ctags generation failed: {e}", "symbols": []}
+            return {"success": False, "error": f"ctags generation failed: {e}", "symbols": []}
 
     # Read and search the tags file
     symbols_list = []
@@ -108,12 +108,12 @@ def symbols(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, An
                                 break
 
         except Exception as e:
-            return {"error": f"Failed to read tags file: {e}", "symbols": []}
+            return {"success": False, "error": f"Failed to read tags file: {e}", "symbols": []}
 
     # Sort by exact match first, then alphabetically
     symbols_list.sort(key=lambda s: (s["name"].lower() != name.lower(), s["name"].lower()))
 
-    return {"symbols": symbols_list[:limit]}
+    return {"success": True, "symbols": symbols_list[:limit]}
 
 
 # Register the tool

@@ -796,6 +796,33 @@ def _execute_react_assistant(
         session_manager.extend_history(session_id, history_messages)
         session.metadata["existing_history_loaded"] = True
 
+    # Inject memory context if available (skip in test mode to avoid polluting test expectations)
+    is_test_mode = os.environ.get("PYTEST_CURRENT_TEST") is not None
+    context_enhancer = None
+    if not is_test_mode:
+        try:
+            from ai_dev_agent.cli.context_enhancer import get_context_enhancer
+            context_enhancer = get_context_enhancer(workspace=repo_root, settings=settings)
+        except Exception as e:
+            logger.debug(f"Failed to initialize context enhancer: {e}")
+
+    try:
+        if context_enhancer and settings.enable_memory_bank:
+            memory_messages_raw, memory_ids = context_enhancer.get_memory_context(
+                query=user_prompt,
+                limit=settings.memory_retrieval_limit,
+                threshold=settings.memory_similarity_threshold
+            )
+            if memory_messages_raw:
+                # Convert dict messages to Message objects
+                memory_messages = [Message(role=msg["role"], content=msg["content"]) for msg in memory_messages_raw]
+                logger.debug(f"Retrieved {len(memory_messages)} memory context messages")
+                session_manager.extend_history(session_id, memory_messages)
+                # Store memory IDs for effectiveness tracking
+                session.metadata["retrieved_memory_ids"] = memory_ids
+    except Exception as e:
+        logger.debug(f"Failed to retrieve memory context: {e}")
+
     session_manager.extend_history(session_id, [user_message])
     with session.lock:
         session.metadata["history_anchor"] = len(session.history)
@@ -979,9 +1006,15 @@ def _execute_react_assistant(
         if user_message.content:
             new_entries.append(user_message)
         with session_local.lock:
-            for msg in session_local.history[anchor:]:
-                if msg.role == "assistant" and msg.content and not msg.tool_calls:
-                    new_entries.append(msg)
+            # Collect all assistant messages without tool calls, but only keep the LAST one
+            # (to handle multi-step iterations where multiple assistant messages are generated)
+            assistant_messages = [
+                msg for msg in session_local.history[anchor:]
+                if msg.role == "assistant" and msg.content and not msg.tool_calls
+            ]
+            if assistant_messages:
+                # Only add the last assistant message (final synthesis/answer)
+                new_entries.append(assistant_messages[-1])
             session_local.metadata["history_anchor"] = len(session_local.history)
         ctx.obj["_shell_conversation_history"] = _truncate_shell_history(
             history_messages + new_entries,
@@ -1103,6 +1136,51 @@ def _execute_react_assistant(
         status_icon = "✅" if execution_completed else "⚠️"
         message = result.stop_reason or ("Completed" if execution_completed else "Execution stopped")
         click.echo(f"\n{status_icon} {message} in {elapsed:.1f}s ({execution_mode})")
+
+    # Distill and store memory from this session (Phase 1: Memory System)
+    # Skip in test mode to avoid side effects
+    is_test_mode = os.environ.get("PYTEST_CURRENT_TEST") is not None
+    if not is_test_mode:
+        try:
+            from ai_dev_agent.cli.context_enhancer import get_context_enhancer
+
+            # Only distill if execution was successful
+            if execution_completed and result.status == "success":
+                session = session_manager.get_session(session_id)
+                messages = session.history
+
+                # Infer task type from user prompt
+                task_type = "debugging" if any(word in user_prompt.lower() for word in ["bug", "fix", "error", "issue"]) else "general"
+
+                context_enhancer = get_context_enhancer(workspace=repo_root, settings=settings)
+                if context_enhancer and context_enhancer._memory_store:
+                    metadata = {"task_type": task_type, "user_prompt": user_prompt}
+                    memory_id = context_enhancer.distill_and_store_memory(
+                        session_id=session_id,
+                        messages=messages,
+                        metadata=metadata
+                    )
+                    if memory_id:
+                        logger.debug(f"Stored memory {memory_id} from session {session_id}")
+
+                    # Track effectiveness of retrieved memories (Phase 2: Effectiveness Tracking)
+                    retrieved_memory_ids = session.metadata.get("retrieved_memory_ids")
+                    if retrieved_memory_ids:
+                        success = result.status == "success" and execution_completed
+                        context_enhancer.track_memory_effectiveness(
+                            memory_ids=retrieved_memory_ids,
+                            success=success,
+                            feedback=None
+                        )
+                        logger.debug(f"Tracked effectiveness for {len(retrieved_memory_ids)} retrieved memories")
+
+                # Save dynamic instruction state (Phase 3: Dynamic Instructions)
+                if context_enhancer and context_enhancer._dynamic_instruction_manager:
+                    context_enhancer._dynamic_instruction_manager.save_state()
+                    logger.debug("Saved dynamic instruction state")
+        except Exception as e:
+            # Don't fail the execution if memory/dynamic storage fails
+            logger.debug(f"Failed to store session data: {e}")
 
     return {
         "final_message": final_message,

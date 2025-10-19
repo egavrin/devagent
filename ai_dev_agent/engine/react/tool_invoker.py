@@ -58,6 +58,9 @@ class RegistryToolInvoker:
             "files": {},
             "project_summary": None,
         }
+        # File read cache: path -> (result, timestamp)
+        self._file_read_cache: Dict[str, tuple[Dict[str, Any], float]] = {}
+        self._cache_ttl = 60.0  # Cache for 60 seconds
 
     # ------------------------------------------------------------------
     # Public API
@@ -253,6 +256,15 @@ class RegistryToolInvoker:
     # ------------------------------------------------------------------
 
     def _invoke_registry(self, tool_name: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        # Check cache for READ operations
+        if tool_name == READ:
+            cache_key = self._get_read_cache_key(payload)
+            if cache_key:
+                cached_result = self._get_from_cache(cache_key)
+                if cached_result is not None:
+                    LOGGER.debug(f"Cache hit for READ: {cache_key}")
+                    return cached_result
+
         extra: Dict[str, Any] = {
             "code_editor": self.code_editor,
             "test_runner": self.test_runner,
@@ -272,7 +284,75 @@ class RegistryToolInvoker:
             metrics_collector=self.collector,
             extra=extra,
         )
-        return registry.invoke(tool_name, payload, ctx)
+        result = registry.invoke(tool_name, payload, ctx)
+
+        # Cache successful READ results (READ returns {"files": [...]}, not {"success": True})
+        if tool_name == READ and isinstance(result, dict) and "files" in result:
+            cache_key = self._get_read_cache_key(payload)
+            if cache_key:
+                self._add_to_cache(cache_key, result)
+                LOGGER.debug(f"Cached READ result: {cache_key}")
+
+        # Invalidate cache for WRITE/RUN operations (they may not have "success" field either)
+        # For WRITE/RUN, any non-exception result means success - they would have raised otherwise
+        if tool_name in (WRITE, RUN) and isinstance(result, dict):
+            self._invalidate_cache_for_write_or_run(tool_name, payload, result)
+
+        return result
+
+    def _get_read_cache_key(self, payload: Mapping[str, Any]) -> Optional[str]:
+        """Generate cache key for READ operations."""
+        paths = payload.get("paths", [])
+        if not paths:
+            return None
+        # Use first path as key (most common case)
+        # For multiple paths, could use hash of sorted paths
+        return str(paths[0]) if len(paths) == 1 else None
+
+    def _get_from_cache(self, key: str) -> Optional[Dict[str, Any]]:
+        """Get cached result if not expired."""
+        if key not in self._file_read_cache:
+            return None
+
+        result, timestamp = self._file_read_cache[key]
+        if time.time() - timestamp > self._cache_ttl:
+            # Expired, remove from cache
+            del self._file_read_cache[key]
+            return None
+
+        return result
+
+    def _add_to_cache(self, key: str, result: Dict[str, Any]) -> None:
+        """Add result to cache with current timestamp."""
+        self._file_read_cache[key] = (result, time.time())
+
+    def _invalidate_cache(self, path: str) -> None:
+        """Invalidate cache entry for a specific file path."""
+        if path in self._file_read_cache:
+            del self._file_read_cache[path]
+            LOGGER.debug(f"Invalidated cache for: {path}")
+
+    def _invalidate_cache_for_write_or_run(
+        self,
+        tool_name: str,
+        payload: Mapping[str, Any],
+        result: Mapping[str, Any]
+    ) -> None:
+        """Invalidate cache entries that might be affected by WRITE or RUN operations."""
+        if tool_name == WRITE:
+            # WRITE returns changed_files and new_files - invalidate those
+            if result.get("applied"):
+                changed = result.get("changed_files", [])
+                new = result.get("new_files", [])
+                for file_path in set(changed + new):
+                    self._invalidate_cache(file_path)
+        elif tool_name == RUN:
+            # RUN might modify files indirectly - could be conservative and clear all cache
+            # or try to infer modified files from the command
+            # For now, be conservative and clear all cache when RUN is used
+            if self._file_read_cache:
+                LOGGER.debug(f"Clearing all file cache due to RUN operation")
+                self._file_read_cache.clear()
 
     def _wrap_result(self, tool_name: str, result: Mapping[str, Any]) -> Observation:
         success = True
