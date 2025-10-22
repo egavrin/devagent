@@ -56,14 +56,46 @@ __all__ = ["_execute_react_assistant"]
 def _build_json_enforcement_instructions(format_schema: Dict[str, Any]) -> str:
     """Build strict JSON-only instructions for forced synthesis paths."""
     return (
-        "OUTPUT FORMAT ENFORCEMENT:\n"
-        "You MUST respond with raw JSON that exactly matches the schema below.\n"
-        "Do NOT include markdown, code fences, natural language, or any additional text.\n"
-        "Start the response with '{' and end with '}'.\n"
-        "If you cannot find any violations, return an object with an empty 'violations' array.\n\n"
+        "CRITICAL OUTPUT REQUIREMENT - READ CAREFULLY:\n"
+        "==============================================\n"
+        "You MUST output ONLY valid JSON. Nothing else.\n\n"
+        "DO NOT include:\n"
+        "- Any explanatory text before or after the JSON\n"
+        "- Markdown code fences (```json)\n"
+        "- Comments or reasoning\n"
+        "- Any natural language\n\n"
+        "START your response with '{'\n"
+        "END your response with '}'\n\n"
+        "If there are NO violations, respond with:\n"
+        '{"violations": [], "summary": {"total_violations": 0, "files_reviewed": N}}\n\n'
         "Required JSON Schema:\n"
         f"{json.dumps(format_schema, indent=2)}"
     )
+
+
+def _sanitize_conversation_for_llm(messages: Sequence[Message]) -> List[Message]:
+    """Remove tool messages whose IDs are not referenced by assistant tool calls."""
+    tool_call_ids: set[str] = set()
+
+    for msg in messages:
+        if msg.role == "assistant" and msg.tool_calls:
+            for call in msg.tool_calls:
+                if isinstance(call, Mapping):
+                    call_id = call.get("id") or call.get("tool_call_id")
+                    if isinstance(call_id, str) and call_id:
+                        tool_call_ids.add(call_id)
+
+    sanitized: List[Message] = []
+    for msg in messages:
+        if msg.role == "tool":
+            if msg.tool_call_id and msg.tool_call_id in tool_call_ids:
+                sanitized.append(msg)
+            else:
+                logger.debug("Removing orphaned tool message with ID: %s", msg.tool_call_id)
+        else:
+            sanitized.append(msg)
+
+    return sanitized
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
@@ -215,6 +247,7 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 # Get the LLM to produce a text response without tools
                 # Access session_manager and session_id from action_provider
                 conversation = action_provider.session_manager.compose(action_provider.session_id)
+                conversation = _sanitize_conversation_for_llm(conversation)
 
                 if self.format_schema:
                     json_instruction_message = Message(
@@ -317,6 +350,7 @@ class BudgetAwareExecutor(ReactiveExecutor):
             try:
                 # Get the conversation and add synthesis instructions
                 conversation = action_provider.session_manager.compose(action_provider.session_id)
+                conversation = _sanitize_conversation_for_llm(conversation)
 
                 # Add a system message to force synthesis
                 synthesis_prompt = Message(

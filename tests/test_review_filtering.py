@@ -174,3 +174,92 @@ def test_review_returns_fallback_when_json_parse_fails(review_context, monkeypat
     assert summary["total_violations"] == 0
     assert summary["files_reviewed"] == 1
     assert summary["rule_name"] == rule_file.stem
+
+
+def test_review_chunking_aggregates_results(review_context, monkeypatch):
+    ctx, patch_file, rule_file = review_context
+
+    from ai_dev_agent.cli import review
+    import ai_dev_agent.cli as cli_package
+
+    # Overwrite patch with two files to force chunking
+    patch_file.write_text(
+        """diff --git a/src/file1.py b/src/file1.py
+--- a/src/file1.py
++++ b/src/file1.py
+@@ -0,0 +1,1 @@
++print("one")
+diff --git a/src/file2.py b/src/file2.py
+--- a/src/file2.py
++++ b/src/file2.py
+@@ -0,0 +1,1 @@
++print("two")
+""",
+        encoding="utf-8",
+    )
+
+    rule_file.write_text("# Rule\n", encoding="utf-8")
+
+    settings = ctx.obj["settings"]
+    settings.review_max_files_per_chunk = 1
+
+    monkeypatch.setattr(review, "get_llm_client", lambda _ctx: object())
+    monkeypatch.setattr(cli_package, "get_llm_client", lambda _ctx: object())
+
+    responses = [
+        {
+            "violations": [
+                {
+                    "file": "src/file1.py",
+                    "line": 1,
+                    "message": "Missing docs",
+                    "code_snippet": 'print("one")',
+                }
+            ],
+            "summary": {
+                "total_violations": 1,
+                "files_reviewed": 1,
+                "rule_name": "Rule",
+            },
+        },
+        {
+            "violations": [
+                {
+                    "file": "src/file2.py",
+                    "line": 1,
+                    "message": "Missing docs",
+                    "code_snippet": 'print("two")',
+                }
+            ],
+            "summary": {
+                "total_violations": 1,
+                "files_reviewed": 1,
+                "rule_name": "Rule",
+            },
+        },
+    ]
+
+    call_index = {"value": 0}
+
+    def fake_execute(*args, **kwargs):
+        idx = call_index["value"]
+        call_index["value"] += 1
+        return {
+            "final_json": responses[idx],
+            "result": {"status": "success"},
+        }
+
+    monkeypatch.setattr(review, "_execute_react_assistant", fake_execute)
+
+    result = run_review(
+        ctx,
+        patch_file=str(patch_file),
+        rule_file=str(rule_file),
+        json_output=True,
+        settings=settings,
+    )
+
+    assert call_index["value"] == 2
+    assert len(result["violations"]) == 2
+    assert result["summary"]["total_violations"] == 2
+    assert result["summary"]["files_reviewed"] == 2

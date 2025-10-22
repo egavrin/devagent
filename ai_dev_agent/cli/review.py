@@ -4,6 +4,7 @@ from __future__ import annotations
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from uuid import uuid4
 
 import click
 
@@ -186,6 +187,62 @@ def format_patch_dataset(parsed_patch: Mapping[str, Any], filter_pattern: Option
     return "\n".join(lines).rstrip()
 
 
+def _chunk_patch_files(
+    files: Sequence[Mapping[str, Any]],
+    max_files_per_chunk: int = 10,
+) -> List[List[Mapping[str, Any]]]:
+    """Split patch files into manageable chunks."""
+    if max_files_per_chunk <= 0:
+        return [list(files)]
+
+    chunked: List[List[Mapping[str, Any]]] = []
+    for i in range(0, len(files), max_files_per_chunk):
+        chunked.append(list(files[i : i + max_files_per_chunk]))
+    return chunked
+
+
+def format_patch_dataset_chunked(
+    parsed_patch: Mapping[str, Any],
+    *,
+    chunk_index: int = 0,
+    max_files: int = 10,
+    filter_pattern: Optional[str] = None,
+) -> Tuple[str, List[Mapping[str, Any]]]:
+    """Format a specific chunk of the patch dataset and return its files."""
+    files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
+    if not files:
+        return "No files with additions were detected in this patch.", []
+
+    if max_files <= 0:
+        max_files = len(files)
+
+    start = chunk_index * max_files
+    if start >= len(files):
+        return "No more files to review.", []
+
+    chunk = list(files[start : start + max_files])
+    sub_patch = {"files": chunk}
+    dataset = format_patch_dataset(sub_patch, filter_pattern=filter_pattern)
+
+    # Apply filter pattern to chunk for downstream validation
+    filtered_chunk: List[Mapping[str, Any]]
+    if filter_pattern:
+        try:
+            pattern_re = re.compile(filter_pattern)
+            filtered_chunk = [
+                entry
+                for entry in chunk
+                if isinstance(entry.get("path"), str) and pattern_re.search(entry["path"])
+            ]
+        except re.error:
+            LOGGER.warning("Invalid filter pattern '%s', processing chunk without filter", filter_pattern)
+            filtered_chunk = chunk
+    else:
+        filtered_chunk = chunk
+
+    return dataset, filtered_chunk
+
+
 def validate_review_response(
     response: Dict[str, Any],
     *,
@@ -337,19 +394,26 @@ def run_review(
     filter_pattern = extract_applies_to_pattern(rule_content)
 
     parsed_patch = parse_patch_file(patch_path)
-    patch_dataset = format_patch_dataset(parsed_patch, filter_pattern=filter_pattern)
-    added_lines, parsed_files = collect_patch_review_data(parsed_patch)
+    all_files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
+    max_files_per_chunk = getattr(settings, "review_max_files_per_chunk", 10)
+    if max_files_per_chunk <= 0:
+        max_files_per_chunk = len(all_files) or 1
 
-    def build_fallback_summary(existing_summary: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    chunks = _chunk_patch_files(all_files, max_files_per_chunk)
+    total_chunks = max(1, len(chunks))
+    use_chunking = len(chunks) > 1
+
+    def build_fallback_summary(
+        file_count: int,
+        existing_summary: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
         summary: Dict[str, Any] = dict(existing_summary or {})
         summary["total_violations"] = 0
-        summary["files_reviewed"] = len(parsed_files)
+        summary["files_reviewed"] = file_count
         rule_name_value = summary.get("rule_name")
         if not isinstance(rule_name_value, str) or not rule_name_value.strip():
             summary["rule_name"] = rule_path.stem
         return summary
-
-    prompt = _build_review_prompt(patch_rel, patch_dataset)
 
     system_extension_with_rule = f"""# Coding Rule: {rule_path.name}
 
@@ -378,56 +442,148 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
     except click.ClickException as exc:
         raise click.ClickException(f'Failed to create LLM client: {exc}') from exc
 
-    try:
-        execution_payload = _execute_react_assistant(
-            ctx, client, settings, prompt,
-            use_planning=False,
-            system_extension=system_extension_with_rule,
-            format_schema=VIOLATION_SCHEMA,
-            agent_type="reviewer",
-            suppress_final_output=True,
-        )
-    except click.ClickException as exc:
-        message_text = str(exc)
-        if "Assistant response did not contain valid JSON matching the required schema" in message_text:
-            LOGGER.debug("LLM output missing required JSON; returning fallback summary: %s", exc)
-            return {
+    original_session_id = ctx.obj.get("_session_id")
+
+    def reset_session(previous: Optional[str]) -> None:
+        if previous:
+            ctx.obj["_session_id"] = previous
+        else:
+            ctx.obj.pop("_session_id", None)
+
+    def execute_dataset(
+        dataset_text: str,
+        chunk_files: List[Mapping[str, Any]],
+        *,
+        chunk_index: Optional[int] = None,
+        total_expected_chunks: Optional[int] = None,
+    ) -> Tuple[Dict[str, Any], Set[str]]:
+        if not chunk_files:
+            summary = build_fallback_summary(0)
+            return {"violations": [], "summary": summary}, set()
+
+        subset_patch = {"files": chunk_files}
+        added_lines, parsed_files = collect_patch_review_data(subset_patch)
+
+        chunk_header = ""
+        if chunk_index is not None and total_expected_chunks and total_expected_chunks > 1:
+            chunk_header = f"(Chunk {chunk_index + 1} of {total_expected_chunks})\n\n"
+
+        prompt = _build_review_prompt(patch_rel, f"{chunk_header}{dataset_text}")
+
+        previous_session = ctx.obj.get("_session_id")
+        ctx.obj["_session_id"] = f"review-{uuid4()}"
+
+        try:
+            try:
+                execution_payload = _execute_react_assistant(
+                    ctx,
+                    client,
+                    settings,
+                    prompt,
+                    use_planning=False,
+                    system_extension=system_extension_with_rule,
+                    format_schema=VIOLATION_SCHEMA,
+                    agent_type="reviewer",
+                    suppress_final_output=True,
+                )
+            except click.ClickException as exc:
+                message_text = str(exc)
+                if "Assistant response did not contain valid JSON matching the required schema" in message_text:
+                    LOGGER.debug("LLM output missing required JSON; returning fallback summary: %s", exc)
+                    summary = build_fallback_summary(len(parsed_files))
+                    return {"violations": [], "summary": summary}, parsed_files
+                raise
+        finally:
+            reset_session(previous_session)
+
+        if not isinstance(execution_payload, dict):
+            raise click.ClickException("Review execution did not return diagnostics for validation.")
+
+        run_result = execution_payload.get("result")
+        if run_result is None:
+            raise click.ClickException("Review execution missing run metadata; cannot validate results.")
+
+        final_json = execution_payload.get("final_json")
+        if final_json is None:
+            raise click.ClickException("Reviewer did not produce JSON output.")
+
+        try:
+            validated = validate_review_response(
+                final_json,
+                added_lines=added_lines,
+                parsed_files=parsed_files,
+            )
+        except click.ClickException as exc:
+            existing_summary: Dict[str, Any] = {}
+            if isinstance(final_json, Mapping):
+                summary_value = final_json.get("summary")
+                if isinstance(summary_value, Mapping):
+                    existing_summary = {str(k): v for k, v in summary_value.items()}
+
+            validated = {
                 "violations": [],
-                "summary": build_fallback_summary(),
+                "summary": build_fallback_summary(len(parsed_files), existing_summary),
             }
-        raise
+            LOGGER.debug("Reviewer output discarded due to validation failure: %s", exc)
 
-    if not isinstance(execution_payload, dict):
-        raise click.ClickException("Review execution did not return diagnostics for validation.")
+        return validated, parsed_files
 
-    run_result = execution_payload.get("result")
-    if run_result is None:
-        raise click.ClickException("Review execution missing run metadata; cannot validate results.")
+    datasets: List[Tuple[str, List[Mapping[str, Any]], Optional[int]]] = []
 
-    final_json = execution_payload.get("final_json")
-    if final_json is None:
-        raise click.ClickException("Reviewer did not produce JSON output.")
-
-    try:
-        validated = validate_review_response(
-            final_json,
-            added_lines=added_lines,
-            parsed_files=parsed_files,
+    if use_chunking:
+        for idx in range(total_chunks):
+            dataset_text, chunk_subset = format_patch_dataset_chunked(
+                parsed_patch,
+                chunk_index=idx,
+                max_files=max_files_per_chunk,
+                filter_pattern=filter_pattern,
+            )
+            if not chunk_subset:
+                continue
+            datasets.append((dataset_text, chunk_subset, idx))
+    else:
+        dataset_text, chunk_subset = format_patch_dataset_chunked(
+            parsed_patch,
+            chunk_index=0,
+            max_files=len(all_files) or 1,
+            filter_pattern=filter_pattern,
         )
-    except click.ClickException as exc:
-        existing_summary: Dict[str, Any] = {}
-        if isinstance(final_json, Mapping):
-            summary_value = final_json.get("summary")
-            if isinstance(summary_value, Mapping):
-                existing_summary = {str(k): v for k, v in summary_value.items()}
+        if chunk_subset:
+            datasets.append((dataset_text, chunk_subset, None))
 
-        validated = {
-            "violations": [],
-            "summary": build_fallback_summary(existing_summary),
-        }
-        LOGGER.debug("Reviewer output discarded due to validation failure: %s", exc)
+    if not datasets:
+        reset_session(original_session_id)
+        summary = build_fallback_summary(0)
+        return {"violations": [], "summary": summary}
 
-    return validated
+    aggregated_violations: List[Dict[str, Any]] = []
+    files_reviewed: Set[str] = set()
+    last_summary: Optional[Dict[str, Any]] = None
+
+    for dataset_text, chunk_subset, chunk_index in datasets:
+        validated, parsed_files = execute_dataset(
+            dataset_text,
+            chunk_subset,
+            chunk_index=chunk_index,
+            total_expected_chunks=total_chunks if use_chunking else None,
+        )
+        aggregated_violations.extend(validated["violations"])
+        files_reviewed.update(parsed_files)
+        last_summary = validated["summary"]
+
+    final_summary: Dict[str, Any] = dict(last_summary or {})
+    final_summary["total_violations"] = len(aggregated_violations)
+    final_summary["files_reviewed"] = len(files_reviewed)
+    rule_name_value = final_summary.get("rule_name")
+    if not isinstance(rule_name_value, str) or not rule_name_value.strip():
+        final_summary["rule_name"] = rule_path.stem
+
+    reset_session(original_session_id)
+
+    return {
+        "violations": aggregated_violations,
+        "summary": final_summary,
+    }
 
 
 __all__ = [

@@ -4,7 +4,12 @@ import json
 from typing import Any, List, Sequence
 
 from ai_dev_agent.agents.schemas import VIOLATION_SCHEMA
-from ai_dev_agent.cli.react.executor import BudgetAwareExecutor, BudgetManager, _record_search_query
+from ai_dev_agent.cli.react.executor import (
+    BudgetAwareExecutor,
+    BudgetManager,
+    _record_search_query,
+    _sanitize_conversation_for_llm,
+)
 from ai_dev_agent.engine.react.types import ActionRequest, Observation, TaskSpec
 from ai_dev_agent.providers.llm.base import Message
 
@@ -83,6 +88,21 @@ class _MockSessionManager:
         return list(self._base_conversation)
 
 
+def test_sanitize_conversation_for_llm_removes_orphaned_tool_messages():
+    assistant_calls = [{"id": "tool-keep"}]
+    messages = [
+        Message(role="assistant", content=None, tool_calls=assistant_calls),
+        Message(role="tool", content="kept", tool_call_id="tool-keep"),
+        Message(role="tool", content="orphan", tool_call_id="tool-drop"),
+        Message(role="assistant", content="summary"),
+    ]
+
+    sanitized = _sanitize_conversation_for_llm(messages)
+
+    assert len(sanitized) == 3
+    assert all(getattr(msg, "tool_call_id", None) != "tool-drop" for msg in sanitized)
+
+
 class _ForcedStopActionProvider:
     def __init__(self, session_manager: _MockSessionManager, client: _RecordingClient) -> None:
         self.session_manager = session_manager
@@ -156,5 +176,5 @@ def test_forced_synthesis_enforces_json_schema_instructions() -> None:
     instructions_message = client.captured_conversation[-1]
     assert instructions_message.role == "system"
     instructions_text = instructions_message.content
-    assert "OUTPUT FORMAT ENFORCEMENT" in instructions_text
+    assert "CRITICAL OUTPUT REQUIREMENT" in instructions_text
     assert json.dumps(VIOLATION_SCHEMA, indent=2) in instructions_text
