@@ -354,11 +354,19 @@ class LLMActionProvider:
                 or entry.get("name")
                 or "tool"
             )
+            # The normalized tool calls always have an "id" field set by _normalize_tool_calls
             call_id = entry.get("id") or entry.get("tool_call_id")
+            if not call_id:
+                # This shouldn't happen after normalization, but generate one as fallback
+                import uuid
+                call_id = f"tool-dummy-{uuid.uuid4().hex[:8]}"
             message = (
                 f"Tool '{tool_name}' was referenced but not executed."
             )
             try:
                 self.session_manager.add_tool_message(self.session_id, call_id, message)
-            except Exception:
-                pass
+            except Exception as e:
+                # Log the exception for debugging instead of silently failing
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.debug(f"Failed to record dummy tool message: {e}")

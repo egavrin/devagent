@@ -242,7 +242,15 @@ def prune_messages(messages: Sequence[Message], config: ContextBudgetConfig) -> 
             break
         msg = pruned[idx]
         if msg.role == "tool":
-            pruned[idx] = Message(role="tool", content="[tool output truncated]")
+            preserved_id = msg.tool_call_id
+            if not preserved_id:
+                from uuid import uuid4
+                preserved_id = f"tool-pruned-{uuid4().hex[:8]}"
+            pruned[idx] = Message(
+                role="tool",
+                content="[tool output truncated]",
+                tool_call_id=preserved_id,
+            )
 
     return pruned
 

@@ -338,6 +338,16 @@ def run_review(
 
     parsed_patch = parse_patch_file(patch_path)
     patch_dataset = format_patch_dataset(parsed_patch, filter_pattern=filter_pattern)
+    added_lines, parsed_files = collect_patch_review_data(parsed_patch)
+
+    def build_fallback_summary(existing_summary: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        summary: Dict[str, Any] = dict(existing_summary or {})
+        summary["total_violations"] = 0
+        summary["files_reviewed"] = len(parsed_files)
+        rule_name_value = summary.get("rule_name")
+        if not isinstance(rule_name_value, str) or not rule_name_value.strip():
+            summary["rule_name"] = rule_path.stem
+        return summary
 
     prompt = _build_review_prompt(patch_rel, patch_dataset)
 
@@ -368,14 +378,24 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
     except click.ClickException as exc:
         raise click.ClickException(f'Failed to create LLM client: {exc}') from exc
 
-    execution_payload = _execute_react_assistant(
-        ctx, client, settings, prompt,
-        use_planning=False,
-        system_extension=system_extension_with_rule,
-        format_schema=VIOLATION_SCHEMA,
-        agent_type="reviewer",
-        suppress_final_output=True,
-    )
+    try:
+        execution_payload = _execute_react_assistant(
+            ctx, client, settings, prompt,
+            use_planning=False,
+            system_extension=system_extension_with_rule,
+            format_schema=VIOLATION_SCHEMA,
+            agent_type="reviewer",
+            suppress_final_output=True,
+        )
+    except click.ClickException as exc:
+        message_text = str(exc)
+        if "Assistant response did not contain valid JSON matching the required schema" in message_text:
+            LOGGER.debug("LLM output missing required JSON; returning fallback summary: %s", exc)
+            return {
+                "violations": [],
+                "summary": build_fallback_summary(),
+            }
+        raise
 
     if not isinstance(execution_payload, dict):
         raise click.ClickException("Review execution did not return diagnostics for validation.")
@@ -387,8 +407,6 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
     final_json = execution_payload.get("final_json")
     if final_json is None:
         raise click.ClickException("Reviewer did not produce JSON output.")
-
-    added_lines, parsed_files = collect_patch_review_data(parsed_patch)
 
     try:
         validated = validate_review_response(
@@ -403,16 +421,9 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
             if isinstance(summary_value, Mapping):
                 existing_summary = {str(k): v for k, v in summary_value.items()}
 
-        fallback_summary: Dict[str, Any] = dict(existing_summary)
-        fallback_summary["total_violations"] = 0
-        fallback_summary["files_reviewed"] = len(parsed_files)
-        rule_name_value = fallback_summary.get("rule_name")
-        if not isinstance(rule_name_value, str) or not rule_name_value.strip():
-            fallback_summary["rule_name"] = rule_path.stem
-
         validated = {
             "violations": [],
-            "summary": fallback_summary,
+            "summary": build_fallback_summary(existing_summary),
         }
         LOGGER.debug("Reviewer output discarded due to validation failure: %s", exc)
 

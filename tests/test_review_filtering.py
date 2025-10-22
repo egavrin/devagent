@@ -143,3 +143,34 @@ def test_filter_allows_in_scope(review_context):
     assert result["violations"] == message["violations"]
     assert result["summary"]["total_violations"] == 1
     assert result["summary"]["files_reviewed"] == 1
+
+
+def test_review_returns_fallback_when_json_parse_fails(review_context, monkeypatch):
+    ctx, patch_file, rule_file = review_context
+
+    from ai_dev_agent.cli import review
+    import ai_dev_agent.cli as cli_package
+
+    # Patch LLM client factory to avoid real network calls
+    monkeypatch.setattr(review, "get_llm_client", lambda _ctx: object())
+    monkeypatch.setattr(cli_package, "get_llm_client", lambda _ctx: object())
+
+    # Simulate executor raising the JSON enforcement error
+    def fake_execute(*args, **kwargs):
+        raise click.ClickException("Assistant response did not contain valid JSON matching the required schema.")
+
+    monkeypatch.setattr(review, "_execute_react_assistant", fake_execute)
+
+    result = run_review(
+        ctx,
+        patch_file=str(patch_file),
+        rule_file=str(rule_file),
+        json_output=True,
+        settings=ctx.obj["settings"],
+    )
+
+    assert result["violations"] == []
+    summary = result["summary"]
+    assert summary["total_violations"] == 0
+    assert summary["files_reviewed"] == 1
+    assert summary["rule_name"] == rule_file.stem

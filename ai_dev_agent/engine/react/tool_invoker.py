@@ -826,8 +826,18 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             action.metadata.get("tool_call_id")
             or action.metadata.get("call_id")
             or action.metadata.get("id")
-            or None
         )
+
+        # If no tool_call_id found, generate one as fallback
+        # This ensures tool messages always have an ID
+        if not tool_call_id:
+            import uuid
+            tool_call_id = f"tool-exec-{uuid.uuid4().hex[:8]}"
+            LOGGER.debug(
+                "No tool_call_id found for %s, generated: %s",
+                action.tool,
+                tool_call_id
+            )
         content_parts: List[str] = []
         if observation.display_message:
             content_parts.append(observation.display_message)
@@ -887,8 +897,19 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
 
         content = "\n".join(content_parts) or f"{result.tool} completed"
 
+        # Ensure tool_call_id is never None
+        tool_call_id = result.call_id
+        if not tool_call_id:
+            import uuid
+            tool_call_id = f"tool-batch-{uuid.uuid4().hex[:8]}"
+            LOGGER.debug(
+                "No call_id found for batch tool %s, generated: %s",
+                result.tool,
+                tool_call_id
+            )
+
         try:
-            self.session_manager.add_tool_message(self.session_id, result.call_id, content)
+            self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
         except Exception:  # noqa: BLE001 - do not fail loop for logging issues
             LOGGER.debug("Failed to record batch tool message for %s", result.tool, exc_info=True)
 
