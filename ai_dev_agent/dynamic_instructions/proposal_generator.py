@@ -157,7 +157,7 @@ IMPORTANT:
             Parsed JSON response from LLM
         """
         # Import LLM provider
-        from ai_dev_agent.providers.llm.factory import create_client
+        from ai_dev_agent.providers.llm import create_client
         from ai_dev_agent.providers.llm.base import Message
 
         # Create LLM client using configured settings
@@ -297,7 +297,7 @@ IMPORTANT:
         """
         # Check content length (should be substantive)
         if len(proposal.new_content or "") < 20:
-            logger.debug(f"Proposal content too short: {len(proposal.new_content or 0)} chars")
+            logger.debug(f"Proposal content too short: {len(proposal.new_content or '')} chars")
             return False
 
         # Check reasoning exists
