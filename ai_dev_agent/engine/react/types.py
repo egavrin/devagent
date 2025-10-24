@@ -95,6 +95,8 @@ class MetricsSnapshot(BaseModel):
     sandbox_violations: Optional[int] = None
     flaky_tests: Optional[int] = None
     tokens_cost: Optional[float] = None
+    tokens_used: Optional[float] = None
+    time_elapsed: Optional[float] = None
     wall_time: Optional[float] = None
     compile_errors: Optional[int] = None
     gate_notes: Dict[str, str] = Field(default_factory=dict)

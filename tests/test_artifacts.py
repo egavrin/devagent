@@ -181,6 +181,17 @@ class TestWriteArtifact:
         # Should still be under artifacts directory, not escaped
         assert str(self.temp_path / ARTIFACTS_ROOT) in str(artifact_path.parent)
 
+    def test_write_artifact_nested_suffix_sanitized(self):
+        """Ensure nested suffix components do not create directories."""
+        content = "Nested suffix"
+        nested_suffix = "logs/output.tar.gz"
+
+        artifact_path = write_artifact(content, suffix=nested_suffix, root=self.temp_path)
+
+        assert artifact_path.exists()
+        assert artifact_path.parent == self.temp_path / ARTIFACTS_ROOT
+        assert artifact_path.name.endswith(".tar.gz")
+
     def test_artifacts_root_constant(self):
         """Test the ARTIFACTS_ROOT constant."""
         assert ARTIFACTS_ROOT == Path(".devagent") / "artifacts"

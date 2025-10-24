@@ -227,13 +227,36 @@ def prune_messages(messages: Sequence[Message], config: ContextBudgetConfig) -> 
             keep_indices.add(idx)
 
     # Recalculate and drop oldest non-protected messages while over budget
+    # NOTE: We preserve message roles to maintain conversation structure.
+    # Orphaned tool messages will be cleaned up by _remove_orphaned_tool_messages()
+    # in context_service.py or by sanitization before LLM calls.
     ordered_indices = list(range(len(pruned)))
     for idx in ordered_indices:
         if estimate_tokens(pruned) <= total_allowed:
             break
         if idx in keep_indices:
             continue
-        pruned[idx] = Message(role="assistant", content="[context truncated]")
+        msg = pruned[idx]
+        # Preserve message role and critical IDs - don't change message types!
+        if msg.role == "tool":
+            pruned[idx] = Message(
+                role="tool",
+                content="[content truncated]",
+                tool_call_id=msg.tool_call_id,
+            )
+        elif msg.role == "user":
+            pruned[idx] = Message(role="user", content="[content truncated]")
+        elif msg.role == "assistant":
+            # Preserve tool_calls structure even when truncating content
+            # (orphaned tool calls will be cleaned up later)
+            pruned[idx] = Message(
+                role="assistant",
+                content="[context truncated]",
+                tool_calls=msg.tool_calls,
+            )
+        else:
+            # system messages
+            pruned[idx] = Message(role=msg.role, content="[context truncated]")
         keep_indices.add(idx)
 
     # Final pass: if still over budget, aggressively trim earliest tool summaries

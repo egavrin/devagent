@@ -11,7 +11,7 @@ from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.engine.react.tool_invoker import RegistryToolInvoker
 from ai_dev_agent.engine.react.types import ActionRequest, ToolCall
 from ai_dev_agent.tools import READ
-from ai_dev_agent.providers.llm.base import Message, ToolCallResult
+from ai_dev_agent.providers.llm.base import Message, ToolCallResult, ToolCall as LLMToolCall
 
 
 @pytest.fixture
@@ -273,6 +273,40 @@ def test_action_provider_enables_parallel_tool_calls():
     assert call_kwargs["parallel_tool_calls"] is True
 
     print("✓ ActionProvider enables parallel_tool_calls by default")
+
+
+def test_action_provider_handles_non_numeric_model_limit():
+    """LLMActionProvider should ignore non-numeric model limits."""
+    from ai_dev_agent.cli.react.action_provider import LLMActionProvider
+    from ai_dev_agent.session import SessionManager
+    from ai_dev_agent.engine.react.types import TaskSpec
+
+    mock_client = MagicMock()
+    mock_client.invoke_tools.return_value = ToolCallResult(
+        calls=[LLMToolCall(name="noop", arguments={}, call_id="c1")],
+        message_content=None,
+    )
+    mock_client._MAX_CONTEXT_TOKENS = MagicMock()  # Non-numeric limit
+
+    session_manager = SessionManager.get_instance()
+    session_id = "test-session-non-numeric"
+    session_manager.ensure_session(
+        session_id,
+        system_messages=[Message(role="system", content="test")],
+    )
+
+    provider = LLMActionProvider(
+        llm_client=mock_client,
+        session_manager=session_manager,
+        session_id=session_id,
+        tools=[{"type": "function", "function": {"name": "noop"}}],
+    )
+
+    task = TaskSpec(identifier="task", goal="goal")
+
+    provider(task, [])
+
+    assert mock_client.invoke_tools.called
 
 
 def test_deepseek_client_does_not_send_parallel_tool_calls():

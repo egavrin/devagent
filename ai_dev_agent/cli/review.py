@@ -429,7 +429,12 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
     if json_output:
         ctx.obj["silent_mode"] = True
 
+    # Configure aggressive context management for review sessions
+    # Reviews can accumulate large context through multiple iterations,
+    # especially with large patches and verbose rules
     settings.max_tool_output_chars = 1_000_000
+    settings.max_context_tokens = 100_000  # Conservative limit to prevent overflow
+    settings.response_headroom_tokens = 10_000  # Leave room for response generation
 
     try:
         cli_pkg = import_module('ai_dev_agent.cli')

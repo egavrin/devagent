@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
 from ai_dev_agent.agents import AgentRegistry, AgentSpec
 from ai_dev_agent.cli.utils import build_system_context
 from ai_dev_agent.core.utils.config import Settings
 # Tool metadata is registered directly under canonical names
-from ai_dev_agent.providers.llm.base import LLMClient, LLMError, ToolCallResult
+from ai_dev_agent.providers.llm.base import LLMClient, LLMError, Message, ToolCall, ToolCallResult
 from ai_dev_agent.tools import (
     registry as tool_registry,
     READ,
@@ -24,6 +25,25 @@ from ai_dev_agent.session import SessionManager, build_system_messages
 
 DEFAULT_TOOLS: List[Dict[str, Any]] = []
 
+_SYSTEM_CONTEXT_DEFAULTS: Dict[str, Any] = {
+    "os": "unknown",
+    "os_friendly": "Unknown OS",
+    "os_version": "unknown",
+    "shell": "/bin/sh",
+    "shell_type": "unix",
+    "architecture": "unknown",
+    "home_dir": str(Path.home()),
+    "cwd": ".",
+    "python_version": "",
+    "available_tools": [],
+    "is_unix": True,
+    "path_separator": "/",
+    "command_separator": "&&",
+    "null_device": "/dev/null",
+    "temp_dir": "/tmp",
+    "command_mappings": {},
+    "platform_examples": "",
+}
 
 @dataclass
 class IntentDecision:
@@ -53,8 +73,12 @@ class IntentRouter:
         self.client = client
         self.settings = settings
         self.agent_spec = AgentRegistry.get(agent_type)
-        self._system_context = build_system_context()
-        self.tools = tools or self._build_tool_list(settings, self.agent_spec)
+        try:
+            system_context = build_system_context()
+        except Exception:  # noqa: BLE001
+            system_context = {}
+        self._system_context = self._normalise_system_context(system_context)
+        self.tools = list(tools) if tools is not None else self._build_tool_list(settings, self.agent_spec)
         self.project_profile = project_profile or {}
         self.tool_success_history = tool_success_history or {}
         self._session_manager = SessionManager.get_instance()
@@ -73,6 +97,39 @@ class IntentRouter:
 
         combined.extend(self._build_registry_tools(settings, agent_spec, used_names))
         return combined
+
+    def _normalise_system_context(self, context: Any) -> Dict[str, Any]:
+        """Ensure the system context is a dict with expected fields."""
+        normalized = dict(_SYSTEM_CONTEXT_DEFAULTS)
+
+        if isinstance(context, dict):
+            normalized.update(context)
+
+        available_tools = normalized.get("available_tools")
+        if isinstance(available_tools, list):
+            normalized["available_tools"] = [str(tool) for tool in available_tools if tool]
+        elif available_tools:
+            normalized["available_tools"] = [str(available_tools)]
+        else:
+            normalized["available_tools"] = []
+
+        command_mappings = normalized.get("command_mappings")
+        if not isinstance(command_mappings, dict):
+            normalized["command_mappings"] = {}
+
+        for key in ("os", "os_friendly", "os_version", "shell", "shell_type", "architecture", "python_version"):
+            normalized[key] = str(normalized.get(key) or _SYSTEM_CONTEXT_DEFAULTS.get(key, ""))
+
+        normalized["cwd"] = str(normalized.get("cwd") or ".")
+        normalized["home_dir"] = str(normalized.get("home_dir") or "")
+        normalized["command_separator"] = str(normalized.get("command_separator") or _SYSTEM_CONTEXT_DEFAULTS["command_separator"])
+        normalized["path_separator"] = str(normalized.get("path_separator") or _SYSTEM_CONTEXT_DEFAULTS["path_separator"])
+        normalized["null_device"] = str(normalized.get("null_device") or _SYSTEM_CONTEXT_DEFAULTS["null_device"])
+        normalized["temp_dir"] = str(normalized.get("temp_dir") or _SYSTEM_CONTEXT_DEFAULTS["temp_dir"])
+        normalized["platform_examples"] = str(normalized.get("platform_examples") or _SYSTEM_CONTEXT_DEFAULTS.get("platform_examples", ""))
+        normalized["is_unix"] = bool(normalized.get("is_unix"))
+
+        return normalized
 
     def _build_registry_tools(self, settings: Settings, agent_spec: AgentSpec, used_names: set[str]) -> List[Dict[str, Any]]:
         """Translate registry specs into LLM tool definitions filtered by agent's allowed tools."""
@@ -119,11 +176,19 @@ class IntentRouter:
             used_names.add(name)
         return tools
 
+    def route_prompt(self, prompt: str) -> IntentDecision:
+        """Legacy entrypoint used by the CLI router tests."""
+        return self._route_internal(prompt, prefer_generate=True)
+
     def route(self, prompt: str) -> IntentDecision:
-        if not prompt.strip():
+        """Default entrypoint that prefers invoke_tools when available."""
+        return self._route_internal(prompt, prefer_generate=False)
+
+    def _route_internal(self, prompt: str, *, prefer_generate: bool) -> IntentDecision:
+        text = prompt.strip()
+        if not text:
             raise IntentRoutingError("Empty prompt provided for intent routing.")
 
-        # Require an LLM client; no keyword-based fallback
         if self.client is None:
             raise IntentRoutingError("No LLM client available; fallback routing is disabled.")
 
@@ -135,6 +200,8 @@ class IntentRouter:
             workspace_root=getattr(self.settings, "workspace_root", None),
             settings=self.settings,
         )
+        if not system_messages:
+            system_messages = [Message(role="system", content=self._system_prompt())]
         session = self._session_manager.ensure_session(
             self._session_id,
             system_messages=system_messages,
@@ -144,54 +211,169 @@ class IntentRouter:
             },
         )
         with session.lock:
-            session.metadata["last_prompt"] = prompt.strip()
+            session.metadata["last_prompt"] = text
 
-        self._session_manager.add_user_message(self._session_id, prompt.strip())
+        self._session_manager.add_user_message(self._session_id, text)
+
+        conversation_payload = self._session_manager.compose(self._session_id)
+        if isinstance(conversation_payload, Sequence):
+            conversation = list(conversation_payload)
+        else:
+            conversation = list(system_messages) + [Message(role="user", content=text)]
 
         try:
-            result: ToolCallResult = self.client.invoke_tools(
-                self._session_manager.compose(self._session_id),
-                tools=self.tools,
-                temperature=0.1,
-            )
+            invocation = self._invoke_model(conversation, prefer_generate)
         except LLMError as exc:
-            self._session_manager.add_system_message(
-                self._session_id,
-                f"Intent routing error: {exc}",
-            )
-            raise IntentRoutingError(f"LLM tool call failed: {exc}") from exc
-        except Exception as exc:
-            self._session_manager.add_system_message(
-                self._session_id,
-                f"Intent routing failure: {exc}",
-            )
+            self._session_manager.add_system_message(self._session_id, f"Intent routing error: {exc}")
             raise IntentRoutingError(f"Intent routing failed: {exc}") from exc
+        except IntentRoutingError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._session_manager.add_system_message(self._session_id, f"Unexpected intent routing failure: {exc}")
+            raise IntentRoutingError(f"Unexpected routing error: {exc}") from exc
+
+        result = self._coerce_tool_call_result(invocation)
+        raw_tool_calls = result.raw_tool_calls or self._build_raw_tool_calls(result.calls)
 
         if result.calls:
             call = result.calls[0]
+            arguments = self._parse_arguments(result, call)
+            rationale = self._normalize_rationale(result.message_content)
             self._session_manager.add_assistant_message(
                 self._session_id,
                 result.message_content,
-                tool_calls=result.raw_tool_calls,
+                tool_calls=raw_tool_calls,
             )
-            return IntentDecision(
-                tool=call.name,
-                arguments=call.arguments,
-                rationale=(result.message_content or "").strip() or None,
+            return IntentDecision(tool=call.name, arguments=arguments, rationale=rationale)
+
+        message = self._normalize_rationale(result.message_content)
+        if prefer_generate:
+            raise IntentRoutingError("Could not determine a tool from the model response.")
+        if message:
+            self._session_manager.add_assistant_message(self._session_id, message)
+            return IntentDecision(tool=None, arguments={"text": message})
+
+        raise IntentRoutingError("Could not determine a tool from the model response.")
+
+    def _invoke_model(self, messages: Sequence[Message], prefer_generate: bool):
+        kwargs = {"tools": self.tools, "temperature": 0.1}
+        if prefer_generate and hasattr(self.client, "generate_with_tools"):
+            return self.client.generate_with_tools(messages, **kwargs)
+        if hasattr(self.client, "invoke_tools"):
+            return self.client.invoke_tools(messages, **kwargs)
+        if hasattr(self.client, "generate_with_tools"):
+            return self.client.generate_with_tools(messages, **kwargs)
+        raise IntentRoutingError("LLM client does not support tool routing.")
+
+    def _coerce_tool_call_result(self, data: Any) -> ToolCallResult:
+        if isinstance(data, ToolCallResult):
+            return data
+
+        if isinstance(data, tuple) and len(data) == 2:
+            message, entries = data
+            calls: List[ToolCall] = []
+            raw_tool_calls: List[Dict[str, Any]] = []
+            for entry in entries or []:
+                if isinstance(entry, ToolCallResult):
+                    calls.extend(entry.calls)
+                    if entry.raw_tool_calls:
+                        raw_tool_calls.extend(entry.raw_tool_calls)
+                    elif entry.calls:
+                        payload = self._build_raw_tool_calls(entry.calls)
+                        if payload:
+                            raw_tool_calls.extend(payload)
+                elif isinstance(entry, ToolCall):
+                    calls.append(entry)
+                elif isinstance(entry, dict):
+                    name = entry.get("name") or entry.get("function", {}).get("name")
+                    arguments = entry.get("arguments") or entry.get("function", {}).get("arguments")
+                    parsed_args = self._ensure_dict(arguments) or {}
+                    calls.append(
+                        ToolCall(
+                            name=name or "",
+                            arguments=parsed_args,
+                            call_id=entry.get("call_id") or entry.get("id"),
+                        )
+                    )
+                    raw_tool_calls.append(
+                        {
+                            "id": entry.get("call_id") or entry.get("id") or f"tool-{len(raw_tool_calls)}",
+                            "type": "function",
+                            "function": {
+                                "name": name or "",
+                                "arguments": json.dumps(parsed_args),
+                            },
+                        }
+                    )
+            return ToolCallResult(
+                calls=calls,
+                message_content=message,
+                raw_tool_calls=raw_tool_calls or None,
             )
 
-        if result.message_content:
-            self._session_manager.add_assistant_message(
-                self._session_id,
-                result.message_content,
-            )
-            # No tool used; surface the response directly without invoking a handler.
-            return IntentDecision(
-                tool=None,
-                arguments={"text": result.message_content.strip()},
-            )
+        raise IntentRoutingError("Received unsupported response from intent model.")
 
-        raise IntentRoutingError("Model response did not include a tool call or content.")
+    def _build_raw_tool_calls(self, calls: Sequence[ToolCall]) -> Optional[List[Dict[str, Any]]]:
+        if not calls:
+            return None
+        payload: List[Dict[str, Any]] = []
+        for index, call in enumerate(calls):
+            name = getattr(call, "name", "") or ""
+            arguments = getattr(call, "arguments", {}) or {}
+            if isinstance(arguments, str):
+                try:
+                    json.loads(arguments)
+                    arguments_str = arguments
+                except json.JSONDecodeError:
+                    arguments_str = json.dumps({})
+            else:
+                try:
+                    arguments_str = json.dumps(arguments)
+                except (TypeError, ValueError):
+                    arguments_str = json.dumps({})
+            payload.append(
+                {
+                    "id": getattr(call, "call_id", None) or f"tool-{index}",
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": arguments_str,
+                    },
+                }
+            )
+        return payload
+
+    def _parse_arguments(self, result: ToolCallResult, call: ToolCall) -> Dict[str, Any]:
+        candidates = [
+            getattr(call, "arguments", None),
+            getattr(result, "arguments", None),
+            result.content,
+        ]
+        for candidate in candidates:
+            parsed = self._ensure_dict(candidate)
+            if parsed is not None:
+                return parsed
+        return {}
+
+    @staticmethod
+    def _ensure_dict(value: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(decoded, dict):
+                return decoded
+        return None
+
+    @staticmethod
+    def _normalize_rationale(content: Optional[str]) -> Optional[str]:
+        if not content:
+            return None
+        text = content.strip()
+        return text or None
 
     @property
     def session_id(self) -> str:

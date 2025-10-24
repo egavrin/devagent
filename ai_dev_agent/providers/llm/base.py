@@ -58,14 +58,77 @@ class ToolCall:
     call_id: str | None = None
 
 
-@dataclass
+@dataclass(init=False)
 class ToolCallResult:
     """Parsed outcome of a tool-enabled completion."""
 
-    calls: List[ToolCall]
+    calls: List[ToolCall] = field(default_factory=list)
     message_content: str | None = None
     raw_tool_calls: List[Dict[str, Any]] | None = None
     _raw_response: Dict[str, Any] | None = None
+    call_id: str | None = field(init=False, default=None)
+    name: str | None = field(init=False, default=None)
+    arguments: Dict[str, Any] = field(init=False, default_factory=dict)
+    content: str | None = field(init=False, default=None)
+
+    def __init__(
+        self,
+        calls: Sequence[ToolCall] | None = None,
+        message_content: str | None = None,
+        raw_tool_calls: List[Dict[str, Any]] | None = None,
+        _raw_response: Dict[str, Any] | None = None,
+        **legacy: Any,
+    ) -> None:
+        self.message_content = message_content
+        self.raw_tool_calls = raw_tool_calls
+        self._raw_response = _raw_response
+
+        self.calls = list(calls) if calls else []
+        extra_content = legacy.pop("content", None)
+        legacy_args = legacy.pop("arguments", None)
+        legacy_name = legacy.pop("name", None)
+        legacy_call_id = legacy.pop("call_id", None)
+
+        if not self.calls and (legacy_name or legacy_call_id or legacy_args is not None or extra_content is not None):
+            arguments = self._coerce_arguments(legacy_args, extra_content)
+            if legacy_name:
+                self.calls = [ToolCall(name=legacy_name, arguments=arguments, call_id=legacy_call_id)]
+            elif arguments:
+                self.calls = [ToolCall(name="", arguments=arguments, call_id=legacy_call_id)]
+            self.content = extra_content if isinstance(extra_content, str) else None
+        else:
+            self.content = extra_content if isinstance(extra_content, str) else None
+
+        if self.calls:
+            primary = self.calls[0]
+            self.call_id = primary.call_id
+            self.name = primary.name
+            self.arguments = dict(primary.arguments or {})
+        else:
+            self.call_id = None
+            self.name = None
+            self.arguments = {}
+
+    @staticmethod
+    def _coerce_arguments(arguments: Any, fallback: Any) -> Dict[str, Any]:
+        if isinstance(arguments, dict):
+            return dict(arguments)
+        if isinstance(arguments, str):
+            try:
+                decoded = json.loads(arguments)
+            except json.JSONDecodeError:
+                return {}
+            if isinstance(decoded, dict):
+                return decoded
+            return {}
+        if fallback and isinstance(fallback, str):
+            try:
+                decoded = json.loads(fallback)
+            except json.JSONDecodeError:
+                return {}
+            if isinstance(decoded, dict):
+                return decoded
+        return {}
 
 
 class LLMError(RuntimeError):

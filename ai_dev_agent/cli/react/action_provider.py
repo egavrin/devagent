@@ -58,6 +58,37 @@ class LLMActionProvider:
 
         conversation = self.session_manager.compose(self.session_id)
 
+        # Sanitize conversation to remove orphaned tool messages
+        # This prevents API errors from strict providers like DeepSeek
+        from ai_dev_agent.session.sanitizer import sanitize_conversation
+        conversation = sanitize_conversation(conversation)
+
+        # Pre-flight check: Ensure conversation fits within model's context limit
+        # This prevents "context length exceeded" API errors
+        from ai_dev_agent.core.utils.context_budget import estimate_tokens
+        estimated_tokens = estimate_tokens(conversation, model=getattr(self.client, "model", None))
+
+        # Get model-specific context limit if available
+        model_limit = getattr(self.client, "_MAX_CONTEXT_TOKENS", None)
+        limit_value: Optional[int]
+        if isinstance(model_limit, (int, float)):
+            limit_value = int(model_limit)
+        else:
+            try:
+                limit_value = int(model_limit)
+            except (TypeError, ValueError):
+                limit_value = None
+        if limit_value and limit_value > 0 and estimated_tokens > limit_value:
+            logger.warning(
+                "Conversation exceeds model context limit: %d tokens (limit: %d). "
+                "Consider enabling aggressive context pruning or reducing iteration cap.",
+                estimated_tokens,
+                model_limit,
+            )
+            # Note: We don't raise an error here because context pruning may have already
+            # been applied in the session manager. The LLM client will handle the error
+            # if it's still too large after any additional pruning.
+
         # In final iteration, add synthesis instructions to the conversation
         if self._is_final_iteration:
             from ai_dev_agent.providers.llm.base import Message

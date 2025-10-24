@@ -39,6 +39,19 @@ class TestIntentDecision:
         assert decision.rationale is None
 
 
+def test_tool_call_result_legacy_constructor():
+    """Ensure ToolCallResult supports legacy constructor arguments."""
+    result = ToolCallResult(
+        call_id="legacy",
+        name="find",
+        content='{"query": "*.py"}'
+    )
+
+    assert result.calls
+    assert result.calls[0].name == "find"
+    assert result.calls[0].arguments["query"] == "*.py"
+
+
 class TestIntentRoutingError:
     """Tests for IntentRoutingError exception."""
 

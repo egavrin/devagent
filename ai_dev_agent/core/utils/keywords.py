@@ -6,9 +6,27 @@ from typing import Iterable, List, Set
 
 _IDENTIFIER_PATTERN = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
 _SPECIAL_TERMS_PATTERN = re.compile(
-    r"\b(?:test|tests|testing|pytest|unittest|function|class|module|import|export|api|endpoint|database|sql|json|http|rest|graphql)\b",
+    r"\b(?:test|tests|pytest|unittest|function|class|module|import|export|api|database|sql|json|http|rest|graphql)\b",
     re.IGNORECASE,
 )
+_SPECIAL_TERMS = {
+    "test",
+    "tests",
+    "pytest",
+    "unittest",
+    "function",
+    "class",
+    "module",
+    "import",
+    "export",
+    "api",
+    "database",
+    "sql",
+    "json",
+    "http",
+    "rest",
+    "graphql",
+}
 _BASE_STOPWORDS = {
     "the",
     "a",
@@ -81,14 +99,16 @@ def extract_keywords(
         lower = token.lower()
         if lower in stops or len(lower) <= 2 or lower in seen:
             continue
+        if not include_special_terms and lower in _SPECIAL_TERMS:
+            continue
         keywords.append(lower)
         seen.add(lower)
         if len(keywords) >= limit:
             return keywords
 
     if include_special_terms and len(keywords) < limit:
-        for term in _SPECIAL_TERMS_PATTERN.findall(text):
-            lower = term.lower()
+        for match in _SPECIAL_TERMS_PATTERN.finditer(text):
+            lower = match.group(0).lower()
             if lower in seen:
                 continue
             keywords.append(lower)

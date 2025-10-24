@@ -74,28 +74,13 @@ def _build_json_enforcement_instructions(format_schema: Dict[str, Any]) -> str:
 
 
 def _sanitize_conversation_for_llm(messages: Sequence[Message]) -> List[Message]:
-    """Remove tool messages whose IDs are not referenced by assistant tool calls."""
-    tool_call_ids: set[str] = set()
+    """Remove tool messages whose IDs are not referenced by assistant tool calls.
 
-    for msg in messages:
-        if msg.role == "assistant" and msg.tool_calls:
-            for call in msg.tool_calls:
-                if isinstance(call, Mapping):
-                    call_id = call.get("id") or call.get("tool_call_id")
-                    if isinstance(call_id, str) and call_id:
-                        tool_call_ids.add(call_id)
-
-    sanitized: List[Message] = []
-    for msg in messages:
-        if msg.role == "tool":
-            if msg.tool_call_id and msg.tool_call_id in tool_call_ids:
-                sanitized.append(msg)
-            else:
-                logger.debug("Removing orphaned tool message with ID: %s", msg.tool_call_id)
-        else:
-            sanitized.append(msg)
-
-    return sanitized
+    DEPRECATED: Use ai_dev_agent.session.sanitizer.sanitize_conversation instead.
+    This wrapper is kept for backward compatibility.
+    """
+    from ai_dev_agent.session.sanitizer import sanitize_conversation
+    return sanitize_conversation(messages)
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:

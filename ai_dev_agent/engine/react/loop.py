@@ -231,7 +231,9 @@ class ReactiveExecutor:
             return "failed", stop_reason
         if condition == "gates":
             stop_reason = evaluation.stop_reason if evaluation else "Completed"
-            return "success", stop_reason
+            if evaluation and evaluation.status == "success" and steps:
+                return "success", stop_reason
+            return "failed", stop_reason
 
         stop_reason = evaluation.stop_reason if evaluation else None
         status = "success" if steps else "failed"

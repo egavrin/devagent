@@ -9,12 +9,20 @@ from .base import HTTPChatLLMClient, Message, RetryConfig
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 
+# DeepSeek's published context limit is 131,072 tokens, but we use a conservative
+# limit to account for: (1) estimation inaccuracy, (2) response generation headroom,
+# (3) API overhead. This prevents "context length exceeded" errors.
+DEEPSEEK_SAFE_CONTEXT_LIMIT = 120_000
+
 
 class DeepSeekClient(HTTPChatLLMClient):
     """Chat-completions client for the DeepSeek API with retry and streaming support."""
 
     # DeepSeek does not support parallel_tool_calls parameter (as of 2025-01)
     _SUPPORTS_PARALLEL_TOOL_CALLS = False
+
+    # DeepSeek's effective context limit (with safety margin)
+    _MAX_CONTEXT_TOKENS = DEEPSEEK_SAFE_CONTEXT_LIMIT
 
     def __init__(
         self,
