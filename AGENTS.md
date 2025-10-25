@@ -19,7 +19,7 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 - **Documentation upkeep**: refresh existing docs such as `docs/IMPLEMENTATION_STATUS.md` when needed, but do not add new `.md` files unless the user explicitly asks.
 
 ## Priority Roadmap
-- **Work Planning Tools** (Priority #1) – ✅ **COMPLETE** - Fully integrated into CLI with `devagent plan` commands (create, list, show, next, start, complete, delete). See `docs/design/work_planning_design.md` for usage.
+- **CLI Simplification** (Priority #1) – ✅ **COMPLETE** - Simplified to flat command structure with natural language fallback and auto-detection of intent. Removed nested namespaces (`agent`, `plan`).
 - **Memory System** (Priority #2) – study Aider’s `RepoMap` and Cline’s persistence model.
 - **Multi-Agent Coordination** (Priority #3) – extract orchestration ideas from Cline and OpenCode.
 - **Testing Infrastructure** (Priority #4) – mirror Aider’s large-suite discipline and enforce the 90 % threshold.
@@ -58,48 +58,48 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 ## CLI Commands Reference
 
 ### Core Commands
-- `devagent "<query>"` – Natural language query (direct execution)
+- `devagent "<query>"` – Natural language query (direct execution, auto-detects intent)
 - `devagent --plan "<query>"` – Query with LLM planning mode
 - `devagent query "<prompt>"` – Explicit query command
-- `devagent review [options]` – Code review functionality
-- `devagent shell` – Interactive shell session
-- `devagent diagnostics` – Show session diagnostics
+- `devagent chat` – Interactive chat session with persistent context
+- `devagent review <file> [--rule <rule_file>] [--json]` – Code/patch review
 
-### Work Planning Commands (Priority #1 - COMPLETE)
-- `devagent plan create "<goal>" [--context]` – Create new work plan
-- `devagent plan list` – List all work plans
-- `devagent plan show <id>` – Display plan details (markdown)
-- `devagent plan next <id>` – Get next task (respects dependencies)
-- `devagent plan start <id> <task_id>` – Mark task as started
-- `devagent plan complete <id> <task_id>` – Mark task as completed
-- `devagent plan delete <id>` – Delete a work plan
+### Specialized Commands
+- `devagent create-design "<feature>" [--context] [--output]` – Create design documents
+- `devagent generate-tests "<feature>" [--coverage N] [--type unit|integration|all]` – Generate test files
+- `devagent write-code "<design_file>" [--test-file]` – Write implementation from design
 
-**Example Workflow**:
+### Global Options
+- `-v, -vv, -vvv` – Verbosity levels (info, debug, trace)
+- `-q, --quiet` – Minimal output
+- `--json` – JSON output format
+- `--plan` – Enable planning mode for complex queries
+
+**Example Usage**:
 ```bash
-# Create a plan
-devagent plan create "Implement REST API" --context "CRUD endpoints for blog"
+# Natural language (auto-detects intent)
+devagent "create a design for user authentication"
+devagent "generate tests for the auth module"
 
-# View the plan
-devagent plan show 296f3e
+# Explicit specialized commands
+devagent create-design "REST API" --context "CRUD endpoints" --output design.md
+devagent generate-tests "API endpoints" --coverage 95 --type integration
+devagent write-code design.md --test-file tests/test_api.py
 
-# Execute tasks in order
-devagent plan next 296f3e           # Get: Task 1
-devagent plan start 296f3e abc123   # Start Task 1
-devagent plan complete 296f3e abc123 # Complete Task 1
+# Code review
+devagent review src/auth.py
+devagent review changes.patch --rule rules/security.md --json
 
-devagent plan next 296f3e           # Get: Task 2 (dependency met)
-# ... continue until 100%
+# Interactive session
+devagent chat
 ```
 
 **Features**:
-- ✅ Dependency-aware task ordering
-- ✅ Priority-based selection (Critical > High > Medium > Low)
-- ✅ Progress tracking with completion percentage
-- ✅ Markdown export for readable summaries
-- ✅ Persistent storage (~/.devagent/plans/)
-- ✅ Partial ID matching for convenience
-
-**Documentation**: `docs/design/work_planning_design.md`
+- ✅ Flat command structure (no nested namespaces)
+- ✅ Auto-detection of intent for complex queries
+- ✅ Unified review command (handles files and patches)
+- ✅ Standard CLI patterns (-v/-vv/-vvv for verbosity)
+- ✅ Natural language fallback for unrecognized commands
 
 ## Verification Checklist
 - Run `pytest --cov=ai_dev_agent --cov-fail-under=90` and any required compatibility suites before declaring the task complete; surface key results in the handoff.

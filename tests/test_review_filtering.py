@@ -6,7 +6,9 @@ from typing import Dict
 
 import click
 import pytest
+import importlib
 
+import ai_dev_agent.cli as cli_package
 from ai_dev_agent.cli.review import run_review
 from ai_dev_agent.core.utils.config import Settings
 
@@ -67,13 +69,11 @@ stdlib/.*\\.ets$
 
 
 def run_review_with_message(ctx, patch_file, rule_file, message):
-    from ai_dev_agent.cli import review
-    import ai_dev_agent.cli as cli_package
-
     dummy_client = DummyClient(message)
+    review_module = importlib.import_module("ai_dev_agent.cli.review")
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(review, "get_llm_client", lambda _ctx: dummy_client)
+    monkeypatch.setattr(review_module, "get_llm_client", lambda _ctx: dummy_client)
     monkeypatch.setattr(cli_package, "get_llm_client", lambda _ctx: dummy_client)
 
     try:
@@ -148,18 +148,17 @@ def test_filter_allows_in_scope(review_context):
 def test_review_returns_fallback_when_json_parse_fails(review_context, monkeypatch):
     ctx, patch_file, rule_file = review_context
 
-    from ai_dev_agent.cli import review
-    import ai_dev_agent.cli as cli_package
+    review_module = importlib.import_module("ai_dev_agent.cli.review")
 
     # Patch LLM client factory to avoid real network calls
-    monkeypatch.setattr(review, "get_llm_client", lambda _ctx: object())
+    monkeypatch.setattr(review_module, "get_llm_client", lambda _ctx: object())
     monkeypatch.setattr(cli_package, "get_llm_client", lambda _ctx: object())
 
     # Simulate executor raising the JSON enforcement error
     def fake_execute(*args, **kwargs):
         raise click.ClickException("Assistant response did not contain valid JSON matching the required schema.")
 
-    monkeypatch.setattr(review, "_execute_react_assistant", fake_execute)
+    monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
 
     result = run_review(
         ctx,
@@ -179,8 +178,7 @@ def test_review_returns_fallback_when_json_parse_fails(review_context, monkeypat
 def test_review_chunking_aggregates_results(review_context, monkeypatch):
     ctx, patch_file, rule_file = review_context
 
-    from ai_dev_agent.cli import review
-    import ai_dev_agent.cli as cli_package
+    review_module = importlib.import_module("ai_dev_agent.cli.review")
 
     # Overwrite patch with two files to force chunking
     patch_file.write_text(
@@ -203,7 +201,7 @@ diff --git a/src/file2.py b/src/file2.py
     settings = ctx.obj["settings"]
     settings.review_max_files_per_chunk = 1
 
-    monkeypatch.setattr(review, "get_llm_client", lambda _ctx: object())
+    monkeypatch.setattr(review_module, "get_llm_client", lambda _ctx: object())
     monkeypatch.setattr(cli_package, "get_llm_client", lambda _ctx: object())
 
     responses = [
@@ -249,7 +247,7 @@ diff --git a/src/file2.py b/src/file2.py
             "result": {"status": "success"},
         }
 
-    monkeypatch.setattr(review, "_execute_react_assistant", fake_execute)
+    monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
 
     result = run_review(
         ctx,

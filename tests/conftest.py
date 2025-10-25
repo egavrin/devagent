@@ -1,34 +1,43 @@
-import sys
-from pathlib import Path
+"""Shared pytest fixtures for CLI tests."""
+from __future__ import annotations
 
-try:
-    import pytest_timeout  # type: ignore  # noqa: F401
+from unittest.mock import MagicMock
 
-    _HAS_PYTEST_TIMEOUT = True
-except Exception:  # pragma: no cover - fallback path for environments without plugin
-    _HAS_PYTEST_TIMEOUT = False
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import pytest
 
 
-def pytest_addoption(parser):
-    """Register optional ini entries when pytest-timeout is unavailable."""
-    if _HAS_PYTEST_TIMEOUT:
-        return
+@pytest.fixture
+def cli_stub_runtime(monkeypatch):
+    """Provide a stubbed CLI runtime that never calls real LLMs."""
+    monkeypatch.setenv("DEVAGENT_API_KEY", "test-key")
 
-    try:
-        parser.addini(
-            "timeout",
-            "Per-test timeout (seconds). Ignored when pytest-timeout plugin is missing.",
-            default="0",
-        )
-    except ValueError:
-        # Another plugin already registered the option; safe to ignore.
-        pass
+    llm_client = MagicMock(name="llm_client")
 
+    def fake_get_llm_client(ctx):
+        ctx.obj["llm_client"] = llm_client
+        return llm_client
 
-def pytest_configure(config):
-    """Access timeout setting so the ini option is marked as used."""
-    if not _HAS_PYTEST_TIMEOUT:
-        # Reading the value ensures pytest considers the ini option consumed.
-        config.getini("timeout")
+    monkeypatch.setattr("ai_dev_agent.cli.commands.get_llm_client", fake_get_llm_client)
+
+    executor = MagicMock(
+        name="_execute_react_assistant",
+        return_value={
+            "result": MagicMock(name="RunResult"),
+            "final_json": {
+                "violations": [],
+                "summary": {"rule_name": "stub-rule", "total_violations": 0, "files_reviewed": 0},
+            },
+            "printed_final": False,
+        },
+    )
+    monkeypatch.setattr("ai_dev_agent.cli.commands._execute_react_assistant", executor)
+
+    import importlib
+
+    review_module = importlib.import_module("ai_dev_agent.cli.review")
+    monkeypatch.setattr(review_module, "_execute_react_assistant", executor)
+
+    return {
+        "llm_client": llm_client,
+        "executor": executor,
+    }

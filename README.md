@@ -51,10 +51,10 @@ devagent "find all TODO comments"
 devagent "explain how the config system works"
 ```
 
-### Interactive shell
+### Interactive chat session
 
 ```bash
-devagent shell
+devagent chat
 ```
 
 ### Development workflow integration
@@ -156,18 +156,19 @@ devagent --plan "implement user authentication with tests"
 - **Early termination**: Stops when query is answered (no redundant verification)
 - **Progress tracking**: Shows completion percentage and task status
 
-**Manual Plan Management:**
+**Auto-Detection and Planning:**
 ```bash
-# Create and manage plans manually
-devagent plan create "Add logging system"
-devagent plan list
-devagent plan show <plan-id>
-devagent plan next <plan-id>
-devagent plan start <plan-id> <task-id>
-devagent plan complete <plan-id> <task-id>
+# Complex queries automatically trigger planning mode
+devagent "design and implement a logging system"
+devagent --plan "add user authentication feature"
+
+# Specialized commands for structured workflows
+devagent create-design "REST API" --output design.md
+devagent generate-tests "auth module" --coverage 95
+devagent write-code design.md --test-file tests/test_auth.py
 ```
 
-See [Work Planning Design](docs/design/work_planning_design.md) for details.
+See [CLI Commands Reference](AGENTS.md#cli-commands-reference) for details.
 
 ## Testing
 

@@ -6,8 +6,11 @@ from .commands import (
     cli,
     main,
     query,
-    shell,
-    # Only add other PUBLIC command functions here
+    chat,
+    review,
+    create_design,
+    generate_tests,
+    write_code,
 )
 from .router import IntentDecision, IntentRouter, IntentRoutingError
 from .utils import get_llm_client, infer_task_files, update_task_state
@@ -21,7 +24,11 @@ __all__ = [
     "cli",
     "main",
     "query",
-    "shell",
+    "chat",
+    "review",
+    "create_design",
+    "generate_tests",
+    "write_code",
     "get_llm_client",
     "infer_task_files",
     "update_task_state",
