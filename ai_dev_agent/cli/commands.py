@@ -85,10 +85,13 @@ class NaturalLanguageGroup(click.Group):
 
         try:
             return super().resolve_command(ctx, filtered_args)
-        except click.UsageError:
+        except click.UsageError as exc:
             # Original NL fallback logic for natural language queries
             if not filtered_args:
                 raise
+            # Treat single CLI-like tokens (eg `foo-bar`) as real commands and surface the original error
+            if len(filtered_args) == 1 and "-" in filtered_args[0]:
+                raise exc
             if any(arg.startswith("-") for arg in filtered_args):
                 raise
             query = " ".join(filtered_args).strip()
@@ -147,6 +150,12 @@ def cli(ctx: click.Context, config_path: Path | None, verbose: bool, plan: bool,
             prompt_file=prompt_global,
             format_file=format_global,
         )
+        return
+
+    # When no subcommand or natural language input supplied, show help text
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+        return
 
 
 @cli.command(name="query")
@@ -320,7 +329,11 @@ def shell(ctx: click.Context) -> None:
     )
 
     try:
-        session_id = manager.create_session(cwd=Path.cwd())
+        start_session = getattr(manager, "start_session", None)
+        if callable(start_session):
+            session_id = start_session(cwd=Path.cwd())
+        else:
+            session_id = manager.create_session(cwd=Path.cwd())
     except ShellSessionError as exc:
         raise click.ClickException(f"Failed to start shell session: {exc}") from exc
 
@@ -331,12 +344,29 @@ def shell(ctx: click.Context) -> None:
     ctx.obj["_shell_session_id"] = session_id
     ctx.obj["_shell_conversation_history"] = []
 
+    is_active_fn = getattr(manager, "is_session_active", None)
+    if callable(is_active_fn):
+        try:
+            is_active = bool(is_active_fn(session_id))
+        except TypeError:
+            is_active = True
+        if not is_active:
+            click.echo("Shell session is not active.")
+            return
+
     click.echo("DevAgent Interactive Shell")
     click.echo("Type a question or command, 'help' for guidance, and 'exit' to quit.")
     click.echo("=" * 50)
 
     try:
         while True:
+            if callable(is_active_fn):
+                try:
+                    if not is_active_fn(session_id):
+                        click.echo("Shell session closed.")
+                        break
+                except TypeError:
+                    pass
             try:
                 user_input = click.prompt("DevAgent> ", prompt_suffix="", show_default=False).strip()
             except (KeyboardInterrupt, EOFError):
@@ -418,7 +448,8 @@ def diagnostics(
                 target_ids.append(router_session)
 
     if not target_ids:
-        raise click.ClickException("No sessions available to inspect. Provide --session or run a query first.")
+        click.echo("No sessions available to inspect. Provide --session or run a session-producing query first.")
+        return
 
     for idx, sid in enumerate(dict.fromkeys(target_ids), start=1):
         session = manager.get_session(sid)

@@ -23,6 +23,7 @@ class SymbolCache:
             cache_dir: Custom cache directory (default: root/.devagent/symbol_cache)
         """
         self.root = Path(root)
+        self._fallback_cache: Dict[str, Any] = {}
 
         if cache_dir is None:
             cache_dir = self.root / ".devagent" / "symbol_cache"
@@ -34,7 +35,6 @@ class SymbolCache:
             self.cache = DiskCache(str(cache_dir), size_limit=100 * 1024 * 1024)  # 100MB limit
         except Exception as e:
             LOGGER.warning("Failed to initialize disk cache, using in-memory cache: %s", e)
-            self._fallback_cache: Dict[str, Any] = {}
             self.cache = None
 
     def get_symbols(self, file_path: Path) -> Optional[List[Any]]:

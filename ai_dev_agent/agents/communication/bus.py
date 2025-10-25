@@ -99,6 +99,45 @@ class AgentBus:
         # For now, priority is ignored (could use PriorityQueue)
         self._event_queue.put(event)
 
+    def subscribe(
+        self,
+        event_type: EventType,
+        handler: EventHandler,
+        *,
+        subscriber_id: Optional[str] = None,
+    ) -> str:
+        """
+        Register a handler to receive events of the given type.
+
+        Returns the subscription identifier for later removal.
+        """
+        if subscriber_id is None:
+            subscriber_id = str(uuid.uuid4())
+
+        with self._lock:
+            subscribers = self._subscribers.setdefault(event_type, [])
+            subscribers.append((subscriber_id, handler))
+
+        return subscriber_id
+
+    def unsubscribe(self, subscription_id: str) -> bool:
+        """
+        Remove a previously registered subscriber.
+
+        Returns True if a subscriber was removed.
+        """
+        removed = False
+
+        with self._lock:
+            for subscribers in self._subscribers.values():
+                for idx, (sub_id, _) in enumerate(list(subscribers)):
+                    if sub_id == subscription_id:
+                        subscribers.pop(idx)
+                        removed = True
+                        break
+
+        return removed
+
 
     def _process_events(self) -> None:
         """Process events from the queue (runs in background thread)."""

@@ -17,9 +17,9 @@ class TaskAgentMapper:
         """Initialize task-agent mapper."""
         self._keyword_mappings = {
             "design": ["design", "architect", "plan", "specification"],
+            "review": ["review", "analyze", "check", "audit", "inspect"],
             "test": ["test", "spec", "coverage", "unittest"],
             "implement": ["implement", "code", "write", "develop", "build"],
-            "review": ["review", "analyze", "check", "audit", "inspect"]
         }
 
     def map_task_to_agent(self, task: Task) -> str:

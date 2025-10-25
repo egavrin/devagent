@@ -324,6 +324,27 @@ class ShellSessionManager:
             self._sessions[sid] = session
         return sid
 
+    def start_session(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        shell: Sequence[str] | str | None = None,
+        cwd: Optional[Path] = None,
+        env: Optional[Mapping[str, str]] = None,
+    ) -> str:
+        """
+        Backwards-compatible alias for create_session.
+
+        Some CLI code paths (and tests) expect a start_session method. This
+        delegates to create_session so existing behavior is preserved.
+        """
+        return self.create_session(
+            session_id=session_id,
+            shell=shell,
+            cwd=cwd,
+            env=env,
+        )
+
     def get_session(self, session_id: str) -> ShellSession:
         with self._lock:
             if session_id not in self._sessions:
@@ -357,6 +378,11 @@ class ShellSessionManager:
     def active_sessions(self) -> Iterable[str]:
         with self._lock:
             return list(self._sessions.keys())
+
+    def is_session_active(self, session_id: str) -> bool:
+        """Return True if the session exists and is still managed."""
+        with self._lock:
+            return session_id in self._sessions
 
 
 __all__ = [
