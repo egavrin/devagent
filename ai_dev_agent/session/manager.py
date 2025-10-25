@@ -1,7 +1,9 @@
 """Session lifecycle management for DevAgent."""
 from __future__ import annotations
 
-from threading import RLock
+import threading
+from datetime import datetime, timedelta
+from threading import RLock, Timer
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 from uuid import uuid4
 
@@ -18,11 +20,18 @@ class SessionManager:
     """Singleton responsible for creating and tracking conversational sessions."""
 
     _instance: "SessionManager" | None = None
+    DEFAULT_SESSION_TTL = timedelta(minutes=30)  # 30 minutes default TTL
+    DEFAULT_MAX_SESSIONS = 100  # Maximum number of concurrent sessions
+    CLEANUP_INTERVAL = 60  # Run cleanup every 60 seconds
 
     def __init__(self) -> None:
         self._sessions: Dict[str, Session] = {}
         self._lock = RLock()
         self._context_service = ContextPruningService()
+        self._session_ttl = self.DEFAULT_SESSION_TTL
+        self._max_sessions = self.DEFAULT_MAX_SESSIONS
+        self._cleanup_timer: Optional[Timer] = None
+        self._start_cleanup_timer()
 
     def configure_context_service(
         self,
@@ -66,10 +75,17 @@ class SessionManager:
         if session_id is None:
             session_id = f"session-{uuid4()}"
         with self._lock:
+            # Check if we're at max sessions and need to evict
+            if session_id not in self._sessions and len(self._sessions) >= self._max_sessions:
+                self._evict_oldest_session()
+
             session = self._sessions.get(session_id)
             if session is None:
                 session = Session(id=session_id)
                 self._sessions[session_id] = session
+            else:
+                # Update last accessed time for existing session
+                session.last_accessed = datetime.now()
         if system_messages is not None:
             with session.lock:
                 session.system_messages = list(system_messages)
@@ -86,7 +102,9 @@ class SessionManager:
         with self._lock:
             if session_id not in self._sessions:
                 raise KeyError(f"Session '{session_id}' does not exist")
-            return self._sessions[session_id]
+            session = self._sessions[session_id]
+            session.last_accessed = datetime.now()
+            return session
 
     def list_sessions(self) -> List[str]:
         with self._lock:
@@ -175,3 +193,85 @@ class SessionManager:
             candidate = f"tool-{uuid4().hex[:8]}"
             if candidate not in used:
                 return candidate
+
+    def _start_cleanup_timer(self) -> None:
+        """Start the background cleanup timer."""
+        if self._cleanup_timer:
+            self._cleanup_timer.cancel()
+
+        self._cleanup_timer = Timer(self.CLEANUP_INTERVAL, self._run_cleanup)
+        self._cleanup_timer.daemon = True
+        self._cleanup_timer.start()
+
+    def _run_cleanup(self) -> None:
+        """Run periodic cleanup of expired sessions."""
+        try:
+            self.cleanup_expired_sessions()
+        finally:
+            # Schedule next cleanup
+            self._start_cleanup_timer()
+
+    def cleanup_expired_sessions(self) -> int:
+        """Remove expired sessions based on TTL. Returns number of sessions removed."""
+        now = datetime.now()
+        expired_ids = []
+
+        with self._lock:
+            for session_id, session in self._sessions.items():
+                if now - session.last_accessed > self._session_ttl:
+                    expired_ids.append(session_id)
+
+            for session_id in expired_ids:
+                del self._sessions[session_id]
+
+        return len(expired_ids)
+
+    def _evict_oldest_session(self) -> None:
+        """Evict the oldest session when at max capacity."""
+        with self._lock:
+            if not self._sessions:
+                return
+
+            # Find the oldest session by last_accessed time
+            oldest_id = min(
+                self._sessions.keys(),
+                key=lambda sid: self._sessions[sid].last_accessed
+            )
+            del self._sessions[oldest_id]
+
+    def set_session_ttl(self, ttl_minutes: int) -> None:
+        """Configure the session TTL in minutes."""
+        self._session_ttl = timedelta(minutes=ttl_minutes)
+
+    def set_max_sessions(self, max_sessions: int) -> None:
+        """Configure the maximum number of concurrent sessions."""
+        self._max_sessions = max_sessions
+
+    def get_session_stats(self) -> Dict[str, Any]:
+        """Get statistics about current sessions."""
+        with self._lock:
+            now = datetime.now()
+            stats = {
+                "total_sessions": len(self._sessions),
+                "max_sessions": self._max_sessions,
+                "ttl_minutes": self._session_ttl.total_seconds() / 60,
+                "sessions": []
+            }
+
+            for session_id, session in self._sessions.items():
+                age = now - session.created_at
+                idle_time = now - session.last_accessed
+                stats["sessions"].append({
+                    "id": session_id,
+                    "age_seconds": age.total_seconds(),
+                    "idle_seconds": idle_time.total_seconds(),
+                    "message_count": len(session.history)
+                })
+
+            return stats
+
+    def shutdown(self) -> None:
+        """Shutdown the session manager and cleanup resources."""
+        if self._cleanup_timer:
+            self._cleanup_timer.cancel()
+            self._cleanup_timer = None

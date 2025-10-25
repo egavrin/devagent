@@ -194,10 +194,10 @@ class TestAgentDelegationPerformance:
 class TestCommunicationBusPerformance:
     """Test performance of event-driven communication bus."""
 
-    @pytest.mark.skip(reason="subscribe method removed - tests legacy functionality")
     def test_event_publishing_throughput(self, metrics):
         """Measure event publishing throughput."""
         bus = AgentBus()
+        bus.start()  # Start the bus
         event_count = 0
 
         def handler(event: AgentEvent):
@@ -242,10 +242,8 @@ class TestCommunicationBusPerformance:
 
         assert throughput > 1000, "Event publishing throughput too low"
 
-    @pytest.mark.skip(reason="subscribe method removed - tests legacy functionality")
     def test_event_subscription_scalability(self, metrics):
         """Measure performance with many subscribers."""
-        bus = AgentBus()
         handler_counts = {}
 
         def make_handler(handler_id: int):
@@ -260,6 +258,7 @@ class TestCommunicationBusPerformance:
 
         for count in subscriber_counts:
             bus = AgentBus()
+            bus.start()  # Start the bus
             handler_counts.clear()
 
             # Register subscribers
@@ -296,10 +295,10 @@ class TestCommunicationBusPerformance:
             # Should be less than 150x slower (ideally closer to 100x)
             assert ratio < 150, "Bus scalability poor with many subscribers"
 
-    @pytest.mark.skip(reason="subscribe method removed - tests legacy functionality")
     def test_request_response_latency(self, metrics):
         """Measure request-response pattern latency."""
         bus = AgentBus()
+        bus.start()  # Start the bus
 
         def responder(event: AgentEvent):
             # Simulate processing
