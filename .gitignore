@@ -26,6 +26,7 @@ htmlcov/
 .coverage.*
 coverage/
 coverage.xml
+coverage.json
 
 # Tool caches
 .mypy_cache/
