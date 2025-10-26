@@ -366,28 +366,13 @@ class TestRegistryCache:
         # Clear the cache first
         _registry.cache_clear()
 
-        with patch("ai_dev_agent.tools.registry.registry") as mock_inst:
-            mock_registry_obj = MagicMock()
-            mock_inst.__class__ = MagicMock  # Make it look like an instance
+        # Get the registry twice
+        reg1 = _registry()
+        reg2 = _registry()
 
-            # Patch the import inside _registry function
-            with patch("ai_dev_agent.core.utils.tool_utils._registry") as mock_func:
-                call_count = 0
+        # Both should be the same object (cached)
+        assert reg1 is reg2
 
-                def side_effect():
-                    nonlocal call_count
-                    call_count += 1
-                    return mock_registry_obj
-
-                mock_func.side_effect = side_effect
-
-                # First call
-                reg1 = mock_func()
-                assert call_count == 1
-
-                # Should return same object (simulating cache)
-                mock_func.side_effect = lambda: mock_registry_obj
-                reg2 = mock_func()
-
-                # Both should be same instance
-                assert reg1 is reg2
+        # Verify it's a real ToolRegistry
+        from ai_dev_agent.tools.registry import ToolRegistry
+        assert isinstance(reg1, ToolRegistry)
