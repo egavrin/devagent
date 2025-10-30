@@ -30,6 +30,11 @@ VIOLATION_SCHEMA = {
                         "type": "string",
                         "description": "Explanation of the violation"
                     },
+                    "change_type": {
+                        "type": "string",
+                        "enum": ["added", "removed"],
+                        "description": "Whether the violation references added or removed code"
+                    },
                     "code_snippet": {
                         "type": "string",
                         "description": "The problematic code (optional)"

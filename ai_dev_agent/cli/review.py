@@ -17,6 +17,7 @@ from ai_dev_agent.core.utils.logger import get_logger
 from ai_dev_agent.tools.patch_analysis import PatchParser
 
 from .react.executor import _execute_react_assistant
+from .review_context import ContextOrchestrator, SourceContextProvider
 from .utils import _record_invocation, get_llm_client
 
 LOGGER = get_logger(__name__)
@@ -138,17 +139,21 @@ def parse_patch_file(patch_path: Path) -> Dict[str, Any]:
     return parsed
 
 
-def collect_patch_review_data(parsed_patch: Mapping[str, Any]) -> Tuple[Dict[str, Dict[int, str]], Set[str]]:
-    """Collect lookup tables for added lines and parsed file set from parsed patch data."""
+def collect_patch_review_data(
+    parsed_patch: Mapping[str, Any]
+) -> Tuple[Dict[str, Dict[int, str]], Dict[str, Dict[int, str]], Set[str]]:
+    """Collect lookup tables for added/removed lines and parsed file set."""
 
     added_lines: Dict[str, Dict[int, str]] = {}
+    removed_lines: Dict[str, Dict[int, str]] = {}
     parsed_files: Set[str] = set()
     for file_entry in parsed_patch.get("files", []):
         path = file_entry.get("path")
         if not isinstance(path, str):
             continue
         parsed_files.add(path)
-        line_lookup: Dict[int, str] = {}
+        added_lookup: Dict[int, str] = {}
+        removed_lookup: Dict[int, str] = {}
         for hunk in file_entry.get("hunks", []):
             if not isinstance(hunk, Mapping):
                 continue
@@ -158,11 +163,20 @@ def collect_patch_review_data(parsed_patch: Mapping[str, Any]) -> Tuple[Dict[str
                 line_no = added.get("line_number")
                 content_value = added.get("content")
                 if isinstance(line_no, int) and isinstance(content_value, str):
-                    line_lookup[line_no] = content_value
-        if line_lookup:
-            added_lines[path] = line_lookup
+                    added_lookup[line_no] = content_value
+            for removed in hunk.get("removed_lines", []):
+                if not isinstance(removed, Mapping):
+                    continue
+                line_no = removed.get("line_number")
+                content_value = removed.get("content")
+                if isinstance(line_no, int) and isinstance(content_value, str):
+                    removed_lookup[line_no] = content_value
+        if added_lookup:
+            added_lines[path] = added_lookup
+        if removed_lookup:
+            removed_lines[path] = removed_lookup
 
-    return added_lines, parsed_files
+    return added_lines, removed_lines, parsed_files
 
 
 def format_patch_dataset(parsed_patch: Mapping[str, Any], filter_pattern: Optional[str] = None) -> str:
@@ -200,7 +214,12 @@ def format_patch_dataset(parsed_patch: Mapping[str, Any], filter_pattern: Option
         path = file_entry.get("path")
         change_type = file_entry.get("change_type", "modified")
         language = file_entry.get("language", "unknown")
-        lines.append(f"FILE: {path}")
+        chunk_index = file_entry.get("_chunk_index")
+        chunk_total = file_entry.get("_chunk_total")
+        chunk_suffix = ""
+        if isinstance(chunk_index, int) and isinstance(chunk_total, int) and chunk_total > 1:
+            chunk_suffix = f" (segment {chunk_index + 1}/{chunk_total})"
+        lines.append(f"FILE: {path}{chunk_suffix}")
         lines.append(f"  Change type: {change_type}")
         lines.append(f"  Language: {language}")
 
@@ -273,66 +292,117 @@ def format_patch_dataset(parsed_patch: Mapping[str, Any], filter_pattern: Option
     return "\n".join(lines).rstrip()
 
 
+def _estimate_hunk_impact(hunk: Mapping[str, Any]) -> int:
+    added = len(hunk.get("added_lines", []) or [])
+    removed = len(hunk.get("removed_lines", []) or [])
+    context = len(hunk.get("context_lines", []) or [])
+    return added + removed + context
+
+
+def _split_large_file_entries(
+    files: Sequence[Mapping[str, Any]],
+    *,
+    max_hunks_per_group: int,
+    max_lines_per_group: int,
+) -> List[Mapping[str, Any]]:
+    if max_hunks_per_group <= 0 and max_lines_per_group <= 0:
+        return list(files)
+
+    results: List[Mapping[str, Any]] = []
+    for file_entry in files:
+        hunks = list(file_entry.get("hunks", []) or [])
+        if not hunks:
+            results.append(file_entry)
+            continue
+
+        groups: List[List[Mapping[str, Any]]] = []
+        current: List[Mapping[str, Any]] = []
+        hunk_counter = 0
+        line_counter = 0
+
+        for hunk in hunks:
+            impact = _estimate_hunk_impact(hunk)
+            should_split = (
+                current
+                and (
+                    (max_hunks_per_group > 0 and hunk_counter >= max_hunks_per_group)
+                    or (max_lines_per_group > 0 and line_counter + impact > max_lines_per_group)
+                )
+            )
+            if should_split:
+                groups.append(current)
+                current = []
+                hunk_counter = 0
+                line_counter = 0
+            current.append(hunk)
+            hunk_counter += 1
+            line_counter += impact
+
+        if current:
+            groups.append(current)
+
+        if len(groups) <= 1:
+            results.append(file_entry)
+            continue
+
+        total = len(groups)
+        for index, group in enumerate(groups):
+            new_entry = dict(file_entry)
+            new_entry["hunks"] = group
+            new_entry["_chunk_index"] = index
+            new_entry["_chunk_total"] = total
+            results.append(new_entry)
+
+    return results
+
+
+def _estimate_entry_lines(file_entry: Mapping[str, Any]) -> int:
+    return sum(_estimate_hunk_impact(h) for h in file_entry.get("hunks", []) or [])
+
+
 def _chunk_patch_files(
     files: Sequence[Mapping[str, Any]],
     max_files_per_chunk: int = 10,
+    max_lines_per_chunk: int = 0,
 ) -> List[List[Mapping[str, Any]]]:
     """Split patch files into manageable chunks."""
-    if max_files_per_chunk <= 0:
-        return [list(files)]
+    if not files:
+        return []
+
+    effective_max_files = max_files_per_chunk if max_files_per_chunk > 0 else len(files)
+    effective_max_lines = max_lines_per_chunk if max_lines_per_chunk > 0 else 0
 
     chunked: List[List[Mapping[str, Any]]] = []
-    for i in range(0, len(files), max_files_per_chunk):
-        chunked.append(list(files[i : i + max_files_per_chunk]))
+    current_chunk: List[Mapping[str, Any]] = []
+    current_lines = 0
+
+    for entry in files:
+        entry_lines = _estimate_entry_lines(entry)
+        should_split = (
+            current_chunk
+            and (
+                (effective_max_files and len(current_chunk) >= effective_max_files)
+                or (effective_max_lines and current_lines + entry_lines > effective_max_lines)
+            )
+        )
+        if should_split:
+            chunked.append(current_chunk)
+            current_chunk = []
+            current_lines = 0
+        current_chunk.append(entry)
+        current_lines += entry_lines
+
+    if current_chunk:
+        chunked.append(current_chunk)
+
     return chunked
-
-
-def format_patch_dataset_chunked(
-    parsed_patch: Mapping[str, Any],
-    *,
-    chunk_index: int = 0,
-    max_files: int = 10,
-    filter_pattern: Optional[str] = None,
-) -> Tuple[str, List[Mapping[str, Any]]]:
-    """Format a specific chunk of the patch dataset and return its files."""
-    files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
-    if not files:
-        return "No files with additions were detected in this patch.", []
-
-    if max_files <= 0:
-        max_files = len(files)
-
-    start = chunk_index * max_files
-    if start >= len(files):
-        return "No more files to review.", []
-
-    chunk = list(files[start : start + max_files])
-    sub_patch = {"files": chunk}
-    dataset = format_patch_dataset(sub_patch, filter_pattern=filter_pattern)
-
-    # Apply filter pattern to chunk for downstream validation
-    filtered_chunk: List[Mapping[str, Any]]
-    if filter_pattern:
-        try:
-            pattern_re = re.compile(filter_pattern)
-            filtered_chunk = [
-                entry
-                for entry in chunk
-                if isinstance(entry.get("path"), str) and pattern_re.search(entry["path"])
-            ]
-        except re.error:
-            LOGGER.warning("Invalid filter pattern '%s', processing chunk without filter", filter_pattern)
-            filtered_chunk = chunk
-    else:
-        filtered_chunk = chunk
-
-    return dataset, filtered_chunk
 
 
 def validate_review_response(
     response: Dict[str, Any],
     *,
     added_lines: Dict[str, Dict[int, str]],
+    removed_lines: Optional[Dict[str, Dict[int, str]]] = None,
     parsed_files: Set[str],
 ) -> Dict[str, Any]:
     """Ensure reviewer output references actual lines from the parsed patch."""
@@ -350,7 +420,6 @@ def validate_review_response(
     if not isinstance(summary, Mapping):
         raise click.ClickException("Reviewer output has invalid 'summary' payload.")
 
-    files_with_additions = set(added_lines.keys())
     invalid_entries: List[str] = []
     for entry in violations:
         if not isinstance(entry, Mapping):
@@ -359,9 +428,23 @@ def validate_review_response(
         file_path = entry.get("file")
         line_number = entry.get("line")
         snippet = entry.get("code_snippet")
+        change_type = entry.get("change_type", "added")
 
         if not isinstance(file_path, str) or not isinstance(line_number, int):
             invalid_entries.append(str(entry))
+            continue
+
+        if change_type == "removed":
+            removed_for_file = (removed_lines or {}).get(file_path)
+            if removed_for_file is None:
+                invalid_entries.append(f"{file_path}:{line_number} (removed line not in patch)")
+                continue
+            actual_line = removed_for_file.get(line_number)
+            if actual_line is None:
+                invalid_entries.append(f"{file_path}:{line_number} (line not removed)")
+                continue
+            if isinstance(snippet, str) and snippet.strip() != actual_line.strip():
+                invalid_entries.append(f"{file_path}:{line_number} (content mismatch)")
             continue
 
         added_for_file = added_lines.get(file_path)
@@ -416,7 +499,15 @@ def validate_review_response(
     }
 
 
-def _build_review_prompt(patch_rel: Path, patch_dataset: str) -> str:
+def _build_review_prompt(
+    patch_rel: Path,
+    patch_dataset: str,
+    *,
+    context_section: Optional[str] = None,
+) -> str:
+    context_block = ""
+    if context_section:
+        context_block = f"\nAdditional Context:\n{context_section}\n"
     return f"""Review the patch file {patch_rel} against the coding rule provided below.
 
 Follow this workflow:
@@ -435,6 +526,7 @@ Follow this workflow:
 
 4. Output the results in the required JSON format with all violations found.
 
+{context_block}
 Patch Dataset:
 {patch_dataset}
 """
@@ -486,14 +578,35 @@ def run_review(
         filter_pattern = extract_applies_to_pattern(rule_content)
 
         parsed_patch = parse_patch_file(patch_path)
-        all_files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
+        original_files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
+
+        expanded_files = _split_large_file_entries(
+            original_files,
+            max_hunks_per_group=getattr(settings, "review_max_hunks_per_chunk", 8),
+            max_lines_per_group=getattr(settings, "review_max_lines_per_chunk", 320),
+        )
+
         max_files_per_chunk = getattr(settings, "review_max_files_per_chunk", 10)
         if max_files_per_chunk <= 0:
-            max_files_per_chunk = len(all_files) or 1
+            max_files_per_chunk = len(expanded_files) or 1
 
-        chunks = _chunk_patch_files(all_files, max_files_per_chunk)
+        max_lines_per_chunk = getattr(settings, "review_max_lines_per_chunk", 320)
+
+        chunks = _chunk_patch_files(
+            expanded_files,
+            max_files_per_chunk=max_files_per_chunk,
+            max_lines_per_chunk=max_lines_per_chunk,
+        )
         total_chunks = max(1, len(chunks))
         use_chunking = len(chunks) > 1
+
+        context_orchestrator = ContextOrchestrator(
+            [SourceContextProvider(
+                pad_lines=getattr(settings, "review_context_pad_lines", 20),
+                max_lines_per_item=getattr(settings, "review_context_max_lines", 160),
+            )],
+            max_total_lines=getattr(settings, "review_context_max_total_lines", 320),
+        )
 
         def build_fallback_summary(
             file_count: int,
@@ -559,13 +672,22 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
                 return {"violations": [], "summary": summary}, set()
 
             subset_patch = {"files": chunk_files}
-            added_lines, parsed_files = collect_patch_review_data(subset_patch)
+            added_lines, removed_lines, parsed_files = collect_patch_review_data(subset_patch)
 
             chunk_header = ""
             if chunk_index is not None and total_expected_chunks and total_expected_chunks > 1:
                 chunk_header = f"(Chunk {chunk_index + 1} of {total_expected_chunks})\n\n"
 
-            prompt = _build_review_prompt(patch_rel, f"{chunk_header}{dataset_text}")
+            context_section = context_orchestrator.build_section(
+                settings.workspace_root,
+                chunk_files,
+            )
+
+            prompt = _build_review_prompt(
+                patch_rel,
+                f"{chunk_header}{dataset_text}",
+                context_section=context_section or None,
+            )
 
             previous_session = ctx.obj.get("_session_id")
             ctx.obj["_session_id"] = f"review-{uuid4()}"
@@ -608,6 +730,7 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
                 validated = validate_review_response(
                     final_json,
                     added_lines=added_lines,
+                    removed_lines=removed_lines,
                     parsed_files=parsed_files,
                 )
             except click.ClickException as exc:
@@ -627,26 +750,38 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
 
         datasets: List[Tuple[str, List[Mapping[str, Any]], Optional[int]]] = []
 
-        if use_chunking:
-            for idx in range(total_chunks):
-                dataset_text, chunk_subset = format_patch_dataset_chunked(
-                    parsed_patch,
-                    chunk_index=idx,
-                    max_files=max_files_per_chunk,
-                    filter_pattern=filter_pattern,
+        compiled_pattern: Optional[re.Pattern[str]] = None
+        if filter_pattern:
+            try:
+                compiled_pattern = re.compile(filter_pattern)
+            except re.error:
+                LOGGER.warning("Invalid filter pattern '%s', processing without filter", filter_pattern)
+                filter_pattern = None
+                compiled_pattern = None
+
+        for idx, chunk in enumerate(chunks):
+            sub_patch = {"files": chunk}
+            dataset_text = format_patch_dataset(sub_patch, filter_pattern=filter_pattern)
+
+            if compiled_pattern:
+                filtered_chunk = [
+                    entry
+                    for entry in chunk
+                    if isinstance(entry.get("path"), str) and compiled_pattern.search(entry["path"])
+                ]
+            else:
+                filtered_chunk = list(chunk)
+
+            if not filtered_chunk:
+                continue
+
+            datasets.append(
+                (
+                    dataset_text,
+                    filtered_chunk,
+                    idx if use_chunking else None,
                 )
-                if not chunk_subset:
-                    continue
-                datasets.append((dataset_text, chunk_subset, idx))
-        else:
-            dataset_text, chunk_subset = format_patch_dataset_chunked(
-                parsed_patch,
-                chunk_index=0,
-                max_files=len(all_files) or 1,
-                filter_pattern=filter_pattern,
             )
-            if chunk_subset:
-                datasets.append((dataset_text, chunk_subset, None))
 
         if not datasets:
             reset_session(original_session_id)

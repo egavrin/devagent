@@ -227,7 +227,23 @@ def review(
         if json_output:
             click.echo(json.dumps(validated, indent=2))
         else:
-            click.echo(json.dumps(validated, indent=2))
+            summary = validated.get("summary", {})
+            files_reviewed = summary.get("files_reviewed", 0)
+            total_violations = summary.get("total_violations", 0)
+            click.echo(f"Files reviewed: {files_reviewed}")
+            click.echo(f"Violations: {total_violations}")
+
+            violations = validated.get("violations") or []
+            if violations:
+                click.echo("")
+                click.echo("Findings:")
+                for violation in violations:
+                    severity = violation.get("severity", "warning")
+                    location = f"{violation.get('file')}:{violation.get('line')}"
+                    message = violation.get("message", "")
+                    click.echo(f"- [{severity.upper()}] {location} - {message}")
+            else:
+                click.echo("No violations reported.")
     else:
         # General code quality review
         from ai_dev_agent.agents.specialized import ReviewAgent

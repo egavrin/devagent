@@ -3,6 +3,7 @@ import importlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from pathlib import Path
+from typing import List
 import pytest
 import click
 from click.testing import CliRunner
@@ -133,6 +134,25 @@ All Python files must have proper comments.
             "--rule", sample_rule
         ])
         assert result.exit_code == 0
+
+    def test_review_patch_outputs_text_without_json(self, runner, sample_patch, sample_rule, monkeypatch):
+        """Human-readable summary should be printed when --json is omitted."""
+        def fake_run_review(*_args, **_kwargs):
+            return {
+                "summary": {"files_reviewed": 1, "total_violations": 0, "rule_name": "TestRule"},
+                "violations": [],
+            }
+
+        monkeypatch.setattr(review_module, "run_review", fake_run_review)
+
+        result = runner.invoke(cli, [
+            "review", sample_patch,
+            "--rule", sample_rule
+        ])
+
+        assert result.exit_code == 0
+        assert "Files reviewed" in result.output
+        assert "{\n" not in result.output  # no raw JSON block
 
     def test_review_patch_with_rule_and_json(self, runner, sample_patch, sample_rule):
         """review patch should output JSON with --json flag."""
@@ -363,6 +383,120 @@ Ensure functions return something.
         assert "CONTEXT:" in dataset
         assert "REMOVED LINES:" in dataset
         assert "2 -     return 1" in dataset
+
+    def test_run_review_splits_large_file_chunks(self, monkeypatch, tmp_path):
+        """Large patches should be split into multiple review calls."""
+        patch_path = tmp_path / "massive.patch"
+        patch_lines = [
+            "diff --git a/huge.py b/huge.py",
+            "--- a/huge.py",
+            "+++ b/huge.py",
+        ]
+        for idx in range(1, 61):
+            patch_lines.append(f"@@ -{idx},0 +{idx},1 @@")
+            patch_lines.append(f"+print('line {idx}')")
+        patch_path.write_text("\n".join(patch_lines) + "\n")
+
+        rule_path = tmp_path / "rule.md"
+        rule_path.write_text("# Rule\n\n## Applies To\n*.py\n")
+
+        settings = Settings(
+            api_key="test-key",
+            workspace_root=tmp_path,
+            max_tool_output_chars=4096,
+            max_context_tokens=4096,
+            response_headroom_tokens=512,
+        )
+        setattr(settings, "review_max_lines_per_chunk", 10)
+
+        ctx = click.Context(click.Command("review"), obj={"settings": settings})
+
+        def fake_import_module(name: str):
+            return SimpleNamespace(get_llm_client=lambda _: object())
+
+        calls: List[str] = []
+
+        def fake_execute(_ctx, _client, _settings, prompt, **_kwargs):
+            calls.append(prompt)
+            return {
+                "result": {"status": "ok"},
+                "final_json": {"violations": [], "summary": {"files_reviewed": 1}},
+            }
+
+        monkeypatch.setattr(review_module, "import_module", fake_import_module)
+        monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
+        monkeypatch.setattr(review_module, "_record_invocation", lambda *args, **kwargs: None)
+
+        run_review(
+            ctx,
+            patch_file=str(patch_path),
+            rule_file=str(rule_path),
+            json_output=True,
+            settings=settings,
+        )
+
+        assert len(calls) > 1, "Expected large patch to be reviewed in multiple chunks"
+
+    def test_run_review_includes_source_context(self, monkeypatch, tmp_path):
+        """Review prompt should include surrounding source context."""
+        source_path = tmp_path / "module.py"
+        source_path.write_text(
+            "def existing():\n    return 1\n\n\ndef target():\n    value = 2\n    return value\n"
+        )
+
+        patch_path = tmp_path / "change.patch"
+        patch_path.write_text(
+            """diff --git a/module.py b/module.py
+--- a/module.py
++++ b/module.py
+@@ -4,2 +4,2 @@
+ def target():
+-    value = 2
++    value = compute()
+     return value
+"""
+        )
+        rule_path = tmp_path / "rule.md"
+        rule_path.write_text("# Rule\n\n## Applies To\n*.py\n")
+
+        settings = Settings(
+            api_key="test-key",
+            workspace_root=tmp_path,
+            max_tool_output_chars=4096,
+            max_context_tokens=4096,
+            response_headroom_tokens=512,
+        )
+
+        ctx = click.Context(click.Command("review"), obj={"settings": settings})
+
+        def fake_import_module(name: str):
+            return SimpleNamespace(get_llm_client=lambda _: object())
+
+        captured_prompts: List[str] = []
+
+        def fake_execute(_ctx, _client, _settings, prompt, **_kwargs):
+            captured_prompts.append(prompt)
+            return {
+                "result": {"status": "ok"},
+                "final_json": {"violations": [], "summary": {"files_reviewed": 1}},
+            }
+
+        monkeypatch.setattr(review_module, "import_module", fake_import_module)
+        monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
+        monkeypatch.setattr(review_module, "_record_invocation", lambda *args, **kwargs: None)
+
+        run_review(
+            ctx,
+            patch_file=str(patch_path),
+            rule_file=str(rule_path),
+            json_output=True,
+            settings=settings,
+        )
+
+        assert captured_prompts, "Review execution did not capture any prompts"
+        combined_prompt = "\n".join(captured_prompts)
+        assert "Context:" in combined_prompt
+        assert "def target()" in combined_prompt
 
     def test_extract_applies_to_pattern_normalizes_globs(self, tmp_path):
         """Glob patterns should be converted to regex and filter datasets."""

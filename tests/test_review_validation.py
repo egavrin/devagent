@@ -79,10 +79,38 @@ def test_validate_review_response_rejects_wrong_line_numbers() -> None:
 
     with pytest.raises(click.ClickException):
         validate_review_response(
-            response,
-            added_lines=added_lines,
-            parsed_files=parsed_files,
-        )
+        response,
+        added_lines=added_lines,
+        parsed_files=parsed_files,
+    )
+
+def test_validate_review_response_allows_removed_line_reference() -> None:
+    response = {
+        "violations": [
+            {
+                "file": "src/new_file.ts",
+                "line": 20,
+                "change_type": "removed",
+                "message": "Removed validation call",
+                "code_snippet": "validate(input);",
+            }
+        ],
+        "summary": {"total_violations": 1},
+    }
+
+    added_lines = {"src/new_file.ts": {10: "export const Foo = 1;"}}
+    removed_lines = {"src/new_file.ts": {20: "validate(input);"}}
+    parsed_files = {"src/new_file.ts"}
+
+    normalized = validate_review_response(
+        response,
+        added_lines=added_lines,
+        removed_lines=removed_lines,
+        parsed_files=parsed_files,
+    )
+
+    assert normalized["summary"]["total_violations"] == 1
+    assert normalized["violations"][0]["change_type"] == "removed"
 
 
 def test_validate_review_response_allows_matching_violation() -> None:

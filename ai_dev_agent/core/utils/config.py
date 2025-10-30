@@ -153,6 +153,13 @@ class Settings:
     instruction_auto_apply_threshold: float = 0.8  # Auto-apply if confidence > threshold
     instruction_proposal_min_queries: int = 10  # Minimum queries before proposing
     instruction_max_auto_apply_per_cycle: int = 3  # Max auto-applied per analysis
+    # Review settings
+    review_max_files_per_chunk: int = 10
+    review_max_hunks_per_chunk: int = 8
+    review_max_lines_per_chunk: int = 320
+    review_context_pad_lines: int = 20
+    review_context_max_lines: int = 160
+    review_context_max_total_lines: int = 320
 
     def ensure_state_dir(self) -> None:
         """Ensure the directory for the state file exists."""
