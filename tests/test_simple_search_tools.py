@@ -1,4 +1,5 @@
 """Unit tests for simplified search tools."""
+
 from __future__ import annotations
 
 import os
@@ -12,8 +13,8 @@ import pytest
 
 from ai_dev_agent.tools.find import find as find_tool
 from ai_dev_agent.tools.grep import grep as grep_tool
-from ai_dev_agent.tools.symbols import symbols as symbols_tool
 from ai_dev_agent.tools.registry import ToolContext
+from ai_dev_agent.tools.symbols import symbols as symbols_tool
 
 
 def _make_context(root: Path) -> ToolContext:
@@ -115,7 +116,9 @@ def test_grep_returns_error_on_failure(tmp_path: Path) -> None:
     assert result["error"] == "bad pattern"
 
 
-def test_symbols_reads_existing_tags_and_prioritizes_exact_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_symbols_reads_existing_tags_and_prioritizes_exact_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_root = tmp_path
     module_path = repo_root / "pkg" / "mod.py"
     module_path.parent.mkdir()
@@ -125,8 +128,8 @@ def test_symbols_reads_existing_tags_and_prioritizes_exact_match(tmp_path: Path,
     tags_content = "\n".join(
         [
             "!_TAG_FILE_FORMAT\t2\t/extended format/",
-            f"target\t{module_path}\t/^def target():$/;\"\tkind:function\tline:1",
-            f"target_helper\t{module_path}\t/^def target_helper():$/;\"\tkind:function\tline:5",
+            f'target\t{module_path}\t/^def target():$/;"\tkind:function\tline:1',
+            f'target_helper\t{module_path}\t/^def target_helper():$/;"\tkind:function\tline:5',
         ]
     )
     tags_file.write_text(tags_content + "\n", encoding="utf-8")
@@ -135,7 +138,9 @@ def test_symbols_reads_existing_tags_and_prioritizes_exact_match(tmp_path: Path,
     os.utime(tags_file, (now, now))
 
     completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-    monkeypatch.setattr("ai_dev_agent.tools.symbols.subprocess.run", lambda *args, **kwargs: completed)
+    monkeypatch.setattr(
+        "ai_dev_agent.tools.symbols.subprocess.run", lambda *args, **kwargs: completed
+    )
     monkeypatch.setattr("ai_dev_agent.tools.symbols.time.time", lambda: now)
 
     context = _make_context(repo_root)
@@ -147,7 +152,9 @@ def test_symbols_reads_existing_tags_and_prioritizes_exact_match(tmp_path: Path,
     assert symbols[0]["line"] == 1
 
 
-def test_symbols_returns_error_when_ctags_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_symbols_returns_error_when_ctags_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def _raise(*args: Any, **kwargs: Any) -> Any:
         raise FileNotFoundError("missing")
 

@@ -1,14 +1,14 @@
 """Review Agent for code quality, security, and performance analysis."""
+
 from __future__ import annotations
 
 import os
 import re
-import ast
-from pathlib import Path
-from typing import Dict, List, Any, Optional
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-from ..base import BaseAgent, AgentContext, AgentResult, AgentCapability
+from ..base import AgentCapability, AgentContext, AgentResult, BaseAgent
 
 
 class ReviewAgent(BaseAgent):
@@ -23,14 +23,14 @@ class ReviewAgent(BaseAgent):
                 "code_quality",
                 "security_analysis",
                 "performance_review",
-                "best_practices"
+                "best_practices",
             ],
             tools=["read", "grep", "find", "symbols"],  # No write or run!
             max_iterations=30,
             permissions={
                 "write": "deny",  # Explicitly deny write
-                "run": "deny"     # Explicitly deny execution
-            }
+                "run": "deny",  # Explicitly deny execution
+            },
         )
 
         # Register capabilities
@@ -43,36 +43,32 @@ class ReviewAgent(BaseAgent):
                 name="code_quality",
                 description="Analyze code quality and style",
                 required_tools=["read"],
-                optional_tools=["grep"]
+                optional_tools=["grep"],
             ),
             AgentCapability(
                 name="security_analysis",
                 description="Check for security vulnerabilities",
                 required_tools=["read"],
-                optional_tools=["grep", "symbols"]
+                optional_tools=["grep", "symbols"],
             ),
             AgentCapability(
                 name="performance_review",
                 description="Review performance and complexity",
                 required_tools=["read"],
-                optional_tools=["symbols"]
+                optional_tools=["symbols"],
             ),
             AgentCapability(
                 name="best_practices",
                 description="Check adherence to best practices",
                 required_tools=["read"],
-                optional_tools=["grep"]
-            )
+                optional_tools=["grep"],
+            ),
         ]
 
         for capability in capabilities:
             self.register_capability(capability)
 
-    def analyze_code_quality(
-        self,
-        code: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def analyze_code_quality(self, code: str, context: AgentContext) -> dict[str, Any]:
         """
         Analyze code quality.
 
@@ -87,54 +83,44 @@ class ReviewAgent(BaseAgent):
         score = 1.0
 
         # Check for common quality issues
-        lines = code.split('\n')
+        lines = code.split("\n")
 
         # Long lines
         for i, line in enumerate(lines):
             if len(line) > 100:
-                issues.append({
-                    "line": i + 1,
-                    "severity": "low",
-                    "message": f"Line too long ({len(line)} characters)"
-                })
+                issues.append(
+                    {
+                        "line": i + 1,
+                        "severity": "low",
+                        "message": f"Line too long ({len(line)} characters)",
+                    }
+                )
                 score -= 0.05
 
         # Single-letter variable names (except common ones)
-        single_letter_pattern = r'\b([a-z])\s*='
+        single_letter_pattern = r"\b([a-z])\s*="
         matches = re.finditer(single_letter_pattern, code)
-        common_single_letters = {'i', 'j', 'k', 'x', 'y', 'z'}
+        common_single_letters = {"i", "j", "k", "x", "y", "z"}
 
         for match in matches:
             var_name = match.group(1)
             if var_name not in common_single_letters:
-                issues.append({
-                    "severity": "medium",
-                    "message": f"Single-letter variable name: {var_name}"
-                })
+                issues.append(
+                    {"severity": "medium", "message": f"Single-letter variable name: {var_name}"}
+                )
                 score -= 0.1
 
         # Missing docstrings
-        if 'def ' in code and '"""' not in code and "'''" not in code:
-            issues.append({
-                "severity": "medium",
-                "message": "Functions missing docstrings"
-            })
+        if "def " in code and '"""' not in code and "'''" not in code:
+            issues.append({"severity": "medium", "message": "Functions missing docstrings"})
             score -= 0.1
 
         # Ensure score is between 0 and 1
         score = max(0.0, min(1.0, score))
 
-        return {
-            "issues": issues,
-            "score": score,
-            "total_issues": len(issues)
-        }
+        return {"issues": issues, "score": score, "total_issues": len(issues)}
 
-    def check_security_vulnerabilities(
-        self,
-        code: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def check_security_vulnerabilities(self, code: str, context: AgentContext) -> dict[str, Any]:
         """
         Check for security vulnerabilities.
 
@@ -150,22 +136,30 @@ class ReviewAgent(BaseAgent):
 
         # Check for dangerous patterns
         dangerous_patterns = {
-            r'eval\(': {"severity": "critical", "message": "Use of eval() is dangerous"},
-            r'exec\(': {"severity": "critical", "message": "Use of exec() is dangerous"},
-            r'os\.system\(': {"severity": "high", "message": "Command injection risk with os.system()"},
-            r'subprocess\..*shell=True': {"severity": "high", "message": "Shell injection risk"},
-            r'pickle\.loads?\(': {"severity": "medium", "message": "Pickle deserialization can be unsafe"},
-            r'input\(.*\).*eval': {"severity": "critical", "message": "eval() on user input"},
-            r'__import__\(': {"severity": "medium", "message": "Dynamic imports can be risky"},
+            r"eval\(": {"severity": "critical", "message": "Use of eval() is dangerous"},
+            r"exec\(": {"severity": "critical", "message": "Use of exec() is dangerous"},
+            r"os\.system\(": {
+                "severity": "high",
+                "message": "Command injection risk with os.system()",
+            },
+            r"subprocess\..*shell=True": {"severity": "high", "message": "Shell injection risk"},
+            r"pickle\.loads?\(": {
+                "severity": "medium",
+                "message": "Pickle deserialization can be unsafe",
+            },
+            r"input\(.*\).*eval": {"severity": "critical", "message": "eval() on user input"},
+            r"__import__\(": {"severity": "medium", "message": "Dynamic imports can be risky"},
         }
 
         for pattern, vuln_info in dangerous_patterns.items():
             if re.search(pattern, code):
-                vulnerabilities.append({
-                    "pattern": pattern,
-                    "severity": vuln_info["severity"],
-                    "message": vuln_info["message"]
-                })
+                vulnerabilities.append(
+                    {
+                        "pattern": pattern,
+                        "severity": vuln_info["severity"],
+                        "message": vuln_info["message"],
+                    }
+                )
 
                 # Update overall severity
                 severity_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
@@ -175,14 +169,10 @@ class ReviewAgent(BaseAgent):
         return {
             "vulnerabilities": vulnerabilities,
             "severity": severity,
-            "total_vulnerabilities": len(vulnerabilities)
+            "total_vulnerabilities": len(vulnerabilities),
         }
 
-    def review_performance(
-        self,
-        code: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def review_performance(self, code: str, context: AgentContext) -> dict[str, Any]:
         """
         Review code for performance issues.
 
@@ -197,39 +187,37 @@ class ReviewAgent(BaseAgent):
         complexity = "low"
 
         # Check for nested loops (O(n^2) or worse)
-        nested_loop_pattern = r'for\s+\w+.*:\s*\n\s+for\s+\w+'
+        nested_loop_pattern = r"for\s+\w+.*:\s*\n\s+for\s+\w+"
         if re.search(nested_loop_pattern, code, re.MULTILINE):
-            issues.append({
-                "severity": "medium",
-                "message": "Nested loops detected - O(n^2) complexity or worse"
-            })
+            issues.append(
+                {
+                    "severity": "medium",
+                    "message": "Nested loops detected - O(n^2) complexity or worse",
+                }
+            )
             complexity = "high"
 
         # Check for inefficient string concatenation in loops
         if re.search(r'for\s+.*:\s*\n\s+.*\+=\s*["\']', code):
-            issues.append({
-                "severity": "low",
-                "message": "String concatenation in loop - consider using join()"
-            })
+            issues.append(
+                {
+                    "severity": "low",
+                    "message": "String concatenation in loop - consider using join()",
+                }
+            )
 
         # Check for global variables
-        if re.search(r'^global\s+\w+', code, re.MULTILINE):
-            issues.append({
-                "severity": "low",
-                "message": "Global variables can impact performance and maintainability"
-            })
+        if re.search(r"^global\s+\w+", code, re.MULTILINE):
+            issues.append(
+                {
+                    "severity": "low",
+                    "message": "Global variables can impact performance and maintainability",
+                }
+            )
 
-        return {
-            "issues": issues,
-            "complexity": complexity,
-            "total_issues": len(issues)
-        }
+        return {"issues": issues, "complexity": complexity, "total_issues": len(issues)}
 
-    def check_best_practices(
-        self,
-        code: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def check_best_practices(self, code: str, context: AgentContext) -> dict[str, Any]:
         """
         Check adherence to best practices.
 
@@ -243,66 +231,59 @@ class ReviewAgent(BaseAgent):
         violations = []
 
         # Check function naming (should be snake_case and descriptive)
-        func_pattern = r'def\s+([A-Z]\w+)\('
+        func_pattern = r"def\s+([A-Z]\w+)\("
         camel_case_funcs = re.findall(func_pattern, code)
         for func in camel_case_funcs:
-            violations.append({
-                "severity": "low",
-                "message": f"Function '{func}' should use snake_case naming"
-            })
+            violations.append(
+                {"severity": "low", "message": f"Function '{func}' should use snake_case naming"}
+            )
 
         # Check for single-letter function names
-        single_letter_func_pattern = r'def\s+([a-z])\('
+        single_letter_func_pattern = r"def\s+([a-z])\("
         single_letter_funcs = re.findall(single_letter_func_pattern, code)
         for func in single_letter_funcs:
-            violations.append({
-                "severity": "medium",
-                "message": f"Function name '{func}' is too short - use descriptive names"
-            })
+            violations.append(
+                {
+                    "severity": "medium",
+                    "message": f"Function name '{func}' is too short - use descriptive names",
+                }
+            )
 
         # Check class naming (should be PascalCase)
-        class_pattern = r'class\s+([a-z]\w+)'
+        class_pattern = r"class\s+([a-z]\w+)"
         lowercase_classes = re.findall(class_pattern, code)
         for cls in lowercase_classes:
-            violations.append({
-                "severity": "low",
-                "message": f"Class '{cls}' should use PascalCase naming"
-            })
+            violations.append(
+                {"severity": "low", "message": f"Class '{cls}' should use PascalCase naming"}
+            )
 
         # Check for single-letter class names
-        single_letter_class_pattern = r'class\s+([a-z])\s*:'
+        single_letter_class_pattern = r"class\s+([a-z])\s*:"
         single_letter_classes = re.findall(single_letter_class_pattern, code)
         for cls in single_letter_classes:
-            violations.append({
-                "severity": "medium",
-                "message": f"Class name '{cls}' is too short - use descriptive names"
-            })
+            violations.append(
+                {
+                    "severity": "medium",
+                    "message": f"Class name '{cls}' is too short - use descriptive names",
+                }
+            )
 
         # Check for bare except clauses
-        if re.search(r'except\s*:', code):
-            violations.append({
-                "severity": "medium",
-                "message": "Bare except clause - specify exception types"
-            })
+        if re.search(r"except\s*:", code):
+            violations.append(
+                {"severity": "medium", "message": "Bare except clause - specify exception types"}
+            )
 
         # Check for mutable default arguments
-        mutable_default_pattern = r'def\s+\w+\([^)]*=\s*(\[\]|\{\})'
+        mutable_default_pattern = r"def\s+\w+\([^)]*=\s*(\[\]|\{\})"
         if re.search(mutable_default_pattern, code):
-            violations.append({
-                "severity": "high",
-                "message": "Mutable default argument - use None instead"
-            })
+            violations.append(
+                {"severity": "high", "message": "Mutable default argument - use None instead"}
+            )
 
-        return {
-            "violations": violations,
-            "total_violations": len(violations)
-        }
+        return {"violations": violations, "total_violations": len(violations)}
 
-    def review_file(
-        self,
-        file_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def review_file(self, file_path: str, context: AgentContext) -> dict[str, Any]:
         """
         Review a complete file.
 
@@ -314,7 +295,9 @@ class ReviewAgent(BaseAgent):
             Complete file review
         """
         try:
-            with open(file_path, 'r') as f:
+            file_path = Path(file_path)
+
+            with file_path.open() as f:
                 code = f.read()
 
             # Run all checks
@@ -324,10 +307,10 @@ class ReviewAgent(BaseAgent):
             practices = self.check_best_practices(code, context)
 
             total_issues = (
-                quality["total_issues"] +
-                security["total_vulnerabilities"] +
-                performance["total_issues"] +
-                practices["total_violations"]
+                quality["total_issues"]
+                + security["total_vulnerabilities"]
+                + performance["total_issues"]
+                + practices["total_violations"]
             )
 
             return {
@@ -338,21 +321,15 @@ class ReviewAgent(BaseAgent):
                 "quality": quality,
                 "security": security,
                 "performance": performance,
-                "best_practices": practices
+                "best_practices": practices,
             }
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def generate_review_report(
-        self,
-        review_data: Dict[str, Any],
-        output_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, review_data: dict[str, Any], output_path: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Generate a review report.
 
@@ -373,45 +350,37 @@ class ReviewAgent(BaseAgent):
                 f"- **Files Reviewed**: {len(review_data.get('files_reviewed', []))}",
                 f"- **Total Issues**: {review_data.get('total_issues', 0)}",
                 f"- **Critical Issues**: {review_data.get('critical_issues', 0)}",
-                "\n## Issues by File\n"
+                "\n## Issues by File\n",
             ]
 
             # Add issues
-            for issue in review_data.get('issues', []):
-                file_name = issue.get('file', 'unknown')
-                line = issue.get('line', 0)
-                severity = issue.get('severity', 'low').upper()
-                message = issue.get('message', 'No message')
+            for issue in review_data.get("issues", []):
+                file_name = issue.get("file", "unknown")
+                line = issue.get("line", 0)
+                severity = issue.get("severity", "low").upper()
+                message = issue.get("message", "No message")
 
                 lines.append(f"### {file_name}:{line} - [{severity}]")
                 lines.append(f"{message}\n")
 
             # Add quality scores
             lines.append("\n## Quality Scores\n")
-            for file_name, score in review_data.get('quality_scores', {}).items():
+            for file_name, score in review_data.get("quality_scores", {}).items():
                 lines.append(f"- **{file_name}**: {score:.2f}/1.00")
 
             # Write report
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, 'w') as f:
-                f.write('\n'.join(lines))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            output_path = Path(output_path)
 
-            return {
-                "success": True,
-                "path": output_path
-            }
+            with output_path.open("w") as f:
+                f.write("\n".join(lines))
+
+            return {"success": True, "path": output_path}
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
-    def check_complexity(
-        self,
-        code: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def check_complexity(self, code: str, context: AgentContext) -> dict[str, Any]:
         """
         Check code complexity.
 
@@ -426,11 +395,11 @@ class ReviewAgent(BaseAgent):
         complexity = 1  # Base complexity
 
         # Count decision points
-        decision_keywords = ['if', 'elif', 'else', 'for', 'while', 'and', 'or', 'except']
+        decision_keywords = ["if", "elif", "else", "for", "while", "and", "or", "except"]
 
         for keyword in decision_keywords:
             # Count occurrences
-            pattern = r'\b' + keyword + r'\b'
+            pattern = r"\b" + keyword + r"\b"
             count = len(re.findall(pattern, code))
             complexity += count
 
@@ -445,15 +414,12 @@ class ReviewAgent(BaseAgent):
         return {
             "cyclomatic_complexity": complexity,
             "complexity_score": complexity_score,
-            "rating": "low" if complexity <= 10 else ("medium" if complexity <= 20 else "high")
+            "rating": "low" if complexity <= 10 else ("medium" if complexity <= 20 else "high"),
         }
 
     def review_with_rules(
-        self,
-        code: str,
-        rules: List[Dict[str, Any]],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, code: str, rules: list[dict[str, Any]], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Review code against custom rules.
 
@@ -473,22 +439,13 @@ class ReviewAgent(BaseAgent):
             name = rule.get("name", "unknown")
 
             if re.search(pattern, code):
-                violations.append({
-                    "rule": name,
-                    "message": message,
-                    "severity": rule.get("severity", "medium")
-                })
+                violations.append(
+                    {"rule": name, "message": message, "severity": rule.get("severity", "medium")}
+                )
 
-        return {
-            "violations": violations,
-            "total_violations": len(violations)
-        }
+        return {"violations": violations, "total_violations": len(violations)}
 
-    def suggest_improvements(
-        self,
-        code: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def suggest_improvements(self, code: str, context: AgentContext) -> dict[str, Any]:
         """
         Suggest code improvements.
 
@@ -502,40 +459,42 @@ class ReviewAgent(BaseAgent):
         suggestions = []
 
         # Suggest list comprehensions (multiple appends to same list)
-        if re.search(r'\.append\(.*\).*\n.*\.append\(', code, re.MULTILINE):
-            suggestions.append({
-                "type": "optimization",
-                "message": "Consider using list comprehension instead of multiple append calls"
-            })
-        elif re.search(r'for\s+\w+\s+in\s+.*:', code) and '.append(' in code:
-            suggestions.append({
-                "type": "optimization",
-                "message": "Consider using list comprehension instead of append in loop"
-            })
+        if re.search(r"\.append\(.*\).*\n.*\.append\(", code, re.MULTILINE):
+            suggestions.append(
+                {
+                    "type": "optimization",
+                    "message": "Consider using list comprehension instead of multiple append calls",
+                }
+            )
+        elif re.search(r"for\s+\w+\s+in\s+.*:", code) and ".append(" in code:
+            suggestions.append(
+                {
+                    "type": "optimization",
+                    "message": "Consider using list comprehension instead of append in loop",
+                }
+            )
 
         # Suggest context managers
-        if 'open(' in code and 'close()' in code:
-            suggestions.append({
-                "type": "best_practice",
-                "message": "Use context manager (with statement) for file handling"
-            })
+        if "open(" in code and "close()" in code:
+            suggestions.append(
+                {
+                    "type": "best_practice",
+                    "message": "Use context manager (with statement) for file handling",
+                }
+            )
 
         # Suggest f-strings over format
-        if '.format(' in code or '%s' in code:
-            suggestions.append({
-                "type": "modernization",
-                "message": "Consider using f-strings for string formatting"
-            })
+        if ".format(" in code or "%s" in code:
+            suggestions.append(
+                {
+                    "type": "modernization",
+                    "message": "Consider using f-strings for string formatting",
+                }
+            )
 
-        return {
-            "suggestions": suggestions,
-            "total_suggestions": len(suggestions)
-        }
+        return {"suggestions": suggestions, "total_suggestions": len(suggestions)}
 
-    def aggregate_scores(
-        self,
-        file_scores: Dict[str, float]
-    ) -> Dict[str, Any]:
+    def aggregate_scores(self, file_scores: dict[str, float]) -> dict[str, Any]:
         """
         Aggregate review scores across multiple files.
 
@@ -546,11 +505,7 @@ class ReviewAgent(BaseAgent):
             Aggregated statistics
         """
         if not file_scores:
-            return {
-                "average": 0.0,
-                "min": 0.0,
-                "max": 0.0
-            }
+            return {"average": 0.0, "min": 0.0, "max": 0.0}
 
         scores = list(file_scores.values())
 
@@ -558,7 +513,7 @@ class ReviewAgent(BaseAgent):
             "average": sum(scores) / len(scores),
             "min": min(scores),
             "max": max(scores),
-            "total_files": len(scores)
+            "total_files": len(scores),
         }
 
     def execute(self, prompt: str, context: AgentContext) -> AgentResult:
@@ -576,8 +531,4 @@ class ReviewAgent(BaseAgent):
         from .executor_bridge import execute_agent_with_react
 
         # Execute using ReAct workflow with LLM and real tools
-        return execute_agent_with_react(
-            agent=self,
-            prompt=prompt,
-            context=context
-        )
+        return execute_agent_with_react(agent=self, prompt=prompt, context=context)

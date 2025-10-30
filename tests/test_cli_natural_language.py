@@ -1,7 +1,10 @@
 """Tests for natural language query and auto-detection."""
+
 from unittest.mock import MagicMock
+
 import pytest
 from click.testing import CliRunner
+
 from ai_dev_agent.agents import AgentSpec
 from ai_dev_agent.cli.commands import cli
 

@@ -4,11 +4,12 @@ This intentionally supports a minimal subset of the example schema described by
 the user: build/test/lint/type/format/coverage commands and gate thresholds.
 If the YAML file is missing, callers should fall back to Settings.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     import yaml  # type: ignore
@@ -18,28 +19,28 @@ except Exception:  # pragma: no cover - optional dependency
 
 @dataclass
 class DevAgentConfig:
-    build_cmd: Optional[str] = None
-    test_cmd: Optional[str] = None
-    lint_cmd: Optional[str] = None
-    type_cmd: Optional[str] = None
-    format_cmd: Optional[str] = None
-    coverage_cmd: Optional[str] = None
-    threshold_diff: Optional[float] = None
-    threshold_project: Optional[float] = None
-    diff_limit_lines: Optional[int] = None
-    diff_limit_files: Optional[int] = None
+    build_cmd: str | None = None
+    test_cmd: str | None = None
+    lint_cmd: str | None = None
+    type_cmd: str | None = None
+    format_cmd: str | None = None
+    coverage_cmd: str | None = None
+    threshold_diff: float | None = None
+    threshold_project: float | None = None
+    diff_limit_lines: int | None = None
+    diff_limit_files: int | None = None
     sandbox_allowlist: tuple[str, ...] = ()
-    sandbox_time_limit: Optional[int] = None
-    sandbox_memory_limit: Optional[int] = None
-    ctags_cmd: Optional[Any] = None
-    ctags_db: Optional[str] = None
-    ctags_refresh_sec: Optional[int] = None
-    react_iteration_global_cap: Optional[int] = None
-    react_phase_overrides: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
-    budget_control: Dict[str, Any] = field(default_factory=dict)
+    sandbox_time_limit: int | None = None
+    sandbox_memory_limit: int | None = None
+    ctags_cmd: Any | None = None
+    ctags_db: str | None = None
+    ctags_refresh_sec: int | None = None
+    react_iteration_global_cap: int | None = None
+    react_phase_overrides: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    budget_control: dict[str, Any] = field(default_factory=dict)
 
 
-def load_devagent_yaml(path: Path | None = None) -> Optional[DevAgentConfig]:
+def load_devagent_yaml(path: Path | None = None) -> DevAgentConfig | None:
     """Load devagent.yaml into a DevAgentConfig or return None if unavailable."""
     candidate = path or (Path.cwd() / "devagent.yaml")
     if not candidate.is_file():
@@ -68,7 +69,7 @@ def load_devagent_yaml(path: Path | None = None) -> Optional[DevAgentConfig]:
     react_iteration = react.get("iteration") or {}
     budget_control_cfg = data.get("budget_control") or {}
 
-    def g(name: str, d: Dict[str, Any]) -> Optional[str]:
+    def g(name: str, d: dict[str, Any]) -> str | None:
         v = d.get("cmd")
         return str(v) if v else None
 
@@ -112,15 +113,15 @@ def load_devagent_yaml(path: Path | None = None) -> Optional[DevAgentConfig]:
 
     phases_cfg = react_iteration.get("phases")
     if isinstance(phases_cfg, dict):
-        parsed_overrides: Dict[str, List[Dict[str, Any]]] = {}
+        parsed_overrides: dict[str, list[dict[str, Any]]] = {}
         for task_name, overrides in phases_cfg.items():
             if not isinstance(overrides, list):
                 continue
-            normalized: List[Dict[str, Any]] = []
+            normalized: list[dict[str, Any]] = []
             for item in overrides:
                 if not isinstance(item, dict) or not item.get("name"):
                     continue
-                entry: Dict[str, Any] = {"name": str(item["name"])}
+                entry: dict[str, Any] = {"name": str(item["name"])}
                 for key in ("description", "max_iterations", "weight", "min_iterations"):
                     if key in item:
                         entry[key] = item[key]
@@ -136,14 +137,14 @@ def load_devagent_yaml(path: Path | None = None) -> Optional[DevAgentConfig]:
     return cfg
 
 
-def _as_int(v: Any) -> Optional[int]:
+def _as_int(v: Any) -> int | None:
     try:
         return int(v) if v is not None else None
     except Exception:
         return None
 
 
-def _as_float(v: Any) -> Optional[float]:
+def _as_float(v: Any) -> float | None:
     try:
         return float(v) if v is not None else None
     except Exception:

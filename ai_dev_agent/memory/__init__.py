@@ -7,15 +7,15 @@ This module implements a sophisticated memory system that:
 4. Tracks effectiveness and learns continuously
 """
 
-from .distiller import MemoryDistiller, Memory, Strategy, Lesson
-from .store import MemoryStore
+from .distiller import Lesson, Memory, MemoryDistiller, Strategy
 from .embeddings import EmbeddingGenerator
+from .store import MemoryStore
 
 __all__ = [
-    "MemoryDistiller",
-    "Memory",
-    "Strategy",
-    "Lesson",
-    "MemoryStore",
     "EmbeddingGenerator",
+    "Lesson",
+    "Memory",
+    "MemoryDistiller",
+    "MemoryStore",
+    "Strategy",
 ]

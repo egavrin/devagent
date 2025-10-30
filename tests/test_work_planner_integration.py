@@ -4,16 +4,15 @@ Integration test demonstrating Work Planning Agent functionality
 This test shows a complete workflow of using the Work Planning Agent.
 """
 
-import pytest
 import tempfile
 from pathlib import Path
+
 from ai_dev_agent.agents.work_planner import (
+    Priority,
     Task,
-    WorkPlan,
+    TaskStatus,
     WorkPlanningAgent,
     WorkPlanStorage,
-    TaskStatus,
-    Priority,
 )
 
 
@@ -37,7 +36,7 @@ def test_complete_work_planning_workflow():
             goal="Implement user authentication system",
             context={
                 "description": "Add JWT-based authentication with login, logout, and token refresh"
-            }
+            },
         )
 
         # The agent creates a basic plan with placeholder task
@@ -62,9 +61,9 @@ def test_complete_work_planning_workflow():
             acceptance_criteria=[
                 "User table with email, password_hash, created_at",
                 "Token table with token, user_id, expires_at",
-                "Session table for tracking active sessions"
+                "Session table for tracking active sessions",
             ],
-            tags=["database", "design"]
+            tags=["database", "design"],
         )
         plan.tasks.append(task1)
         print(f"✓ Added task 1: {task1.title}")
@@ -79,9 +78,9 @@ def test_complete_work_planning_workflow():
             acceptance_criteria=[
                 "User class with email, password properties",
                 "Password hashing using bcrypt",
-                "Email validation"
+                "Email validation",
             ],
-            tags=["backend", "model"]
+            tags=["backend", "model"],
         )
         plan.tasks.append(task2)
         print(f"✓ Added task 2: {task2.title} (depends on task 1)")
@@ -96,9 +95,9 @@ def test_complete_work_planning_workflow():
             acceptance_criteria=[
                 "Generate JWT tokens with user claims",
                 "Validate and decode tokens",
-                "Handle token expiration"
+                "Handle token expiration",
             ],
-            tags=["backend", "security"]
+            tags=["backend", "security"],
         )
         plan.tasks.append(task3)
         print(f"✓ Added task 3: {task3.title} (depends on task 2)")
@@ -113,9 +112,9 @@ def test_complete_work_planning_workflow():
             acceptance_criteria=[
                 "Accept email and password",
                 "Return JWT token on success",
-                "Return 401 on invalid credentials"
+                "Return 401 on invalid credentials",
             ],
-            tags=["backend", "api"]
+            tags=["backend", "api"],
         )
         plan.tasks.append(task4)
         print(f"✓ Added task 4: {task4.title} (depends on task 3)")
@@ -131,9 +130,9 @@ def test_complete_work_planning_workflow():
                 "Test successful login",
                 "Test invalid credentials",
                 "Test token validation",
-                "Achieve 90% coverage"
+                "Achieve 90% coverage",
             ],
-            tags=["testing"]
+            tags=["testing"],
         )
         plan.tasks.append(task5)
         print(f"✓ Added task 5: {task5.title} (depends on task 4)")
@@ -161,18 +160,18 @@ def test_complete_work_planning_workflow():
             print(f"\nIteration {iteration}: Next task is '{next_task.title}'")
             print(f"  Priority: {next_task.priority.value}")
             print(f"  Effort: {next_task.effort_estimate}")
-            print(f"  Dependencies met: ✓")
+            print("  Dependencies met: ✓")
 
             # Start the task
             agent.mark_task_started(plan.id, next_task.id)
-            print(f"  → Started task")
+            print("  → Started task")
 
             # Simulate work being done...
             # (In real usage, actual implementation would happen here)
 
             # Complete the task
             agent.mark_task_complete(plan.id, next_task.id)
-            print(f"  → Completed task")
+            print("  → Completed task")
 
             completed_tasks.append(next_task.title)
 
@@ -197,9 +196,9 @@ def test_complete_work_planning_workflow():
         print("\n=== Phase 4: Generating Summary ===")
 
         summary = agent.get_plan_summary(plan.id)
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print(summary)
-        print("="*60)
+        print("=" * 60)
 
         # Verify summary contains expected elements
         assert "Implement user authentication system" in summary
@@ -238,7 +237,7 @@ def test_complete_work_planning_workflow():
         dep_task2 = Task(
             title="Task B (blocked)",
             priority=Priority.CRITICAL,  # Higher priority but blocked
-            dependencies=[dep_task1.id]
+            dependencies=[dep_task1.id],
         )
         test_plan.tasks = [dep_task1, dep_task2]
         agent.storage.save_plan(test_plan)
@@ -257,9 +256,9 @@ def test_complete_work_planning_workflow():
         print("✓ Task becomes available after dependency completed")
 
         # ===== SUCCESS =====
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("✅ ALL WORK PLANNING FEATURES VERIFIED SUCCESSFULLY!")
-        print("="*60)
+        print("=" * 60)
         print("\nDemonstrated capabilities:")
         print("  ✓ Create work plans with goals and context")
         print("  ✓ Add tasks with priorities, estimates, and acceptance criteria")

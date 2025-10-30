@@ -8,19 +8,17 @@ This script executes the same query twice:
 And compares the actual results.
 """
 
-import os
+import json
 import sys
 import time
-import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.cli.context_enhancer import ContextEnhancer
-
+from ai_dev_agent.core.utils.config import Settings
 
 # The query to test
 QUERY = """Could you please tell me how to check in ETSGen that a type will be emitted as Any? The IsETSAnyType() check doesn't cover all cases, for example, it doesn't include the case of generics and union types like (T|undefined). These might not be all the cases. Is there a way to check this without such fragile constructs that enumerate all the variants?"""
@@ -59,13 +57,13 @@ def run_baseline_measurement():
         end_time = time.time()
         elapsed = end_time - start_time
 
-        print(f"\n✅ Baseline context gathered")
+        print("\n✅ Baseline context gathered")
         print(f"   Time: {elapsed:.2f}s")
         print(f"   Context size: {context_size:,} characters")
         print(f"   Estimated context tokens: {context_tokens:,}")
-        print(f"   Memory used: 0")
-        print(f"   Playbook instructions: 0")
-        print(f"   Dynamic updates: 0")
+        print("   Memory used: 0")
+        print("   Playbook instructions: 0")
+        print("   Dynamic updates: 0")
 
         return {
             "mode": "baseline",
@@ -75,12 +73,13 @@ def run_baseline_measurement():
             "memories_used": 0,
             "playbook_instructions": 0,
             "dynamic_updates": 0,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
         return None
 
@@ -113,9 +112,7 @@ def run_enhanced_measurement():
         memory_messages, memory_ids = [], None
         if enhancer._memory_store:
             memory_messages, memory_ids = enhancer.get_memory_context(
-                query=QUERY,
-                task_type="debugging",
-                limit=5
+                query=QUERY, task_type="debugging", limit=5
             )
         memories_used = len(memory_ids) if memory_ids else 0
         memory_size = sum(len(str(m)) for m in memory_messages)
@@ -124,10 +121,13 @@ def run_enhanced_measurement():
         playbook_context = ""
         instructions_count = 0
         if enhancer._playbook_manager:
-            playbook_context = enhancer.get_playbook_context(
-                task_type=None,  # Don't filter - get all relevant instructions
-                max_instructions=15
-            ) or ""
+            playbook_context = (
+                enhancer.get_playbook_context(
+                    task_type=None,  # Don't filter - get all relevant instructions
+                    max_instructions=15,
+                )
+                or ""
+            )
             instructions_count = playbook_context.count("⚡") if playbook_context else 0
         playbook_size = len(playbook_context)
 
@@ -138,7 +138,7 @@ def run_enhanced_measurement():
         end_time = time.time()
         elapsed = end_time - start_time
 
-        print(f"\n✅ Enhanced context gathered")
+        print("\n✅ Enhanced context gathered")
         print(f"   Time: {elapsed:.2f}s")
         print(f"   Total context size: {total_size:,} characters")
         print(f"   - RepoMap: {repo_map_size:,} chars")
@@ -165,12 +165,13 @@ def run_enhanced_measurement():
             "memories_used": memories_used,
             "playbook_instructions": instructions_count,
             "dynamic_updates": dynamic_pending,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
         return None
 
@@ -191,55 +192,72 @@ def compare_results(baseline, enhanced):
 
     # Context size comparison
     context_diff = enhanced["context_chars"] - baseline["context_chars"]
-    context_pct = (context_diff / baseline["context_chars"] * 100) if baseline["context_chars"] > 0 else 0
+    context_pct = (
+        (context_diff / baseline["context_chars"] * 100) if baseline["context_chars"] > 0 else 0
+    )
 
     # Token comparison
     token_diff = enhanced["context_tokens_est"] - baseline["context_tokens_est"]
-    token_pct = (token_diff / baseline["context_tokens_est"] * 100) if baseline["context_tokens_est"] > 0 else 0
+    token_pct = (
+        (token_diff / baseline["context_tokens_est"] * 100)
+        if baseline["context_tokens_est"] > 0
+        else 0
+    )
 
-    print(f"\n📊 Performance Metrics:")
-    print(f"   Gathering Time:")
+    print("\n📊 Performance Metrics:")
+    print("   Gathering Time:")
     print(f"     Baseline:  {baseline['time_seconds']:.2f}s")
     print(f"     Enhanced:  {enhanced['time_seconds']:.2f}s")
     print(f"     Change:    {time_diff:+.2f}s ({time_pct:+.1f}%)")
 
-    print(f"\n   Context Size:")
-    print(f"     Baseline:  {baseline['context_chars']:,} chars ({baseline['context_tokens_est']:,} tokens)")
-    print(f"     Enhanced:  {enhanced['context_chars']:,} chars ({enhanced['context_tokens_est']:,} tokens)")
+    print("\n   Context Size:")
+    print(
+        f"     Baseline:  {baseline['context_chars']:,} chars ({baseline['context_tokens_est']:,} tokens)"
+    )
+    print(
+        f"     Enhanced:  {enhanced['context_chars']:,} chars ({enhanced['context_tokens_est']:,} tokens)"
+    )
     print(f"     Change:    {context_diff:+,} chars ({context_pct:+.1f}%)")
 
-    print(f"\n📚 Context Engineering Contribution:")
+    print("\n📚 Context Engineering Contribution:")
     print(f"   Memories Retrieved:      {enhanced['memories_used']}")
     print(f"   Playbook Instructions:   {enhanced['playbook_instructions']}")
     print(f"   Dynamic Updates Pending: {enhanced['dynamic_updates']}")
 
     # Context breakdown
-    if 'memory_chars' in enhanced:
-        print(f"\n   Enhanced Context Breakdown:")
-        print(f"     RepoMap:  {enhanced['repomap_chars']:,} chars ({enhanced['repomap_chars']*100//enhanced['context_chars']:.0f}%)")
-        print(f"     Memory:   {enhanced['memory_chars']:,} chars ({enhanced['memory_chars']*100//enhanced['context_chars']:.0f}%)")
-        print(f"     Playbook: {enhanced['playbook_chars']:,} chars ({enhanced['playbook_chars']*100//enhanced['context_chars']:.0f}%)")
+    if "memory_chars" in enhanced:
+        print("\n   Enhanced Context Breakdown:")
+        print(
+            f"     RepoMap:  {enhanced['repomap_chars']:,} chars ({enhanced['repomap_chars']*100//enhanced['context_chars']:.0f}%)"
+        )
+        print(
+            f"     Memory:   {enhanced['memory_chars']:,} chars ({enhanced['memory_chars']*100//enhanced['context_chars']:.0f}%)"
+        )
+        print(
+            f"     Playbook: {enhanced['playbook_chars']:,} chars ({enhanced['playbook_chars']*100//enhanced['context_chars']:.0f}%)"
+        )
 
-    print(f"\n✅ Target Validation:")
-    targets_met = []
+    print("\n✅ Target Validation:")
 
     # Note: For context gathering, we expect INCREASED context (adding value)
     # The actual token SAVINGS come during LLM response (more focused, shorter answer)
     print(f"   Context Enrichment: {context_pct:+.1f}% (Expected: positive - adding value)")
 
     if time_pct < -10:
-        print(f"   ⚠️  Context gathering slower by {-time_pct:.1f}% (acceptable overhead for better results)")
+        print(
+            f"   ⚠️  Context gathering slower by {-time_pct:.1f}% (acceptable overhead for better results)"
+        )
     else:
-        print(f"   ✅ Context gathering time reasonable")
+        print("   ✅ Context gathering time reasonable")
 
-    print(f"\n💡 Analysis:")
+    print("\n💡 Analysis:")
     print(f"   - Context engineering added {enhanced['memories_used']} relevant memories")
     print(f"   - Applied {enhanced['playbook_instructions']} curated instructions")
     print(f"   - Total added context: {context_diff:,} chars")
-    print(f"   - This enriched context should lead to:")
-    print(f"     • More accurate answers (fewer LLM iterations)")
-    print(f"     • Shorter responses (more focused)")
-    print(f"     • Better quality (project-specific knowledge)")
+    print("   - This enriched context should lead to:")
+    print("     • More accurate answers (fewer LLM iterations)")
+    print("     • Shorter responses (more focused)")
+    print("     • Better quality (project-specific knowledge)")
 
     # Save results
     results = {
@@ -253,8 +271,8 @@ def compare_results(baseline, enhanced):
             "context_diff_chars": context_diff,
             "context_change_pct": context_pct,
             "token_diff_est": token_diff,
-            "token_change_pct": token_pct
-        }
+            "token_change_pct": token_pct,
+        },
     }
 
     output_file = Path(__file__).parent / "real_measurement_results.json"
@@ -268,10 +286,10 @@ def compare_results(baseline, enhanced):
 
 def main():
     """Run complete measurement."""
-    print(f"\n🎯 Real-World Context Engineering Measurement")
+    print("\n🎯 Real-World Context Engineering Measurement")
     print(f"Query: {QUERY[:80]}...")
     print(f"Project: {PROJECT_PATH}")
-    print(f"Project size: 3,248 C++ files")
+    print("Project size: 3,248 C++ files")
 
     # Run baseline
     baseline = run_baseline_measurement()

@@ -1,15 +1,16 @@
 """Tests for cli/utils.py - utility helper functions."""
+
+import platform
 from pathlib import Path
 from unittest.mock import Mock, patch
-import platform
 
 import pytest
 
 from ai_dev_agent.cli.utils import (
-    build_system_context,
-    _OS_FRIENDLY_NAMES,
     _COMMAND_MAPPINGS,
+    _OS_FRIENDLY_NAMES,
     _PLATFORM_EXAMPLES,
+    build_system_context,
 )
 
 
@@ -136,7 +137,12 @@ class TestPlatformExamples:
         for platform_name, example_str in _PLATFORM_EXAMPLES.items():
             assert isinstance(example_str, str)
             assert len(example_str) > 0
-            assert "e.g." in example_str.lower() or "example" in example_str.lower() or "ls" in example_str or "dir" in example_str
+            assert (
+                "e.g." in example_str.lower()
+                or "example" in example_str.lower()
+                or "ls" in example_str
+                or "dir" in example_str
+            )
 
 
 class TestResolveRepoPath:
@@ -153,8 +159,9 @@ class TestResolveRepoPath:
 
     def test_resolve_repo_path_absolute(self):
         """Test that absolute paths outside repo raise error."""
-        from ai_dev_agent.cli.utils import _resolve_repo_path
         import click
+
+        from ai_dev_agent.cli.utils import _resolve_repo_path
 
         # Absolute paths outside repo should raise ClickException
         with pytest.raises(click.ClickException, match="escapes the repository root"):
@@ -260,10 +267,7 @@ class TestNormalizeArgumentList:
         """Test normalizing list of strings."""
         from ai_dev_agent.cli.utils import _normalize_argument_list
 
-        result = _normalize_argument_list(
-            {"files": ["arg1", "arg2", "arg3"]},
-            plural_key="files"
-        )
+        result = _normalize_argument_list({"files": ["arg1", "arg2", "arg3"]}, plural_key="files")
 
         assert result == ["arg1", "arg2", "arg3"]
 
@@ -272,9 +276,7 @@ class TestNormalizeArgumentList:
         from ai_dev_agent.cli.utils import _normalize_argument_list
 
         result = _normalize_argument_list(
-            {"file": "single.txt"},
-            plural_key="files",
-            singular_key="file"
+            {"file": "single.txt"}, plural_key="files", singular_key="file"
         )
 
         assert result == ["single.txt"]
@@ -283,7 +285,7 @@ class TestNormalizeArgumentList:
 class TestPromptYesNo:
     """Test _prompt_yes_no function."""
 
-    @patch('ai_dev_agent.core.approval.approvals.ApprovalManager.require')
+    @patch("ai_dev_agent.core.approval.approvals.ApprovalManager.require")
     def test_prompt_yes_no_yes(self, mock_require):
         """Test prompting with yes response."""
         from ai_dev_agent.cli.utils import _prompt_yes_no
@@ -300,7 +302,7 @@ class TestPromptYesNo:
         assert result is True
         assert mock_require.called
 
-    @patch('ai_dev_agent.core.approval.approvals.ApprovalManager.require')
+    @patch("ai_dev_agent.core.approval.approvals.ApprovalManager.require")
     def test_prompt_yes_no_no(self, mock_require):
         """Test prompting with no response."""
         from ai_dev_agent.cli.utils import _prompt_yes_no
@@ -315,7 +317,7 @@ class TestPromptYesNo:
 
         assert result is False
 
-    @patch('ai_dev_agent.core.approval.approvals.ApprovalManager.require')
+    @patch("ai_dev_agent.core.approval.approvals.ApprovalManager.require")
     def test_prompt_yes_no_default_yes(self, mock_require):
         """Test prompting with default yes."""
         from ai_dev_agent.cli.utils import _prompt_yes_no
@@ -331,7 +333,7 @@ class TestPromptYesNo:
         # Should use default
         assert result is True
 
-    @patch('ai_dev_agent.core.approval.approvals.ApprovalManager.require')
+    @patch("ai_dev_agent.core.approval.approvals.ApprovalManager.require")
     def test_prompt_yes_no_default_no(self, mock_require):
         """Test prompting with default no."""
         from ai_dev_agent.cli.utils import _prompt_yes_no

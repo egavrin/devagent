@@ -1,11 +1,12 @@
 """Caching utilities for symbol extraction and repository mapping."""
+
 from __future__ import annotations
 
 import json
+import logging
 import pickle
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-import logging
+from typing import Any
 
 from diskcache import Cache as DiskCache
 
@@ -15,7 +16,7 @@ LOGGER = logging.getLogger(__name__)
 class SymbolCache:
     """Persistent cache for tree-sitter symbol extraction with mtime tracking."""
 
-    def __init__(self, root: Path, cache_dir: Optional[Path] = None):
+    def __init__(self, root: Path, cache_dir: Path | None = None):
         """Initialize symbol cache.
 
         Args:
@@ -23,7 +24,7 @@ class SymbolCache:
             cache_dir: Custom cache directory (default: root/.devagent/symbol_cache)
         """
         self.root = Path(root)
-        self._fallback_cache: Dict[str, Any] = {}
+        self._fallback_cache: dict[str, Any] = {}
 
         if cache_dir is None:
             cache_dir = self.root / ".devagent" / "symbol_cache"
@@ -37,7 +38,7 @@ class SymbolCache:
             LOGGER.warning("Failed to initialize disk cache, using in-memory cache: %s", e)
             self.cache = None
 
-    def get_symbols(self, file_path: Path) -> Optional[List[Any]]:
+    def get_symbols(self, file_path: Path) -> list[Any] | None:
         """Get cached symbols for a file.
 
         Args:
@@ -66,7 +67,7 @@ class SymbolCache:
 
         return None
 
-    def set_symbols(self, file_path: Path, symbols: List[Any]) -> None:
+    def set_symbols(self, file_path: Path, symbols: list[Any]) -> None:
         """Cache symbols for a file.
 
         Args:
@@ -80,10 +81,7 @@ class SymbolCache:
             mtime = file_path.stat().st_mtime
             cache_key = str(file_path)
 
-            cache_value = {
-                "mtime": mtime,
-                "symbols": symbols
-            }
+            cache_value = {"mtime": mtime, "symbols": symbols}
 
             if self.cache:
                 self.cache[cache_key] = cache_value
@@ -121,7 +119,7 @@ class SymbolCache:
         except Exception as e:
             LOGGER.warning("Failed to clear cache: %s", e)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics.
 
         Returns:
@@ -132,13 +130,10 @@ class SymbolCache:
                 "type": "disk",
                 "size": len(self.cache),
                 "hits": getattr(self.cache, "hits", 0),
-                "misses": getattr(self.cache, "misses", 0)
+                "misses": getattr(self.cache, "misses", 0),
             }
         else:
-            return {
-                "type": "memory",
-                "size": len(self._fallback_cache)
-            }
+            return {"type": "memory", "size": len(self._fallback_cache)}
 
 
 class RepoMapCache:
@@ -164,12 +159,12 @@ class RepoMapCache:
             graph: NetworkX graph to save
         """
         try:
-            with open(self.graph_cache_file, "wb") as f:
+            with self.graph_cache_file.open("wb") as f:
                 pickle.dump(graph, f)
         except Exception as e:
             LOGGER.warning("Failed to save graph cache: %s", e)
 
-    def load_graph(self) -> Optional[Any]:
+    def load_graph(self) -> Any | None:
         """Load NetworkX graph from cache.
 
         Returns:
@@ -179,25 +174,25 @@ class RepoMapCache:
             return None
 
         try:
-            with open(self.graph_cache_file, "rb") as f:
+            with self.graph_cache_file.open("rb") as f:
                 return pickle.load(f)
         except Exception as e:
             LOGGER.warning("Failed to load graph cache: %s", e)
             return None
 
-    def save_pagerank(self, scores: Dict[str, float]) -> None:
+    def save_pagerank(self, scores: dict[str, float]) -> None:
         """Save PageRank scores to cache.
 
         Args:
             scores: Dictionary of file paths to PageRank scores
         """
         try:
-            with open(self.pagerank_cache_file, "w") as f:
+            with self.pagerank_cache_file.open("w") as f:
                 json.dump(scores, f, indent=2)
         except Exception as e:
             LOGGER.warning("Failed to save PageRank cache: %s", e)
 
-    def load_pagerank(self) -> Optional[Dict[str, float]]:
+    def load_pagerank(self) -> dict[str, float] | None:
         """Load PageRank scores from cache.
 
         Returns:
@@ -207,7 +202,7 @@ class RepoMapCache:
             return None
 
         try:
-            with open(self.pagerank_cache_file, "r") as f:
+            with self.pagerank_cache_file.open() as f:
                 return json.load(f)
         except Exception as e:
             LOGGER.warning("Failed to load PageRank cache: %s", e)

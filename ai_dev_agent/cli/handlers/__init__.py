@@ -1,10 +1,7 @@
 """Tool handlers for CLI commands."""
+
 from __future__ import annotations
 
-from .registry_handlers import (
-    REGISTRY_INTENTS,
-    INTENT_HANDLERS,
-    RegistryIntent,
-)
+from .registry_handlers import INTENT_HANDLERS, REGISTRY_INTENTS, RegistryIntent
 
-__all__ = ["RegistryIntent", "REGISTRY_INTENTS", "INTENT_HANDLERS"]
+__all__ = ["INTENT_HANDLERS", "REGISTRY_INTENTS", "RegistryIntent"]

@@ -1,5 +1,7 @@
 """Tests for agent registry system."""
+
 import pytest
+
 from ai_dev_agent.agents import AgentRegistry, AgentSpec
 
 
@@ -54,10 +56,7 @@ def test_agent_registry_register_custom():
     original_agents = set(AgentRegistry.list_agents())
 
     custom_spec = AgentSpec(
-        name="test_agent",
-        tools=["read"],
-        max_iterations=5,
-        description="Test agent"
+        name="test_agent", tools=["read"], max_iterations=5, description="Test agent"
     )
     AgentRegistry.register(custom_spec)
 
@@ -69,6 +68,7 @@ def test_agent_registry_register_custom():
     # Cleanup
     AgentRegistry.clear()
     from ai_dev_agent.agents.registry import _register_default_agents
+
     _register_default_agents()
 
     # Verify original agents restored

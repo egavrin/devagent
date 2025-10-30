@@ -1,4 +1,5 @@
 """Direct command execution tool without sandbox restrictions."""
+
 from __future__ import annotations
 
 import os
@@ -7,13 +8,16 @@ import shlex
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from ai_dev_agent.core.utils.constants import RUN_STDERR_TAIL_CHARS, RUN_STDOUT_TAIL_CHARS
 
-from ..registry import ToolContext, ToolSpec, registry
 from ..names import RUN
+from ..registry import ToolContext, ToolSpec, registry
 from .shell_session import ShellSessionError, ShellSessionManager, ShellSessionTimeout
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
 
 SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas" / "tools"
 
@@ -97,10 +101,7 @@ def _exec_command(payload: Mapping[str, Any], context: ToolContext) -> Mapping[s
 
     command = _build_command(cmd, args)
 
-    if args:
-        session_command = shlex.join([cmd, *args])
-    else:
-        session_command = cmd
+    session_command = shlex.join([cmd, *args]) if args else cmd
 
     extra = context.extra or {}
     manager = extra.get("shell_session_manager") if isinstance(extra, dict) else None

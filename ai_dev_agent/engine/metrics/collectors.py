@@ -1,14 +1,19 @@
 """Metric aggregation helpers."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
 
 from ai_dev_agent.engine.react.types import MetricsSnapshot
-from ai_dev_agent.tools.execution.testing.local_tests import TestResult
+
 from .coverage import PatchCoverageResult, compute_patch_coverage
 from .diff import DiffMetrics, compute_diff_metrics
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ai_dev_agent.tools.execution.testing.local_tests import TestResult
 
 
 @dataclass
@@ -22,16 +27,16 @@ class MetricsCollector:
         self,
         *,
         test_result: TestResult | None = None,
-        lint_errors: Optional[int] = None,
-        type_errors: Optional[int] = None,
-        format_errors: Optional[int] = None,
-        compile_errors: Optional[int] = None,
+        lint_errors: int | None = None,
+        type_errors: int | None = None,
+        format_errors: int | None = None,
+        compile_errors: int | None = None,
         coverage_xml: Path | None = None,
-        secrets_found: Optional[int] = None,
-        sandbox_violations: Optional[int] = None,
-        flaky_tests: Optional[int] = None,
-        tokens_cost: Optional[float] = None,
-        wall_time: Optional[float] = None,
+        secrets_found: int | None = None,
+        sandbox_violations: int | None = None,
+        flaky_tests: int | None = None,
+        tokens_cost: float | None = None,
+        wall_time: float | None = None,
     ) -> MetricsSnapshot:
         diff_metrics = compute_diff_metrics(self.repo_root, compare_ref=self.diff_base)
         coverage_result = compute_patch_coverage(
@@ -58,17 +63,17 @@ class MetricsCollector:
 def build_metrics_snapshot(
     *,
     test_result: TestResult | None = None,
-    lint_errors: Optional[int] = None,
-    type_errors: Optional[int] = None,
-    format_errors: Optional[int] = None,
-    compile_errors: Optional[int] = None,
+    lint_errors: int | None = None,
+    type_errors: int | None = None,
+    format_errors: int | None = None,
+    compile_errors: int | None = None,
     diff_metrics: DiffMetrics | None = None,
     coverage: PatchCoverageResult | None = None,
-    secrets_found: Optional[int] = None,
-    sandbox_violations: Optional[int] = None,
-    flaky_tests: Optional[int] = None,
-    tokens_cost: Optional[float] = None,
-    wall_time: Optional[float] = None,
+    secrets_found: int | None = None,
+    sandbox_violations: int | None = None,
+    flaky_tests: int | None = None,
+    tokens_cost: float | None = None,
+    wall_time: float | None = None,
 ) -> MetricsSnapshot:
     snapshot = MetricsSnapshot(
         tests_passed=test_result.success if test_result else None,

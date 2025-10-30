@@ -1,4 +1,5 @@
 """Agent communication infrastructure."""
-from .bus import AgentBus, AgentEvent, EventType, EventHandler
 
-__all__ = ["AgentBus", "AgentEvent", "EventType", "EventHandler"]
+from .bus import AgentBus, AgentEvent, EventHandler, EventType
+
+__all__ = ["AgentBus", "AgentEvent", "EventHandler", "EventType"]

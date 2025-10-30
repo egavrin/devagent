@@ -4,19 +4,17 @@ This module provides mock implementations of external dependencies
 to enable isolated unit testing.
 """
 
-import json
-from typing import Any, Dict, List, Optional, Union
-from unittest.mock import MagicMock, Mock
-from dataclasses import dataclass
 import asyncio
+from typing import Any, Optional, Union
+from unittest.mock import Mock
 
 
 class MockLLM:
     """Mock LLM implementation for testing without API calls."""
 
-    def __init__(self,
-                 default_response: str = "Mock LLM response",
-                 fail_after: Optional[int] = None):
+    def __init__(
+        self, default_response: str = "Mock LLM response", fail_after: Optional[int] = None
+    ):
         """Initialize mock LLM.
 
         Args:
@@ -28,11 +26,9 @@ class MockLLM:
         self.call_count = 0
         self.history = []
 
-    def complete(self,
-                prompt: str,
-                temperature: float = 0.7,
-                max_tokens: int = 2000,
-                **kwargs) -> Dict:
+    def complete(
+        self, prompt: str, temperature: float = 0.7, max_tokens: int = 2000, **kwargs
+    ) -> dict:
         """Mock completion endpoint.
 
         Args:
@@ -59,9 +55,9 @@ class MockLLM:
             "usage": {
                 "prompt_tokens": len(prompt.split()),
                 "completion_tokens": len(response.split()),
-                "total_tokens": len(prompt.split()) + len(response.split())
+                "total_tokens": len(prompt.split()) + len(response.split()),
             },
-            "finish_reason": "stop"
+            "finish_reason": "stop",
         }
 
     def _generate_response(self, prompt: str) -> str:
@@ -88,7 +84,7 @@ class MockLLM:
         else:
             return self.default_response
 
-    async def aComplete(self, prompt: str, **kwargs) -> Dict:
+    async def aComplete(self, prompt: str, **kwargs) -> dict:
         """Async version of complete method."""
         await asyncio.sleep(0.01)  # Simulate network delay
         return self.complete(prompt, **kwargs)
@@ -159,7 +155,7 @@ class MockFileSystem:
         """
         return path in self.files or path in self.directories
 
-    def list_dir(self, path: str) -> List[str]:
+    def list_dir(self, path: str) -> list[str]:
         """List directory contents.
 
         Args:
@@ -177,13 +173,13 @@ class MockFileSystem:
         # Find direct children
         for file_path in self.files:
             if file_path.startswith(path + "/"):
-                relative = file_path[len(path) + 1:]
+                relative = file_path[len(path) + 1 :]
                 if "/" not in relative:
                     items.append(relative)
 
         for dir_path in self.directories:
             if dir_path.startswith(path + "/"):
-                relative = dir_path[len(path) + 1:]
+                relative = dir_path[len(path) + 1 :]
                 if "/" not in relative:
                     items.append(relative + "/")
 
@@ -212,7 +208,7 @@ class MockGitRepo:
         self.staged = set()
         self.modified = set()
 
-    def status(self) -> Dict:
+    def status(self) -> dict:
         """Get repository status.
 
         Returns:
@@ -222,10 +218,10 @@ class MockGitRepo:
             "branch": self.current_branch,
             "staged": list(self.staged),
             "modified": list(self.modified),
-            "untracked": []
+            "untracked": [],
         }
 
-    def add(self, files: Union[str, List[str]]) -> None:
+    def add(self, files: Union[str, list[str]]) -> None:
         """Stage files for commit.
 
         Args:
@@ -245,13 +241,10 @@ class MockGitRepo:
             Commit hash
         """
         import hashlib
+
         commit_hash = hashlib.sha1(message.encode()).hexdigest()[:7]
 
-        self.commits.append({
-            "hash": commit_hash,
-            "message": message,
-            "files": list(self.staged)
-        })
+        self.commits.append({"hash": commit_hash, "message": message, "files": list(self.staged)})
 
         self.staged.clear()
         return commit_hash
@@ -270,7 +263,7 @@ class MockGitRepo:
 
         self.current_branch = branch
 
-    def log(self, n: int = 10) -> List[Dict]:
+    def log(self, n: int = 10) -> list[dict]:
         """Get commit log.
 
         Args:
@@ -290,7 +283,7 @@ class MockHTTPClient:
         self.responses = {}
         self.history = []
 
-    def set_response(self, url: str, response: Dict) -> None:
+    def set_response(self, url: str, response: dict) -> None:
         """Set mock response for URL.
 
         Args:
@@ -299,7 +292,7 @@ class MockHTTPClient:
         """
         self.responses[url] = response
 
-    def get(self, url: str, **kwargs) -> Dict:
+    def get(self, url: str, **kwargs) -> dict:
         """Mock GET request.
 
         Args:
@@ -315,13 +308,9 @@ class MockHTTPClient:
             if pattern in url:
                 return response
 
-        return {
-            "status": 404,
-            "content": "Not found",
-            "headers": {}
-        }
+        return {"status": 404, "content": "Not found", "headers": {}}
 
-    def post(self, url: str, data: Any = None, **kwargs) -> Dict:
+    def post(self, url: str, data: Any = None, **kwargs) -> dict:
         """Mock POST request.
 
         Args:
@@ -332,22 +321,13 @@ class MockHTTPClient:
         Returns:
             Mock response
         """
-        self.history.append({
-            "method": "POST",
-            "url": url,
-            "data": data,
-            "kwargs": kwargs
-        })
+        self.history.append({"method": "POST", "url": url, "data": data, "kwargs": kwargs})
 
         for pattern, response in self.responses.items():
             if pattern in url:
                 return response
 
-        return {
-            "status": 200,
-            "content": {"message": "Success"},
-            "headers": {}
-        }
+        return {"status": 200, "content": {"message": "Success"}, "headers": {}}
 
 
 class MockDatabase:
@@ -358,19 +338,16 @@ class MockDatabase:
         self.tables = {}
         self.query_count = 0
 
-    def create_table(self, name: str, schema: Dict) -> None:
+    def create_table(self, name: str, schema: dict) -> None:
         """Create a table.
 
         Args:
             name: Table name
             schema: Table schema
         """
-        self.tables[name] = {
-            "schema": schema,
-            "data": []
-        }
+        self.tables[name] = {"schema": schema, "data": []}
 
-    def insert(self, table: str, record: Dict) -> int:
+    def insert(self, table: str, record: dict) -> int:
         """Insert a record.
 
         Args:
@@ -389,7 +366,7 @@ class MockDatabase:
         self.tables[table]["data"].append(record)
         return record_id
 
-    def select(self, table: str, where: Optional[Dict] = None) -> List[Dict]:
+    def select(self, table: str, where: Optional[dict] = None) -> list[dict]:
         """Select records.
 
         Args:
@@ -417,7 +394,7 @@ class MockDatabase:
 
         return results
 
-    def update(self, table: str, record_id: int, updates: Dict) -> bool:
+    def update(self, table: str, record_id: int, updates: dict) -> bool:
         """Update a record.
 
         Args:
@@ -455,8 +432,7 @@ class MockDatabase:
         self.query_count += 1
         original_len = len(self.tables[table]["data"])
         self.tables[table]["data"] = [
-            r for r in self.tables[table]["data"]
-            if r.get("id") != record_id
+            r for r in self.tables[table]["data"] if r.get("id") != record_id
         ]
         return len(self.tables[table]["data"]) < original_len
 
@@ -542,10 +518,7 @@ def create_mock_agent(name: str, agent_type: str) -> Mock:
     agent.name = name
     agent.type = agent_type
     agent.status = "ready"
-    agent.execute = Mock(return_value={
-        "status": "success",
-        "result": f"Task completed by {name}"
-    })
+    agent.execute = Mock(return_value={"status": "success", "result": f"Task completed by {name}"})
     return agent
 
 
@@ -562,8 +535,5 @@ def create_mock_tool(name: str, description: str) -> Mock:
     tool = Mock()
     tool.name = name
     tool.description = description
-    tool.execute = Mock(return_value={
-        "status": "success",
-        "output": f"Tool {name} executed"
-    })
+    tool.execute = Mock(return_value={"status": "success", "output": f"Tool {name} executed"})
     return tool

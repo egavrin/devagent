@@ -1,12 +1,11 @@
 """Logger configuration utilities with correlation ID support."""
+
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 from datetime import datetime
-from typing import Optional
-
-import contextvars
 
 _CORRELATION_ID = contextvars.ContextVar("correlation_id", default="-")
 
@@ -56,7 +55,7 @@ def configure_logging(level: str = "INFO", *, structured: bool = False) -> None:
     root.addHandler(handler)
 
 
-def set_correlation_id(value: Optional[str]) -> None:
+def set_correlation_id(value: str | None) -> None:
     """Set the active correlation ID for subsequent log records."""
     _CORRELATION_ID.set(value or "-")
 
@@ -66,14 +65,14 @@ def get_correlation_id() -> str:
     return _CORRELATION_ID.get()
 
 
-def get_logger(name: Optional[str] = None) -> logging.Logger:
+def get_logger(name: str | None = None) -> logging.Logger:
     """Retrieve a module-level logger."""
     return logging.getLogger(name if name else "ai_dev_agent")
 
 
 __all__ = [
     "configure_logging",
-    "get_logger",
     "get_correlation_id",
+    "get_logger",
     "set_correlation_id",
 ]

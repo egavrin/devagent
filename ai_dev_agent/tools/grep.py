@@ -1,10 +1,12 @@
 """Simple content search tool using ripgrep."""
+
 import os
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 
-from .registry import ToolSpec, ToolContext, registry
+from .registry import ToolContext, ToolSpec, registry
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schemas" / "tools"
 
@@ -22,8 +24,8 @@ def grep(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
         return {"matches": []}
 
     # Convert path to absolute if relative
-    if not os.path.isabs(path):
-        path = os.path.join(context.repo_root, path)
+    if not Path(path).is_absolute():
+        path = str(Path(context.repo_root) / path)
 
     # Build ripgrep command
     cmd = ["rg", "-n", "-H", "--no-heading", "--max-count", str(limit)]
@@ -35,23 +37,22 @@ def grep(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
 
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(context.repo_root),
-            timeout=30
+            cmd, capture_output=True, text=True, cwd=str(context.repo_root), timeout=30
         )
 
         if result.returncode not in {0, 1}:
             # Error occurred
-            return {"error": result.stderr.strip() if result.stderr else "Unknown error", "matches": []}
+            return {
+                "error": result.stderr.strip() if result.stderr else "Unknown error",
+                "matches": [],
+            }
 
         matches = []
         if result.stdout:
-            for line in result.stdout.strip().split('\n'):
-                if ':' in line and line:
+            for line in result.stdout.strip().split("\n"):
+                if ":" in line and line:
                     # Parse ripgrep output: file:line:content
-                    parts = line.split(':', 2)
+                    parts = line.split(":", 2)
                     if len(parts) >= 3:
                         file_path = parts[0]
                         try:
@@ -61,11 +62,13 @@ def grep(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
                         except ValueError:
                             file_path = str(Path(file_path).resolve())
 
-                        matches.append({
-                            "file": file_path,
-                            "line": int(parts[1]) if parts[1].isdigit() else 0,
-                            "text": parts[2].strip()
-                        })
+                        matches.append(
+                            {
+                                "file": file_path,
+                                "line": int(parts[1]) if parts[1].isdigit() else 0,
+                                "text": parts[2].strip(),
+                            }
+                        )
 
         # Group matches by file for better readability
         files_dict = {}
@@ -73,14 +76,11 @@ def grep(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
             file_path = match["file"]
             if file_path not in files_dict:
                 files_dict[file_path] = []
-            files_dict[file_path].append({
-                "line": match["line"],
-                "text": match["text"]
-            })
+            files_dict[file_path].append({"line": match["line"], "text": match["text"]})
 
         # Sort files by modification time
         files_with_time = []
-        for file_path in files_dict.keys():
+        for file_path in files_dict:
             full_path = context.repo_root / file_path
             if full_path.exists():
                 mtime = full_path.stat().st_mtime
@@ -97,10 +97,7 @@ def grep(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
 
         result_matches = []
         for file_path, _ in files_with_time[:max_files]:
-            result_matches.append({
-                "file": file_path,
-                "matches": files_dict[file_path]
-            })
+            result_matches.append({"file": file_path, "matches": files_dict[file_path]})
 
         result = {"matches": result_matches}
 
@@ -108,7 +105,9 @@ def grep(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
         if truncated:
             result["truncated"] = True
             result["total_files"] = total_files
-            result["message"] = f"Showing {max_files} of {total_files} files with matches. Use more specific search pattern to narrow results."
+            result["message"] = (
+                f"Showing {max_files} of {total_files} files with matches. Use more specific search pattern to narrow results."
+            )
 
         return result
 

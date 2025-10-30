@@ -1,12 +1,17 @@
 """Tests for Orchestrator Agent."""
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-import tempfile
-import os
 
-from ai_dev_agent.agents.specialized.orchestrator_agent import OrchestratorAgent
-from ai_dev_agent.agents.specialized import DesignAgent, TestingAgent, ImplementationAgent, ReviewAgent
+from unittest.mock import Mock, patch
+
+import pytest
+
 from ai_dev_agent.agents.base import AgentContext, AgentResult
+from ai_dev_agent.agents.specialized import (
+    DesignAgent,
+    ImplementationAgent,
+    ReviewAgent,
+    TestingAgent,
+)
+from ai_dev_agent.agents.specialized.orchestrator_agent import OrchestratorAgent
 
 
 class TestOrchestratorAgent:
@@ -39,18 +44,12 @@ class TestOrchestratorAgent:
         # Register a mock agent
         mock_agent = Mock()
         mock_agent.execute.return_value = AgentResult(
-            success=True,
-            output="Task completed",
-            metadata={"result": "success"}
+            success=True, output="Task completed", metadata={"result": "success"}
         )
 
         orchestrator.register_subagent("mock", mock_agent)
 
-        result = orchestrator.delegate_task(
-            agent_name="mock",
-            task="Do something",
-            context=context
-        )
+        result = orchestrator.delegate_task(agent_name="mock", task="Do something", context=context)
 
         assert result.success is True
         assert mock_agent.execute.called
@@ -65,7 +64,7 @@ class TestOrchestratorAgent:
             "steps": [
                 {"agent": "design", "task": "Create design"},
                 {"agent": "test", "task": "Generate tests"},
-                {"agent": "implement", "task": "Implement code"}
+                {"agent": "implement", "task": "Implement code"},
             ]
         }
 
@@ -73,8 +72,7 @@ class TestOrchestratorAgent:
         for agent_name in ["design", "test", "implement"]:
             mock_agent = Mock()
             mock_agent.execute.return_value = AgentResult(
-                success=True,
-                output=f"{agent_name} completed"
+                success=True, output=f"{agent_name} completed"
             )
             orchestrator.register_subagent(agent_name, mock_agent)
 
@@ -92,16 +90,13 @@ class TestOrchestratorAgent:
         tasks = [
             {"agent": "agent1", "task": "Task 1"},
             {"agent": "agent2", "task": "Task 2"},
-            {"agent": "agent3", "task": "Task 3"}
+            {"agent": "agent3", "task": "Task 3"},
         ]
 
         # Register mock agents
         for i in range(1, 4):
             mock_agent = Mock()
-            mock_agent.execute.return_value = AgentResult(
-                success=True,
-                output=f"Agent {i} done"
-            )
+            mock_agent.execute.return_value = AgentResult(success=True, output=f"Agent {i} done")
             orchestrator.register_subagent(f"agent{i}", mock_agent)
 
         results = orchestrator.execute_parallel(tasks, context)
@@ -118,16 +113,13 @@ class TestOrchestratorAgent:
         tasks = [
             {"agent": "design", "task": "Create design", "depends_on": []},
             {"agent": "test", "task": "Write tests", "depends_on": ["design"]},
-            {"agent": "implement", "task": "Code", "depends_on": ["test"]}
+            {"agent": "implement", "task": "Code", "depends_on": ["test"]},
         ]
 
         # Register mock agents
         for agent_name in ["design", "test", "implement"]:
             mock_agent = Mock()
-            mock_agent.execute.return_value = AgentResult(
-                success=True,
-                output=f"{agent_name} done"
-            )
+            mock_agent.execute.return_value = AgentResult(success=True, output=f"{agent_name} done")
             orchestrator.register_subagent(agent_name, mock_agent)
 
         results = orchestrator.execute_sequential(tasks, context)
@@ -144,18 +136,12 @@ class TestOrchestratorAgent:
         # Agent that fails
         failing_agent = Mock()
         failing_agent.execute.return_value = AgentResult(
-            success=False,
-            output="",
-            error="Agent failed"
+            success=False, output="", error="Agent failed"
         )
 
         orchestrator.register_subagent("failing", failing_agent)
 
-        result = orchestrator.delegate_task(
-            agent_name="failing",
-            task="Will fail",
-            context=context
-        )
+        result = orchestrator.delegate_task(agent_name="failing", task="Will fail", context=context)
 
         assert result.success is False
         assert "fail" in result.error.lower()
@@ -169,16 +155,13 @@ class TestOrchestratorAgent:
         mock_agent = Mock()
         mock_agent.execute.side_effect = [
             AgentResult(success=False, output="", error="First fail"),
-            AgentResult(success=True, output="Success on retry")
+            AgentResult(success=True, output="Success on retry"),
         ]
 
         orchestrator.register_subagent("retry_agent", mock_agent)
 
         result = orchestrator.delegate_with_retry(
-            agent_name="retry_agent",
-            task="Task",
-            context=context,
-            max_retries=2
+            agent_name="retry_agent", task="Task", context=context, max_retries=2
         )
 
         assert result.success is True
@@ -199,8 +182,7 @@ class TestOrchestratorAgent:
 
         # Task requiring design capability
         selected = orchestrator.select_agent_for_task(
-            task_type="create_design",
-            required_capabilities=["technical_design"]
+            task_type="create_design", required_capabilities=["technical_design"]
         )
 
         assert selected == "design"
@@ -212,7 +194,7 @@ class TestOrchestratorAgent:
         results = [
             AgentResult(success=True, output="Result 1", metadata={"score": 0.9}),
             AgentResult(success=True, output="Result 2", metadata={"score": 0.8}),
-            AgentResult(success=False, output="", error="Failed", metadata={"score": 0.0})
+            AgentResult(success=False, output="", error="Failed", metadata={"score": 0.0}),
         ]
 
         aggregated = orchestrator.aggregate_results(results)
@@ -231,8 +213,8 @@ class TestOrchestratorAgent:
             "tasks": [
                 {"id": "1", "description": "Design API", "type": "design"},
                 {"id": "2", "description": "Write tests", "type": "test", "depends_on": ["1"]},
-                {"id": "3", "description": "Implement", "type": "implement", "depends_on": ["2"]}
-            ]
+                {"id": "3", "description": "Implement", "type": "implement", "depends_on": ["2"]},
+            ],
         }
 
         workflow = orchestrator.create_workflow_from_plan(plan)
@@ -245,7 +227,7 @@ class TestOrchestratorAgent:
     def test_monitor_progress(self):
         """Test monitoring workflow progress."""
         orchestrator = OrchestratorAgent()
-        context = AgentContext(session_id="test-monitor")
+        AgentContext(session_id="test-monitor")
 
         workflow_id = "workflow-123"
 
@@ -281,10 +263,12 @@ class TestOrchestratorAgent:
         4. Review for security
         """
 
-        with patch.object(DesignAgent, 'execute') as mock_design, \
-             patch.object(TestingAgent, 'execute') as mock_test, \
-             patch.object(ImplementationAgent, 'execute') as mock_impl, \
-             patch.object(ReviewAgent, 'execute') as mock_review:
+        with (
+            patch.object(DesignAgent, "execute") as mock_design,
+            patch.object(TestingAgent, "execute") as mock_test,
+            patch.object(ImplementationAgent, "execute") as mock_impl,
+            patch.object(ReviewAgent, "execute") as mock_review,
+        ):
 
             # Mock all agent executions
             mock_design.return_value = AgentResult(success=True, output="Design done")

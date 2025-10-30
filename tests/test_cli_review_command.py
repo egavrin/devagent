@@ -1,20 +1,25 @@
 """Tests for unified review command."""
+
 import importlib
-from types import SimpleNamespace
-from unittest.mock import MagicMock
+import shutil
 from pathlib import Path
-from typing import List, Optional
-import pytest
+from types import SimpleNamespace
+from typing import Optional
+from unittest.mock import MagicMock
+from uuid import uuid4
+
 import click
+import pytest
 from click.testing import CliRunner
-from ai_dev_agent.cli.commands import cli
+
 from ai_dev_agent.agents.base import AgentResult
+from ai_dev_agent.cli.commands import cli
 from ai_dev_agent.cli.review import (
     _PATCH_CACHE,
+    extract_applies_to_pattern,
     format_patch_dataset,
     parse_patch_file,
     run_review,
-    extract_applies_to_pattern,
 )
 from ai_dev_agent.core.utils.config import Settings
 
@@ -64,28 +69,19 @@ class TestReviewCommand:
     def test_review_file_with_report(self, runner, review_cli_stub, tmp_path):
         """review should accept --report flag for file review."""
         report_path = tmp_path / "review.md"
-        result = runner.invoke(cli, [
-            "review", "src/auth.py",
-            "--report", str(report_path)
-        ])
+        result = runner.invoke(cli, ["review", "src/auth.py", "--report", str(report_path)])
         assert result.exit_code in [0, 1, 2]
         assert report_path.exists()
         review_cli_stub["agent_execute"].assert_called_once()
 
     def test_review_file_with_json(self, runner):
         """review should accept --json flag."""
-        result = runner.invoke(cli, [
-            "review", "src/auth.py",
-            "--json"
-        ])
+        result = runner.invoke(cli, ["review", "src/auth.py", "--json"])
         assert result.exit_code in [0, 1, 2]
 
     def test_review_file_with_verbose(self, runner):
         """review should accept verbosity flags."""
-        result = runner.invoke(cli, [
-            "review", "src/auth.py",
-            "-v"
-        ])
+        result = runner.invoke(cli, ["review", "src/auth.py", "-v"])
         assert result.exit_code in [0, 1, 2]
 
 
@@ -129,14 +125,14 @@ All Python files must have proper comments.
 
     def test_review_patch_with_rule(self, runner, sample_patch, sample_rule):
         """review should accept --rule flag for patch review."""
-        result = runner.invoke(cli, [
-            "review", sample_patch,
-            "--rule", sample_rule
-        ])
+        result = runner.invoke(cli, ["review", sample_patch, "--rule", sample_rule])
         assert result.exit_code == 0
 
-    def test_review_patch_outputs_text_without_json(self, runner, sample_patch, sample_rule, monkeypatch):
+    def test_review_patch_outputs_text_without_json(
+        self, runner, sample_patch, sample_rule, monkeypatch
+    ):
         """Human-readable summary should be printed when --json is omitted."""
+
         def fake_run_review(*_args, **_kwargs):
             return {
                 "summary": {"files_reviewed": 1, "total_violations": 0, "rule_name": "TestRule"},
@@ -146,17 +142,17 @@ All Python files must have proper comments.
         monkeypatch.setattr(review_module, "run_review", fake_run_review)
         monkeypatch.setattr("ai_dev_agent.cli.commands.run_review", fake_run_review)
 
-        result = runner.invoke(cli, [
-            "review", sample_patch,
-            "--rule", sample_rule
-        ])
+        result = runner.invoke(cli, ["review", sample_patch, "--rule", sample_rule])
 
         assert result.exit_code == 0
         assert "Files reviewed" in result.output
         assert "{\n" not in result.output  # no raw JSON block
 
-    def test_review_patch_reports_discarded_count(self, runner, sample_patch, sample_rule, monkeypatch):
+    def test_review_patch_reports_discarded_count(
+        self, runner, sample_patch, sample_rule, monkeypatch
+    ):
         """CLI should surface discarded violations information."""
+
         def fake_run_review(*_args, **_kwargs):
             return {
                 "summary": {
@@ -171,37 +167,24 @@ All Python files must have proper comments.
         monkeypatch.setattr(review_module, "run_review", fake_run_review)
         monkeypatch.setattr("ai_dev_agent.cli.commands.run_review", fake_run_review)
 
-        result = runner.invoke(cli, [
-            "review", sample_patch,
-            "--rule", sample_rule
-        ])
+        result = runner.invoke(cli, ["review", sample_patch, "--rule", sample_rule])
 
         assert result.exit_code == 0
         assert "Discarded violations: 2" in result.output
 
     def test_review_patch_with_rule_and_json(self, runner, sample_patch, sample_rule):
         """review patch should output JSON with --json flag."""
-        result = runner.invoke(cli, [
-            "review", sample_patch,
-            "--rule", sample_rule,
-            "--json"
-        ])
+        result = runner.invoke(cli, ["review", sample_patch, "--rule", sample_rule, "--json"])
         assert result.exit_code == 0
 
     def test_review_patch_without_rule(self, runner, sample_patch):
         """review patch without --rule should do general code review."""
-        result = runner.invoke(cli, [
-            "review", sample_patch
-        ])
+        result = runner.invoke(cli, ["review", sample_patch])
         assert result.exit_code == 0
 
     def test_review_patch_with_verbose(self, runner, sample_patch, sample_rule):
         """review patch should accept verbosity flags."""
-        result = runner.invoke(cli, [
-            "review", sample_patch,
-            "--rule", sample_rule,
-            "-vv"
-        ])
+        result = runner.invoke(cli, ["review", sample_patch, "--rule", sample_rule, "-vv"])
         assert result.exit_code in [0, 1, 2]
 
 
@@ -439,7 +422,7 @@ Ensure functions return something.
         def fake_import_module(name: str):
             return SimpleNamespace(get_llm_client=lambda _: object())
 
-        calls: List[str] = []
+        calls: list[str] = []
 
         def fake_execute(_ctx, _client, _settings, prompt, **_kwargs):
             calls.append(prompt)
@@ -497,7 +480,7 @@ Ensure functions return something.
         def fake_import_module(name: str):
             return SimpleNamespace(get_llm_client=lambda _: object())
 
-        captured_prompts: List[str] = []
+        captured_prompts: list[str] = []
 
         def fake_execute(_ctx, _client, _settings, prompt, **_kwargs):
             captured_prompts.append(prompt)
@@ -522,6 +505,78 @@ Ensure functions return something.
         combined_prompt = "\n".join(captured_prompts)
         assert "Context:" in combined_prompt
         assert "def target()" in combined_prompt
+
+    def test_run_review_shared_parent_root(self, monkeypatch, tmp_path):
+        """Workspace must stay unchanged when only '/' is shared."""
+        patch_path = tmp_path / "patches" / "changes.patch"
+        patch_path.parent.mkdir(parents=True, exist_ok=True)
+        patch_path.write_text(
+            """diff --git a/foo.py b/foo.py
+--- a/foo.py
++++ b/foo.py
+@@ -0,0 +1,1 @@
++print("hi")
+""",
+            encoding="utf-8",
+        )
+
+        external_root = Path("/tmp") / f"devagent_rule_{uuid4().hex}"
+        external_root.mkdir(parents=True, exist_ok=True)
+        rule_path = external_root / "rule.md"
+        rule_path.write_text("# Rule\n", encoding="utf-8")
+
+        settings = Settings(
+            api_key="test-key",
+            workspace_root=tmp_path,
+            max_tool_output_chars=4096,
+            max_context_tokens=4096,
+            response_headroom_tokens=512,
+        )
+
+        ctx = click.Context(click.Command("review"), obj={"settings": settings})
+
+        def fake_import_module(name: str):
+            return SimpleNamespace(get_llm_client=lambda _: object())
+
+        captured_roots: list[Path] = []
+
+        def fake_build_items(
+            self, workspace_root, file_entry
+        ):  # pragma: no cover - instrumentation
+            captured_roots.append(workspace_root)
+            return []
+
+        def fake_execute(*_args, **_kwargs):
+            return {
+                "result": {"status": "ok"},
+                "final_json": {
+                    "violations": [],
+                    "summary": {"files_reviewed": 1},
+                },
+            }
+
+        monkeypatch.setattr(review_module, "import_module", fake_import_module)
+        monkeypatch.setattr(
+            review_module.SourceContextProvider,
+            "build_items",
+            fake_build_items,
+        )
+        monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
+        monkeypatch.setattr(review_module, "_record_invocation", lambda *args, **kwargs: None)
+
+        try:
+            run_review(
+                ctx,
+                patch_file=str(patch_path),
+                rule_file=str(rule_path),
+                json_output=True,
+                settings=settings,
+            )
+        finally:
+            shutil.rmtree(external_root, ignore_errors=True)
+
+        assert captured_roots
+        assert all(root == settings.workspace_root for root in captured_roots)
 
     def test_run_review_preserves_workspace_for_disparate_paths(self, monkeypatch, tmp_path):
         """Review should not reset workspace_root to an unrelated shared parent."""
@@ -555,7 +610,9 @@ Ensure functions return something.
 
         captured_roots = []
 
-        def fake_build_items(self, workspace_root, file_entry):  # pragma: no cover - instrumentation
+        def fake_build_items(
+            self, workspace_root, file_entry
+        ):  # pragma: no cover - instrumentation
             captured_roots.append(workspace_root)
             return []
 
@@ -736,7 +793,7 @@ Ensure functions return something.
         def fake_import_module(name: str):
             return SimpleNamespace(get_llm_client=lambda _: object())
 
-        observed_sessions: List[Optional[str]] = []
+        observed_sessions: list[Optional[str]] = []
 
         def fake_execute(_ctx, _client, _settings, _prompt, **_kwargs):
             observed_sessions.append(_ctx.obj.get("_session_id"))
@@ -804,7 +861,7 @@ Ensure functions return something.
         def fake_import_module(name: str):
             return SimpleNamespace(get_llm_client=lambda _: object())
 
-        calls: List[str] = []
+        calls: list[str] = []
 
         def fake_execute(_ctx, _client, _settings, prompt, **_kwargs):
             calls.append(prompt)
@@ -829,6 +886,67 @@ Ensure functions return something.
         )
 
         assert len(calls) > 1
+
+    def test_review_token_budget_enforces_additional_splits(self, monkeypatch, tmp_path):
+        """Token budget should force smaller chunks when necessary."""
+        patch_path = tmp_path / "changes.patch"
+        patch_path.write_text(
+            """diff --git a/file1.py b/file1.py
+--- a/file1.py
++++ b/file1.py
+@@ -0,0 +1,1 @@
++print("one")
+diff --git a/file2.py b/file2.py
+--- a/file2.py
++++ b/file2.py
+@@ -0,0 +1,1 @@
++print("two")
+""",
+            encoding="utf-8",
+        )
+
+        rule_path = tmp_path / "rule.md"
+        rule_path.write_text("# Rule\n", encoding="utf-8")
+
+        settings = Settings(
+            api_key="test-key",
+            workspace_root=tmp_path,
+            max_tool_output_chars=4096,
+            max_context_tokens=4096,
+            response_headroom_tokens=512,
+        )
+        settings.review_token_budget = 10
+
+        ctx = click.Context(click.Command("review"), obj={"settings": settings})
+
+        def fake_import_module(name: str):
+            return SimpleNamespace(get_llm_client=lambda _: object())
+
+        calls: list[str] = []
+
+        def fake_execute(_ctx, _client, _settings, prompt, **_kwargs):
+            calls.append(prompt)
+            return {
+                "result": {"status": "ok"},
+                "final_json": {
+                    "violations": [],
+                    "summary": {"files_reviewed": 1},
+                },
+            }
+
+        monkeypatch.setattr(review_module, "import_module", fake_import_module)
+        monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
+        monkeypatch.setattr(review_module, "_record_invocation", lambda *args, **kwargs: None)
+
+        run_review(
+            ctx,
+            patch_file=str(patch_path),
+            rule_file=str(rule_path),
+            json_output=True,
+            settings=settings,
+        )
+
+        assert len(calls) == 2
 
     def test_extract_applies_to_pattern_normalizes_globs(self, tmp_path):
         """Glob patterns should be converted to regex and filter datasets."""

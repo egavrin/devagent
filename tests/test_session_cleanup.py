@@ -1,11 +1,9 @@
 """Tests for session cleanup and memory management."""
+
 import time
 from datetime import datetime, timedelta
 
-import pytest
-
 from ai_dev_agent.session.manager import SessionManager
-from ai_dev_agent.session.models import Session
 
 
 class TestSessionCleanup:
@@ -41,11 +39,11 @@ class TestSessionCleanup:
         manager.set_max_sessions(3)
 
         # Create sessions up to max
-        session1 = manager.ensure_session("test-1")
+        manager.ensure_session("test-1")
         time.sleep(0.1)
-        session2 = manager.ensure_session("test-2")
+        manager.ensure_session("test-2")
         time.sleep(0.1)
-        session3 = manager.ensure_session("test-3")
+        manager.ensure_session("test-3")
 
         # All should exist
         assert manager.has_session("test-1")
@@ -53,7 +51,7 @@ class TestSessionCleanup:
         assert manager.has_session("test-3")
 
         # Create one more - oldest should be evicted
-        session4 = manager.ensure_session("test-4")
+        manager.ensure_session("test-4")
 
         # test-1 should be evicted as it's the oldest
         assert not manager.has_session("test-1")
@@ -80,8 +78,8 @@ class TestSessionCleanup:
         manager = SessionManager()
 
         # Create a few sessions
-        session1 = manager.ensure_session("test-1")
-        session2 = manager.ensure_session("test-2")
+        manager.ensure_session("test-1")
+        manager.ensure_session("test-2")
 
         # Add some messages
         manager.add_user_message("test-1", "Hello")

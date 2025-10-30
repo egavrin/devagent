@@ -3,28 +3,30 @@
 This module provides a unified abstraction for symbol extraction and analysis,
 supporting both tree-sitter (offline, fast) and LSP (real-time, accurate) backends.
 """
+
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Protocol, Any
-from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Protocol, Set
 
 __all__ = [
-    "Symbol",
-    "SymbolKind",
-    "SymbolSource",
-    "SymbolGraph",
-    "SymbolProvider",
-    "TreeSitterSymbolProvider",
-    "LSPSymbolProvider",
     "HybridSymbolProvider",
+    "LSPSymbolProvider",
+    "Symbol",
+    "SymbolGraph",
+    "SymbolKind",
+    "SymbolProvider",
+    "SymbolSource",
+    "TreeSitterSymbolProvider",
 ]
 
 
 class SymbolKind(Enum):
     """Universal symbol types across languages."""
+
     FUNCTION = "function"
     CLASS = "class"
     METHOD = "method"
@@ -43,6 +45,7 @@ class SymbolKind(Enum):
 
 class SymbolSource(Enum):
     """Source of symbol information."""
+
     TREE_SITTER = "tree_sitter"
     LSP = "lsp"
     HYBRID = "hybrid"
@@ -52,6 +55,7 @@ class SymbolSource(Enum):
 @dataclass
 class Symbol:
     """Universal symbol representation."""
+
     name: str
     kind: SymbolKind
     file: Path
@@ -59,9 +63,9 @@ class Symbol:
     column: int
     source: SymbolSource
     is_definition: bool = True
-    type_info: Optional[str] = None  # From LSP
-    documentation: Optional[str] = None  # From LSP
-    references: Set[Path] = field(default_factory=set)
+    type_info: str | None = None  # From LSP
+    documentation: str | None = None  # From LSP
+    references: set[Path] = field(default_factory=set)
 
     def __hash__(self) -> int:
         """Make symbols hashable for use in sets."""
@@ -72,25 +76,26 @@ class Symbol:
         if not isinstance(other, Symbol):
             return False
         return (
-            self.name == other.name and
-            self.file == other.file and
-            self.line == other.line and
-            self.column == other.column
+            self.name == other.name
+            and self.file == other.file
+            and self.line == other.line
+            and self.column == other.column
         )
 
 
 @dataclass
 class SymbolGraph:
     """Graph of symbol definitions and references."""
-    symbols: List[Symbol]
-    definitions: Dict[str, Set[Path]]  # symbol_name -> defining files
-    references: Dict[str, List[Path]]  # symbol_name -> referencing files
+
+    symbols: list[Symbol]
+    definitions: dict[str, set[Path]]  # symbol_name -> defining files
+    references: dict[str, list[Path]]  # symbol_name -> referencing files
 
     @classmethod
-    def from_symbols(cls, symbols: List[Symbol]) -> "SymbolGraph":
+    def from_symbols(cls, symbols: list[Symbol]) -> SymbolGraph:
         """Build graph from symbol list."""
-        definitions: Dict[str, Set[Path]] = {}
-        references: Dict[str, List[Path]] = {}
+        definitions: dict[str, set[Path]] = {}
+        references: dict[str, list[Path]] = {}
 
         for symbol in symbols:
             if symbol.is_definition:
@@ -109,17 +114,17 @@ class SymbolProvider(ABC):
     """Abstract interface for symbol providers."""
 
     @abstractmethod
-    async def get_symbols(self, file: Path) -> List[Symbol]:
+    async def get_symbols(self, file: Path) -> list[Symbol]:
         """Get all symbols in a file."""
         raise NotImplementedError
 
     @abstractmethod
-    async def get_workspace_symbols(self, query: str = "") -> List[Symbol]:
+    async def get_workspace_symbols(self, query: str = "") -> list[Symbol]:
         """Search symbols across workspace."""
         raise NotImplementedError
 
     @abstractmethod
-    async def get_references(self, symbol_name: str, file: Path) -> List[Symbol]:
+    async def get_references(self, symbol_name: str, file: Path) -> list[Symbol]:
         """Find all references to a symbol."""
         raise NotImplementedError
 
@@ -139,13 +144,13 @@ class TreeSitterSymbolProvider(SymbolProvider):
 
     def _init_tree_sitter(self) -> None:
         """Initialize tree-sitter components."""
-        from ai_dev_agent.core.tree_sitter import TreeSitterManager, ensure_parser
         from ai_dev_agent.core.cache import SymbolCache
+        from ai_dev_agent.core.tree_sitter import TreeSitterManager, ensure_parser
 
         self.manager = TreeSitterManager()
         self.cache = SymbolCache(self.root)
 
-    async def get_symbols(self, file: Path) -> List[Symbol]:
+    async def get_symbols(self, file: Path) -> list[Symbol]:
         """Extract symbols using tree-sitter queries."""
         # Check cache first
         cached = self.cache.get_symbols(file)
@@ -163,9 +168,7 @@ class TreeSitterSymbolProvider(SymbolProvider):
         tree = parser_handle.parser.parse(content)
 
         # Extract using language-specific queries
-        symbols = await self._extract_symbols_from_tree(
-            tree, parser_handle.language, file, content
-        )
+        symbols = await self._extract_symbols_from_tree(tree, parser_handle.language, file, content)
 
         # Cache results
         self.cache.set_symbols(file, symbols)
@@ -174,7 +177,7 @@ class TreeSitterSymbolProvider(SymbolProvider):
 
     async def _extract_symbols_from_tree(
         self, tree: Any, language: str, file: Path, content: bytes
-    ) -> List[Symbol]:
+    ) -> list[Symbol]:
         """Extract symbols from parsed tree."""
         symbols = []
 
@@ -185,6 +188,7 @@ class TreeSitterSymbolProvider(SymbolProvider):
 
         # Execute query
         from ai_dev_agent.core.tree_sitter import language_object
+
         lang_obj = language_object(language)
         if not lang_obj:
             return []
@@ -195,32 +199,36 @@ class TreeSitterSymbolProvider(SymbolProvider):
             if tag.startswith("name.definition."):
                 kind_str = tag.replace("name.definition.", "")
                 kind = self._map_tree_sitter_kind(kind_str)
-                symbols.append(Symbol(
-                    name=node.text.decode("utf-8"),
-                    kind=kind,
-                    file=file,
-                    line=node.start_point[0],
-                    column=node.start_point[1],
-                    source=SymbolSource.TREE_SITTER,
-                    is_definition=True
-                ))
+                symbols.append(
+                    Symbol(
+                        name=node.text.decode("utf-8"),
+                        kind=kind,
+                        file=file,
+                        line=node.start_point[0],
+                        column=node.start_point[1],
+                        source=SymbolSource.TREE_SITTER,
+                        is_definition=True,
+                    )
+                )
             elif tag.startswith("name.reference."):
-                symbols.append(Symbol(
-                    name=node.text.decode("utf-8"),
-                    kind=SymbolKind.VARIABLE,  # Default for references
-                    file=file,
-                    line=node.start_point[0],
-                    column=node.start_point[1],
-                    source=SymbolSource.TREE_SITTER,
-                    is_definition=False
-                ))
+                symbols.append(
+                    Symbol(
+                        name=node.text.decode("utf-8"),
+                        kind=SymbolKind.VARIABLE,  # Default for references
+                        file=file,
+                        line=node.start_point[0],
+                        column=node.start_point[1],
+                        source=SymbolSource.TREE_SITTER,
+                        is_definition=False,
+                    )
+                )
 
         return symbols
 
-    def _load_query_for_language(self, language: str) -> Optional[Any]:
+    def _load_query_for_language(self, language: str) -> Any | None:
         """Load tree-sitter query for language."""
-        from ai_dev_agent.core.tree_sitter.queries import get_scm_file_path
         from ai_dev_agent.core.tree_sitter import language_object
+        from ai_dev_agent.core.tree_sitter.queries import get_scm_file_path
 
         query_path = get_scm_file_path(language)
         if not query_path or not query_path.exists():
@@ -251,7 +259,7 @@ class TreeSitterSymbolProvider(SymbolProvider):
         }
         return mapping.get(kind_str, SymbolKind.VARIABLE)
 
-    async def get_workspace_symbols(self, query: str = "") -> List[Symbol]:
+    async def get_workspace_symbols(self, query: str = "") -> list[Symbol]:
         """Search symbols across workspace (slow with tree-sitter)."""
         symbols = []
 
@@ -264,24 +272,18 @@ class TreeSitterSymbolProvider(SymbolProvider):
                 file_symbols = await self.get_symbols(file)
                 if query:
                     # Filter by query
-                    file_symbols = [
-                        s for s in file_symbols
-                        if query.lower() in s.name.lower()
-                    ]
+                    file_symbols = [s for s in file_symbols if query.lower() in s.name.lower()]
                 symbols.extend(file_symbols)
 
         return symbols
 
-    async def get_references(self, symbol_name: str, file: Path) -> List[Symbol]:
+    async def get_references(self, symbol_name: str, file: Path) -> list[Symbol]:
         """Find references to a symbol."""
         references = []
 
         # Search in current file first
         symbols = await self.get_symbols(file)
-        references.extend([
-            s for s in symbols
-            if s.name == symbol_name and not s.is_definition
-        ])
+        references.extend([s for s in symbols if s.name == symbol_name and not s.is_definition])
 
         # Could expand to search other files if needed
         return references
@@ -302,10 +304,11 @@ class LSPSymbolProvider(SymbolProvider):
         """Lazily initialize LSP registry."""
         if self.registry is None:
             from ai_dev_agent.lsp.servers import ServerRegistry
+
             self.registry = ServerRegistry(self.root)
         return self.registry
 
-    async def get_symbols(self, file: Path) -> List[Symbol]:
+    async def get_symbols(self, file: Path) -> list[Symbol]:
         """Get symbols via LSP documentSymbol request."""
         registry = await self._ensure_registry()
         client = await registry.get_or_create_client(file)
@@ -318,13 +321,12 @@ class LSPSymbolProvider(SymbolProvider):
 
         # Request document symbols
         lsp_symbols = await client.connection.sendRequest(
-            "textDocument/documentSymbol",
-            {"textDocument": {"uri": file.as_uri()}}
+            "textDocument/documentSymbol", {"textDocument": {"uri": file.as_uri()}}
         )
 
         return [self._convert_lsp_symbol(s, file) for s in lsp_symbols]
 
-    def _convert_lsp_symbol(self, lsp_symbol: Dict[str, Any], file: Path) -> Symbol:
+    def _convert_lsp_symbol(self, lsp_symbol: dict[str, Any], file: Path) -> Symbol:
         """Convert LSP symbol to universal Symbol."""
         return Symbol(
             name=lsp_symbol["name"],
@@ -335,7 +337,7 @@ class LSPSymbolProvider(SymbolProvider):
             source=SymbolSource.LSP,
             is_definition=True,
             type_info=lsp_symbol.get("detail"),
-            documentation=lsp_symbol.get("documentation")
+            documentation=lsp_symbol.get("documentation"),
         )
 
     def _map_lsp_kind(self, lsp_kind: int) -> SymbolKind:
@@ -355,7 +357,7 @@ class LSPSymbolProvider(SymbolProvider):
         }
         return mapping.get(lsp_kind, SymbolKind.VARIABLE)
 
-    async def get_workspace_symbols(self, query: str = "") -> List[Symbol]:
+    async def get_workspace_symbols(self, query: str = "") -> list[Symbol]:
         """Fast workspace-wide symbol search via LSP."""
         registry = await self._ensure_registry()
         all_symbols = []
@@ -363,27 +365,28 @@ class LSPSymbolProvider(SymbolProvider):
         for client in registry.active_clients():
             try:
                 lsp_symbols = await client.connection.sendRequest(
-                    "workspace/symbol",
-                    {"query": query}
+                    "workspace/symbol", {"query": query}
                 )
 
                 for s in lsp_symbols:
                     file = Path(s["location"]["uri"].replace("file://", ""))
-                    all_symbols.append(Symbol(
-                        name=s["name"],
-                        kind=self._map_lsp_kind(s.get("kind", 0)),
-                        file=file,
-                        line=s["location"]["range"]["start"]["line"],
-                        column=s["location"]["range"]["start"]["character"],
-                        source=SymbolSource.LSP,
-                        is_definition=True
-                    ))
+                    all_symbols.append(
+                        Symbol(
+                            name=s["name"],
+                            kind=self._map_lsp_kind(s.get("kind", 0)),
+                            file=file,
+                            line=s["location"]["range"]["start"]["line"],
+                            column=s["location"]["range"]["start"]["character"],
+                            source=SymbolSource.LSP,
+                            is_definition=True,
+                        )
+                    )
             except Exception:
                 continue
 
         return all_symbols
 
-    async def get_references(self, symbol_name: str, file: Path) -> List[Symbol]:
+    async def get_references(self, symbol_name: str, file: Path) -> list[Symbol]:
         """Find references via LSP."""
         registry = await self._ensure_registry()
         client = await registry.get_or_create_client(file)
@@ -404,8 +407,8 @@ class LSPSymbolProvider(SymbolProvider):
             {
                 "textDocument": {"uri": file.as_uri()},
                 "position": {"line": target.line, "character": target.column},
-                "context": {"includeDeclaration": False}
-            }
+                "context": {"includeDeclaration": False},
+            },
         )
 
         return [
@@ -416,7 +419,7 @@ class LSPSymbolProvider(SymbolProvider):
                 line=ref["range"]["start"]["line"],
                 column=ref["range"]["start"]["character"],
                 source=SymbolSource.LSP,
-                is_definition=False
+                is_definition=False,
             )
             for ref in references
         ]
@@ -434,7 +437,7 @@ class HybridSymbolProvider(SymbolProvider):
         self.ts_provider = TreeSitterSymbolProvider(root)
         self.lsp_provider = LSPSymbolProvider(root)
 
-    async def get_symbols(self, file: Path) -> List[Symbol]:
+    async def get_symbols(self, file: Path) -> list[Symbol]:
         """Get symbols using best available method."""
         # Try LSP first (has type info)
         try:
@@ -449,9 +452,7 @@ class HybridSymbolProvider(SymbolProvider):
         # Fallback to tree-sitter
         return await self.ts_provider.get_symbols(file)
 
-    def _merge_symbols(
-        self, lsp_symbols: List[Symbol], ts_symbols: List[Symbol]
-    ) -> List[Symbol]:
+    def _merge_symbols(self, lsp_symbols: list[Symbol], ts_symbols: list[Symbol]) -> list[Symbol]:
         """Merge LSP definitions with tree-sitter references."""
         # Index by name and location
         symbol_map = {(s.name, s.line): s for s in lsp_symbols}
@@ -466,7 +467,7 @@ class HybridSymbolProvider(SymbolProvider):
 
         return list(symbol_map.values())
 
-    async def get_workspace_symbols(self, query: str = "") -> List[Symbol]:
+    async def get_workspace_symbols(self, query: str = "") -> list[Symbol]:
         """Use LSP for fast workspace search, fallback to tree-sitter."""
         try:
             lsp_symbols = await self.lsp_provider.get_workspace_symbols(query)
@@ -477,7 +478,7 @@ class HybridSymbolProvider(SymbolProvider):
 
         return await self.ts_provider.get_workspace_symbols(query)
 
-    async def get_references(self, symbol_name: str, file: Path) -> List[Symbol]:
+    async def get_references(self, symbol_name: str, file: Path) -> list[Symbol]:
         """Find references using best available method."""
         try:
             lsp_refs = await self.lsp_provider.get_references(symbol_name, file)
@@ -493,6 +494,6 @@ class HybridSymbolProvider(SymbolProvider):
         return SymbolSource.HYBRID
 
     @classmethod
-    def create(cls, root: Path) -> "HybridSymbolProvider":
+    def create(cls, root: Path) -> HybridSymbolProvider:
         """Factory method to create hybrid provider."""
         return cls(root)

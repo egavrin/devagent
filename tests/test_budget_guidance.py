@@ -1,23 +1,24 @@
 """Test the new phase-based budget guidance system."""
 
+
 def test_phase_determination():
     """Test that phases are determined correctly based on percentage."""
 
     # Test cases: (iteration, total, expected_phase)
     test_cases = [
-        (1, 10, "exploration"),     # 10% consumed
-        (3, 10, "exploration"),     # 30% consumed
-        (4, 10, "investigation"),   # 40% consumed - boundary (>=40% is investigation)
-        (5, 10, "investigation"),   # 50% consumed
-        (7, 10, "consolidation"),   # 70% consumed - boundary (>=70% is consolidation)
-        (8, 10, "consolidation"),   # 80% consumed
-        (9, 10, "late"),           # 90% consumed - boundary (>=90% is late phase)
-        (10, 10, "synthesis"),     # 100% consumed - final (special case)
+        (1, 10, "exploration"),  # 10% consumed
+        (3, 10, "exploration"),  # 30% consumed
+        (4, 10, "investigation"),  # 40% consumed - boundary (>=40% is investigation)
+        (5, 10, "investigation"),  # 50% consumed
+        (7, 10, "consolidation"),  # 70% consumed - boundary (>=70% is consolidation)
+        (8, 10, "consolidation"),  # 80% consumed
+        (9, 10, "late"),  # 90% consumed - boundary (>=90% is late phase)
+        (10, 10, "synthesis"),  # 100% consumed - final (special case)
     ]
 
     for iteration, total, expected_phase in test_cases:
         remaining = total - iteration
-        percent_consumed = (iteration / total * 100)
+        percent_consumed = iteration / total * 100
 
         # Determine phase (matching executor logic)
         if remaining == 0:
@@ -66,7 +67,7 @@ BUDGET STATUS: 18 steps remaining (28% budget consumed)"""
     new_tokens = len(new_format) / 4
     saved_per_iteration = old_tokens - new_tokens
 
-    print(f"\nToken usage comparison:")
+    print("\nToken usage comparison:")
     print(f"Old format: ~{old_tokens:.0f} tokens")
     print(f"New format: ~{new_tokens:.0f} tokens")
     print(f"Saved per iteration: ~{saved_per_iteration:.0f} tokens")

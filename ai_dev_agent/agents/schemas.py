@@ -11,55 +11,40 @@ VIOLATION_SCHEMA = {
                 "properties": {
                     "file": {
                         "type": "string",
-                        "description": "File path where violation was found"
+                        "description": "File path where violation was found",
                     },
-                    "line": {
-                        "type": "integer",
-                        "description": "Line number of the violation"
-                    },
+                    "line": {"type": "integer", "description": "Line number of the violation"},
                     "severity": {
                         "type": "string",
                         "enum": ["error", "warning", "info"],
-                        "description": "Severity level of the violation"
+                        "description": "Severity level of the violation",
                     },
-                    "rule": {
-                        "type": "string",
-                        "description": "Name or ID of the violated rule"
-                    },
-                    "message": {
-                        "type": "string",
-                        "description": "Explanation of the violation"
-                    },
+                    "rule": {"type": "string", "description": "Name or ID of the violated rule"},
+                    "message": {"type": "string", "description": "Explanation of the violation"},
                     "change_type": {
                         "type": "string",
                         "enum": ["added", "removed"],
-                        "description": "Whether the violation references added or removed code"
+                        "description": "Whether the violation references added or removed code",
                     },
                     "code_snippet": {
                         "type": "string",
-                        "description": "The problematic code (optional)"
-                    }
+                        "description": "The problematic code (optional)",
+                    },
                 },
-                "required": ["file", "line", "message"]
-            }
+                "required": ["file", "line", "message"],
+            },
         },
         "summary": {
             "type": "object",
             "properties": {
                 "total_violations": {
                     "type": "integer",
-                    "description": "Total number of violations found"
+                    "description": "Total number of violations found",
                 },
-                "files_reviewed": {
-                    "type": "integer",
-                    "description": "Number of files reviewed"
-                },
-                "rule_name": {
-                    "type": "string",
-                    "description": "Name of the rule that was applied"
-                }
-            }
-        }
+                "files_reviewed": {"type": "integer", "description": "Number of files reviewed"},
+                "rule_name": {"type": "string", "description": "Name of the rule that was applied"},
+            },
+        },
     },
-    "required": ["violations"]
+    "required": ["violations"],
 }

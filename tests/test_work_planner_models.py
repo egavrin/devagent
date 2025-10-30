@@ -4,14 +4,9 @@ Tests for Work Planning Agent Models
 Following TDD: These tests are written BEFORE implementation.
 """
 
-import pytest
 from datetime import datetime
-from ai_dev_agent.agents.work_planner import (
-    Task,
-    WorkPlan,
-    TaskStatus,
-    Priority,
-)
+
+from ai_dev_agent.agents.work_planner import Priority, Task, TaskStatus, WorkPlan
 
 
 class TestTaskStatus:
@@ -247,9 +242,7 @@ class TestWorkPlan:
     def test_workplan_get_next_task_with_dependencies(self):
         """Test getting next task respecting dependencies"""
         task1 = Task(title="Task 1", priority=Priority.HIGH)
-        task2 = Task(
-            title="Task 2", priority=Priority.CRITICAL, dependencies=[task1.id]
-        )
+        task2 = Task(title="Task 2", priority=Priority.CRITICAL, dependencies=[task1.id])
         task3 = Task(title="Task 3", priority=Priority.MEDIUM)
 
         plan = WorkPlan(name="Test Plan", goal="Goal", tasks=[task1, task2, task3])

@@ -3,7 +3,7 @@
 These agents wrap the specialized agent interface but delegate actual
 execution to the manager agent which has real tool access and LLM integration.
 """
-from pathlib import Path
+
 from typing import Optional
 
 from ..base import AgentContext, AgentResult, BaseAgent
@@ -16,9 +16,14 @@ class LiveReviewAgent(BaseAgent):
         super().__init__(
             name="live_review_agent",
             description="Reviews code for quality, security, and best practices (LIVE)",
-            capabilities=["code_quality", "security_analysis", "performance_review", "best_practices"],
+            capabilities=[
+                "code_quality",
+                "security_analysis",
+                "performance_review",
+                "best_practices",
+            ],
             tools=["read", "grep", "find", "symbols", "git"],
-            permissions={"read": "allow", "write": "deny", "run": "deny"}
+            permissions={"read": "allow", "write": "deny", "run": "deny"},
         )
 
     def execute(self, prompt: str, context: AgentContext) -> AgentResult:
@@ -33,10 +38,9 @@ class LiveReviewAgent(BaseAgent):
         """
         try:
             # Import here to avoid circular dependency
-            from ai_dev_agent.cli.react.executor import _execute_react_assistant
-            from ai_dev_agent.cli.utils import get_llm_client
-            from ai_dev_agent.core.utils.config import Settings
             import os
+
+            from ai_dev_agent.core.utils.config import Settings
 
             # Get settings
             settings = Settings()
@@ -47,7 +51,7 @@ class LiveReviewAgent(BaseAgent):
                 return AgentResult(
                     success=False,
                     output="No API key configured. Set DEVAGENT_API_KEY environment variable.",
-                    error="Missing API key"
+                    error="Missing API key",
                 )
 
             # Create enhanced prompt for review
@@ -64,16 +68,12 @@ Provide specific findings with line numbers and recommendations."""
             # This would need CLI context - for now, return guidance
             return AgentResult(
                 success=True,
-                output=f"Review task received: {prompt}\\n\\nTo execute this review with real tools, use:\\n  devagent \\\"{review_prompt}\\\"",
-                metadata={"prompt": review_prompt, "type": "review"}
+                output=f'Review task received: {prompt}\\n\\nTo execute this review with real tools, use:\\n  devagent \\"{review_prompt}\\"',
+                metadata={"prompt": review_prompt, "type": "review"},
             )
 
         except Exception as e:
-            return AgentResult(
-                success=False,
-                output=f"Review failed: {str(e)}",
-                error=str(e)
-            )
+            return AgentResult(success=False, output=f"Review failed: {e!s}", error=str(e))
 
 
 class LiveDesignAgent(BaseAgent):
@@ -84,7 +84,7 @@ class LiveDesignAgent(BaseAgent):
             name="live_design_agent",
             description="Creates technical designs and architecture (LIVE)",
             capabilities=["technical_design", "architecture_design"],
-            tools=["read", "write", "grep", "find", "symbols"]
+            tools=["read", "write", "grep", "find", "symbols"],
         )
 
     def execute(self, prompt: str, context: AgentContext) -> AgentResult:
@@ -101,8 +101,8 @@ Create a comprehensive technical design including:
 
         return AgentResult(
             success=True,
-            output=f"Design task received: {prompt}\\n\\nTo execute with real analysis, use:\\n  devagent \\\"{design_prompt}\\\"",
-            metadata={"prompt": design_prompt, "type": "design"}
+            output=f'Design task received: {prompt}\\n\\nTo execute with real analysis, use:\\n  devagent \\"{design_prompt}\\"',
+            metadata={"prompt": design_prompt, "type": "design"},
         )
 
 
@@ -115,8 +115,5 @@ def get_live_agent(agent_type: str) -> Optional[BaseAgent]:
     Returns:
         Live agent instance or None
     """
-    agents = {
-        "review": LiveReviewAgent(),
-        "design": LiveDesignAgent()
-    }
+    agents = {"review": LiveReviewAgent(), "design": LiveDesignAgent()}
     return agents.get(agent_type)

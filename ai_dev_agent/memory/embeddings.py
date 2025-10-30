@@ -12,9 +12,8 @@ import hashlib
 import logging
 import pickle
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -22,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Try to import optional dependencies
 try:
     from sentence_transformers import SentenceTransformer
+
     SENTENCE_TRANSFORMERS_AVAILABLE = True
 except ImportError:
     SENTENCE_TRANSFORMERS_AVAILABLE = False
@@ -35,10 +35,7 @@ class EmbeddingGenerator:
     CACHE_DIR = Path.home() / ".devagent" / "embeddings_cache"
 
     def __init__(
-        self,
-        method: str = "auto",
-        model_name: Optional[str] = None,
-        cache_embeddings: bool = True
+        self, method: str = "auto", model_name: str | None = None, cache_embeddings: bool = True
     ):
         """Initialize the embedding generator.
 
@@ -49,7 +46,7 @@ class EmbeddingGenerator:
         """
         self.method = self._select_method(method)
         self.cache_embeddings = cache_embeddings
-        self._embedding_cache: Dict[str, np.ndarray] = {}
+        self._embedding_cache: dict[str, np.ndarray] = {}
 
         # Initialize based on method
         if self.method == "transformer":
@@ -71,7 +68,7 @@ class EmbeddingGenerator:
             # Use a simpler approach: fixed vocabulary size
             self.embedding_dim = 384
             self._tfidf_fitted = False
-            self._corpus: List[str] = []
+            self._corpus: list[str] = []
             self._vocabulary = None
             logger.debug("Using TF-IDF embeddings")
 
@@ -124,7 +121,7 @@ class EmbeddingGenerator:
 
         return embedding
 
-    def generate_embeddings(self, texts: List[str]) -> np.ndarray:
+    def generate_embeddings(self, texts: list[str]) -> np.ndarray:
         """Generate embeddings for multiple texts.
 
         Args:
@@ -162,9 +159,7 @@ class EmbeddingGenerator:
             # Generate embeddings for uncached texts
             if uncached_texts:
                 new_embeddings = self.transformer_model.encode(
-                    uncached_texts,
-                    show_progress_bar=False,
-                    convert_to_numpy=True
+                    uncached_texts, show_progress_bar=False, convert_to_numpy=True
                 )
 
                 # Cache the new embeddings
@@ -186,9 +181,7 @@ class EmbeddingGenerator:
             return np.vstack(embeddings)
 
     def compute_similarity(
-        self,
-        query_embedding: np.ndarray,
-        candidate_embeddings: np.ndarray
+        self, query_embedding: np.ndarray, candidate_embeddings: np.ndarray
     ) -> np.ndarray:
         """Compute cosine similarity between query and candidates.
 
@@ -209,10 +202,10 @@ class EmbeddingGenerator:
     def find_similar(
         self,
         query: str,
-        candidates: List[Tuple[str, np.ndarray]],
+        candidates: list[tuple[str, np.ndarray]],
         top_k: int = 5,
-        threshold: float = 0.3
-    ) -> List[Tuple[int, float]]:
+        threshold: float = 0.3,
+    ) -> list[tuple[int, float]]:
         """Find most similar candidates to query.
 
         Args:
@@ -250,9 +243,7 @@ class EmbeddingGenerator:
     def _generate_transformer_embedding(self, text: str) -> np.ndarray:
         """Generate embedding using sentence transformer."""
         embedding = self.transformer_model.encode(
-            text,
-            show_progress_bar=False,
-            convert_to_numpy=True
+            text, show_progress_bar=False, convert_to_numpy=True
         )
         return embedding
 
@@ -262,13 +253,13 @@ class EmbeddingGenerator:
         from sklearn.feature_extraction.text import HashingVectorizer
 
         # Use hashing vectorizer for consistent dimensions
-        if not hasattr(self, '_hashing_vectorizer'):
+        if not hasattr(self, "_hashing_vectorizer"):
             self._hashing_vectorizer = HashingVectorizer(
                 n_features=self.embedding_dim,
                 ngram_range=(2, 4),  # Character n-grams
-                analyzer='char',
-                norm='l2',
-                alternate_sign=False  # All positive values
+                analyzer="char",
+                norm="l2",
+                alternate_sign=False,  # All positive values
             )
 
         # Generate embedding
@@ -280,15 +271,15 @@ class EmbeddingGenerator:
             if embedding.shape[0] < self.embedding_dim:
                 # Pad with zeros
                 padded = np.zeros(self.embedding_dim)
-                padded[:embedding.shape[0]] = embedding
+                padded[: embedding.shape[0]] = embedding
                 embedding = padded
             else:
                 # Truncate
-                embedding = embedding[:self.embedding_dim]
+                embedding = embedding[: self.embedding_dim]
 
         return embedding
 
-    def update_tfidf_corpus(self, texts: List[str]) -> None:
+    def update_tfidf_corpus(self, texts: list[str]) -> None:
         """Update TF-IDF corpus with new texts.
 
         This is kept for compatibility but not needed with HashingVectorizer.
@@ -308,7 +299,7 @@ class EmbeddingGenerator:
         text_hash = hashlib.md5(text.encode()).hexdigest()[:8]
         return f"{self.method}_{text_preview}_{text_hash}"
 
-    def _load_from_cache(self, cache_key: str) -> Optional[np.ndarray]:
+    def _load_from_cache(self, cache_key: str) -> np.ndarray | None:
         """Load embedding from disk cache."""
         if not self.cache_embeddings:
             return None
@@ -316,7 +307,7 @@ class EmbeddingGenerator:
         cache_file = self.CACHE_DIR / f"{cache_key}.pkl"
         if cache_file.exists():
             try:
-                with open(cache_file, "rb") as f:
+                with Path(cache_file).open("rb") as f:
                     return pickle.load(f)
             except Exception as e:
                 logger.debug(f"Failed to load cache {cache_key}: {e}")
@@ -329,7 +320,7 @@ class EmbeddingGenerator:
 
         cache_file = self.CACHE_DIR / f"{cache_key}.pkl"
         try:
-            with open(cache_file, "wb") as f:
+            with Path(cache_file).open("wb") as f:
                 pickle.dump(embedding, f)
         except Exception as e:
             logger.debug(f"Failed to save cache {cache_key}: {e}")

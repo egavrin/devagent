@@ -1,18 +1,26 @@
 """Shared data structures for the ReAct execution loop."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 class ToolCall(BaseModel):
     """Single tool invocation within a batched request."""
 
     tool: str = Field(..., description="Registered tool identifier.")
-    args: Dict[str, Any] = Field(default_factory=dict, description="Keyword arguments for the tool.")
-    call_id: Optional[str] = Field(default=None, description="Unique identifier for this specific call.")
+    args: dict[str, Any] = Field(
+        default_factory=dict, description="Keyword arguments for the tool."
+    )
+    call_id: Optional[str] = Field(
+        default=None, description="Unique identifier for this specific call."
+    )
 
     model_config = ConfigDict(extra="allow")
 
@@ -25,7 +33,7 @@ class ToolResult(BaseModel):
     success: bool = Field(..., description="Whether execution succeeded.")
     outcome: str = Field(default="", description="Result summary.")
     error: Optional[str] = Field(default=None, description="Error if failed.")
-    metrics: Dict[str, Any] = Field(default_factory=dict, description="Per-call metrics.")
+    metrics: dict[str, Any] = Field(default_factory=dict, description="Per-call metrics.")
     wall_time: Optional[float] = Field(default=None, description="Execution time in seconds.")
 
     model_config = ConfigDict(extra="allow")
@@ -37,11 +45,17 @@ class ActionRequest(BaseModel):
     step_id: str
     thought: str = Field(..., description="Reasoning that led to the action.")
     tool: str = Field(..., description="Registered tool identifier (single-tool mode).")
-    args: Dict[str, Any] = Field(default_factory=dict, description="Keyword arguments for the tool.")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Auxiliary data for logging.")
+    args: dict[str, Any] = Field(
+        default_factory=dict, description="Keyword arguments for the tool."
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Auxiliary data for logging."
+    )
 
     # Batch support
-    tool_calls: List[ToolCall] = Field(default_factory=list, description="Multiple tool calls for parallel execution.")
+    tool_calls: list[ToolCall] = Field(
+        default_factory=list, description="Multiple tool calls for parallel execution."
+    )
 
     model_config = ConfigDict(extra="allow")
 
@@ -51,14 +65,24 @@ class Observation(BaseModel):
 
     success: bool
     outcome: str = Field(default="", description="Primary result summary.")
-    metrics: Dict[str, Any] = Field(default_factory=dict, description="Structured metrics captured from the action.")
-    artifacts: List[str] = Field(default_factory=list, description="Recorded artifact identifiers (paths, URIs).")
+    metrics: dict[str, Any] = Field(
+        default_factory=dict, description="Structured metrics captured from the action."
+    )
+    artifacts: list[str] = Field(
+        default_factory=list, description="Recorded artifact identifiers (paths, URIs)."
+    )
     tool: Optional[str] = Field(default=None, description="Tool that produced the observation.")
-    raw_output: Optional[str] = Field(default=None, description="Unstructured output for later inspection.")
-    error: Optional[str] = Field(default=None, description="Error information if the action failed.")
+    raw_output: Optional[str] = Field(
+        default=None, description="Unstructured output for later inspection."
+    )
+    error: Optional[str] = Field(
+        default=None, description="Error information if the action failed."
+    )
 
     # Batch support
-    results: List[ToolResult] = Field(default_factory=list, description="Per-call results for batched execution.")
+    results: list[ToolResult] = Field(
+        default_factory=list, description="Per-call results for batched execution."
+    )
 
     model_config = ConfigDict(extra="allow")
 
@@ -99,12 +123,12 @@ class MetricsSnapshot(BaseModel):
     time_elapsed: Optional[float] = None
     wall_time: Optional[float] = None
     compile_errors: Optional[int] = None
-    gate_notes: Dict[str, str] = Field(default_factory=dict)
-    raw: Dict[str, Any] = Field(default_factory=dict)
+    gate_notes: dict[str, str] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
-    def _collect_raw(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    def _collect_raw(cls, values: dict[str, Any]) -> dict[str, Any]:
         raw = dict(values)
         for key in list(values.keys()):
             if key in cls.model_fields:
@@ -158,13 +182,15 @@ class GateConfig(BaseModel):
 class EvaluationResult(BaseModel):
     """Result of evaluating gate status after a step."""
 
-    gates: Dict[str, bool]
-    required_gates: Dict[str, bool] = Field(default_factory=dict)
+    gates: dict[str, bool]
+    required_gates: dict[str, bool] = Field(default_factory=dict)
     should_stop: bool
     stop_reason: Optional[str] = None
     next_action_hint: Optional[str] = None
-    improved_metrics: Dict[str, Any] = Field(default_factory=dict)
-    status: str = Field("in_progress", description="Lifecycle indicator (in_progress|success|failure|blocked)")
+    improved_metrics: dict[str, Any] = Field(default_factory=dict)
+    status: str = Field(
+        "in_progress", description="Lifecycle indicator (in_progress|success|failure|blocked)"
+    )
 
 
 class StepRecord(BaseModel):
@@ -184,8 +210,8 @@ class TaskSpec:
     identifier: str
     goal: str
     category: str = "implementation"
-    instructions: Optional[str] = None
-    files: Optional[List[str]] = None
+    instructions: str | None = None
+    files: list[str] | None = None
 
 
 class RunResult(BaseModel):
@@ -193,12 +219,12 @@ class RunResult(BaseModel):
 
     task_id: str
     status: str
-    steps: List[StepRecord]
-    gates: Dict[str, bool]
-    required_gates: Dict[str, bool] = Field(default_factory=dict)
+    steps: list[StepRecord]
+    gates: dict[str, bool]
+    required_gates: dict[str, bool] = Field(default_factory=dict)
     stop_reason: Optional[str] = None
     runtime_seconds: Optional[float] = None
-    metrics: Dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
 
     def gate_summary(self) -> Mapping[str, bool]:
         return self.gates

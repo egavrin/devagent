@@ -1,4 +1,5 @@
 """Abstractions for LLM providers."""
+
 from __future__ import annotations
 
 import json
@@ -6,9 +7,12 @@ import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 import requests
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 
 @dataclass(frozen=True)
@@ -16,9 +20,9 @@ class Message:
     role: str
     content: str | None = None
     tool_call_id: str | None = None
-    tool_calls: List[Dict[str, Any]] | None = None
+    tool_calls: list[dict[str, Any]] | None = None
 
-    def to_payload(self) -> Dict[str, Any]:
+    def to_payload(self) -> dict[str, Any]:
         payload = {"role": self.role}
         if self.content is not None:
             payload["content"] = self.content
@@ -32,6 +36,7 @@ class Message:
 @dataclass
 class StreamHooks:
     """Hooks for streaming responses."""
+
     on_start: Callable[[], None] | None = None
     on_chunk: Callable[[str], None] | None = None
     on_complete: Callable[[str], None] | None = None
@@ -41,6 +46,7 @@ class StreamHooks:
 @dataclass
 class RetryConfig:
     """Configuration for retry behavior."""
+
     max_retries: int = 3
     initial_delay: float = 0.5
     max_delay: float = 5.0
@@ -54,7 +60,7 @@ class ToolCall:
     """Single tool/function invocation requested by the model."""
 
     name: str
-    arguments: Dict[str, Any]
+    arguments: dict[str, Any]
     call_id: str | None = None
 
 
@@ -62,21 +68,21 @@ class ToolCall:
 class ToolCallResult:
     """Parsed outcome of a tool-enabled completion."""
 
-    calls: List[ToolCall] = field(default_factory=list)
+    calls: list[ToolCall] = field(default_factory=list)
     message_content: str | None = None
-    raw_tool_calls: List[Dict[str, Any]] | None = None
-    _raw_response: Dict[str, Any] | None = None
+    raw_tool_calls: list[dict[str, Any]] | None = None
+    _raw_response: dict[str, Any] | None = None
     call_id: str | None = field(init=False, default=None)
     name: str | None = field(init=False, default=None)
-    arguments: Dict[str, Any] = field(init=False, default_factory=dict)
+    arguments: dict[str, Any] = field(init=False, default_factory=dict)
     content: str | None = field(init=False, default=None)
 
     def __init__(
         self,
         calls: Sequence[ToolCall] | None = None,
         message_content: str | None = None,
-        raw_tool_calls: List[Dict[str, Any]] | None = None,
-        _raw_response: Dict[str, Any] | None = None,
+        raw_tool_calls: list[dict[str, Any]] | None = None,
+        _raw_response: dict[str, Any] | None = None,
         **legacy: Any,
     ) -> None:
         self.message_content = message_content
@@ -89,10 +95,14 @@ class ToolCallResult:
         legacy_name = legacy.pop("name", None)
         legacy_call_id = legacy.pop("call_id", None)
 
-        if not self.calls and (legacy_name or legacy_call_id or legacy_args is not None or extra_content is not None):
+        if not self.calls and (
+            legacy_name or legacy_call_id or legacy_args is not None or extra_content is not None
+        ):
             arguments = self._coerce_arguments(legacy_args, extra_content)
             if legacy_name:
-                self.calls = [ToolCall(name=legacy_name, arguments=arguments, call_id=legacy_call_id)]
+                self.calls = [
+                    ToolCall(name=legacy_name, arguments=arguments, call_id=legacy_call_id)
+                ]
             elif arguments:
                 self.calls = [ToolCall(name="", arguments=arguments, call_id=legacy_call_id)]
             self.content = extra_content if isinstance(extra_content, str) else None
@@ -110,7 +120,7 @@ class ToolCallResult:
             self.arguments = {}
 
     @staticmethod
-    def _coerce_arguments(arguments: Any, fallback: Any) -> Dict[str, Any]:
+    def _coerce_arguments(arguments: Any, fallback: Any) -> dict[str, Any]:
         if isinstance(arguments, dict):
             return dict(arguments)
         if isinstance(arguments, str):
@@ -163,8 +173,8 @@ class LLMClient(Protocol):
         messages: Sequence[Message],
         temperature: float = 0.2,
         max_tokens: int | None = None,
-        extra_headers: Dict[str, str] | None = None,
-        response_format: Dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         """Complete a chat conversation."""
         ...
@@ -174,7 +184,7 @@ class LLMClient(Protocol):
         messages: Sequence[Message],
         temperature: float = 0.2,
         max_tokens: int | None = None,
-        extra_headers: Dict[str, str] | None = None,
+        extra_headers: dict[str, str] | None = None,
         hooks: StreamHooks | None = None,
     ) -> Iterable[str]:
         """Stream a chat conversation with optional hooks."""
@@ -191,15 +201,15 @@ class LLMClient(Protocol):
     def invoke_tools(
         self,
         messages: Sequence[Message],
-        tools: List[Dict[str, Any]],
+        tools: list[dict[str, Any]],
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
-        tool_choice: str | Dict[str, Any] | None = "auto",
-        extra_headers: Dict[str, str] | None = None,
-        response_format: Dict[str, Any] | None = None,
+        tool_choice: str | dict[str, Any] | None = "auto",
+        extra_headers: dict[str, str] | None = None,
+        response_format: dict[str, Any] | None = None,
         parallel_tool_calls: bool = True,
-    ) -> "ToolCallResult":
+    ) -> ToolCallResult:
         """Run a chat completion with tool definitions and return parsed tool calls.
 
         Args:
@@ -256,7 +266,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
     def _request_url(self) -> str:
         return f"{self.base_url}{self._COMPLETIONS_PATH}"
 
-    def _build_headers(self, extra_headers: Dict[str, str] | None = None) -> Dict[str, str]:
+    def _build_headers(self, extra_headers: dict[str, str] | None = None) -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -278,7 +288,8 @@ class HTTPChatLLMClient(LLMClient, ABC):
     def _calculate_delay(self, attempt: int) -> float:
         base_delay = min(
             self.retry_config.max_delay,
-            self.retry_config.initial_delay * (self.retry_config.backoff_multiplier ** (attempt - 1)),
+            self.retry_config.initial_delay
+            * (self.retry_config.backoff_multiplier ** (attempt - 1)),
         )
         if base_delay <= 0:
             return 0.0
@@ -295,7 +306,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
             return LLMTimeoutError(f"{self._provider_name} request timed out: {exc}")
         return LLMConnectionError(f"{self._provider_name} connection failed: {exc}")
 
-    def _decode_json(self, response: requests.Response) -> Dict[str, Any]:
+    def _decode_json(self, response: requests.Response) -> dict[str, Any]:
         try:
             return response.json()
         except json.JSONDecodeError as exc:
@@ -303,10 +314,10 @@ class HTTPChatLLMClient(LLMClient, ABC):
 
     def _post(
         self,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         *,
-        extra_headers: Dict[str, str] | None = None,
-    ) -> Dict[str, Any]:
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         url = self._request_url()
         headers = self._build_headers(extra_headers)
         body = json.dumps(payload)
@@ -361,7 +372,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
         messages: Sequence[Message],
         temperature: float,
         max_tokens: int | None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Return the provider-specific request payload."""
 
     def complete(
@@ -369,8 +380,8 @@ class HTTPChatLLMClient(LLMClient, ABC):
         messages: Sequence[Message],
         temperature: float = 0.2,
         max_tokens: int | None = None,
-        extra_headers: Dict[str, str] | None = None,
-        response_format: Dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         payload = self._prepare_payload(messages, temperature, max_tokens)
         if response_format:
@@ -389,7 +400,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
         messages: Sequence[Message],
         temperature: float = 0.2,
         max_tokens: int | None = None,
-        extra_headers: Dict[str, str] | None = None,
+        extra_headers: dict[str, str] | None = None,
         hooks: StreamHooks | None = None,
     ) -> Iterable[str]:
         payload = self._prepare_payload(messages, temperature, max_tokens)
@@ -397,7 +408,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
 
         url = self._request_url()
         headers = self._build_headers(extra_headers)
-        accumulated: List[str] = []
+        accumulated: list[str] = []
 
         try:
             if hooks and hooks.on_start:
@@ -415,7 +426,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
                 for line in response.iter_lines(decode_unicode=True):
                     if not line or not line.startswith("data: "):
                         continue
-                    chunk = line[len("data: "):]
+                    chunk = line[len("data: ") :]
                     if chunk == "[DONE]":
                         break
                     try:
@@ -440,13 +451,13 @@ class HTTPChatLLMClient(LLMClient, ABC):
     def invoke_tools(
         self,
         messages: Sequence[Message],
-        tools: List[Dict[str, Any]],
+        tools: list[dict[str, Any]],
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
-        tool_choice: str | Dict[str, Any] | None = "auto",
-        extra_headers: Dict[str, str] | None = None,
-        response_format: Dict[str, Any] | None = None,
+        tool_choice: str | dict[str, Any] | None = "auto",
+        extra_headers: dict[str, str] | None = None,
+        response_format: dict[str, Any] | None = None,
         parallel_tool_calls: bool = True,
     ) -> ToolCallResult:
         payload = self._prepare_payload(messages, temperature, max_tokens)
@@ -472,7 +483,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
     # Response parsing helpers
     # ------------------------------------------------------------------
 
-    def _extract_choice_message(self, data: Dict[str, Any], context: str) -> Dict[str, Any]:
+    def _extract_choice_message(self, data: dict[str, Any], context: str) -> dict[str, Any]:
         try:
             return data["choices"][0]["message"]
         except (KeyError, IndexError) as exc:
@@ -480,7 +491,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
                 f"Unexpected {self._provider_name} response structure for {context}"
             ) from exc
 
-    def _parse_stream_delta(self, data: Dict[str, Any]) -> str | None:
+    def _parse_stream_delta(self, data: dict[str, Any]) -> str | None:
         try:
             delta = data["choices"][0]["delta"].get("content")
         except (KeyError, IndexError, AttributeError):
@@ -491,8 +502,8 @@ class HTTPChatLLMClient(LLMClient, ABC):
             return delta
         return str(delta)
 
-    def _parse_tool_calls(self, tool_calls_raw: Iterable[Dict[str, Any]]) -> List[ToolCall]:
-        parsed: List[ToolCall] = []
+    def _parse_tool_calls(self, tool_calls_raw: Iterable[dict[str, Any]]) -> list[ToolCall]:
+        parsed: list[ToolCall] = []
         for call in tool_calls_raw:
             function_data = call.get("function", {}) or {}
             name = function_data.get("name") or ""
@@ -516,17 +527,17 @@ class HTTPChatLLMClient(LLMClient, ABC):
 
 
 __all__ = [
-    "Message",
-    "LLMClient",
     "HTTPChatLLMClient",
+    "LLMClient",
+    "LLMConnectionError",
     "LLMError",
     "LLMRateLimitError",
-    "LLMTimeoutError",
-    "LLMConnectionError",
     "LLMResponseError",
     "LLMRetryExhaustedError",
-    "StreamHooks",
+    "LLMTimeoutError",
+    "Message",
     "RetryConfig",
+    "StreamHooks",
     "ToolCall",
     "ToolCallResult",
 ]

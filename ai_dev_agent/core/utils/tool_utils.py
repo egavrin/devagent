@@ -1,9 +1,10 @@
 """Utilities for working with tool identifiers and signatures."""
+
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, TypeVar
-
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
@@ -14,36 +15,37 @@ def _registry():
 
     return _registry_instance
 
-def canonical_tool_name(tool_name: Optional[str]) -> str:
+
+def canonical_tool_name(tool_name: str | None) -> str:
     """Return a stable canonical name for a tool alias."""
     if not tool_name:
         return "generic"
     return _registry().canonical_name(tool_name)
 
 
-def tool_category(tool_name: Optional[str]) -> str:
+def tool_category(tool_name: str | None) -> str:
     """Return the logical category for a tool alias."""
     if not tool_name:
         return "generic"
     return _registry().category(tool_name)
 
 
-def display_tool_name(tool_name: Optional[str]) -> str:
+def display_tool_name(tool_name: str | None) -> str:
     """Return the user-facing display name for a tool."""
     if not tool_name:
         return "generic"
     return _registry().display_name(tool_name)
 
 
-def tool_aliases(tool_name: Optional[str], *, include_canonical: bool = True) -> Tuple[str, ...]:
+def tool_aliases(tool_name: str | None, *, include_canonical: bool = True) -> tuple[str, ...]:
     """Return all known aliases for a tool, including the canonical name."""
     return _registry().aliases(tool_name, include_canonical=include_canonical)
 
 
-def expand_tool_aliases(mapping: Mapping[str, T]) -> Dict[str, T]:
+def expand_tool_aliases(mapping: Mapping[str, T]) -> dict[str, T]:
     """Expand a mapping keyed by tool name to include all aliases."""
 
-    expanded: Dict[str, T] = {}
+    expanded: dict[str, T] = {}
     for name, value in mapping.items():
         for alias in _registry().aliases(name):
             expanded[alias] = value
@@ -93,11 +95,11 @@ def tool_signature(tool_call: Any) -> str:
 
 
 __all__ = [
-    "canonical_tool_name",
-    "tool_category",
-    "display_tool_name",
-    "tool_aliases",
-    "expand_tool_aliases",
     "build_tool_signature",
+    "canonical_tool_name",
+    "display_tool_name",
+    "expand_tool_aliases",
+    "tool_aliases",
+    "tool_category",
     "tool_signature",
 ]

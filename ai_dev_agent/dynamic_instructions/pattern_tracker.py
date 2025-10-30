@@ -10,10 +10,10 @@ import json
 import logging
 import threading
 from collections import defaultdict
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +24,11 @@ class QueryRecord:
 
     session_id: str
     success: bool
-    tools_used: List[str]
+    tools_used: list[str]
     task_type: str
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    error_type: Optional[str] = None
-    duration_seconds: Optional[float] = None
+    error_type: str | None = None
+    duration_seconds: float | None = None
 
 
 @dataclass
@@ -40,16 +40,16 @@ class PatternSignal:
     query_count: int
     success_rate: float
     confidence: float  # 0.0-1.0 based on sample size and consistency
-    examples: List[str] = field(default_factory=list)  # Session IDs
+    examples: list[str] = field(default_factory=list)  # Session IDs
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 class PatternTracker:
     """Tracks query execution patterns for automatic instruction generation."""
 
-    def __init__(self, storage_path: Optional[Path] = None):
+    def __init__(self, storage_path: Path | None = None):
         """Initialize the pattern tracker.
 
         Args:
@@ -60,12 +60,12 @@ class PatternTracker:
         )
 
         self._lock = threading.RLock()
-        self._query_records: List[QueryRecord] = []
+        self._query_records: list[QueryRecord] = []
         self._query_count = 0
 
         # Pattern caches
-        self._tool_sequences: defaultdict[Tuple[str, ...], List[bool]] = defaultdict(list)
-        self._task_type_success: defaultdict[str, List[bool]] = defaultdict(list)
+        self._tool_sequences: defaultdict[tuple[str, ...], list[bool]] = defaultdict(list)
+        self._task_type_success: defaultdict[str, list[bool]] = defaultdict(list)
 
         # Load existing data
         self._load_data()
@@ -78,14 +78,12 @@ class PatternTracker:
             return
 
         try:
-            with open(self.storage_path, "r") as f:
+            with self.storage_path.open() as f:
                 data = json.load(f)
 
             # Load query records
             records_data = data.get("query_records", [])
-            self._query_records = [
-                QueryRecord(**record) for record in records_data
-            ]
+            self._query_records = [QueryRecord(**record) for record in records_data]
             self._query_count = data.get("query_count", len(self._query_records))
 
             # Rebuild pattern caches from records
@@ -105,11 +103,11 @@ class PatternTracker:
             data = {
                 "query_count": self._query_count,
                 "query_records": [asdict(record) for record in records_to_save],
-                "saved_at": datetime.now().isoformat()
+                "saved_at": datetime.now().isoformat(),
             }
 
             try:
-                with open(self.storage_path, "w") as f:
+                with self.storage_path.open("w") as f:
                     json.dump(data, f, indent=2)
                 logger.debug(f"Saved pattern data ({len(records_to_save)} records)")
             except Exception as e:
@@ -133,10 +131,10 @@ class PatternTracker:
         self,
         session_id: str,
         success: bool,
-        tools_used: List[str],
+        tools_used: list[str],
         task_type: str = "general",
-        error_type: Optional[str] = None,
-        duration_seconds: Optional[float] = None
+        error_type: str | None = None,
+        duration_seconds: float | None = None,
     ) -> None:
         """Record a query execution.
 
@@ -155,7 +153,7 @@ class PatternTracker:
                 tools_used=tools_used,
                 task_type=task_type,
                 error_type=error_type,
-                duration_seconds=duration_seconds
+                duration_seconds=duration_seconds,
             )
 
             self._query_records.append(record)
@@ -189,7 +187,9 @@ class PatternTracker:
         """
         return self._query_count >= min_queries
 
-    def detect_patterns(self, min_sample_size: int = 5, min_success_rate: float = 0.7) -> List[PatternSignal]:
+    def detect_patterns(
+        self, min_sample_size: int = 5, min_success_rate: float = 0.7
+    ) -> list[PatternSignal]:
         """Detect significant patterns from recorded queries.
 
         Args:
@@ -199,7 +199,7 @@ class PatternTracker:
         Returns:
             List of detected patterns with confidence scores
         """
-        patterns: List[PatternSignal] = []
+        patterns: list[PatternSignal] = []
 
         with self._lock:
             # 1. Tool sequence patterns
@@ -219,17 +219,21 @@ class PatternTracker:
                     record.session_id
                     for record in self._query_records
                     if tuple(record.tools_used[:3]) == seq
-                ][:3]  # Keep up to 3 examples
+                ][
+                    :3
+                ]  # Keep up to 3 examples
 
                 tool_names = " → ".join(seq)
-                patterns.append(PatternSignal(
-                    pattern_type="tool_sequence",
-                    description=f"Tool sequence: {tool_names}",
-                    query_count=len(results),
-                    success_rate=success_rate,
-                    confidence=confidence,
-                    examples=examples
-                ))
+                patterns.append(
+                    PatternSignal(
+                        pattern_type="tool_sequence",
+                        description=f"Tool sequence: {tool_names}",
+                        query_count=len(results),
+                        success_rate=success_rate,
+                        confidence=confidence,
+                        examples=examples,
+                    )
+                )
 
             # 2. Task-specific success patterns
             for task_type, results in self._task_type_success.items():
@@ -248,14 +252,16 @@ class PatternTracker:
                         if record.task_type == task_type and record.success
                     ][:3]
 
-                    patterns.append(PatternSignal(
-                        pattern_type="success_strategy",
-                        description=f"Task type '{task_type}' has high success rate",
-                        query_count=len(results),
-                        success_rate=success_rate,
-                        confidence=confidence,
-                        examples=examples
-                    ))
+                    patterns.append(
+                        PatternSignal(
+                            pattern_type="success_strategy",
+                            description=f"Task type '{task_type}' has high success rate",
+                            query_count=len(results),
+                            success_rate=success_rate,
+                            confidence=confidence,
+                            examples=examples,
+                        )
+                    )
                 elif success_rate < 0.4:  # Low success - failure pattern
                     confidence = self._calculate_confidence(results, 1.0 - success_rate)
 
@@ -265,14 +271,16 @@ class PatternTracker:
                         if record.task_type == task_type and not record.success
                     ][:3]
 
-                    patterns.append(PatternSignal(
-                        pattern_type="failure_pattern",
-                        description=f"Task type '{task_type}' has low success rate",
-                        query_count=len(results),
-                        success_rate=success_rate,
-                        confidence=confidence,
-                        examples=examples
-                    ))
+                    patterns.append(
+                        PatternSignal(
+                            pattern_type="failure_pattern",
+                            description=f"Task type '{task_type}' has low success rate",
+                            query_count=len(results),
+                            success_rate=success_rate,
+                            confidence=confidence,
+                            examples=examples,
+                        )
+                    )
 
             # 3. Error recovery patterns
             error_recoveries = defaultdict(lambda: {"success": 0, "total": 0, "examples": []})
@@ -284,7 +292,9 @@ class PatternTracker:
                         error_recoveries[record.error_type]["total"] += 1
                         if next_record.success:
                             error_recoveries[record.error_type]["success"] += 1
-                            error_recoveries[record.error_type]["examples"].append(next_record.session_id)
+                            error_recoveries[record.error_type]["examples"].append(
+                                next_record.session_id
+                            )
 
             for error_type, stats in error_recoveries.items():
                 if stats["total"] < min_sample_size:
@@ -297,14 +307,16 @@ class PatternTracker:
                 # Simplified confidence for recovery patterns
                 confidence = min(0.9, success_rate * (stats["total"] / 20))
 
-                patterns.append(PatternSignal(
-                    pattern_type="error_recovery",
-                    description=f"Recovery from '{error_type}' errors",
-                    query_count=stats["total"],
-                    success_rate=success_rate,
-                    confidence=confidence,
-                    examples=stats["examples"][:3]
-                ))
+                patterns.append(
+                    PatternSignal(
+                        pattern_type="error_recovery",
+                        description=f"Recovery from '{error_type}' errors",
+                        query_count=stats["total"],
+                        success_rate=success_rate,
+                        confidence=confidence,
+                        examples=stats["examples"][:3],
+                    )
+                )
 
         # Sort by confidence (highest first)
         patterns.sort(key=lambda p: p.confidence, reverse=True)
@@ -312,7 +324,7 @@ class PatternTracker:
         logger.info(f"Detected {len(patterns)} significant patterns")
         return patterns
 
-    def _calculate_confidence(self, results: List[bool], success_rate: float) -> float:
+    def _calculate_confidence(self, results: list[bool], success_rate: float) -> float:
         """Calculate confidence score for a pattern.
 
         Confidence is based on:
@@ -342,7 +354,7 @@ class PatternTracker:
         # Ensure minimum confidence for returned patterns
         return max(0.5, min(1.0, confidence))
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get statistics about recorded patterns.
 
         Returns:
@@ -357,7 +369,7 @@ class PatternTracker:
                 "unique_tool_sequences": len(self._tool_sequences),
                 "task_types": list(self._task_type_success.keys()),
                 "records_in_memory": len(self._query_records),
-                "storage_path": str(self.storage_path)
+                "storage_path": str(self.storage_path),
             }
 
     def clear(self) -> None:

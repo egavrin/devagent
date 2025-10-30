@@ -1,12 +1,13 @@
 """Reactive execution loop orchestrating action → observation → evaluation."""
+
 from __future__ import annotations
 
 import time
-from typing import Callable, Iterable, List, Optional, Sequence, Union
+from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING, Callable, Union
 
 from pydantic import ValidationError
 
-from .evaluator import GateEvaluator
 from .types import (
     ActionRequest,
     EvaluationResult,
@@ -17,6 +18,9 @@ from .types import (
     TaskSpec,
 )
 
+if TYPE_CHECKING:
+    from .evaluator import GateEvaluator
+
 ActionProvider = Callable[[TaskSpec, Sequence[StepRecord]], Union[ActionRequest, dict]]
 ToolInvoker = Callable[[ActionRequest], Union[Observation, dict]]
 
@@ -26,7 +30,7 @@ class ReactiveExecutor:
 
     def __init__(
         self,
-        evaluator: Optional[GateEvaluator] = None,
+        evaluator: GateEvaluator | None = None,
         *,
         default_max_steps: int = 25,
     ) -> None:
@@ -39,15 +43,15 @@ class ReactiveExecutor:
         action_provider: ActionProvider,
         tool_invoker: ToolInvoker,
         *,
-        prior_steps: Optional[Iterable[StepRecord]] = None,
-        max_steps: Optional[int] = None,
+        prior_steps: Iterable[StepRecord] | None = None,
+        max_steps: int | None = None,
     ) -> RunResult:
         start_time = time.perf_counter()
-        history: List[StepRecord] = list(prior_steps or [])
-        steps: List[StepRecord] = []
-        last_eval: Optional[EvaluationResult] = None
-        exc_info: Optional[Exception] = None
-        stop_condition: Optional[str] = None
+        history: list[StepRecord] = list(prior_steps or [])
+        steps: list[StepRecord] = []
+        last_eval: EvaluationResult | None = None
+        exc_info: Exception | None = None
+        stop_condition: str | None = None
         steps_budget = self._resolve_steps_budget(max_steps)
         try:
             step_index = len(history) + 1
@@ -59,7 +63,7 @@ class ReactiveExecutor:
                     break
                 try:
                     action = self._ensure_action(action_payload, step_index)
-                except ValidationError as exc:  # noqa: TRY003 - translate to runtime error
+                except ValidationError as exc:
                     raise ValueError(f"Action provider returned invalid payload: {exc}") from exc
 
                 observation = self._invoke_tool(tool_invoker, action)
@@ -93,7 +97,7 @@ class ReactiveExecutor:
             else:
                 stop_condition = "budget"
 
-        except Exception as exc:  # noqa: BLE001 - propagate after trace finalization
+        except Exception as exc:
             exc_info = exc
             if not last_eval:
                 last_eval = EvaluationResult(
@@ -137,7 +141,7 @@ class ReactiveExecutor:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _ensure_action(self, payload: Union[ActionRequest, dict], step_index: int) -> ActionRequest:
+    def _ensure_action(self, payload: ActionRequest | dict, step_index: int) -> ActionRequest:
         if isinstance(payload, ActionRequest):
             return payload
         if not isinstance(payload, dict):
@@ -148,7 +152,7 @@ class ReactiveExecutor:
     def _invoke_tool(self, invoker: ToolInvoker, action: ActionRequest) -> Observation:
         try:
             raw = invoker(action)
-        except Exception as exc:  # noqa: BLE001 - capture tool failure as observation
+        except Exception as exc:
             return Observation(
                 success=False,
                 outcome="Tool invocation raised exception.",
@@ -172,7 +176,7 @@ class ReactiveExecutor:
             raise TypeError(f"Observation metrics must be dict-like, received {type(metrics)!r}")
         return MetricsSnapshot.model_validate(metrics)
 
-    def _resolve_steps_budget(self, max_steps: Optional[int]) -> int:
+    def _resolve_steps_budget(self, max_steps: int | None) -> int:
         if self.evaluator:
             budget = self.evaluator.config.steps_budget
             if max_steps is not None:
@@ -198,11 +202,11 @@ class ReactiveExecutor:
 
     def _derive_status(
         self,
-        stop_condition: Optional[str],
-        evaluation: Optional[EvaluationResult],
+        stop_condition: str | None,
+        evaluation: EvaluationResult | None,
         has_evaluator: bool,
         steps: Sequence[StepRecord],
-    ) -> tuple[str, Optional[str]]:
+    ) -> tuple[str, str | None]:
         condition = stop_condition or "unknown"
         if has_evaluator:
             if evaluation:
@@ -227,7 +231,9 @@ class ReactiveExecutor:
                 return "failed", "Step budget exhausted."
             return "failed", "No actions were executed before the step budget was reached."
         if condition == "exception":
-            stop_reason = evaluation.stop_reason if evaluation else "Exception raised during execution."
+            stop_reason = (
+                evaluation.stop_reason if evaluation else "Exception raised during execution."
+            )
             return "failed", stop_reason
         if condition == "gates":
             stop_reason = evaluation.stop_reason if evaluation else "Completed"
@@ -240,4 +246,4 @@ class ReactiveExecutor:
         return status, stop_reason
 
 
-__all__ = ["ReactiveExecutor", "ActionProvider", "ToolInvoker"]
+__all__ = ["ActionProvider", "ReactiveExecutor", "ToolInvoker"]

@@ -1,15 +1,12 @@
 """Tests for the agent executor bridge module."""
-from unittest.mock import MagicMock, patch, Mock
-from uuid import uuid4
+
+from unittest.mock import MagicMock, Mock, patch
 
 import click
 import pytest
 
 from ai_dev_agent.agents.base import AgentContext, AgentResult, BaseAgent
-from ai_dev_agent.agents.specialized.executor_bridge import (
-    AgentExecutor,
-    execute_agent_with_react,
-)
+from ai_dev_agent.agents.specialized.executor_bridge import AgentExecutor, execute_agent_with_react
 from ai_dev_agent.core.utils.config import Settings
 
 
@@ -63,7 +60,7 @@ class TestAgentExecutor:
         mock_ctx_obj = {"test": "context"}
         mock_build_context.return_value = mock_ctx_obj
 
-        ctx = executor._create_click_context(mock_settings)
+        executor._create_click_context(mock_settings)
 
         # Verify context was built
         mock_build_context.assert_called_once_with(mock_settings)
@@ -84,9 +81,7 @@ class TestAgentExecutor:
         mock_spec.system_prompt_suffix = "You are a specialized test agent."
 
         prompt = executor._build_agent_prompt(
-            mock_agent,
-            "Test the authentication system",
-            mock_spec
+            mock_agent, "Test the authentication system", mock_spec
         )
 
         assert "You are a specialized test agent." in prompt
@@ -95,11 +90,7 @@ class TestAgentExecutor:
 
     def test_build_agent_prompt_without_spec(self, executor, mock_agent):
         """Test building agent prompt without agent spec."""
-        prompt = executor._build_agent_prompt(
-            mock_agent,
-            "Test the authentication system",
-            None
-        )
+        prompt = executor._build_agent_prompt(mock_agent, "Test the authentication system", None)
 
         assert "Test Agent for unit testing" in prompt
         assert "Your capabilities: analysis, planning" in prompt
@@ -130,10 +121,7 @@ class TestAgentExecutor:
         # Don't set exception attribute - hasattr should return False
         del mock_result.exception
 
-        react_result = {
-            "final_message": "Task completed successfully",
-            "result": mock_result
-        }
+        react_result = {"final_message": "Task completed successfully", "result": mock_result}
 
         result = executor._convert_result(react_result, "test_agent")
 
@@ -155,7 +143,7 @@ class TestAgentExecutor:
         react_result = {
             "final_message": "Analysis complete",
             "final_json": {"result": "data"},
-            "result": mock_result
+            "result": mock_result,
         }
 
         result = executor._convert_result(react_result, "test_agent")
@@ -170,10 +158,7 @@ class TestAgentExecutor:
         mock_result.stop_condition = "error"
         mock_result.steps = []
 
-        react_result = {
-            "final_message": "Error occurred",
-            "result": mock_result
-        }
+        react_result = {"final_message": "Error occurred", "result": mock_result}
 
         result = executor._convert_result(react_result, "test_agent")
 
@@ -191,7 +176,7 @@ class TestAgentExecutor:
 
         react_result = {
             "final_message": "",  # Empty message indicates incomplete
-            "result": mock_result
+            "result": mock_result,
         }
 
         result = executor._convert_result(react_result, "test_agent")
@@ -207,10 +192,7 @@ class TestAgentExecutor:
         # Don't set exception attribute
         del mock_result.exception
 
-        react_result = {
-            "final_message": "Partial results: found 3 issues",
-            "result": mock_result
-        }
+        react_result = {"final_message": "Partial results: found 3 issues", "result": mock_result}
 
         result = executor._convert_result(react_result, "test_agent")
 
@@ -220,10 +202,7 @@ class TestAgentExecutor:
 
     def test_convert_result_no_run_result(self, executor):
         """Test converting result with no run_result."""
-        react_result = {
-            "final_message": "Completed",
-            "result": None
-        }
+        react_result = {"final_message": "Completed", "result": None}
 
         result = executor._convert_result(react_result, "test_agent")
 
@@ -251,17 +230,10 @@ class TestAgentExecutor:
         mock_result.steps = [1]
         del mock_result.exception
 
-        mock_execute.return_value = {
-            "final_message": "Task completed",
-            "result": mock_result
-        }
+        mock_execute.return_value = {"final_message": "Task completed", "result": mock_result}
 
         # Execute
-        result = executor.execute_with_react(
-            mock_agent,
-            "Test prompt",
-            mock_context
-        )
+        result = executor.execute_with_react(mock_agent, "Test prompt", mock_context)
 
         # Verify
         assert result.success is True
@@ -281,18 +253,11 @@ class TestAgentExecutor:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
-        mock_execute.return_value = {
-            "final_message": "Done",
-            "result": None
-        }
+        mock_execute.return_value = {"final_message": "Done", "result": None}
 
         # Execute
-        result = executor.execute_with_react(
-            mock_agent,
-            "Test",
-            mock_context,
-            ctx=ctx,
-            cli_client=mock_client
+        executor.execute_with_react(
+            mock_agent, "Test", mock_context, ctx=ctx, cli_client=mock_client
         )
 
         # Verify context was modified
@@ -302,16 +267,14 @@ class TestAgentExecutor:
 
     @patch("ai_dev_agent.cli.utils.get_llm_client")
     @patch("ai_dev_agent.cli.react.executor._execute_react_assistant")
-    def test_execute_with_react_exception(self, mock_execute, mock_get_client, executor, mock_agent, mock_context):
+    def test_execute_with_react_exception(
+        self, mock_execute, mock_get_client, executor, mock_agent, mock_context
+    ):
         """Test execution when exception occurs."""
         # Mock the get_llm_client to avoid API key error
         mock_get_client.side_effect = Exception("Test error")
 
-        result = executor.execute_with_react(
-            mock_agent,
-            "Test",
-            mock_context
-        )
+        result = executor.execute_with_react(mock_agent, "Test", mock_context)
 
         assert result.success is False
         assert "Agent execution failed" in result.output
@@ -330,16 +293,9 @@ class TestAgentExecutor:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
-        mock_execute.return_value = {
-            "final_message": "Done",
-            "result": None
-        }
+        mock_execute.return_value = {"final_message": "Done", "result": None}
 
-        result = executor.execute_with_react(
-            mock_agent,
-            "Test",
-            mock_context
-        )
+        executor.execute_with_react(mock_agent, "Test", mock_context)
 
         # Should use agent name when not registered
         call_args = mock_execute.call_args
@@ -362,18 +318,10 @@ class TestModuleFunctions:
         mock_execute.return_value = expected_result
 
         result = execute_agent_with_react(
-            mock_agent,
-            "Test prompt",
-            mock_context,
-            ctx=mock_ctx,
-            cli_client=mock_client
+            mock_agent, "Test prompt", mock_context, ctx=mock_ctx, cli_client=mock_client
         )
 
         assert result is expected_result
         mock_execute.assert_called_once_with(
-            mock_agent,
-            "Test prompt",
-            mock_context,
-            mock_ctx,
-            mock_client
+            mock_agent, "Test prompt", mock_context, mock_ctx, mock_client
         )

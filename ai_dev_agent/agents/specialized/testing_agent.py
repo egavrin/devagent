@@ -1,15 +1,14 @@
 """Test Agent for TDD workflow and test generation."""
+
 from __future__ import annotations
 
 import os
 import re
-import json
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Any, Optional
-from datetime import datetime
+from typing import Any
 
-from ..base import BaseAgent, AgentContext, AgentResult, AgentCapability
+from ..base import AgentCapability, AgentContext, AgentResult, BaseAgent
 
 
 class TestingAgent(BaseAgent):
@@ -26,10 +25,10 @@ class TestingAgent(BaseAgent):
                 "test_generation",
                 "tdd_workflow",
                 "coverage_analysis",
-                "fixture_creation"
+                "fixture_creation",
             ],
             tools=["read", "write", "grep", "find", "run"],
-            max_iterations=25
+            max_iterations=25,
         )
 
         # Register capabilities
@@ -42,36 +41,34 @@ class TestingAgent(BaseAgent):
                 name="test_generation",
                 description="Generate unit and integration tests",
                 required_tools=["read", "write"],
-                optional_tools=["grep"]
+                optional_tools=["grep"],
             ),
             AgentCapability(
                 name="tdd_workflow",
                 description="Ensure tests are written before implementation",
                 required_tools=["write", "run"],
-                optional_tools=["read"]
+                optional_tools=["read"],
             ),
             AgentCapability(
                 name="coverage_analysis",
                 description="Analyze and validate test coverage",
                 required_tools=["run"],
-                optional_tools=["read", "grep"]
+                optional_tools=["read", "grep"],
             ),
             AgentCapability(
                 name="fixture_creation",
                 description="Create test fixtures and mock data",
                 required_tools=["write"],
-                optional_tools=["read"]
-            )
+                optional_tools=["read"],
+            ),
         ]
 
         for capability in capabilities:
             self.register_capability(capability)
 
     def analyze_design_for_tests(
-        self,
-        design: Dict[str, Any],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, design: dict[str, Any], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Analyze a design to generate test cases.
 
@@ -87,24 +84,28 @@ class TestingAgent(BaseAgent):
         # Extract components and generate tests
         components = design.get("components", [])
         for component in components:
-            test_cases.append({
-                "name": f"test_{component.lower()}_initialization",
-                "type": "unit",
-                "target": component,
-                "description": f"Test {component} can be initialized"
-            })
+            test_cases.append(
+                {
+                    "name": f"test_{component.lower()}_initialization",
+                    "type": "unit",
+                    "target": component,
+                    "description": f"Test {component} can be initialized",
+                }
+            )
 
         # Generate tests for requirements
         requirements = design.get("requirements", [])
         for req in requirements:
             req_lower = req.lower()
-            test_name = re.sub(r'[^\w]+', '_', req_lower)
-            test_cases.append({
-                "name": f"test_{test_name}",
-                "type": "functional",
-                "target": req,
-                "description": f"Test {req} functionality"
-            })
+            test_name = re.sub(r"[^\w]+", "_", req_lower)
+            test_cases.append(
+                {
+                    "name": f"test_{test_name}",
+                    "type": "functional",
+                    "target": req,
+                    "description": f"Test {req} functionality",
+                }
+            )
 
         # Generate tests for API endpoints
         endpoints = design.get("api_endpoints", [])
@@ -113,26 +114,25 @@ class TestingAgent(BaseAgent):
             path = endpoint.get("path", "")
             handler = endpoint.get("handler", "handler")
 
-            test_cases.append({
-                "name": f"test_{method.lower()}_{handler}",
-                "type": "integration",
-                "target": f"{method} {path}",
-                "description": f"Test {method} {path} endpoint"
-            })
+            test_cases.append(
+                {
+                    "name": f"test_{method.lower()}_{handler}",
+                    "type": "integration",
+                    "target": f"{method} {path}",
+                    "description": f"Test {method} {path} endpoint",
+                }
+            )
 
         return {
             "status": "analyzed",
             "test_cases": test_cases,
             "total_tests": len(test_cases),
-            "feature": design.get("feature", "Unknown")
+            "feature": design.get("feature", "Unknown"),
         }
 
     def generate_unit_tests(
-        self,
-        module_spec: Dict[str, Any],
-        output_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, module_spec: dict[str, Any], output_path: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Generate unit tests for a module.
 
@@ -151,58 +151,52 @@ class TestingAgent(BaseAgent):
 
             # Generate test file content
             lines = [
-                '"""Unit tests for {}.{}"""'.format(module_name, class_name),
+                f'"""Unit tests for {module_name}.{class_name}"""',
                 "import pytest",
                 f"from {module_name} import {class_name}",
                 "\n",
                 f"class Test{class_name}:",
-                '    """Test suite for {}"""'.format(class_name),
-                ""
+                f'    """Test suite for {class_name}"""',
+                "",
             ]
 
             # Generate test for each method
             for method in methods:
                 method_name = method.get("name", "method")
                 params = method.get("params", [])
-                returns = method.get("returns", "None")
+                method.get("returns", "None")
 
-                lines.extend([
-                    f"    def test_{method_name}(self):",
-                    f'        """Test {method_name} method."""',
-                    f"        # Arrange",
-                    f"        obj = {class_name}()",
-                    "",
-                    "        # Act",
-                    f"        result = obj.{method_name}({', '.join('None' for _ in params)})",
-                    "",
-                    "        # Assert",
-                    "        assert result is not None",
-                    ""
-                ])
+                lines.extend(
+                    [
+                        f"    def test_{method_name}(self):",
+                        f'        """Test {method_name} method."""',
+                        "        # Arrange",
+                        f"        obj = {class_name}()",
+                        "",
+                        "        # Act",
+                        f"        result = obj.{method_name}({', '.join('None' for _ in params)})",
+                        "",
+                        "        # Assert",
+                        "        assert result is not None",
+                        "",
+                    ]
+                )
 
             # Write test file
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, 'w') as f:
-                f.write('\n'.join(lines))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            output_path = Path(output_path)
 
-            return {
-                "success": True,
-                "path": output_path,
-                "tests_generated": len(methods)
-            }
+            with output_path.open("w") as f:
+                f.write("\n".join(lines))
+
+            return {"success": True, "path": output_path, "tests_generated": len(methods)}
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def generate_integration_tests(
-        self,
-        integration_spec: Dict[str, Any],
-        output_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, integration_spec: dict[str, Any], output_path: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Generate integration tests.
 
@@ -226,16 +220,18 @@ class TestingAgent(BaseAgent):
                 "",
                 "class TestIntegration:",
                 f'    """Integration tests for {system_name}"""',
-                ""
+                "",
             ]
 
             # Generate setup/teardown
             if dependencies:
-                lines.extend([
-                    "    @pytest.fixture(autouse=True)",
-                    "    def setup_dependencies(self):",
-                    '        """Set up test dependencies."""',
-                ])
+                lines.extend(
+                    [
+                        "    @pytest.fixture(autouse=True)",
+                        "    def setup_dependencies(self):",
+                        '        """Set up test dependencies."""',
+                    ]
+                )
                 for dep in dependencies:
                     lines.append(f"        # Initialize {dep}")
                 lines.extend(["        yield", "        # Cleanup", ""])
@@ -247,43 +243,37 @@ class TestingAgent(BaseAgent):
                 expected_status = endpoint.get("expected_status", 200)
 
                 test_name = f"test_{method.lower()}_endpoint_{i+1}"
-                lines.extend([
-                    f"    def {test_name}(self):",
-                    f'        """Test {method} {path} endpoint."""',
-                    "        # Arrange",
-                    f'        endpoint = "{path}"',
-                    "",
-                    "        # Act",
-                    f'        # response = make_request("{method}", endpoint)',
-                    "",
-                    "        # Assert",
-                    f"        # assert response.status_code == {expected_status}",
-                    ""
-                ])
+                lines.extend(
+                    [
+                        f"    def {test_name}(self):",
+                        f'        """Test {method} {path} endpoint."""',
+                        "        # Arrange",
+                        f'        endpoint = "{path}"',
+                        "",
+                        "        # Act",
+                        f'        # response = make_request("{method}", endpoint)',
+                        "",
+                        "        # Assert",
+                        f"        # assert response.status_code == {expected_status}",
+                        "",
+                    ]
+                )
 
             # Write test file
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, 'w') as f:
-                f.write('\n'.join(lines))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            output_path = Path(output_path)
 
-            return {
-                "success": True,
-                "path": output_path,
-                "tests_generated": len(endpoints)
-            }
+            with output_path.open("w") as f:
+                f.write("\n".join(lines))
+
+            return {"success": True, "path": output_path, "tests_generated": len(endpoints)}
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def create_test_fixtures(
-        self,
-        fixture_spec: Dict[str, Any],
-        output_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, fixture_spec: dict[str, Any], output_path: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Create test fixtures and mock data.
 
@@ -310,35 +300,29 @@ class TestingAgent(BaseAgent):
                 fixture_name = f"{model.lower()}_fixture"
                 model_data = data.get(model, {})
 
-                lines.extend([
-                    "@pytest.fixture",
-                    f"def {fixture_name}():",
-                    f'    """Fixture for {model} model."""',
-                    f"    return {model}(**{model_data})",
-                    ""
-                ])
+                lines.extend(
+                    [
+                        "@pytest.fixture",
+                        f"def {fixture_name}():",
+                        f'    """Fixture for {model} model."""',
+                        f"    return {model}(**{model_data})",
+                        "",
+                    ]
+                )
 
             # Write conftest.py
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, 'w') as f:
-                f.write('\n'.join(lines))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            output_path = Path(output_path)
 
-            return {
-                "success": True,
-                "path": output_path,
-                "fixtures_created": len(models)
-            }
+            with output_path.open("w") as f:
+                f.write("\n".join(lines))
+
+            return {"success": True, "path": output_path, "fixtures_created": len(models)}
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
-    def calculate_coverage_requirements(
-        self,
-        module_info: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def calculate_coverage_requirements(self, module_info: dict[str, Any]) -> dict[str, Any]:
         """
         Calculate coverage requirements for a module.
 
@@ -376,14 +360,12 @@ class TestingAgent(BaseAgent):
             "target_coverage": target_coverage,
             "required_test_count": required_test_count,
             "critical_paths": critical_paths,
-            "module": module_info.get("name", "Unknown")
+            "module": module_info.get("name", "Unknown"),
         }
 
     def validate_test_coverage(
-        self,
-        coverage_data: Dict[str, Any],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, coverage_data: dict[str, Any], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Validate test coverage against requirements.
 
@@ -409,17 +391,14 @@ class TestingAgent(BaseAgent):
             "meets_requirements": meets_requirements,
             "uncovered_files": uncovered_files,
             "uncovered_lines": uncovered_lines,
-            "recommendations": [
-                f"Add tests for {f}" for f in uncovered_files
-            ] if uncovered_files else []
+            "recommendations": (
+                [f"Add tests for {f}" for f in uncovered_files] if uncovered_files else []
+            ),
         }
 
     def run_tests(
-        self,
-        test_path: str,
-        context: AgentContext,
-        framework: str = "pytest"
-    ) -> Dict[str, Any]:
+        self, test_path: str, context: AgentContext, framework: str = "pytest"
+    ) -> dict[str, Any]:
         """
         Run tests and collect results.
 
@@ -437,12 +416,7 @@ class TestingAgent(BaseAgent):
             else:
                 cmd = ["python", "-m", "unittest", test_path]
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
             # Parse output
             output = result.stdout + result.stderr
@@ -460,20 +434,15 @@ class TestingAgent(BaseAgent):
                 "tests_passed": tests_passed,
                 "tests_failed": tests_failed,
                 "duration": duration,
-                "output": output
+                "output": output,
             }
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def ensure_tests_fail_first(
-        self,
-        test_spec: Dict[str, Any],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, test_spec: dict[str, Any], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Ensure tests fail before implementation (TDD).
 
@@ -503,15 +472,16 @@ class TestingAgent(BaseAgent):
         return {
             "status": status,
             "test_count": len(test_cases),
-            "message": "Tests are designed to fail before implementation" if status == "ready_for_implementation" else "Tests may pass prematurely"
+            "message": (
+                "Tests are designed to fail before implementation"
+                if status == "ready_for_implementation"
+                else "Tests may pass prematurely"
+            ),
         }
 
     def generate_backward_compatibility_tests(
-        self,
-        api_spec: Dict[str, Any],
-        output_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, api_spec: dict[str, Any], output_path: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Generate backward compatibility tests.
 
@@ -534,7 +504,7 @@ class TestingAgent(BaseAgent):
                 "",
                 "class TestBackwardCompatibility:",
                 '    """Ensure existing APIs remain functional."""',
-                ""
+                "",
             ]
 
             # Generate tests for existing functions
@@ -542,42 +512,45 @@ class TestingAgent(BaseAgent):
                 func_name = func.get("name", "function")
                 signature = func.get("signature", "")
 
-                lines.extend([
-                    f"    def test_{func_name}_signature(self):",
-                    f'        """Test {func_name} maintains signature: {signature}"""',
-                    f"        # Verify function exists",
-                    f"        # assert callable({func_name})",
-                    "        # Verify signature hasn't changed",
-                    "        pass",
-                    ""
-                ])
+                lines.extend(
+                    [
+                        f"    def test_{func_name}_signature(self):",
+                        f'        """Test {func_name} maintains signature: {signature}"""',
+                        "        # Verify function exists",
+                        f"        # assert callable({func_name})",
+                        "        # Verify signature hasn't changed",
+                        "        pass",
+                        "",
+                    ]
+                )
 
             # Generate tests for existing classes
             for cls in existing_classes:
-                lines.extend([
-                    f"    def test_{cls.lower()}_class_exists(self):",
-                    f'        """Test {cls} class still exists."""',
-                    f"        # assert {cls} is not None",
-                    "        pass",
-                    ""
-                ])
+                lines.extend(
+                    [
+                        f"    def test_{cls.lower()}_class_exists(self):",
+                        f'        """Test {cls} class still exists."""',
+                        f"        # assert {cls} is not None",
+                        "        pass",
+                        "",
+                    ]
+                )
 
             # Write test file
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, 'w') as f:
-                f.write('\n'.join(lines))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            output_path = Path(output_path)
+
+            with output_path.open("w") as f:
+                f.write("\n".join(lines))
 
             return {
                 "success": True,
                 "path": output_path,
-                "tests_generated": len(existing_functions) + len(existing_classes)
+                "tests_generated": len(existing_functions) + len(existing_classes),
             }
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def detect_test_framework(self, project_path: str) -> str:
         """
@@ -590,19 +563,18 @@ class TestingAgent(BaseAgent):
             Test framework name
         """
         # Check for pytest
-        if os.path.exists(os.path.join(project_path, "pytest.ini")) or \
-           os.path.exists(os.path.join(project_path, "pyproject.toml")):
+        project_path_obj = Path(project_path)
+        if (project_path_obj / "pytest.ini").exists() or (
+            project_path_obj / "pyproject.toml"
+        ).exists():
             return "pytest"
 
         # Default to pytest as it's more modern
         return "pytest"
 
     def extend_existing_tests(
-        self,
-        test_file: str,
-        new_spec: Dict[str, Any],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, test_file: str, new_spec: dict[str, Any], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Extend existing test file with new tests.
 
@@ -616,13 +588,16 @@ class TestingAgent(BaseAgent):
         """
         try:
             # Read existing tests
-            with open(test_file, 'r') as f:
+            test_file = Path(test_file)
+
+            with test_file.open() as f:
                 existing_content = f.read()
 
             # Generate new tests
             new_tests = []
             for func in new_spec.get("add_tests_for", []):
-                new_tests.append(f"""
+                new_tests.append(
+                    f"""
 def test_{func}():
     \"\"\"Test {func} function.\"\"\"
     # Arrange
@@ -630,25 +605,22 @@ def test_{func}():
     result = {func}()
     # Assert
     assert result is not None
-""")
+"""
+                )
 
             # Append new tests
             updated_content = existing_content + "\n\n" + "\n".join(new_tests)
 
             # Write back
-            with open(test_file, 'w') as f:
+            test_file = Path(test_file)
+
+            with test_file.open("w") as f:
                 f.write(updated_content)
 
-            return {
-                "success": True,
-                "tests_added": len(new_tests)
-            }
+            return {"success": True, "tests_added": len(new_tests)}
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def execute(self, prompt: str, context: AgentContext) -> AgentResult:
         """
@@ -665,8 +637,4 @@ def test_{func}():
         from .executor_bridge import execute_agent_with_react
 
         # Execute using ReAct workflow with LLM and real tools
-        return execute_agent_with_react(
-            agent=self,
-            prompt=prompt,
-            context=context
-        )
+        return execute_agent_with_react(agent=self, prompt=prompt, context=context)

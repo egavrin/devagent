@@ -1,9 +1,9 @@
 """Test to ensure tool messages always have tool_call_id for API compatibility."""
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
 from ai_dev_agent.cli.react.action_provider import LLMActionProvider
-from ai_dev_agent.providers.llm.base import Message, ToolCallResult
+from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session import SessionManager
 
 
@@ -16,10 +16,7 @@ def test_dummy_tool_messages_have_tool_call_id():
     session_manager.ensure_session(session_id)
 
     action_provider = LLMActionProvider(
-        llm_client=mock_client,
-        session_manager=session_manager,
-        session_id=session_id,
-        tools=[]
+        llm_client=mock_client, session_manager=session_manager, session_id=session_id, tools=[]
     )
 
     # Simulate normalized tool calls (as they would be after _normalize_tool_calls)
@@ -27,19 +24,13 @@ def test_dummy_tool_messages_have_tool_call_id():
         {
             "id": "tool-0-abc123",  # ID should be present after normalization
             "type": "function",
-            "function": {
-                "name": "test_tool",
-                "arguments": '{"arg": "value"}'
-            }
+            "function": {"name": "test_tool", "arguments": '{"arg": "value"}'},
         },
         {
             # Edge case: missing ID (shouldn't happen after normalization but testing fallback)
             "type": "function",
-            "function": {
-                "name": "another_tool",
-                "arguments": '{}'
-            }
-        }
+            "function": {"name": "another_tool", "arguments": "{}"},
+        },
     ]
 
     # Call the method
@@ -64,8 +55,9 @@ def test_dummy_tool_messages_have_tool_call_id():
             assert payload["tool_call_id"] == "tool-0-abc123"
         # Second message should have a generated ID
         else:
-            assert payload["tool_call_id"].startswith("tool-"), \
-                f"Generated tool_call_id should start with 'tool-', got {payload['tool_call_id']}"
+            assert payload["tool_call_id"].startswith(
+                "tool-"
+            ), f"Generated tool_call_id should start with 'tool-', got {payload['tool_call_id']}"
 
 
 def test_tool_message_to_payload_includes_tool_call_id():
@@ -102,12 +94,8 @@ def test_deepseek_api_compatibility():
         session_id,
         "Processing...",
         tool_calls=[
-            {
-                "id": "call-123",
-                "type": "function",
-                "function": {"name": "test", "arguments": "{}"}
-            }
-        ]
+            {"id": "call-123", "type": "function", "function": {"name": "test", "arguments": "{}"}}
+        ],
     )
 
     # Tool response with matching ID

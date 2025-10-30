@@ -3,18 +3,22 @@
 This module provides hooks to wire the new cost tracking, retry handling,
 and summarization features into the execution path.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence
+from typing import TYPE_CHECKING, Any
 
-from ai_dev_agent.core.utils.config import Settings
-from ai_dev_agent.core.utils.context_budget import ContextBudgetConfig, config_from_settings
-from ai_dev_agent.core.utils.cost_tracker import CostTracker, TokenUsage, create_token_usage_from_response
+from ai_dev_agent.core.utils.cost_tracker import CostTracker, create_token_usage_from_response
 from ai_dev_agent.core.utils.retry_handler import RetryConfig, create_retry_handler
 from ai_dev_agent.core.utils.summarizer import SummarizationConfig, create_summarizer
-from ai_dev_agent.providers.llm.base import LLMClient, Message
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from ai_dev_agent.core.utils.config import Settings
+    from ai_dev_agent.providers.llm.base import LLMClient, Message
 
 LOGGER = logging.getLogger(__name__)
 
@@ -28,9 +32,9 @@ class BudgetIntegration:
     """
 
     settings: Settings
-    cost_tracker: Optional[CostTracker] = None
-    retry_handler: Optional[Any] = None
-    summarizer: Optional[Any] = None
+    cost_tracker: CostTracker | None = None
+    retry_handler: Any | None = None
+    summarizer: Any | None = None
     enabled: bool = True
 
     def __post_init__(self):
@@ -48,8 +52,7 @@ class BudgetIntegration:
                 max_delay=self.settings.retry_max_delay,
             )
             self.retry_handler = create_retry_handler(
-                smart=True,  # Use smart handler with circuit breaker
-                **retry_config.__dict__
+                smart=True, **retry_config.__dict__  # Use smart handler with circuit breaker
             )
             # Silent initialization - no logs
 
@@ -68,22 +71,19 @@ class BudgetIntegration:
                 async_summarization=False,  # Can be made configurable
             )
             # Use two_tier based on settings
-            use_two_tier = getattr(self.settings, 'enable_two_tier_pruning', True)
+            use_two_tier = getattr(self.settings, "enable_two_tier_pruning", True)
             self.summarizer = create_summarizer(
-                llm_client,
-                two_tier=use_two_tier,
-                **config.__dict__
+                llm_client, two_tier=use_two_tier, **config.__dict__
             )
-            summarizer_type = "TwoTierSummarizer" if use_two_tier else "ConversationSummarizer"
             # Silent initialization - no logs
 
     def track_llm_call(
         self,
         model: str,
-        response_data: Dict[str, Any],
+        response_data: dict[str, Any],
         operation: str = "completion",
-        iteration: Optional[int] = None,
-        phase: Optional[str] = None,
+        iteration: int | None = None,
+        phase: str | None = None,
     ) -> None:
         """Track cost and usage for an LLM call.
 
@@ -99,7 +99,7 @@ class BudgetIntegration:
 
         try:
             usage = create_token_usage_from_response(response_data)
-            record = self.cost_tracker.track_request(
+            self.cost_tracker.track_request(
                 model=model,
                 usage=usage,
                 operation=operation,
@@ -127,10 +127,7 @@ class BudgetIntegration:
         """
         if self.retry_handler and self.enabled:
             return self.retry_handler.execute_with_retry(
-                func,
-                *args,
-                on_retry=self._on_retry,
-                **kwargs
+                func, *args, on_retry=self._on_retry, **kwargs
             )
         else:
             # No retry, execute directly
@@ -165,13 +162,13 @@ class BudgetIntegration:
 
         try:
             # Check which method is available on the summarizer
-            if hasattr(self.summarizer, 'optimize_context'):
+            if hasattr(self.summarizer, "optimize_context"):
                 # TwoTierSummarizer
                 return self.summarizer.optimize_context(
                     list(messages),
                     target_tokens,
                 )
-            elif hasattr(self.summarizer, 'summarize_if_needed'):
+            elif hasattr(self.summarizer, "summarize_if_needed"):
                 # ConversationSummarizer
                 return self.summarizer.summarize_if_needed(
                     list(messages),
@@ -217,7 +214,7 @@ class BudgetIntegration:
         if self.retry_handler:
             self.retry_handler.reset()
 
-    def get_integration_status(self) -> Dict[str, Any]:
+    def get_integration_status(self) -> dict[str, Any]:
         """Get status of all integrated components.
 
         Returns:
@@ -239,8 +236,7 @@ class BudgetIntegration:
         if self.cost_tracker:
             status["cost_tracking"]["total_cost"] = self.cost_tracker.total_cost_usd
             status["cost_tracking"]["total_tokens"] = (
-                self.cost_tracker.total_prompt_tokens +
-                self.cost_tracker.total_completion_tokens
+                self.cost_tracker.total_prompt_tokens + self.cost_tracker.total_completion_tokens
             )
 
         if self.retry_handler:
@@ -282,13 +278,10 @@ def integrate_with_executor(
     Returns:
         Wrapped function with budgeting features
     """
+
     def wrapped(*args, **kwargs):
         # Execute with retry
-        result = budget_integration.execute_with_retry(
-            executor_func,
-            *args,
-            **kwargs
-        )
+        result = budget_integration.execute_with_retry(executor_func, *args, **kwargs)
 
         # Track cost if response contains usage data
         if isinstance(result, dict) and "usage" in result:
@@ -352,6 +345,6 @@ def enhance_executor(settings: Settings, llm_client: LLMClient) -> BudgetIntegra
 __all__ = [
     "BudgetIntegration",
     "create_budget_integration",
-    "integrate_with_executor",
     "enhance_executor",
+    "integrate_with_executor",
 ]

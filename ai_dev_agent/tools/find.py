@@ -1,11 +1,13 @@
 """Simple file finding tool using ripgrep."""
+
 import os
 import subprocess
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 
-from .registry import ToolSpec, ToolContext, registry
+from .registry import ToolContext, ToolSpec, registry
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schemas" / "tools"
 
@@ -18,28 +20,27 @@ def find(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
     limit = min(payload.get("limit", 20), 100)  # Reduced default to 20, cap at 100
 
     # Convert path to absolute if relative
-    if not os.path.isabs(path):
-        path = os.path.join(context.repo_root, path)
+    if not Path(path).is_absolute():
+        path = str(Path(context.repo_root) / path)
 
     # Use ripgrep to list files matching the pattern
     cmd = ["rg", "--files", "--hidden", "--no-ignore-vcs", "-g", query, path]
 
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(context.repo_root),
-            timeout=10
+            cmd, capture_output=True, text=True, cwd=str(context.repo_root), timeout=10
         )
 
         if result.returncode not in {0, 1}:
             # Error occurred
-            return {"error": result.stderr.strip() if result.stderr else "Unknown error", "files": []}
+            return {
+                "error": result.stderr.strip() if result.stderr else "Unknown error",
+                "files": [],
+            }
 
-        files: List[str] = []
+        files: list[str] = []
         if result.stdout:
-            all_files = result.stdout.strip().split('\n')
+            all_files = result.stdout.strip().split("\n")
             # Make paths relative to repo root
             for f in all_files:
                 if f:
@@ -52,7 +53,7 @@ def find(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
                         files.append(f)
 
         # Sort by modification time (newest first)
-        files_with_time: List[tuple[str, float]] = []
+        files_with_time: list[tuple[str, float]] = []
         for f in files:
             full_path = context.repo_root / f
             if full_path.exists():
@@ -66,7 +67,7 @@ def find(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
         total_files = len(files_with_time)
         truncated = total_files > limit
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         now = datetime.now(timezone.utc).timestamp()
         for rel_path, mtime in files_with_time[:limit]:
             full_path = (context.repo_root / rel_path).resolve()
@@ -101,7 +102,9 @@ def find(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
         if truncated:
             result_dict["truncated"] = True
             result_dict["total_files"] = total_files
-            result_dict["message"] = f"Showing {limit} of {total_files} matching files. Use more specific pattern to narrow results."
+            result_dict["message"] = (
+                f"Showing {limit} of {total_files} matching files. Use more specific pattern to narrow results."
+            )
 
         return result_dict
 

@@ -1,16 +1,14 @@
 """Tests to improve coverage for simple utility modules."""
+
 import logging
-from unittest.mock import patch, MagicMock
 
-import pytest
-
-from ai_dev_agent.core.utils.logger import (
-    get_logger,
-    configure_logging,
-    set_correlation_id,
-    get_correlation_id,
-)
 from ai_dev_agent.core.utils.keywords import extract_keywords
+from ai_dev_agent.core.utils.logger import (
+    configure_logging,
+    get_correlation_id,
+    get_logger,
+    set_correlation_id,
+)
 
 
 class TestLogger:
@@ -37,7 +35,7 @@ class TestLogger:
     def test_configure_logging_basic(self):
         """Test basic logging configuration."""
         configure_logging(level="INFO")  # Pass as string, not int
-        logger = get_logger("config_test")
+        get_logger("config_test")
         # Logger should inherit the root configuration
         assert logging.getLogger().level == logging.INFO
 
@@ -49,6 +47,7 @@ class TestLogger:
         # Check that structured formatter is used
         handler = logging.getLogger().handlers[0]
         from ai_dev_agent.core.utils.logger import StructuredFormatter
+
         assert isinstance(handler.formatter, StructuredFormatter)
 
     def test_correlation_id(self):
@@ -106,7 +105,9 @@ class TestKeywords:
         text = "Build a REST API with GraphQL support and JSON responses"
         keywords = extract_keywords(text, include_special_terms=True)
         # Keywords are returned lowercase
-        assert "rest" in keywords or "api" in keywords or "graphql" in keywords or "json" in keywords
+        assert (
+            "rest" in keywords or "api" in keywords or "graphql" in keywords or "json" in keywords
+        )
 
     def test_extract_keywords_with_limit(self):
         """Test keyword extraction with limit."""
@@ -148,9 +149,9 @@ class TestSimpleUtilities:
         """Test that constants module has expected values."""
         from ai_dev_agent.core.utils.constants import (
             DEFAULT_IGNORED_REPO_DIRS,
-            MAX_HISTORY_ENTRIES,
             DEFAULT_MAX_CONTEXT_TOKENS,
             DEFAULT_RESPONSE_HEADROOM,
+            MAX_HISTORY_ENTRIES,
         )
 
         # Verify constants exist and have reasonable values
@@ -168,17 +169,17 @@ class TestSimpleUtilities:
 
         # Test that ApprovalPolicy is a dataclass with expected fields
         policy = ApprovalPolicy()
-        assert hasattr(policy, 'auto_approve_plan')
-        assert hasattr(policy, 'auto_approve_code')
-        assert hasattr(policy, 'auto_approve_shell')
-        assert hasattr(policy, 'auto_approve_adr')
-        assert hasattr(policy, 'emergency_override')
-        assert hasattr(policy, 'audit_file')
+        assert hasattr(policy, "auto_approve_plan")
+        assert hasattr(policy, "auto_approve_code")
+        assert hasattr(policy, "auto_approve_shell")
+        assert hasattr(policy, "auto_approve_adr")
+        assert hasattr(policy, "emergency_override")
+        assert hasattr(policy, "audit_file")
 
         # Test default values
-        assert policy.auto_approve_plan == False
-        assert policy.auto_approve_code == False
-        assert policy.emergency_override == False
+        assert not policy.auto_approve_plan
+        assert not policy.auto_approve_code
+        assert not policy.emergency_override
 
     def test_approval_manager(self):
         """Test approval manager functionality."""
@@ -187,19 +188,17 @@ class TestSimpleUtilities:
 
         # Create policy with some auto-approvals
         policy = ApprovalPolicy(
-            auto_approve_plan=True,
-            auto_approve_code=False,
-            auto_approve_shell=False
+            auto_approve_plan=True, auto_approve_code=False, auto_approve_shell=False
         )
         manager = ApprovalManager(policy)
 
         # Test auto-approval based on policy
-        assert manager.maybe_auto("plan") == True
-        assert manager.maybe_auto("code") == False
-        assert manager.maybe_auto("shell") == False
-        assert manager.maybe_auto("unknown") == False
+        assert manager.maybe_auto("plan")
+        assert not manager.maybe_auto("code")
+        assert not manager.maybe_auto("shell")
+        assert not manager.maybe_auto("unknown")
 
         # Test with emergency override
         emergency_policy = ApprovalPolicy(emergency_override=True)
         emergency_manager = ApprovalManager(emergency_policy)
-        assert emergency_manager.maybe_auto("anything") == True
+        assert emergency_manager.maybe_auto("anything")

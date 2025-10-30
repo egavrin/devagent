@@ -1,14 +1,13 @@
 import os
 from pathlib import Path
 
+import pytest
+
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.engine.react.tool_invoker import RegistryToolInvoker
 from ai_dev_agent.engine.react.types import ActionRequest
 from ai_dev_agent.tools import RUN
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
-
-
-import pytest
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Shell session manager requires POSIX shell")

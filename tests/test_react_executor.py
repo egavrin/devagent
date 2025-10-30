@@ -1,24 +1,18 @@
 """Tests for the ReAct executor module."""
-import json
-from unittest.mock import MagicMock, patch, Mock, call
-from pathlib import Path
-import tempfile
 
-import pytest
-import click
+import json
+from unittest.mock import MagicMock
 
 from ai_dev_agent.cli.react.executor import (
-    _execute_react_assistant,
+    BudgetAwareExecutor,
     _build_json_enforcement_instructions,
-    _sanitize_conversation_for_llm,
-    _extract_json,
-    _truncate_shell_history,
     _build_phase_prompt,
     _build_synthesis_prompt,
+    _extract_json,
     _record_search_query,
-    BudgetAwareExecutor
+    _sanitize_conversation_for_llm,
+    _truncate_shell_history,
 )
-from ai_dev_agent.engine.react.types import ActionRequest, Observation, StepRecord, RunResult, MetricsSnapshot
 from ai_dev_agent.providers.llm.base import Message
 
 
@@ -40,9 +34,9 @@ class TestJsonEnforcement:
             "type": "object",
             "properties": {
                 "status": {"type": "string", "enum": ["success", "failure"]},
-                "data": {"type": "array", "items": {"type": "string"}}
+                "data": {"type": "array", "items": {"type": "string"}},
             },
-            "required": ["status"]
+            "required": ["status"],
         }
         instructions = _build_json_enforcement_instructions(schema)
 
@@ -63,7 +57,7 @@ class TestSanitizeConversation:
         """Test sanitizing basic conversation."""
         messages = [
             Message(role="user", content="Hello"),
-            Message(role="assistant", content="Hi there")
+            Message(role="assistant", content="Hi there"),
         ]
         result = _sanitize_conversation_for_llm(messages)
         assert len(result) == 2
@@ -73,9 +67,11 @@ class TestSanitizeConversation:
     def test_sanitize_conversation_removes_orphaned_tools(self):
         """Test sanitizing removes orphaned tool messages."""
         messages = [
-            Message(role="assistant", content="Let me help", tool_calls=[
-                {"id": "call_1", "type": "function", "function": {"name": "test"}}
-            ]),
+            Message(
+                role="assistant",
+                content="Let me help",
+                tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "test"}}],
+            ),
             Message(role="tool", content="Result", tool_call_id="call_1"),  # Valid
             Message(role="tool", content="Orphan", tool_call_id="call_999"),  # Orphan
         ]
@@ -88,7 +84,7 @@ class TestSanitizeConversation:
         messages = [
             Message(role="user", content="Hello"),
             Message(role="assistant", content="Hi there"),
-            Message(role="system", content="You are helpful")
+            Message(role="system", content="You are helpful"),
         ]
         result = _sanitize_conversation_for_llm(messages)
         assert len(result) == 3
@@ -156,7 +152,7 @@ class TestTruncateShellHistory:
         """Test truncating history under the limit."""
         messages = [
             Message(role="user", content="cmd1"),
-            Message(role="assistant", content="output1")
+            Message(role="assistant", content="output1"),
         ]
         result = _truncate_shell_history(messages, 5)
         assert result == messages
@@ -180,7 +176,7 @@ class TestTruncateShellHistory:
             Message(role="assistant", content="output1"),
             Message(role="user", content="cmd2"),
             Message(role="assistant", content="output2"),
-            Message(role="user", content="cmd3")  # Incomplete pair
+            Message(role="user", content="cmd3"),  # Incomplete pair
         ]
 
         result = _truncate_shell_history(messages, 1)
@@ -199,7 +195,7 @@ class TestBuildPhasePrompt:
             context="Some context",
             constraints="No constraints",
             workspace="/test/workspace",
-            repository_language="python"
+            repository_language="python",
         )
 
         assert "Test query" in prompt
@@ -213,7 +209,7 @@ class TestBuildPhasePrompt:
             context="Previous work done",
             constraints="Must be fast",
             workspace="/test/workspace",
-            repository_language="javascript"
+            repository_language="javascript",
         )
 
         assert "Test query" in prompt
@@ -227,7 +223,7 @@ class TestBuildPhasePrompt:
             context="Feature implemented",
             constraints="Must have 90% coverage",
             workspace="/test/workspace",
-            repository_language="java"
+            repository_language="java",
         )
 
         assert "Build feature X" in prompt
@@ -244,9 +240,7 @@ class TestBuildSynthesisPrompt:
         context = "Examined files:\n- test.py (read_file)\nFound: def test(): pass"
 
         prompt = _build_synthesis_prompt(
-            user_query="Test task",
-            context=context,
-            workspace="/test/workspace"
+            user_query="Test task", context=context, workspace="/test/workspace"
         )
 
         assert "Test task" in prompt
@@ -260,9 +254,7 @@ class TestBuildSynthesisPrompt:
 2. Edited main.py (file updated)"""
 
         prompt = _build_synthesis_prompt(
-            user_query="Fix TODOs",
-            context=context,
-            workspace="/test/workspace"
+            user_query="Fix TODOs", context=context, workspace="/test/workspace"
         )
 
         assert "Fix TODOs" in prompt
@@ -275,9 +267,7 @@ class TestBuildSynthesisPrompt:
         context = "Attempted to write out.txt but failed: Permission denied"
 
         prompt = _build_synthesis_prompt(
-            user_query="Write output",
-            context=context,
-            workspace="/test/workspace"
+            user_query="Write output", context=context, workspace="/test/workspace"
         )
 
         assert "Write output" in prompt
@@ -347,14 +337,11 @@ class TestBudgetAwareExecutor:
         mock_budget = MagicMock()
         format_schema = {"type": "object"}
 
-        executor = BudgetAwareExecutor(
-            budget_manager=mock_budget,
-            format_schema=format_schema
-        )
+        executor = BudgetAwareExecutor(budget_manager=mock_budget, format_schema=format_schema)
 
         assert executor.budget_manager == mock_budget
         assert executor.format_schema == format_schema
-        assert hasattr(executor, 'failure_detector')
+        assert hasattr(executor, "failure_detector")
 
     def test_budget_aware_executor_with_defaults(self):
         """Test BudgetAwareExecutor with defaults."""

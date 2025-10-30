@@ -3,27 +3,50 @@
 Provides granular accounting with micro-cent precision to track input/output/cache
 tokens and calculate costs based on model pricing.
 """
+
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
 
 # Model pricing per million tokens (in dollars)
 # Based on current pricing as of 2025
-MODEL_PRICING: Dict[str, Dict[str, float]] = {
+MODEL_PRICING: dict[str, dict[str, float]] = {
     # Anthropic models
-    "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30},
-    "claude-3-5-haiku-20241022": {"input": 1.00, "output": 5.00, "cache_write": 1.25, "cache_read": 0.10},
-    "claude-3-opus-20240229": {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_read": 1.50},
-    "claude-3-sonnet-20240229": {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30},
-    "claude-3-haiku-20240307": {"input": 0.25, "output": 1.25, "cache_write": 0.30, "cache_read": 0.03},
-
+    "claude-3-5-sonnet-20241022": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_write": 3.75,
+        "cache_read": 0.30,
+    },
+    "claude-3-5-haiku-20241022": {
+        "input": 1.00,
+        "output": 5.00,
+        "cache_write": 1.25,
+        "cache_read": 0.10,
+    },
+    "claude-3-opus-20240229": {
+        "input": 15.00,
+        "output": 75.00,
+        "cache_write": 18.75,
+        "cache_read": 1.50,
+    },
+    "claude-3-sonnet-20240229": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_write": 3.75,
+        "cache_read": 0.30,
+    },
+    "claude-3-haiku-20240307": {
+        "input": 0.25,
+        "output": 1.25,
+        "cache_write": 0.30,
+        "cache_read": 0.03,
+    },
     # DeepSeek models
     "deepseek-coder": {"input": 0.14, "output": 0.28, "cache_write": 0.14, "cache_read": 0.014},
     "deepseek-chat": {"input": 0.14, "output": 0.28, "cache_write": 0.14, "cache_read": 0.014},
     "deepseek-reasoner": {"input": 0.55, "output": 2.19, "reasoning": 0.55},
-
     # Default pricing for unknown models
     "default": {"input": 1.00, "output": 2.00},
 }
@@ -43,11 +66,7 @@ class TokenUsage:
     def __post_init__(self):
         """Calculate total if not provided."""
         if self.total_tokens == 0:
-            self.total_tokens = (
-                self.prompt_tokens +
-                self.completion_tokens +
-                self.reasoning_tokens
-            )
+            self.total_tokens = self.prompt_tokens + self.completion_tokens + self.reasoning_tokens
 
 
 @dataclass
@@ -59,8 +78,8 @@ class CostRecord:
     usage: TokenUsage
     cost_usd: float
     operation: str = ""  # e.g., "completion", "tool_call", "summarization"
-    iteration: Optional[int] = None
-    phase: Optional[str] = None
+    iteration: int | None = None
+    phase: str | None = None
 
 
 @dataclass
@@ -75,7 +94,7 @@ class CostTracker:
     - Session aggregation
     """
 
-    records: List[CostRecord] = field(default_factory=list)
+    records: list[CostRecord] = field(default_factory=list)
     total_cost_usd: float = 0.0
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
@@ -84,20 +103,20 @@ class CostTracker:
     total_reasoning_tokens: int = 0
 
     # Per-model breakdown
-    model_costs: Dict[str, float] = field(default_factory=dict)
-    model_tokens: Dict[str, TokenUsage] = field(default_factory=dict)
+    model_costs: dict[str, float] = field(default_factory=dict)
+    model_tokens: dict[str, TokenUsage] = field(default_factory=dict)
 
     # Per-phase breakdown (exploration, investigation, etc.)
-    phase_costs: Dict[str, float] = field(default_factory=dict)
-    phase_tokens: Dict[str, TokenUsage] = field(default_factory=dict)
+    phase_costs: dict[str, float] = field(default_factory=dict)
+    phase_tokens: dict[str, TokenUsage] = field(default_factory=dict)
 
     def track_request(
         self,
         model: str,
         usage: TokenUsage,
         operation: str = "",
-        iteration: Optional[int] = None,
-        phase: Optional[str] = None,
+        iteration: int | None = None,
+        phase: str | None = None,
     ) -> CostRecord:
         """Track a single LLM request and calculate its cost.
 
@@ -196,7 +215,7 @@ class CostTracker:
         # Round to 8 decimal places for micro-cent precision
         return round(total_cost, 8)
 
-    def get_average_tokens_per_iteration(self) -> Tuple[int, int]:
+    def get_average_tokens_per_iteration(self) -> tuple[int, int]:
         """Get average input/output tokens per iteration.
 
         Returns:
@@ -206,7 +225,12 @@ class CostTracker:
         if not iterations_with_usage:
             return (0, 0)
 
-        num_iterations = max(r.iteration for r in iterations_with_usage)
+        # Filter out None values before max()
+        iteration_values = [r.iteration for r in iterations_with_usage if r.iteration is not None]
+        if not iteration_values:
+            return (0, 0)
+
+        num_iterations = max(iteration_values)
         if num_iterations == 0:
             return (0, 0)
 
@@ -228,8 +252,7 @@ class CostTracker:
         # Overall summary
         lines.append(f"💰 Total Cost: ${self.total_cost_usd:.4f}")
         lines.append(
-            f"📊 Tokens: {self.total_prompt_tokens:,} in, "
-            f"{self.total_completion_tokens:,} out"
+            f"📊 Tokens: {self.total_prompt_tokens:,} in, " f"{self.total_completion_tokens:,} out"
         )
 
         if self.total_cache_read_tokens > 0 or self.total_cache_write_tokens > 0:
@@ -248,17 +271,16 @@ class CostTracker:
                 lines.append("\n📈 Per Model:")
                 for model, cost in sorted(self.model_costs.items(), key=lambda x: -x[1]):
                     usage = self.model_tokens[model]
-                    lines.append(
-                        f"  • {model}: ${cost:.4f} "
-                        f"({usage.total_tokens:,} tokens)"
-                    )
+                    lines.append(f"  • {model}: ${cost:.4f} " f"({usage.total_tokens:,} tokens)")
 
             # Per-phase breakdown
             if self.phase_costs:
                 lines.append("\n📋 Per Phase:")
                 for phase, cost in self.phase_costs.items():
                     usage = self.phase_tokens[phase]
-                    percentage = (cost / self.total_cost_usd * 100) if self.total_cost_usd > 0 else 0
+                    percentage = (
+                        (cost / self.total_cost_usd * 100) if self.total_cost_usd > 0 else 0
+                    )
                     lines.append(
                         f"  • {phase}: ${cost:.4f} ({percentage:.1f}%) "
                         f"- {usage.total_tokens:,} tokens"
@@ -309,7 +331,11 @@ class CostTracker:
             return round(avg_cost_per_request * 5 * remaining_iterations, 4)
 
         # Calculate average cost per iteration
-        max_iteration = max(r.iteration for r in iterations_with_cost)
+        iteration_values = [r.iteration for r in iterations_with_cost if r.iteration is not None]
+        if not iteration_values:
+            return 0.0
+
+        max_iteration = max(iteration_values)
         if max_iteration == 0:
             return 0.0
 
@@ -328,7 +354,7 @@ class CostTracker:
         return self.total_cost_usd >= threshold_usd
 
 
-def create_token_usage_from_response(response_data: Dict) -> TokenUsage:
+def create_token_usage_from_response(response_data: dict) -> TokenUsage:
     """Create TokenUsage from LLM response data.
 
     Handles various response formats from different providers.
@@ -353,9 +379,9 @@ def create_token_usage_from_response(response_data: Dict) -> TokenUsage:
 
 
 __all__ = [
-    "TokenUsage",
+    "MODEL_PRICING",
     "CostRecord",
     "CostTracker",
+    "TokenUsage",
     "create_token_usage_from_response",
-    "MODEL_PRICING",
 ]

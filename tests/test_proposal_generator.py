@@ -1,17 +1,19 @@
 """Comprehensive tests for the ProposalGenerator module."""
 
 import json
-import logging
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 
-from ai_dev_agent.dynamic_instructions.proposal_generator import ProposalGenerator
-from ai_dev_agent.dynamic_instructions.pattern_tracker import PatternSignal
-from dataclasses import dataclass, field
-from ai_dev_agent.dynamic_instructions.manager import (
-    InstructionUpdate, UpdateType, UpdateSource, UpdateConfidence
-)
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.dynamic_instructions.manager import (
+    InstructionUpdate,
+    UpdateConfidence,
+    UpdateSource,
+    UpdateType,
+)
+from ai_dev_agent.dynamic_instructions.pattern_tracker import PatternSignal
+from ai_dev_agent.dynamic_instructions.proposal_generator import ProposalGenerator
 
 
 class TestProposalGenerator:
@@ -49,7 +51,7 @@ class TestProposalGenerator:
                 query_count=15,
                 success_rate=0.93,
                 confidence=0.85,
-                examples=["session1", "session2"]
+                examples=["session1", "session2"],
             ),
             PatternSignal(
                 pattern_type="failure_pattern",
@@ -57,8 +59,8 @@ class TestProposalGenerator:
                 query_count=10,
                 success_rate=0.20,
                 confidence=0.75,
-                examples=["session3"]
-            )
+                examples=["session3"],
+            ),
         ]
 
         # Mock LLM response
@@ -68,23 +70,26 @@ class TestProposalGenerator:
                     "type": "ADD",
                     "content": "Always read a file before writing to understand its current content",
                     "reasoning": "Tool sequence 'find → read → write' shows 93% success rate",
-                    "confidence": 0.85
+                    "confidence": 0.85,
                 },
                 {
                     "type": "MODIFY",
                     "content": "Check file existence before attempting direct writes",
                     "reasoning": "Direct writes have only 20% success rate",
-                    "confidence": 0.70
-                }
+                    "confidence": 0.70,
+                },
             ]
         }
 
-        with patch.object(self.generator, '_call_llm_for_proposals', return_value=mock_response):
+        with patch.object(self.generator, "_call_llm_for_proposals", return_value=mock_response):
             proposals = self.generator.generate_proposals(patterns, max_proposals=2)
 
         assert len(proposals) == 2
         assert proposals[0].update_type == UpdateType.ADD
-        assert proposals[0].new_content == "Always read a file before writing to understand its current content"
+        assert (
+            proposals[0].new_content
+            == "Always read a file before writing to understand its current content"
+        )
         assert proposals[0].confidence == 0.85
         assert proposals[0].confidence_level == UpdateConfidence.HIGH
 
@@ -101,11 +106,13 @@ class TestProposalGenerator:
                 query_count=5,
                 success_rate=0.8,
                 confidence=0.6,
-                examples=[]
+                examples=[],
             )
         ]
 
-        with patch.object(self.generator, '_call_llm_for_proposals', side_effect=Exception("LLM error")):
+        with patch.object(
+            self.generator, "_call_llm_for_proposals", side_effect=Exception("LLM error")
+        ):
             proposals = self.generator.generate_proposals(patterns)
             assert proposals == []
 
@@ -118,7 +125,7 @@ class TestProposalGenerator:
                 query_count=20,
                 success_rate=0.95,
                 confidence=0.90,
-                examples=[]
+                examples=[],
             ),
             PatternSignal(
                 pattern_type="failure_pattern",
@@ -126,7 +133,7 @@ class TestProposalGenerator:
                 query_count=15,
                 success_rate=0.10,
                 confidence=0.80,
-                examples=[]
+                examples=[],
             ),
             PatternSignal(
                 pattern_type="error_recovery",
@@ -134,7 +141,7 @@ class TestProposalGenerator:
                 query_count=8,
                 success_rate=0.75,
                 confidence=0.65,
-                examples=[]
+                examples=[],
             ),
             PatternSignal(
                 pattern_type="success_strategy",
@@ -142,8 +149,8 @@ class TestProposalGenerator:
                 query_count=12,
                 success_rate=0.88,
                 confidence=0.77,
-                examples=[]
-            )
+                examples=[],
+            ),
         ]
 
         prompt = self.generator._build_proposal_prompt(patterns, max_proposals=3)
@@ -169,7 +176,7 @@ class TestProposalGenerator:
                 query_count=10,
                 success_rate=0.9,
                 confidence=0.8,
-                examples=[]
+                examples=[],
             )
         ]
 
@@ -180,7 +187,7 @@ class TestProposalGenerator:
         assert "Error Recovery" not in prompt
         assert "good sequence" in prompt
 
-    @patch('ai_dev_agent.providers.llm.create_client')
+    @patch("ai_dev_agent.providers.llm.create_client")
     def test_call_llm_for_proposals_success(self, mock_create_client):
         """Test successful LLM call."""
         # Mock LLM client and response
@@ -193,7 +200,7 @@ class TestProposalGenerator:
                     "type": "ADD",
                     "content": "Test instruction",
                     "reasoning": "Test reasoning",
-                    "confidence": 0.75
+                    "confidence": 0.75,
                 }
             ]
         }
@@ -206,14 +213,16 @@ class TestProposalGenerator:
         mock_create_client.assert_called_once()
         mock_client.complete.assert_called_once()
 
-    @patch('ai_dev_agent.providers.llm.create_client')
+    @patch("ai_dev_agent.providers.llm.create_client")
     def test_call_llm_for_proposals_json_with_markdown(self, mock_create_client):
         """Test LLM response with markdown code fences."""
         mock_client = MagicMock()
         mock_create_client.return_value = mock_client
 
         expected_response = {
-            "proposals": [{"type": "ADD", "content": "Test", "reasoning": "Test", "confidence": 0.5}]
+            "proposals": [
+                {"type": "ADD", "content": "Test", "reasoning": "Test", "confidence": 0.5}
+            ]
         }
 
         # Response wrapped in markdown code fences
@@ -223,24 +232,28 @@ class TestProposalGenerator:
 
         assert result == expected_response
 
-    @patch('ai_dev_agent.providers.llm.create_client')
+    @patch("ai_dev_agent.providers.llm.create_client")
     def test_call_llm_for_proposals_json_extraction(self, mock_create_client):
         """Test JSON extraction from mixed text response."""
         mock_client = MagicMock()
         mock_create_client.return_value = mock_client
 
         expected_response = {
-            "proposals": [{"type": "ADD", "content": "Test", "reasoning": "Test", "confidence": 0.5}]
+            "proposals": [
+                {"type": "ADD", "content": "Test", "reasoning": "Test", "confidence": 0.5}
+            ]
         }
 
         # Response with extra text
-        mock_client.complete.return_value = f"Here is the JSON:\n{json.dumps(expected_response)}\nEnd of response"
+        mock_client.complete.return_value = (
+            f"Here is the JSON:\n{json.dumps(expected_response)}\nEnd of response"
+        )
 
         result = self.generator._call_llm_for_proposals("test prompt")
 
         assert result == expected_response
 
-    @patch('ai_dev_agent.providers.llm.create_client')
+    @patch("ai_dev_agent.providers.llm.create_client")
     def test_call_llm_for_proposals_invalid_json(self, mock_create_client):
         """Test handling of invalid JSON response."""
         mock_client = MagicMock()
@@ -252,7 +265,7 @@ class TestProposalGenerator:
         with pytest.raises(json.JSONDecodeError):
             self.generator._call_llm_for_proposals("test prompt")
 
-    @patch('ai_dev_agent.providers.llm.create_client')
+    @patch("ai_dev_agent.providers.llm.create_client")
     def test_call_llm_for_proposals_exception(self, mock_create_client):
         """Test LLM call exception handling."""
         mock_create_client.side_effect = Exception("Connection error")
@@ -272,20 +285,20 @@ class TestProposalGenerator:
                     "type": "ADD",
                     "content": "First instruction",
                     "reasoning": "Good reason",
-                    "confidence": 0.95
+                    "confidence": 0.95,
                 },
                 {
                     "type": "MODIFY",
                     "content": "Modified instruction",
                     "reasoning": "Another reason",
-                    "confidence": 0.60
+                    "confidence": 0.60,
                 },
                 {
                     "type": "REMOVE",
                     "content": "Remove this",
                     "reasoning": "Not needed",
-                    "confidence": 0.45
-                }
+                    "confidence": 0.45,
+                },
             ]
         }
 
@@ -324,12 +337,14 @@ class TestProposalGenerator:
 
         for confidence, expected_level in test_cases:
             proposals_data = {
-                "proposals": [{
-                    "type": "ADD",
-                    "content": "Test",
-                    "reasoning": "Test",
-                    "confidence": confidence
-                }]
+                "proposals": [
+                    {
+                        "type": "ADD",
+                        "content": "Test",
+                        "reasoning": "Test",
+                        "confidence": confidence,
+                    }
+                ]
             }
 
             proposals = self.generator._parse_proposals(proposals_data, patterns)
@@ -345,20 +360,20 @@ class TestProposalGenerator:
                     "type": "ADD",
                     # Missing content
                     "reasoning": "Test",
-                    "confidence": 0.5
+                    "confidence": 0.5,
                 },
                 {
                     "type": "ADD",
                     "content": "Test",
                     # Missing reasoning
-                    "confidence": 0.5
+                    "confidence": 0.5,
                 },
                 {
                     "type": "ADD",
                     "content": "Valid content",
                     "reasoning": "Valid reasoning",
-                    "confidence": 0.7
-                }
+                    "confidence": 0.7,
+                },
             ]
         }
 
@@ -378,14 +393,14 @@ class TestProposalGenerator:
                     "type": "ADD",
                     "content": "Test high",
                     "reasoning": "Test",
-                    "confidence": 1.5  # Too high
+                    "confidence": 1.5,  # Too high
                 },
                 {
                     "type": "ADD",
                     "content": "Test low",
                     "reasoning": "Test",
-                    "confidence": -0.5  # Too low
-                }
+                    "confidence": -0.5,  # Too low
+                },
             ]
         }
 
@@ -400,12 +415,9 @@ class TestProposalGenerator:
         patterns = []
 
         proposals_data = {
-            "proposals": [{
-                "type": "INVALID_TYPE",
-                "content": "Test",
-                "reasoning": "Test",
-                "confidence": 0.5
-            }]
+            "proposals": [
+                {"type": "INVALID_TYPE", "content": "Test", "reasoning": "Test", "confidence": 0.5}
+            ]
         }
 
         proposals = self.generator._parse_proposals(proposals_data, patterns)
@@ -432,7 +444,7 @@ class TestProposalGenerator:
             new_content="This is a substantive instruction with clear guidance",
             confidence=0.75,
             confidence_level=UpdateConfidence.HIGH,
-            reasoning="This proposal is well-reasoned and based on strong evidence"
+            reasoning="This proposal is well-reasoned and based on strong evidence",
         )
 
         assert self.generator.validate_proposal_quality(proposal) is True
@@ -446,7 +458,7 @@ class TestProposalGenerator:
             new_content="Too short",  # Less than 20 chars
             confidence=0.75,
             confidence_level=UpdateConfidence.HIGH,
-            reasoning="Good reasoning here"
+            reasoning="Good reasoning here",
         )
 
         assert self.generator.validate_proposal_quality(proposal) is False
@@ -460,7 +472,7 @@ class TestProposalGenerator:
             new_content="This is a good instruction with enough content",
             confidence=0.75,
             confidence_level=UpdateConfidence.HIGH,
-            reasoning=""  # Empty reasoning
+            reasoning="",  # Empty reasoning
         )
 
         assert self.generator.validate_proposal_quality(proposal) is False
@@ -474,7 +486,7 @@ class TestProposalGenerator:
             new_content="This is a good instruction with enough content",
             confidence=0.75,
             confidence_level=UpdateConfidence.HIGH,
-            reasoning="Too short"  # Less than 10 chars
+            reasoning="Too short",  # Less than 10 chars
         )
 
         assert self.generator.validate_proposal_quality(proposal) is False
@@ -488,7 +500,7 @@ class TestProposalGenerator:
             new_content="This is a substantive instruction with clear guidance",
             confidence=0.25,  # Below 0.3 threshold
             confidence_level=UpdateConfidence.VERY_LOW,
-            reasoning="This proposal has good reasoning but low confidence"
+            reasoning="This proposal has good reasoning but low confidence",
         )
 
         assert self.generator.validate_proposal_quality(proposal) is False
@@ -502,7 +514,7 @@ class TestProposalGenerator:
             new_content=None,  # None content for REMOVE type
             confidence=0.75,
             confidence_level=UpdateConfidence.HIGH,
-            reasoning="Good reasoning for removal"
+            reasoning="Good reasoning for removal",
         )
 
         assert self.generator.validate_proposal_quality(proposal) is False
@@ -516,7 +528,7 @@ class TestProposalGenerator:
             new_content="This is a substantive instruction with clear guidance",
             confidence=0.75,
             confidence_level=UpdateConfidence.HIGH,
-            reasoning=None  # None reasoning
+            reasoning=None,  # None reasoning
         )
 
         assert self.generator.validate_proposal_quality(proposal) is False
@@ -531,7 +543,7 @@ class TestProposalGenerator:
                 query_count=25,
                 success_rate=0.92,
                 confidence=0.88,
-                examples=["session4", "session5", "session6"]
+                examples=["session4", "session5", "session6"],
             ),
             PatternSignal(
                 pattern_type="failure_pattern",
@@ -539,7 +551,7 @@ class TestProposalGenerator:
                 query_count=18,
                 success_rate=0.28,
                 confidence=0.82,
-                examples=["session7", "session8"]
+                examples=["session7", "session8"],
             ),
             PatternSignal(
                 pattern_type="error_recovery",
@@ -547,8 +559,8 @@ class TestProposalGenerator:
                 query_count=12,
                 success_rate=0.83,
                 confidence=0.75,
-                examples=["session9"]
-            )
+                examples=["session9"],
+            ),
         ]
 
         # Mock a realistic LLM response
@@ -558,24 +570,26 @@ class TestProposalGenerator:
                     "type": "ADD",
                     "content": "Always validate data before processing to prevent downstream errors",
                     "reasoning": "Skipping validation shows only 28% success rate in 18 queries, indicating validation is critical",
-                    "confidence": 0.82
+                    "confidence": 0.82,
                 },
                 {
                     "type": "WEIGHT_INCREASE",
                     "content": "Prioritize read-analyze-write workflow for complex operations",
                     "reasoning": "This workflow demonstrates 92% success rate across 25 queries with high confidence",
-                    "confidence": 0.88
+                    "confidence": 0.88,
                 },
                 {
                     "type": "ADD",
                     "content": "Implement exponential backoff for retry operations on transient failures",
                     "reasoning": "Recovery with exponential backoff shows 83% success in error recovery scenarios",
-                    "confidence": 0.75
-                }
+                    "confidence": 0.75,
+                },
             ]
         }
 
-        with patch.object(self.generator, '_call_llm_for_proposals', return_value=mock_llm_response):
+        with patch.object(
+            self.generator, "_call_llm_for_proposals", return_value=mock_llm_response
+        ):
             proposals = self.generator.generate_proposals(patterns, max_proposals=3)
 
         # Verify all proposals are properly generated

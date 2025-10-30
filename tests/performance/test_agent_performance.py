@@ -2,30 +2,28 @@
 
 Tests agent coordination efficiency, delegation overhead, and communication bus performance.
 """
+
 import time
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from typing import Dict, List
 
 import pytest
 
-from ai_dev_agent.agents.base import AgentContext, BaseAgent
+from ai_dev_agent.agents.base import AgentContext
 from ai_dev_agent.agents.communication.bus import AgentBus, AgentEvent, EventType
 from ai_dev_agent.agents.enhanced_registry import EnhancedAgentRegistry
-from ai_dev_agent.agents.integration.planning_integration import AutomatedWorkflow, PlanningIntegration
+from ai_dev_agent.agents.integration.planning_integration import AutomatedWorkflow
 from ai_dev_agent.agents.specialized.design_agent import DesignAgent
 from ai_dev_agent.agents.specialized.implementation_agent import ImplementationAgent
 from ai_dev_agent.agents.specialized.orchestrator_agent import OrchestratorAgent
 from ai_dev_agent.agents.specialized.review_agent import ReviewAgent
 from ai_dev_agent.agents.specialized.testing_agent import TestingAgent
-from ai_dev_agent.agents.work_planner import Priority, Task, WorkPlan, WorkPlanningAgent
+from ai_dev_agent.agents.work_planner import Priority, Task, WorkPlan
 
 
 class PerformanceMetrics:
     """Collects and reports performance metrics."""
 
     def __init__(self):
-        self.measurements: Dict[str, List[float]] = {}
+        self.measurements: dict[str, list[float]] = {}
 
     def record(self, operation: str, duration: float):
         """Record a performance measurement."""
@@ -33,7 +31,7 @@ class PerformanceMetrics:
             self.measurements[operation] = []
         self.measurements[operation].append(duration)
 
-    def get_stats(self, operation: str) -> Dict[str, float]:
+    def get_stats(self, operation: str) -> dict[str, float]:
         """Get statistics for an operation."""
         if operation not in self.measurements:
             return {}
@@ -209,9 +207,7 @@ class TestCommunicationBusPerformance:
         # Warm-up
         for i in range(10):
             event = AgentEvent(
-                event_type=EventType.TASK_STARTED,
-                source_agent="test",
-                data={"task_id": i}
+                event_type=EventType.TASK_STARTED, source_agent="test", data={"task_id": i}
             )
             bus.publish(event)
 
@@ -223,9 +219,7 @@ class TestCommunicationBusPerformance:
 
         for i in range(iterations):
             event = AgentEvent(
-                event_type=EventType.TASK_STARTED,
-                source_agent="test",
-                data={"task_id": i}
+                event_type=EventType.TASK_STARTED, source_agent="test", data={"task_id": i}
             )
             bus.publish(event)
 
@@ -251,6 +245,7 @@ class TestCommunicationBusPerformance:
                 if handler_id not in handler_counts:
                     handler_counts[handler_id] = 0
                 handler_counts[handler_id] += 1
+
             return handler
 
         # Subscribe multiple handlers
@@ -271,9 +266,7 @@ class TestCommunicationBusPerformance:
 
             for i in range(event_count):
                 event = AgentEvent(
-                    event_type=EventType.TASK_COMPLETED,
-                    source_agent="test",
-                    data={"task_id": i}
+                    event_type=EventType.TASK_COMPLETED, source_agent="test", data={"task_id": i}
                 )
                 bus.publish(event)
 
@@ -305,7 +298,7 @@ class TestCommunicationBusPerformance:
             response_event = AgentEvent(
                 event_type=EventType.TASK_COMPLETED,
                 source_agent="responder",
-                data={"response": f"processed_{event.data.get('request_id')}"}
+                data={"response": f"processed_{event.data.get('request_id')}"},
             )
             bus.publish(response_event)
 
@@ -314,9 +307,7 @@ class TestCommunicationBusPerformance:
         # Warm-up
         for i in range(10):
             event = AgentEvent(
-                event_type=EventType.TASK_STARTED,
-                source_agent="requester",
-                data={"request_id": i}
+                event_type=EventType.TASK_STARTED, source_agent="requester", data={"request_id": i}
             )
             bus.publish(event)
 
@@ -328,9 +319,7 @@ class TestCommunicationBusPerformance:
             start = time.time()
 
             event = AgentEvent(
-                event_type=EventType.TASK_STARTED,
-                source_agent="requester",
-                data={"request_id": i}
+                event_type=EventType.TASK_STARTED, source_agent="requester", data={"request_id": i}
             )
             bus.publish(event)
 
@@ -368,7 +357,7 @@ class TestWorkflowPerformance:
                     title="Design feature",
                     description="Create design",
                     priority=Priority.HIGH,
-                    tags=["design"]
+                    tags=["design"],
                 ),
                 Task(
                     id="task-2",
@@ -376,7 +365,7 @@ class TestWorkflowPerformance:
                     description="Generate tests",
                     priority=Priority.HIGH,
                     dependencies=["task-1"],
-                    tags=["test"]
+                    tags=["test"],
                 ),
                 Task(
                     id="task-3",
@@ -384,7 +373,7 @@ class TestWorkflowPerformance:
                     description="Write code",
                     priority=Priority.HIGH,
                     dependencies=["task-2"],
-                    tags=["implement"]
+                    tags=["implement"],
                 ),
                 Task(
                     id="task-4",
@@ -392,9 +381,9 @@ class TestWorkflowPerformance:
                     description="Code review",
                     priority=Priority.MEDIUM,
                     dependencies=["task-3"],
-                    tags=["review"]
+                    tags=["review"],
                 ),
-            ]
+            ],
         )
 
         workflow = AutomatedWorkflow()
@@ -411,7 +400,7 @@ class TestWorkflowPerformance:
                 task.status = task.status.__class__.PENDING
 
             start = time.time()
-            result = workflow.execute_plan_automatically(plan, context, stop_on_failure=False)
+            workflow.execute_plan_automatically(plan, context, stop_on_failure=False)
             duration = time.time() - start
             metrics.record("small_plan_execution", duration)
 
@@ -433,45 +422,43 @@ class TestWorkflowPerformance:
         tasks = []
         for feature_idx in range(3):
             base_id = feature_idx * 4
-            tasks.extend([
-                Task(
-                    id=f"task-{base_id+1}",
-                    title=f"Design feature {feature_idx+1}",
-                    description="Create design",
-                    priority=Priority.HIGH,
-                    tags=["design"]
-                ),
-                Task(
-                    id=f"task-{base_id+2}",
-                    title=f"Write tests for feature {feature_idx+1}",
-                    description="Generate tests",
-                    priority=Priority.HIGH,
-                    dependencies=[f"task-{base_id+1}"],
-                    tags=["test"]
-                ),
-                Task(
-                    id=f"task-{base_id+3}",
-                    title=f"Implement feature {feature_idx+1}",
-                    description="Write code",
-                    priority=Priority.HIGH,
-                    dependencies=[f"task-{base_id+2}"],
-                    tags=["implement"]
-                ),
-                Task(
-                    id=f"task-{base_id+4}",
-                    title=f"Review feature {feature_idx+1}",
-                    description="Code review",
-                    priority=Priority.MEDIUM,
-                    dependencies=[f"task-{base_id+3}"],
-                    tags=["review"]
-                ),
-            ])
+            tasks.extend(
+                [
+                    Task(
+                        id=f"task-{base_id+1}",
+                        title=f"Design feature {feature_idx+1}",
+                        description="Create design",
+                        priority=Priority.HIGH,
+                        tags=["design"],
+                    ),
+                    Task(
+                        id=f"task-{base_id+2}",
+                        title=f"Write tests for feature {feature_idx+1}",
+                        description="Generate tests",
+                        priority=Priority.HIGH,
+                        dependencies=[f"task-{base_id+1}"],
+                        tags=["test"],
+                    ),
+                    Task(
+                        id=f"task-{base_id+3}",
+                        title=f"Implement feature {feature_idx+1}",
+                        description="Write code",
+                        priority=Priority.HIGH,
+                        dependencies=[f"task-{base_id+2}"],
+                        tags=["implement"],
+                    ),
+                    Task(
+                        id=f"task-{base_id+4}",
+                        title=f"Review feature {feature_idx+1}",
+                        description="Code review",
+                        priority=Priority.MEDIUM,
+                        dependencies=[f"task-{base_id+3}"],
+                        tags=["review"],
+                    ),
+                ]
+            )
 
-        plan = WorkPlan(
-            id="perf-plan-002",
-            goal="Implement 3 features",
-            tasks=tasks
-        )
+        plan = WorkPlan(id="perf-plan-002", goal="Implement 3 features", tasks=tasks)
 
         workflow = AutomatedWorkflow()
         context = AgentContext(session_id="perf-workflow-002")
@@ -484,7 +471,7 @@ class TestWorkflowPerformance:
                 task.status = task.status.__class__.PENDING
 
             start = time.time()
-            result = workflow.execute_plan_automatically(plan, context, stop_on_failure=False)
+            workflow.execute_plan_automatically(plan, context, stop_on_failure=False)
             duration = time.time() - start
             metrics.record("medium_plan_execution", duration)
 
@@ -505,7 +492,6 @@ class TestMemoryAndScalability:
     @pytest.mark.llm
     def test_agent_session_memory(self, metrics):
         """Measure memory impact of agent sessions."""
-        import sys
 
         agent = DesignAgent()
         context = AgentContext(session_id="perf-mem-001")
@@ -519,6 +505,7 @@ class TestMemoryAndScalability:
             session = agent.create_session(AgentContext(session_id=f"session-{i}"))
             # Add some history
             from ai_dev_agent.agents.base import Message
+
             session.add_message(Message(role="user", content=f"Request {i}"))
             session.add_result(agent.execute(f"Design feature {i}", context))
             sessions.append(session)

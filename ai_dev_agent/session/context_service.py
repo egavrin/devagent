@@ -1,19 +1,25 @@
 """Lightweight conversation summarization and pruning service."""
+
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
-from typing import Iterable, List, Mapping, Sequence, Set
+from typing import TYPE_CHECKING
 
-from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.core.utils.context_budget import (
     ContextBudgetConfig,
     ensure_context_budget,
     estimate_tokens,
     summarize_text,
 )
+from ai_dev_agent.providers.llm.base import Message
+
 from .summarizer import ConversationSummarizer, HeuristicConversationSummarizer
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping, Sequence
+
 try:
     from .enhanced_summarizer import EnhancedSummarizer, SummarizationConfig
 except ImportError:
@@ -148,7 +154,7 @@ class ContextPruningService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _summarize_and_prune(self, history: Sequence[Message]) -> List[Message]:
+    def _summarize_and_prune(self, history: Sequence[Message]) -> list[Message]:
         """Return a pruned history with a lightweight summary message."""
 
         history_list = list(history)
@@ -224,10 +230,10 @@ class ContextPruningService:
         content = message.content or ""
         return content.startswith(SUMMARY_PREFIX)
 
-    def _remove_orphaned_tool_messages(self, messages: Sequence[Message]) -> List[Message]:
+    def _remove_orphaned_tool_messages(self, messages: Sequence[Message]) -> list[Message]:
         """Drop tool responses whose initiating assistant turn was pruned."""
 
-        result: List[Message] = []
+        result: list[Message] = []
         last_assistant_with_tools: Message | None = None
 
         for msg in messages:
@@ -247,7 +253,7 @@ class ContextPruningService:
 
         return result
 
-    def _redact_stale_tool_outputs(self, messages: Sequence[Message]) -> tuple[List[Message], int]:
+    def _redact_stale_tool_outputs(self, messages: Sequence[Message]) -> tuple[list[Message], int]:
         """Summarise or redact tool outputs that fall outside the active window."""
 
         if not messages:
@@ -258,11 +264,11 @@ class ContextPruningService:
             return list(messages), 0
 
         keep_count = max(self._budget.max_tool_messages, 0)
-        keep_indices: Set[int] = set(tool_indices[-keep_count:]) if keep_count else set()
+        keep_indices: set[int] = set(tool_indices[-keep_count:]) if keep_count else set()
 
         redacted = 0
         limit = max(self._config.summary_max_chars // 2, 512)
-        result: List[Message] = []
+        result: list[Message] = []
 
         for idx, msg in enumerate(messages):
             if msg.role != "tool" or idx in keep_indices:
@@ -286,7 +292,7 @@ class ContextPruningService:
 
         return result, redacted
 
-    def _record_event(self, events: List[Mapping[str, object]], event: ContextPruningEvent) -> None:
+    def _record_event(self, events: list[Mapping[str, object]], event: ContextPruningEvent) -> None:
         payload = {
             "timestamp": event.timestamp,
             "token_estimate_before": event.token_estimate_before,

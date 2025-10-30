@@ -3,16 +3,16 @@
 Implements jittered backoff to handle transient failures with configurable retry
 behavior.
 """
+
 from __future__ import annotations
 
 import random
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Set, TypeVar
+from typing import Callable, TypeVar
 
 from ai_dev_agent.providers.llm import (
     LLMConnectionError,
-    LLMError,
     LLMRateLimitError,
     LLMRetryExhaustedError,
     LLMTimeoutError,
@@ -32,10 +32,10 @@ class RetryConfig:
     jitter_ratio: float = 0.1  # 10% jitter to avoid thundering herd
 
     # Retryable exceptions
-    retryable_exceptions: Set[type] = None
+    retryable_exceptions: set[type] = None
 
     # Retryable status codes (for HTTP errors)
-    retryable_status_codes: Set[int] = None
+    retryable_status_codes: set[int] = None
 
     def __post_init__(self):
         """Initialize default retryable conditions."""
@@ -76,7 +76,7 @@ class RetryHandler:
         ```
     """
 
-    def __init__(self, config: Optional[RetryConfig] = None):
+    def __init__(self, config: RetryConfig | None = None):
         """Initialize retry handler with configuration.
 
         Args:
@@ -90,7 +90,7 @@ class RetryHandler:
         self,
         func: Callable[..., T],
         *args,
-        on_retry: Optional[Callable[[int, Exception, float], None]] = None,
+        on_retry: Callable[[int, Exception, float], None] | None = None,
         **kwargs,
     ) -> T:
         """Execute a function with retry logic.
@@ -130,7 +130,7 @@ class RetryHandler:
                 # Check if we've exhausted retries
                 if attempt == self.config.max_retries - 1:
                     raise LLMRetryExhaustedError(
-                        f"Failed after {self.config.max_retries} attempts: {str(e)}"
+                        f"Failed after {self.config.max_retries} attempts: {e!s}"
                     ) from e
 
                 # Calculate delay with jitter
@@ -149,7 +149,7 @@ class RetryHandler:
 
         # Should not reach here, but handle it gracefully
         raise LLMRetryExhaustedError(
-            f"Failed after {self.config.max_retries} attempts: {str(last_error)}"
+            f"Failed after {self.config.max_retries} attempts: {last_error!s}"
         ) from last_error
 
     def _is_retryable(self, error: Exception) -> bool:
@@ -185,11 +185,7 @@ class RetryHandler:
             "internal server error",
         ]
 
-        for indicator in transient_indicators:
-            if indicator in error_msg:
-                return True
-
-        return False
+        return any(indicator in error_msg for indicator in transient_indicators)
 
     def _add_jitter(self, delay: float) -> float:
         """Add jitter to delay to prevent thundering herd.
@@ -231,7 +227,7 @@ class SmartRetryHandler(RetryHandler):
     - Success rate tracking
     """
 
-    def __init__(self, config: Optional[RetryConfig] = None):
+    def __init__(self, config: RetryConfig | None = None):
         """Initialize smart retry handler."""
         super().__init__(config)
         self._success_count = 0
@@ -243,7 +239,7 @@ class SmartRetryHandler(RetryHandler):
         self,
         func: Callable[..., T],
         *args,
-        on_retry: Optional[Callable[[int, Exception, float], None]] = None,
+        on_retry: Callable[[int, Exception, float], None] | None = None,
         **kwargs,
     ) -> T:
         """Execute with smart retry logic including circuit breaker.
@@ -269,7 +265,7 @@ class SmartRetryHandler(RetryHandler):
             result = super().execute_with_retry(func, *args, on_retry=on_retry, **kwargs)
             self._on_success()
             return result
-        except Exception as e:
+        except Exception:
             self._on_failure()
             raise
 

@@ -1,6 +1,5 @@
-from pathlib import Path
-
 import subprocess
+from pathlib import Path
 
 from ai_dev_agent.tools.code.code_edit.diff_utils import DiffProcessor
 

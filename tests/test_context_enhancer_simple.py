@@ -1,8 +1,9 @@
 """Simplified tests for the context enhancer module - focuses on core functionality."""
-import json
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+
 import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from ai_dev_agent.cli.context_enhancer import ContextEnhancer
@@ -51,7 +52,7 @@ class TestContextEnhancerSimple:
         """Test basic symbol extraction."""
         text = "The UserAuth class and validate_token function need work"
 
-        symbols, files = enhancer.extract_symbols_and_files(text)
+        symbols, _files = enhancer.extract_symbols_and_files(text)
 
         assert "UserAuth" in symbols  # CamelCase
         assert "validate_token" in symbols  # snake_case
@@ -60,7 +61,7 @@ class TestContextEnhancerSimple:
         """Test basic file extraction."""
         text = "Check src/auth.py and tests/test_auth.py for issues"
 
-        symbols, files = enhancer.extract_symbols_and_files(text)
+        _symbols, files = enhancer.extract_symbols_and_files(text)
 
         assert "src/auth.py" in files
         assert "tests/test_auth.py" in files
@@ -69,7 +70,7 @@ class TestContextEnhancerSimple:
         """Test extraction of quoted filenames."""
         text = 'The file "config/settings.json" has the configuration'
 
-        symbols, files = enhancer.extract_symbols_and_files(text)
+        _symbols, files = enhancer.extract_symbols_and_files(text)
 
         assert "config/settings.json" in files
 
@@ -140,9 +141,9 @@ class TestContextEnhancerSimple:
         # But actual symbol should be
         assert "UserManager" in symbols
 
-    @patch('ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE', False)
-    @patch('ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE', False)
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', False)
+    @patch("ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE", False)
+    @patch("ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE", False)
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", False)
     def test_init_with_all_disabled(self, temp_workspace):
         """Test initialization with all optional features disabled."""
         settings = MagicMock(spec=Settings)

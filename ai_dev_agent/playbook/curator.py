@@ -7,10 +7,8 @@ pattern, ensuring high-quality, non-redundant instructions in the playbook.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
-import numpy as np
+from datetime import datetime
 
 from .manager import Instruction, InstructionCategory, PlaybookManager
 
@@ -19,6 +17,7 @@ logger = logging.getLogger(__name__)
 # Try to import embedding generator from memory system
 try:
     from ai_dev_agent.memory.embeddings import EmbeddingGenerator
+
     EMBEDDINGS_AVAILABLE = True
 except ImportError:
     EMBEDDINGS_AVAILABLE = False
@@ -28,8 +27,9 @@ except ImportError:
 @dataclass
 class DuplicateGroup:
     """Group of similar instructions that may need merging."""
+
     primary: Instruction
-    duplicates: List[Tuple[Instruction, float]]  # (instruction, similarity_score)
+    duplicates: list[tuple[Instruction, float]]  # (instruction, similarity_score)
     merge_recommended: bool
     merge_strategy: str  # "keep_primary", "merge_content", "keep_both"
     reason: str
@@ -38,6 +38,7 @@ class DuplicateGroup:
 @dataclass
 class QualityIssue:
     """Quality issue found in an instruction."""
+
     instruction: Instruction
     issue_type: str  # "too_vague", "too_specific", "outdated", "low_effectiveness"
     severity: str  # "critical", "major", "minor"
@@ -52,7 +53,7 @@ class PlaybookCurator:
         self,
         playbook_manager: PlaybookManager,
         similarity_threshold: float = 0.9,
-        quality_threshold: float = 0.3
+        quality_threshold: float = 0.3,
     ):
         """Initialize the curator.
 
@@ -75,10 +76,8 @@ class PlaybookCurator:
                 logger.warning(f"Failed to initialize embeddings: {e}")
 
     def find_duplicates(
-        self,
-        category: Optional[InstructionCategory] = None,
-        min_similarity: Optional[float] = None
-    ) -> List[DuplicateGroup]:
+        self, category: InstructionCategory | None = None, min_similarity: float | None = None
+    ) -> list[DuplicateGroup]:
         """Find groups of similar instructions that may be duplicates.
 
         Args:
@@ -110,7 +109,7 @@ class PlaybookCurator:
 
             similar_instructions = []
 
-            for j, inst2 in enumerate(instructions[i + 1:], start=i + 1):
+            for _j, inst2 in enumerate(instructions[i + 1 :], start=i + 1):
                 if inst2.instruction_id in grouped_ids:
                     continue
 
@@ -122,16 +121,14 @@ class PlaybookCurator:
 
             if similar_instructions:
                 # Determine merge strategy
-                merge_strategy, reason = self._determine_merge_strategy(
-                    inst1, similar_instructions
-                )
+                merge_strategy, reason = self._determine_merge_strategy(inst1, similar_instructions)
 
                 duplicate_group = DuplicateGroup(
                     primary=inst1,
                     duplicates=similar_instructions,
                     merge_recommended=(merge_strategy != "keep_both"),
                     merge_strategy=merge_strategy,
-                    reason=reason
+                    reason=reason,
                 )
                 duplicate_groups.append(duplicate_group)
                 grouped_ids.add(inst1.instruction_id)
@@ -139,10 +136,8 @@ class PlaybookCurator:
         return duplicate_groups
 
     def merge_duplicates(
-        self,
-        duplicate_group: DuplicateGroup,
-        auto_merge: bool = False
-    ) -> Optional[Instruction]:
+        self, duplicate_group: DuplicateGroup, auto_merge: bool = False
+    ) -> Instruction | None:
         """Merge a group of duplicate instructions.
 
         Args:
@@ -163,7 +158,9 @@ class PlaybookCurator:
             # Remove duplicates, keep primary
             for dup_inst, _ in duplicates:
                 self.playbook_manager.remove_instruction(dup_inst.instruction_id)
-            logger.info(f"Kept primary {primary.instruction_id}, removed {len(duplicates)} duplicates")
+            logger.info(
+                f"Kept primary {primary.instruction_id}, removed {len(duplicates)} duplicates"
+            )
             return primary
 
         elif duplicate_group.merge_strategy == "merge_content":
@@ -175,7 +172,7 @@ class PlaybookCurator:
                 instruction_id=primary.instruction_id,
                 content=merged.content,
                 examples=merged.examples,
-                tags=merged.tags
+                tags=merged.tags,
             )
 
             # Remove duplicates
@@ -194,10 +191,7 @@ class PlaybookCurator:
 
         return None
 
-    def check_quality(
-        self,
-        category: Optional[InstructionCategory] = None
-    ) -> List[QualityIssue]:
+    def check_quality(self, category: InstructionCategory | None = None) -> list[QualityIssue]:
         """Check for quality issues in instructions.
 
         Args:
@@ -216,57 +210,69 @@ class PlaybookCurator:
 
         for instruction in instructions:
             # Check 1: Low effectiveness
-            if (instruction.usage_count >= 5 and
-                instruction.effectiveness_score < self.quality_threshold):
-                issues.append(QualityIssue(
-                    instruction=instruction,
-                    issue_type="low_effectiveness",
-                    severity="major",
-                    recommendation=f"Review or remove - only {instruction.effectiveness_score:.1%} effective",
-                    auto_fixable=False
-                ))
+            if (
+                instruction.usage_count >= 5
+                and instruction.effectiveness_score < self.quality_threshold
+            ):
+                issues.append(
+                    QualityIssue(
+                        instruction=instruction,
+                        issue_type="low_effectiveness",
+                        severity="major",
+                        recommendation=f"Review or remove - only {instruction.effectiveness_score:.1%} effective",
+                        auto_fixable=False,
+                    )
+                )
 
             # Check 2: Too vague (very short content)
             if len(instruction.content) < 20:
-                issues.append(QualityIssue(
-                    instruction=instruction,
-                    issue_type="too_vague",
-                    severity="minor",
-                    recommendation="Add more specific guidance or examples",
-                    auto_fixable=False
-                ))
+                issues.append(
+                    QualityIssue(
+                        instruction=instruction,
+                        issue_type="too_vague",
+                        severity="minor",
+                        recommendation="Add more specific guidance or examples",
+                        auto_fixable=False,
+                    )
+                )
 
             # Check 3: Too specific (overly long, detailed)
             if len(instruction.content) > 500:
-                issues.append(QualityIssue(
-                    instruction=instruction,
-                    issue_type="too_specific",
-                    severity="minor",
-                    recommendation="Consider splitting into multiple instructions",
-                    auto_fixable=False
-                ))
+                issues.append(
+                    QualityIssue(
+                        instruction=instruction,
+                        issue_type="too_specific",
+                        severity="minor",
+                        recommendation="Consider splitting into multiple instructions",
+                        auto_fixable=False,
+                    )
+                )
 
             # Check 4: Never used (but exists for a while)
             if instruction.usage_count == 0 and instruction.created_at:
                 # Check if it's been more than 30 days (in real implementation)
                 # For now, just flag unused instructions
-                issues.append(QualityIssue(
-                    instruction=instruction,
-                    issue_type="unused",
-                    severity="minor",
-                    recommendation="Consider testing or removing if not needed",
-                    auto_fixable=False
-                ))
+                issues.append(
+                    QualityIssue(
+                        instruction=instruction,
+                        issue_type="unused",
+                        severity="minor",
+                        recommendation="Consider testing or removing if not needed",
+                        auto_fixable=False,
+                    )
+                )
 
             # Check 5: Missing examples for complex instructions
             if len(instruction.content) > 100 and not instruction.examples:
-                issues.append(QualityIssue(
-                    instruction=instruction,
-                    issue_type="missing_examples",
-                    severity="minor",
-                    recommendation="Add examples to clarify usage",
-                    auto_fixable=False
-                ))
+                issues.append(
+                    QualityIssue(
+                        instruction=instruction,
+                        issue_type="missing_examples",
+                        severity="minor",
+                        recommendation="Add examples to clarify usage",
+                        auto_fixable=False,
+                    )
+                )
 
         return issues
 
@@ -285,15 +291,39 @@ class PlaybookCurator:
         category_keywords = {
             InstructionCategory.DEBUGGING: ["debug", "error", "fix", "bug", "trace", "breakpoint"],
             InstructionCategory.TESTING: ["test", "assert", "mock", "coverage", "verify"],
-            InstructionCategory.REFACTORING: ["refactor", "clean", "simplify", "restructure", "organize"],
-            InstructionCategory.OPTIMIZATION: ["optimize", "performance", "speed", "efficiency", "cache"],
+            InstructionCategory.REFACTORING: [
+                "refactor",
+                "clean",
+                "simplify",
+                "restructure",
+                "organize",
+            ],
+            InstructionCategory.OPTIMIZATION: [
+                "optimize",
+                "performance",
+                "speed",
+                "efficiency",
+                "cache",
+            ],
             InstructionCategory.SECURITY: ["security", "auth", "encrypt", "validate", "sanitize"],
-            InstructionCategory.CODE_REVIEW: ["review", "feedback", "suggest", "critique", "analyze"],
-            InstructionCategory.DOCUMENTATION: ["document", "comment", "explain", "describe", "readme"],
+            InstructionCategory.CODE_REVIEW: [
+                "review",
+                "feedback",
+                "suggest",
+                "critique",
+                "analyze",
+            ],
+            InstructionCategory.DOCUMENTATION: [
+                "document",
+                "comment",
+                "explain",
+                "describe",
+                "readme",
+            ],
             InstructionCategory.ERROR_HANDLING: ["error", "exception", "try", "catch", "handle"],
             InstructionCategory.API_DESIGN: ["api", "endpoint", "rest", "graphql", "interface"],
             InstructionCategory.DATABASE: ["database", "sql", "query", "schema", "migration"],
-            InstructionCategory.GENERAL: []  # Default fallback
+            InstructionCategory.GENERAL: [],  # Default fallback
         }
 
         # Score each category
@@ -311,7 +341,7 @@ class PlaybookCurator:
 
         return best_category
 
-    def optimize_playbook(self, dry_run: bool = True) -> Dict[str, any]:
+    def optimize_playbook(self, dry_run: bool = True) -> dict[str, any]:
         """Perform comprehensive optimization of the playbook.
 
         Args:
@@ -326,7 +356,7 @@ class PlaybookCurator:
             "quality_issues": 0,
             "recategorized": 0,
             "removed": 0,
-            "actions": []
+            "actions": [],
         }
 
         # Step 1: Find and merge duplicates
@@ -376,8 +406,12 @@ class PlaybookCurator:
                     # Directly modify the category (update_instruction doesn't support category parameter)
                     with self.playbook_manager._lock:
                         if instruction.instruction_id in self.playbook_manager._instructions:
-                            self.playbook_manager._instructions[instruction.instruction_id].category = suggested_category
-                            self.playbook_manager._instructions[instruction.instruction_id].updated_at = datetime.now().isoformat()
+                            self.playbook_manager._instructions[
+                                instruction.instruction_id
+                            ].category = suggested_category
+                            self.playbook_manager._instructions[
+                                instruction.instruction_id
+                            ].updated_at = datetime.now().isoformat()
                             if self.playbook_manager.auto_save:
                                 self.playbook_manager.save_playbook()
                     results["recategorized"] += 1
@@ -406,7 +440,9 @@ class PlaybookCurator:
             try:
                 emb1 = self._embedding_generator.generate_embedding(inst1.content)
                 emb2 = self._embedding_generator.generate_embedding(inst2.content)
-                similarity = self._embedding_generator.compute_similarity(emb1, emb2.reshape(1, -1))[0]
+                similarity = self._embedding_generator.compute_similarity(
+                    emb1, emb2.reshape(1, -1)
+                )[0]
                 return float(similarity)
             except Exception as e:
                 logger.debug(f"Failed to compute semantic similarity: {e}")
@@ -438,10 +474,8 @@ class PlaybookCurator:
         return intersection / union if union > 0 else 0.0
 
     def _determine_merge_strategy(
-        self,
-        primary: Instruction,
-        similar_instructions: List[Tuple[Instruction, float]]
-    ) -> Tuple[str, str]:
+        self, primary: Instruction, similar_instructions: list[tuple[Instruction, float]]
+    ) -> tuple[str, str]:
         """Determine the best merge strategy for a group of similar instructions.
 
         Args:
@@ -462,22 +496,29 @@ class PlaybookCurator:
                     best_effectiveness = inst.effectiveness_score
 
             if best_effectiveness == primary.effectiveness_score:
-                return "keep_primary", f"Primary has best effectiveness ({primary.effectiveness_score:.1%})"
+                return (
+                    "keep_primary",
+                    f"Primary has best effectiveness ({primary.effectiveness_score:.1%})",
+                )
             else:
                 return "keep_primary", "Near-duplicates found, keeping most effective"
 
         elif avg_similarity > 0.85:
             # Similar but with some differences - merge content
-            return "merge_content", f"Similar instructions ({avg_similarity:.1%} similar), merging to combine insights"
+            return (
+                "merge_content",
+                f"Similar instructions ({avg_similarity:.1%} similar), merging to combine insights",
+            )
 
         else:
             # Somewhat similar but distinct enough to keep separate
-            return "keep_both", f"Instructions are related but distinct ({avg_similarity:.1%} similar)"
+            return (
+                "keep_both",
+                f"Instructions are related but distinct ({avg_similarity:.1%} similar)",
+            )
 
     def _merge_instruction_content(
-        self,
-        primary: Instruction,
-        duplicates: List[Tuple[Instruction, float]]
+        self, primary: Instruction, duplicates: list[tuple[Instruction, float]]
     ) -> Instruction:
         """Merge content from duplicate instructions into primary.
 
@@ -513,7 +554,9 @@ class PlaybookCurator:
             total_usage += dup_inst.usage_count
             weighted_score += dup_inst.effectiveness_score * dup_inst.usage_count
 
-        merged_effectiveness = weighted_score / total_usage if total_usage > 0 else primary.effectiveness_score
+        merged_effectiveness = (
+            weighted_score / total_usage if total_usage > 0 else primary.effectiveness_score
+        )
 
         # Create merged instruction (copy of primary with merged data)
         merged = Instruction(
@@ -528,7 +571,7 @@ class PlaybookCurator:
             examples=merged_examples,
             created_at=primary.created_at,
             updated_at=primary.updated_at,
-            metadata=primary.metadata
+            metadata=primary.metadata,
         )
 
         return merged

@@ -1,5 +1,4 @@
 """Unit tests for auth service comprehensive test suite."""
-import pytest
 
 
 class TestAuthServiceSuite:

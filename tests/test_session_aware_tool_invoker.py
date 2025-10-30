@@ -119,7 +119,10 @@ def test_run_display_message_includes_stdout_preview(monkeypatch, tmp_path):
     display = observation.display_message or ""
     assert "277 ai_dev_agent/cli/commands.py" in display
     assert "(stdout:" in display
-    assert observation.formatted_output and "277 ai_dev_agent/cli/commands.py" in observation.formatted_output
+    assert (
+        observation.formatted_output
+        and "277 ai_dev_agent/cli/commands.py" in observation.formatted_output
+    )
     session = session_manager.get_session(session_id)
     with session.lock:
         tool_messages = [msg for msg in session.history if msg.role == "tool"]

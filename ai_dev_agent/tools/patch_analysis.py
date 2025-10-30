@@ -1,9 +1,10 @@
 """Parse unified diff patches into structured data for analysis."""
+
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 
 from ai_dev_agent.core.utils.logger import get_logger
 
@@ -14,11 +15,11 @@ class PatchParser:
     """Parse unified diff patches into structured data."""
 
     # Regex patterns for parsing
-    DIFF_HEADER = re.compile(r'^diff --git a/(.*) b/(.*)$')
-    FILE_HEADER_OLD = re.compile(r'^--- (?:a/)?(.*)$')  # a/ prefix is optional
-    FILE_HEADER_NEW = re.compile(r'^\+\+\+ (?:b/)?(.*)$')  # b/ prefix is optional
-    HUNK_HEADER = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$')
-    COMMIT_HEADER = re.compile(r'^From ([0-9a-f]{40}) ')
+    DIFF_HEADER = re.compile(r"^diff --git a/(.*) b/(.*)$")
+    FILE_HEADER_OLD = re.compile(r"^--- (?:a/)?(.*)$")  # a/ prefix is optional
+    FILE_HEADER_NEW = re.compile(r"^\+\+\+ (?:b/)?(.*)$")  # b/ prefix is optional
+    HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
+    COMMIT_HEADER = re.compile(r"^From ([0-9a-f]{40}) ")
 
     def __init__(self, patch_content: str, include_context: bool = False):
         """Initialize parser with patch content.
@@ -31,7 +32,7 @@ class PatchParser:
         self.include_context = include_context
         self.current_line = 0
 
-    def parse(self, filter_pattern: Optional[str] = None) -> Dict[str, Any]:
+    def parse(self, filter_pattern: str | None = None) -> dict[str, Any]:
         """Parse the entire patch.
 
         Args:
@@ -49,29 +50,25 @@ class PatchParser:
             if file_entry:
                 files.append(file_entry)
 
-        return {
-            "patch_info": patch_info,
-            "files": files,
-            "summary": self._compute_summary(files)
-        }
+        return {"patch_info": patch_info, "files": files, "summary": self._compute_summary(files)}
 
-    def _extract_commit_info(self) -> Dict[str, str]:
+    def _extract_commit_info(self) -> dict[str, str]:
         """Extract commit metadata from patch header."""
         info = {}
         # Check first few lines for git format-patch headers
         for i in range(min(20, len(self.lines))):
             line = self.lines[i]
             if match := self.COMMIT_HEADER.match(line):
-                info['commit'] = match.group(1)
-            elif line.startswith('From: '):
-                info['author'] = line[6:].strip()
-            elif line.startswith('Date: '):
-                info['date'] = line[6:].strip()
-            elif line.startswith('Subject: '):
-                info['message'] = line[9:].strip()
+                info["commit"] = match.group(1)
+            elif line.startswith("From: "):
+                info["author"] = line[6:].strip()
+            elif line.startswith("Date: "):
+                info["date"] = line[6:].strip()
+            elif line.startswith("Subject: "):
+                info["message"] = line[9:].strip()
         return info
 
-    def _parse_file(self, filter_pattern: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def _parse_file(self, filter_pattern: str | None = None) -> dict[str, Any] | None:
         """Parse a single file's changes.
 
         Args:
@@ -151,8 +148,8 @@ class PatchParser:
             # Parse hunk
             if hunk := self._parse_hunk():
                 hunks.append(hunk)
-                additions += len(hunk['added_lines'])
-                deletions += len(hunk['removed_lines'])
+                additions += len(hunk["added_lines"])
+                deletions += len(hunk["removed_lines"])
             else:
                 self.current_line += 1
 
@@ -162,14 +159,10 @@ class PatchParser:
             "old_path": old_path if change_type == "renamed" else None,
             "language": self._detect_language(actual_path),
             "hunks": hunks,
-            "stats": {
-                "additions": additions,
-                "deletions": deletions,
-                "total_hunks": len(hunks)
-            }
+            "stats": {"additions": additions, "deletions": deletions, "total_hunks": len(hunks)},
         }
 
-    def _parse_hunk(self) -> Optional[Dict[str, Any]]:
+    def _parse_hunk(self) -> dict[str, Any] | None:
         """Parse a single hunk."""
         if self.current_line >= len(self.lines):
             return None
@@ -199,39 +192,37 @@ class PatchParser:
             line = self.lines[self.current_line]
 
             # End of hunk markers
-            if (line.startswith('@@') or
-                line.startswith('diff --git') or
-                (line.startswith('---') and self.FILE_HEADER_OLD.match(line)) or
-                (line.startswith('+++') and self.FILE_HEADER_NEW.match(line))):
+            if (
+                line.startswith("@@")
+                or line.startswith("diff --git")
+                or (line.startswith("---") and self.FILE_HEADER_OLD.match(line))
+                or (line.startswith("+++") and self.FILE_HEADER_NEW.match(line))
+            ):
                 break
 
-            if line.startswith('+') and not line.startswith('+++'):
+            if line.startswith("+") and not line.startswith("+++"):
                 # Added line
                 content = line[1:]
-                added_lines.append({
-                    "line_number": new_line_num,
-                    "content": content,
-                    "indentation": self._get_indentation(content)
-                })
+                added_lines.append(
+                    {
+                        "line_number": new_line_num,
+                        "content": content,
+                        "indentation": self._get_indentation(content),
+                    }
+                )
                 new_line_num += 1
-            elif line.startswith('-') and not line.startswith('---'):
+            elif line.startswith("-") and not line.startswith("---"):
                 # Removed line
-                removed_lines.append({
-                    "line_number": old_line_num,
-                    "content": line[1:]
-                })
+                removed_lines.append({"line_number": old_line_num, "content": line[1:]})
                 old_line_num += 1
-            elif line.startswith(' ') or line == '':
+            elif line.startswith(" ") or line == "":
                 # Context line (including empty lines which are context)
                 if self.include_context:
-                    content = line[1:] if line else ''
-                    context_lines.append({
-                        "line_number": new_line_num,
-                        "content": content
-                    })
+                    content = line[1:] if line else ""
+                    context_lines.append({"line_number": new_line_num, "content": content})
                 new_line_num += 1
                 old_line_num += 1
-            elif line.startswith('\\'):
+            elif line.startswith("\\"):
                 # "\ No newline at end of file" - skip
                 pass
             else:
@@ -247,7 +238,7 @@ class PatchParser:
             "new_start": new_start,
             "new_count": new_count,
             "added_lines": added_lines,
-            "removed_lines": removed_lines
+            "removed_lines": removed_lines,
         }
 
         if self.include_context:
@@ -258,32 +249,32 @@ class PatchParser:
     @staticmethod
     def _get_indentation(line: str) -> str:
         """Extract leading whitespace."""
-        return line[:len(line) - len(line.lstrip())]
+        return line[: len(line) - len(line.lstrip())]
 
     @staticmethod
     def _detect_language(path: str) -> str:
         """Detect language from file extension."""
         ext = Path(path).suffix.lower()
         lang_map = {
-            '.py': 'python',
-            '.js': 'javascript',
-            '.ts': 'typescript',
-            '.ets': 'ets',
-            '.java': 'java',
-            '.cpp': 'cpp',
-            '.c': 'c',
-            '.h': 'c',
-            '.hpp': 'cpp',
-            '.go': 'go',
-            '.rs': 'rust',
-            '.rb': 'ruby',
-            '.sh': 'shell',
-            '.md': 'markdown',
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".ets": "ets",
+            ".java": "java",
+            ".cpp": "cpp",
+            ".c": "c",
+            ".h": "c",
+            ".hpp": "cpp",
+            ".go": "go",
+            ".rs": "rust",
+            ".rb": "ruby",
+            ".sh": "shell",
+            ".md": "markdown",
         }
-        return lang_map.get(ext, ext[1:] if ext else 'unknown')
+        return lang_map.get(ext, ext[1:] if ext else "unknown")
 
     @staticmethod
-    def _compute_summary(files: List[Dict]) -> Dict[str, int]:
+    def _compute_summary(files: list[dict]) -> dict[str, int]:
         """Compute overall patch statistics."""
         summary = {
             "total_files": len(files),
@@ -291,19 +282,19 @@ class PatchParser:
             "files_modified": 0,
             "files_deleted": 0,
             "total_additions": 0,
-            "total_deletions": 0
+            "total_deletions": 0,
         }
 
         for f in files:
-            if f['change_type'] == 'added':
-                summary['files_added'] += 1
-            elif f['change_type'] == 'deleted':
-                summary['files_deleted'] += 1
+            if f["change_type"] == "added":
+                summary["files_added"] += 1
+            elif f["change_type"] == "deleted":
+                summary["files_deleted"] += 1
             else:
-                summary['files_modified'] += 1
+                summary["files_modified"] += 1
 
-            summary['total_additions'] += f['stats']['additions']
-            summary['total_deletions'] += f['stats']['deletions']
+            summary["total_additions"] += f["stats"]["additions"]
+            summary["total_deletions"] += f["stats"]["deletions"]
 
         return summary
 

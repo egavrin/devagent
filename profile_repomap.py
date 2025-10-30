@@ -2,18 +2,17 @@
 """Profile the RepoMap scanning and ranking operations on a large repository."""
 
 import cProfile
-import pstats
 import io
+import pstats
 import sys
 import time
 from pathlib import Path
-from typing import Set
 
 # Add the current directory to the path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from ai_dev_agent.core.repo_map import RepoMapManager
 from ai_dev_agent.cli.context_enhancer import ContextEnhancer
+from ai_dev_agent.core.repo_map import RepoMapManager
 from ai_dev_agent.core.utils.config import Settings
 
 
@@ -44,12 +43,12 @@ def profile_repomap_scan(repo_path: Path):
 
     # Print profiling stats
     s = io.StringIO()
-    ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+    ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
     ps.print_stats(50)  # Top 50 functions by cumulative time
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TOP 50 FUNCTIONS BY CUMULATIVE TIME (scan phase)")
-    print("="*80)
+    print("=" * 80)
     print(s.getvalue())
 
     return rm
@@ -58,7 +57,7 @@ def profile_repomap_scan(repo_path: Path):
 def profile_pagerank_computation(rm):
     """Profile the PageRank computation phase."""
     print(f"\n{'='*80}")
-    print(f"Profiling PageRank computation")
+    print("Profiling PageRank computation")
     print(f"{'='*80}\n")
 
     pr = cProfile.Profile()
@@ -83,19 +82,19 @@ def profile_pagerank_computation(rm):
 
     # Print profiling stats
     s = io.StringIO()
-    ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+    ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
     ps.print_stats(50)
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TOP 50 FUNCTIONS BY CUMULATIVE TIME (PageRank phase)")
-    print("="*80)
+    print("=" * 80)
     print(s.getvalue())
 
 
 def profile_context_enhancement(repo_path: Path, query: str):
     """Profile the context enhancement phase."""
     print(f"\n{'='*80}")
-    print(f"Profiling context enhancement for query")
+    print("Profiling context enhancement for query")
     print(f"{'='*80}\n")
     print(f"Query: {query[:100]}...")
 
@@ -108,7 +107,7 @@ def profile_context_enhancement(repo_path: Path, query: str):
     pr.enable()
 
     start_time = time.time()
-    original_query, repomap_messages = enhancer.get_repomap_messages(query, max_files=15)
+    _original_query, repomap_messages = enhancer.get_repomap_messages(query, max_files=15)
     enhancement_time = time.time() - start_time
 
     pr.disable()
@@ -120,19 +119,19 @@ def profile_context_enhancement(repo_path: Path, query: str):
 
     # Print profiling stats
     s = io.StringIO()
-    ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+    ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
     ps.print_stats(50)
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TOP 50 FUNCTIONS BY CUMULATIVE TIME (context enhancement)")
-    print("="*80)
+    print("=" * 80)
     print(s.getvalue())
 
 
-def profile_file_ranking(rm, symbols: Set[str], mentioned_files: Set[str]):
+def profile_file_ranking(rm, symbols: set[str], mentioned_files: set[str]):
     """Profile the file ranking phase."""
     print(f"\n{'='*80}")
-    print(f"Profiling get_ranked_files")
+    print("Profiling get_ranked_files")
     print(f"{'='*80}\n")
     print(f"Symbols: {list(symbols)[:10]}...")
     print(f"Mentioned files: {list(mentioned_files)[:5]}...")
@@ -142,9 +141,7 @@ def profile_file_ranking(rm, symbols: Set[str], mentioned_files: Set[str]):
 
     start_time = time.time()
     ranked_files = rm.get_ranked_files(
-        mentioned_files=mentioned_files,
-        mentioned_symbols=symbols,
-        max_files=20
+        mentioned_files=mentioned_files, mentioned_symbols=symbols, max_files=20
     )
     ranking_time = time.time() - start_time
 
@@ -153,18 +150,18 @@ def profile_file_ranking(rm, symbols: Set[str], mentioned_files: Set[str]):
     print(f"\nFile ranking: {ranking_time:.2f} seconds")
     print(f"Files returned: {len(ranked_files)}")
     if ranked_files:
-        print(f"\nTop 5 ranked files:")
+        print("\nTop 5 ranked files:")
         for file_path, score in ranked_files[:5]:
             print(f"  {file_path}: {score:.2f}")
 
     # Print profiling stats
     s = io.StringIO()
-    ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+    ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
     ps.print_stats(50)
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TOP 50 FUNCTIONS BY CUMULATIVE TIME (file ranking)")
-    print("="*80)
+    print("=" * 80)
     print(s.getvalue())
 
 
@@ -199,9 +196,9 @@ def main():
     mentioned_files = set()
     profile_file_ranking(rm, symbols, mentioned_files)
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("PROFILING COMPLETE")
-    print("="*80)
+    print("=" * 80)
 
 
 if __name__ == "__main__":

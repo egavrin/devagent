@@ -44,8 +44,7 @@ def test_pruning_service_inserts_summary() -> None:
         history = list(session.history)
         assert history, "Expected conversation history after pruning"
         assert any(
-            msg.content and msg.content.startswith("[Context summary]")
-            for msg in history
+            msg.content and msg.content.startswith("[Context summary]") for msg in history
         ), "Summarized message not found"
         metadata = session.metadata.get("context_service", {})
         assert metadata.get("events"), "Pruning event metadata missing"

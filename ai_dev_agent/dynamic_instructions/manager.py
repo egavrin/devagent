@@ -10,11 +10,11 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -22,32 +22,35 @@ logger = logging.getLogger(__name__)
 
 class UpdateConfidence(str, Enum):
     """Confidence level for instruction updates."""
-    VERY_LOW = "very_low"      # <0.3 - don't apply
-    LOW = "low"                # 0.3-0.5 - apply with caution
-    MEDIUM = "medium"          # 0.5-0.7 - apply normally
-    HIGH = "high"              # 0.7-0.9 - apply eagerly
-    VERY_HIGH = "very_high"    # >0.9 - apply immediately
+
+    VERY_LOW = "very_low"  # <0.3 - don't apply
+    LOW = "low"  # 0.3-0.5 - apply with caution
+    MEDIUM = "medium"  # 0.5-0.7 - apply normally
+    HIGH = "high"  # 0.7-0.9 - apply eagerly
+    VERY_HIGH = "very_high"  # >0.9 - apply immediately
 
 
 class UpdateType(str, Enum):
     """Type of instruction update."""
-    ADD = "add"                # Add new instruction
-    MODIFY = "modify"          # Modify existing instruction
-    REMOVE = "remove"          # Remove instruction
+
+    ADD = "add"  # Add new instruction
+    MODIFY = "modify"  # Modify existing instruction
+    REMOVE = "remove"  # Remove instruction
     WEIGHT_INCREASE = "weight_increase"  # Increase priority/weight
     WEIGHT_DECREASE = "weight_decrease"  # Decrease priority/weight
-    ENABLE = "enable"          # Re-enable disabled instruction
-    DISABLE = "disable"        # Temporarily disable instruction
+    ENABLE = "enable"  # Re-enable disabled instruction
+    DISABLE = "disable"  # Temporarily disable instruction
 
 
 class UpdateSource(str, Enum):
     """Source of the instruction update."""
+
     EXECUTION_FEEDBACK = "execution_feedback"  # From execution monitoring
-    ERROR_RECOVERY = "error_recovery"          # From error handling
-    SUCCESS_PATTERN = "success_pattern"        # From successful execution
-    USER_FEEDBACK = "user_feedback"            # From explicit user feedback
-    AB_TEST = "ab_test"                        # From A/B test results
-    AUTOMATIC = "automatic"                    # From automatic analysis
+    ERROR_RECOVERY = "error_recovery"  # From error handling
+    SUCCESS_PATTERN = "success_pattern"  # From successful execution
+    USER_FEEDBACK = "user_feedback"  # From explicit user feedback
+    AB_TEST = "ab_test"  # From A/B test results
+    AUTOMATIC = "automatic"  # From automatic analysis
 
 
 @dataclass
@@ -55,39 +58,39 @@ class InstructionUpdate:
     """Represents a proposed or applied instruction update."""
 
     update_id: str = field(default_factory=lambda: str(uuid4()))
-    instruction_id: str = ""                    # Target instruction ID
+    instruction_id: str = ""  # Target instruction ID
     update_type: UpdateType = UpdateType.MODIFY
     update_source: UpdateSource = UpdateSource.EXECUTION_FEEDBACK
 
     # Update content
-    old_content: Optional[str] = None
-    new_content: Optional[str] = None
-    old_priority: Optional[int] = None
-    new_priority: Optional[int] = None
+    old_content: str | None = None
+    new_content: str | None = None
+    old_priority: int | None = None
+    new_priority: int | None = None
 
     # Confidence and metadata
-    confidence: float = 0.5                     # 0.0 - 1.0
+    confidence: float = 0.5  # 0.0 - 1.0
     confidence_level: UpdateConfidence = UpdateConfidence.MEDIUM
-    reasoning: str = ""                         # Why this update is proposed
+    reasoning: str = ""  # Why this update is proposed
 
     # Execution context
-    session_id: Optional[str] = None
-    task_context: Optional[str] = None
+    session_id: str | None = None
+    task_context: str | None = None
 
     # Status tracking
     applied: bool = False
-    applied_at: Optional[str] = None
+    applied_at: str | None = None
     rolled_back: bool = False
-    rolled_back_at: Optional[str] = None
+    rolled_back_at: str | None = None
 
     # Outcome tracking
-    success_after_update: Optional[bool] = None
-    error_after_update: Optional[str] = None
+    success_after_update: bool | None = None
+    error_after_update: str | None = None
 
     # Timestamps
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         data = asdict(self)
         data["update_type"] = self.update_type.value
@@ -96,7 +99,7 @@ class InstructionUpdate:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> InstructionUpdate:
+    def from_dict(cls, data: dict[str, Any]) -> InstructionUpdate:
         """Create from dictionary."""
         if "update_type" in data and isinstance(data["update_type"], str):
             data["update_type"] = UpdateType(data["update_type"])
@@ -130,15 +133,15 @@ class InstructionSnapshot:
     content: str = ""
     priority: int = 5
     enabled: bool = True
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> InstructionSnapshot:
+    def from_dict(cls, data: dict[str, Any]) -> InstructionSnapshot:
         """Create from dictionary."""
         return cls(**data)
 
@@ -150,20 +153,22 @@ class DynamicInstructionManager:
     instruction adaptation based on execution feedback.
     """
 
-    DEFAULT_HISTORY_PATH = Path.home() / ".devagent" / "dynamic_instructions" / "update_history.json"
+    DEFAULT_HISTORY_PATH = (
+        Path.home() / ".devagent" / "dynamic_instructions" / "update_history.json"
+    )
     DEFAULT_SNAPSHOTS_PATH = Path.home() / ".devagent" / "dynamic_instructions" / "snapshots.json"
 
     def __init__(
         self,
-        history_path: Optional[Path] = None,
-        snapshots_path: Optional[Path] = None,
+        history_path: Path | None = None,
+        snapshots_path: Path | None = None,
         confidence_threshold: float = 0.5,
         auto_rollback_on_error: bool = True,
         max_history: int = 1000,
         analysis_interval: int = 15,
         auto_apply_threshold: float = 0.8,
         proposal_min_queries: int = 10,
-        max_auto_apply_per_cycle: int = 3
+        max_auto_apply_per_cycle: int = 3,
     ):
         """Initialize the dynamic instruction manager.
 
@@ -192,21 +197,22 @@ class DynamicInstructionManager:
         self._lock = threading.RLock()
 
         # In-memory storage
-        self._update_history: List[InstructionUpdate] = []
-        self._snapshots: Dict[str, List[InstructionSnapshot]] = {}  # instruction_id -> snapshots
-        self._pending_updates: Dict[str, InstructionUpdate] = {}    # update_id -> update
+        self._update_history: list[InstructionUpdate] = []
+        self._snapshots: dict[str, list[InstructionSnapshot]] = {}  # instruction_id -> snapshots
+        self._pending_updates: dict[str, InstructionUpdate] = {}  # update_id -> update
 
         # Active session tracking
-        self._active_session_id: Optional[str] = None
-        self._session_updates: Dict[str, List[str]] = {}  # session_id -> update_ids
+        self._active_session_id: str | None = None
+        self._session_updates: dict[str, list[str]] = {}  # session_id -> update_ids
 
         # Pattern tracking for automatic proposals
         from .pattern_tracker import PatternTracker
+
         patterns_path = self.history_path.parent / "patterns.json"
         self._pattern_tracker = PatternTracker(storage_path=patterns_path)
 
         # Rollback tracking for safety
-        self._recent_rollbacks: List[str] = []  # Recent rollback timestamps
+        self._recent_rollbacks: list[str] = []  # Recent rollback timestamps
 
         # Load existing data
         self._load_data()
@@ -216,7 +222,7 @@ class DynamicInstructionManager:
         # Load update history
         if self.history_path.exists():
             try:
-                with open(self.history_path, "r") as f:
+                with self.history_path.open() as f:
                     data = json.load(f)
                     self._update_history = [
                         InstructionUpdate.from_dict(item) for item in data.get("updates", [])
@@ -228,7 +234,7 @@ class DynamicInstructionManager:
         # Load snapshots
         if self.snapshots_path.exists():
             try:
-                with open(self.snapshots_path, "r") as f:
+                with self.snapshots_path.open() as f:
                     data = json.load(f)
                     for inst_id, snapshots_data in data.get("snapshots", {}).items():
                         self._snapshots[inst_id] = [
@@ -243,25 +249,35 @@ class DynamicInstructionManager:
         # Save update history
         try:
             self.history_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.history_path, "w") as f:
-                json.dump({
-                    "updates": [u.to_dict() for u in self._update_history[-self.max_history:]],
-                    "saved_at": datetime.now().isoformat()
-                }, f, indent=2)
+            with self.history_path.open("w") as f:
+                json.dump(
+                    {
+                        "updates": [u.to_dict() for u in self._update_history[-self.max_history :]],
+                        "saved_at": datetime.now().isoformat(),
+                    },
+                    f,
+                    indent=2,
+                )
         except Exception as e:
             logger.error(f"Failed to save update history: {e}")
 
         # Save snapshots
         try:
             self.snapshots_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.snapshots_path, "w") as f:
-                json.dump({
-                    "snapshots": {
-                        inst_id: [s.to_dict() for s in snapshots[-10:]]  # Keep last 10 snapshots
-                        for inst_id, snapshots in self._snapshots.items()
+            with self.snapshots_path.open("w") as f:
+                json.dump(
+                    {
+                        "snapshots": {
+                            inst_id: [
+                                s.to_dict() for s in snapshots[-10:]
+                            ]  # Keep last 10 snapshots
+                            for inst_id, snapshots in self._snapshots.items()
+                        },
+                        "saved_at": datetime.now().isoformat(),
                     },
-                    "saved_at": datetime.now().isoformat()
-                }, f, indent=2)
+                    f,
+                    indent=2,
+                )
         except Exception as e:
             logger.error(f"Failed to save snapshots: {e}")
 
@@ -276,7 +292,7 @@ class DynamicInstructionManager:
             self._session_updates[session_id] = []
             logger.debug(f"Started tracking session: {session_id}")
 
-    def end_session(self, session_id: str, success: bool = True) -> List[InstructionUpdate]:
+    def end_session(self, session_id: str, success: bool = True) -> list[InstructionUpdate]:
         """End a session and return updates made during it.
 
         Args:
@@ -292,7 +308,8 @@ class DynamicInstructionManager:
 
             update_ids = self._session_updates[session_id]
             updates = [
-                self._get_update_by_id(uid) for uid in update_ids
+                self._get_update_by_id(uid)
+                for uid in update_ids
                 if self._get_update_by_id(uid) is not None
             ]
 
@@ -321,11 +338,11 @@ class DynamicInstructionManager:
         update_source: UpdateSource,
         confidence: float,
         reasoning: str,
-        new_content: Optional[str] = None,
-        new_priority: Optional[int] = None,
-        old_content: Optional[str] = None,
-        old_priority: Optional[int] = None,
-        task_context: Optional[str] = None
+        new_content: str | None = None,
+        new_priority: int | None = None,
+        old_content: str | None = None,
+        old_priority: int | None = None,
+        task_context: str | None = None,
     ) -> InstructionUpdate:
         """Propose an instruction update.
 
@@ -359,7 +376,7 @@ class DynamicInstructionManager:
                 confidence_level=confidence_level,
                 reasoning=reasoning,
                 session_id=self._active_session_id,
-                task_context=task_context
+                task_context=task_context,
             )
 
             # Add to pending updates
@@ -367,17 +384,19 @@ class DynamicInstructionManager:
 
             # Auto-apply if confidence is above threshold
             if confidence >= self.confidence_threshold:
-                logger.info(f"Auto-applying update {update.update_id} (confidence: {confidence:.2f})")
+                logger.info(
+                    f"Auto-applying update {update.update_id} (confidence: {confidence:.2f})"
+                )
                 # Note: Actual application would happen in apply_update()
             else:
-                logger.debug(f"Update {update.update_id} pending approval (confidence: {confidence:.2f})")
+                logger.debug(
+                    f"Update {update.update_id} pending approval (confidence: {confidence:.2f})"
+                )
 
             return update
 
     def apply_update(
-        self,
-        update_id: str,
-        snapshot_before: Optional[InstructionSnapshot] = None
+        self, update_id: str, snapshot_before: InstructionSnapshot | None = None
     ) -> bool:
         """Apply a pending update.
 
@@ -415,7 +434,9 @@ class DynamicInstructionManager:
                     self._session_updates[self._active_session_id] = []
                 self._session_updates[self._active_session_id].append(update_id)
 
-            logger.info(f"Applied update {update_id}: {update.update_type.value} to {update.instruction_id}")
+            logger.info(
+                f"Applied update {update_id}: {update.update_type.value} to {update.instruction_id}"
+            )
             self._save_data()
             return True
 
@@ -454,7 +475,9 @@ class DynamicInstructionManager:
             self._save_data()
             return True
 
-    def get_snapshot(self, instruction_id: str, snapshot_id: Optional[str] = None) -> Optional[InstructionSnapshot]:
+    def get_snapshot(
+        self, instruction_id: str, snapshot_id: str | None = None
+    ) -> InstructionSnapshot | None:
         """Get a snapshot for an instruction.
 
         Args:
@@ -482,10 +505,10 @@ class DynamicInstructionManager:
 
     def get_update_history(
         self,
-        instruction_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        limit: int = 100
-    ) -> List[InstructionUpdate]:
+        instruction_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[InstructionUpdate]:
         """Get update history with optional filters.
 
         Args:
@@ -508,10 +531,7 @@ class DynamicInstructionManager:
             # Return most recent first
             return updates[-limit:][::-1]
 
-    def get_pending_updates(
-        self,
-        min_confidence: Optional[float] = None
-    ) -> List[InstructionUpdate]:
+    def get_pending_updates(self, min_confidence: float | None = None) -> list[InstructionUpdate]:
         """Get pending updates.
 
         Args:
@@ -529,7 +549,7 @@ class DynamicInstructionManager:
             # Sort by confidence descending
             return sorted(updates, key=lambda u: u.confidence, reverse=True)
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get statistics about dynamic updates.
 
         Returns:
@@ -563,10 +583,10 @@ class DynamicInstructionManager:
                 "by_type": by_type,
                 "by_source": by_source,
                 "success_rate": successful / applied_updates if applied_updates > 0 else 0.0,
-                "rollback_rate": rolled_back / applied_updates if applied_updates > 0 else 0.0
+                "rollback_rate": rolled_back / applied_updates if applied_updates > 0 else 0.0,
             }
 
-    def _get_update_by_id(self, update_id: str) -> Optional[InstructionUpdate]:
+    def _get_update_by_id(self, update_id: str) -> InstructionUpdate | None:
         """Get an update by ID from history or pending.
 
         Args:
@@ -614,10 +634,10 @@ class DynamicInstructionManager:
         self,
         session_id: str,
         success: bool,
-        tools_used: List[str],
+        tools_used: list[str],
         task_type: str = "general",
-        error_type: Optional[str] = None,
-        duration_seconds: Optional[float] = None
+        error_type: str | None = None,
+        duration_seconds: float | None = None,
     ) -> None:
         """Record a query outcome for pattern analysis.
 
@@ -635,7 +655,7 @@ class DynamicInstructionManager:
             tools_used=tools_used,
             task_type=task_type,
             error_type=error_type,
-            duration_seconds=duration_seconds
+            duration_seconds=duration_seconds,
         )
 
     def should_analyze_patterns(self) -> bool:
@@ -655,7 +675,7 @@ class DynamicInstructionManager:
 
         return False
 
-    def get_pattern_statistics(self) -> Dict[str, Any]:
+    def get_pattern_statistics(self) -> dict[str, Any]:
         """Get statistics about recorded patterns.
 
         Returns:
@@ -671,10 +691,12 @@ class DynamicInstructionManager:
         """
         # Keep only recent rollbacks (last 50 queries worth)
         query_count = self._pattern_tracker.get_query_count()
-        recent_threshold = max(0, query_count - 50)
+        max(0, query_count - 50)
 
         # Count recent rollbacks
-        recent_count = len([ts for ts in self._recent_rollbacks if query_count - int(ts.split('_')[-1]) <= 50])
+        recent_count = len(
+            [ts for ts in self._recent_rollbacks if query_count - int(ts.split("_")[-1]) <= 50]
+        )
 
         # Safe if < 3 recent rollbacks
         return recent_count < 3
@@ -691,8 +713,8 @@ class DynamicInstructionManager:
     def analyze_and_propose_instructions(
         self,
         playbook_manager: Any,  # PlaybookManager instance
-        settings: Any = None  # Settings instance
-    ) -> Dict[str, Any]:
+        settings: Any = None,  # Settings instance
+    ) -> dict[str, Any]:
         """Analyze patterns and generate/apply instruction proposals.
 
         Args:
@@ -712,10 +734,7 @@ class DynamicInstructionManager:
         logger.info("Analyzing query patterns for instruction proposals")
 
         # Detect patterns
-        patterns = self._pattern_tracker.detect_patterns(
-            min_sample_size=5,
-            min_success_rate=0.7
-        )
+        patterns = self._pattern_tracker.detect_patterns(min_sample_size=5, min_success_rate=0.7)
 
         if not patterns:
             logger.info("No significant patterns detected")
@@ -724,7 +743,7 @@ class DynamicInstructionManager:
                 "proposals_generated": 0,
                 "auto_applied": 0,
                 "pending_review": 0,
-                "proposals": []
+                "proposals": [],
             }
 
         logger.info(f"Detected {len(patterns)} significant patterns")
@@ -740,7 +759,7 @@ class DynamicInstructionManager:
                 "proposals_generated": 0,
                 "auto_applied": 0,
                 "pending_review": 0,
-                "proposals": []
+                "proposals": [],
             }
 
         # Validate proposal quality
@@ -756,13 +775,13 @@ class DynamicInstructionManager:
         pending_review = 0
         proposal_details = []
 
-        for proposal in valid_proposals[:self.max_auto_apply_per_cycle]:
+        for proposal in valid_proposals[: self.max_auto_apply_per_cycle]:
             detail = {
                 "type": proposal.update_type.value,
                 "content": proposal.new_content,
                 "reasoning": proposal.reasoning,
                 "confidence": proposal.confidence,
-                "action": "none"
+                "action": "none",
             }
 
             # Auto-apply if high confidence and safe
@@ -780,7 +799,7 @@ class DynamicInstructionManager:
                         category="auto_generated",
                         priority=5,  # Medium priority
                         tags=["auto_proposal"],
-                        enabled=True
+                        enabled=True,
                     )
 
                     playbook_manager.add_instruction(instruction)
@@ -830,7 +849,7 @@ class DynamicInstructionManager:
             "proposals_generated": len(valid_proposals),
             "auto_applied": auto_applied,
             "pending_review": pending_review,
-            "proposals": proposal_details
+            "proposals": proposal_details,
         }
 
         logger.info(

@@ -1,17 +1,21 @@
 """Session lifecycle management for DevAgent."""
+
 from __future__ import annotations
 
-import threading
 from datetime import datetime, timedelta
 from threading import RLock, Timer
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
 from ai_dev_agent.providers.llm.base import Message
 
-from .models import Session
 from .context_service import ContextPruningConfig, ContextPruningService
-from .summarizer import ConversationSummarizer
+from .models import Session
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from .summarizer import ConversationSummarizer
 
 _UNSET = object()
 
@@ -19,18 +23,18 @@ _UNSET = object()
 class SessionManager:
     """Singleton responsible for creating and tracking conversational sessions."""
 
-    _instance: "SessionManager" | None = None
+    _instance: SessionManager | None = None
     DEFAULT_SESSION_TTL = timedelta(minutes=30)  # 30 minutes default TTL
     DEFAULT_MAX_SESSIONS = 100  # Maximum number of concurrent sessions
     CLEANUP_INTERVAL = 60  # Run cleanup every 60 seconds
 
     def __init__(self) -> None:
-        self._sessions: Dict[str, Session] = {}
+        self._sessions: dict[str, Session] = {}
         self._lock = RLock()
         self._context_service = ContextPruningService()
         self._session_ttl = self.DEFAULT_SESSION_TTL
         self._max_sessions = self.DEFAULT_MAX_SESSIONS
-        self._cleanup_timer: Optional[Timer] = None
+        self._cleanup_timer: Timer | None = None
         self._start_cleanup_timer()
 
     def configure_context_service(
@@ -50,7 +54,9 @@ class SessionManager:
                 self._context_service = ContextPruningService(config)
                 return
 
-            base_config = config or getattr(self._context_service, "config", None) or ContextPruningConfig()
+            base_config = (
+                config or getattr(self._context_service, "config", None) or ContextPruningConfig()
+            )
             if summarizer is _UNSET:
                 summarizer_to_use = getattr(self._context_service, "summarizer", None)
             else:
@@ -59,17 +65,17 @@ class SessionManager:
             self._context_service = ContextPruningService(base_config, summarizer=summarizer_to_use)
 
     @classmethod
-    def get_instance(cls) -> "SessionManager":
+    def get_instance(cls) -> SessionManager:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
 
     def ensure_session(
         self,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
         *,
-        system_messages: Optional[Iterable[Message]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        system_messages: Iterable[Message] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Session:
         """Return an existing session or create a new one with optional metadata."""
         if session_id is None:
@@ -106,11 +112,11 @@ class SessionManager:
             session.last_accessed = datetime.now()
             return session
 
-    def list_sessions(self) -> List[str]:
+    def list_sessions(self) -> list[str]:
         with self._lock:
             return list(self._sessions.keys())
 
-    def compose(self, session_id: str) -> List[Message]:
+    def compose(self, session_id: str) -> list[Message]:
         session = self.get_session(session_id)
         with session.lock:
             return session.compose()
@@ -129,9 +135,9 @@ class SessionManager:
     def add_assistant_message(
         self,
         session_id: str,
-        content: Optional[str],
+        content: str | None,
         *,
-        tool_calls: Optional[List[Dict[str, Any]]] = None,
+        tool_calls: list[dict[str, Any]] | None = None,
     ) -> Message:
         message = Message(role="assistant", content=content, tool_calls=tool_calls)
         self._append_history(session_id, message)
@@ -165,7 +171,9 @@ class SessionManager:
         session = self.get_session(session_id)
         with session.lock:
             session.system_messages = [msg for msg in session.system_messages if not predicate(msg)]
-            session.history = [msg for msg in session.history if not (msg.role == "system" and predicate(msg))]
+            session.history = [
+                msg for msg in session.history if not (msg.role == "system" and predicate(msg))
+            ]
 
     def _append_history(self, session_id: str, message: Message) -> None:
         session = self.get_session(session_id)
@@ -183,7 +191,7 @@ class SessionManager:
 
     def _generate_tool_call_id(self, session: Session) -> str:
         with session.lock:
-            used: Set[str] = {
+            used: set[str] = {
                 msg.tool_call_id
                 for msg in session.history
                 if msg.role == "tool" and msg.tool_call_id
@@ -234,8 +242,7 @@ class SessionManager:
 
             # Find the oldest session by last_accessed time
             oldest_id = min(
-                self._sessions.keys(),
-                key=lambda sid: self._sessions[sid].last_accessed
+                self._sessions.keys(), key=lambda sid: self._sessions[sid].last_accessed
             )
             del self._sessions[oldest_id]
 
@@ -247,7 +254,7 @@ class SessionManager:
         """Configure the maximum number of concurrent sessions."""
         self._max_sessions = max_sessions
 
-    def get_session_stats(self) -> Dict[str, Any]:
+    def get_session_stats(self) -> dict[str, Any]:
         """Get statistics about current sessions."""
         with self._lock:
             now = datetime.now()
@@ -255,18 +262,20 @@ class SessionManager:
                 "total_sessions": len(self._sessions),
                 "max_sessions": self._max_sessions,
                 "ttl_minutes": self._session_ttl.total_seconds() / 60,
-                "sessions": []
+                "sessions": [],
             }
 
             for session_id, session in self._sessions.items():
                 age = now - session.created_at
                 idle_time = now - session.last_accessed
-                stats["sessions"].append({
-                    "id": session_id,
-                    "age_seconds": age.total_seconds(),
-                    "idle_seconds": idle_time.total_seconds(),
-                    "message_count": len(session.history)
-                })
+                stats["sessions"].append(
+                    {
+                        "id": session_id,
+                        "age_seconds": age.total_seconds(),
+                        "idle_seconds": idle_time.total_seconds(),
+                        "message_count": len(session.history),
+                    }
+                )
 
             return stats
 

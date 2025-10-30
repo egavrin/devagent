@@ -1,8 +1,8 @@
 import pytest
 
 from ai_dev_agent.cli.router import IntentDecision, IntentRouter, IntentRoutingError
-from ai_dev_agent.providers.llm.base import ToolCall, ToolCallResult
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.providers.llm.base import ToolCall, ToolCallResult
 from ai_dev_agent.tools import RUN
 
 
@@ -12,7 +12,16 @@ class DummyClient:
         self.captured_messages = None
         self.captured_tools = None
 
-    def invoke_tools(self, messages, tools, temperature=0.2, max_tokens=None, tool_choice="auto", extra_headers=None, **kwargs):
+    def invoke_tools(
+        self,
+        messages,
+        tools,
+        temperature=0.2,
+        max_tokens=None,
+        tool_choice="auto",
+        extra_headers=None,
+        **kwargs,
+    ):
         self.captured_messages = messages
         self.captured_tools = tools
         return self.result

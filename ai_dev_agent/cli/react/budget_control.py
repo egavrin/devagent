@@ -1,17 +1,19 @@
 """Iteration and tool-budget helpers for the CLI ReAct executor."""
+
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any
 
-from ai_dev_agent.tools import READ, RUN, WRITE
+from ai_dev_agent.tools import READ, RUN
 
 _DEFAULT_THRESHOLD_EXPLORATION = 30.0
 _DEFAULT_THRESHOLD_INVESTIGATION = 60.0
 _DEFAULT_THRESHOLD_CONSOLIDATION = 85.0
 
 
-PHASE_PROMPTS: Dict[str, str] = {
+PHASE_PROMPTS: dict[str, str] = {
     "exploration": (
         "You are beginning your investigation.\n"
         "Cast a wide net, explore the codebase structure, gather context, identify key components.\n\n"
@@ -101,8 +103,12 @@ class BudgetManager:
             scaling_factor = max(scaling_factor, 0.5)  # Clamp between 0.5x and 2x
 
             base_exploration *= scaling_factor
-            base_investigation = base_exploration + (base_investigation - _DEFAULT_THRESHOLD_EXPLORATION)
-            base_consolidation = base_investigation + (base_consolidation - _DEFAULT_THRESHOLD_INVESTIGATION)
+            base_investigation = base_exploration + (
+                base_investigation - _DEFAULT_THRESHOLD_EXPLORATION
+            )
+            base_consolidation = base_investigation + (
+                base_consolidation - _DEFAULT_THRESHOLD_INVESTIGATION
+            )
 
         self._exploration_end = _coerce_percentage(
             thresholds.get("exploration_end"),
@@ -180,10 +186,10 @@ class BudgetManager:
 
 def get_tools_for_iteration(
     context: IterationContext,
-    available_tools: Sequence[Dict[str, Any]],
+    available_tools: Sequence[dict[str, Any]],
     *,
     tool_config: Mapping[str, Any] | None = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Select tools based on iteration context and optional config."""
 
     if context.is_final:
@@ -201,7 +207,10 @@ def get_tools_for_iteration(
         if limited:
             return limited
 
-    if config.get("remove_exploratory_late", True) and context.phase in {"preparation", "final_warning"}:
+    if config.get("remove_exploratory_late", True) and context.phase in {
+        "preparation",
+        "final_warning",
+    }:
         limited = filter_non_exploratory_tools(available_tools)
         if limited:
             return limited
@@ -209,9 +218,9 @@ def get_tools_for_iteration(
     return list(available_tools)
 
 
-def filter_non_exploratory_tools(tools: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def filter_non_exploratory_tools(tools: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     exploratory_patterns = ("search", "plan", "outline", "index", "crawl", "explore", "symbol")
-    filtered: List[Dict[str, Any]] = []
+    filtered: list[dict[str, Any]] = []
     for tool in tools:
         name = _extract_tool_name(tool)
         if not name:
@@ -224,7 +233,7 @@ def filter_non_exploratory_tools(tools: Sequence[Dict[str, Any]]) -> List[Dict[s
     return filtered
 
 
-def filter_essential_tools(tools: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def filter_essential_tools(tools: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     essential_names = {
         READ,
         "fs_read_text",
@@ -234,7 +243,7 @@ def filter_essential_tools(tools: Sequence[Dict[str, Any]]) -> List[Dict[str, An
         "plan.summarize",
         "summarize",
     }
-    selected: List[Dict[str, Any]] = []
+    selected: list[dict[str, Any]] = []
     for tool in tools:
         name = _extract_tool_name(tool)
         if name and name.lower() in essential_names:
@@ -242,7 +251,7 @@ def filter_essential_tools(tools: Sequence[Dict[str, Any]]) -> List[Dict[str, An
     return selected or list(tools)
 
 
-def create_text_only_tool() -> Dict[str, Any]:
+def create_text_only_tool() -> dict[str, Any]:
     """Return a tool schema that only accepts the final answer text."""
 
     return {
@@ -268,10 +277,7 @@ def extract_text_content(result: Any) -> str:
     """Pull any available text content from a tool invocation result."""
 
     text = getattr(result, "message_content", None)
-    if isinstance(text, str):
-        text = text.strip()
-    else:
-        text = ""
+    text = text.strip() if isinstance(text, str) else ""
     return text or ""
 
 
@@ -291,25 +297,27 @@ def auto_generate_summary(
     searches = sorted({str(item) for item in searches_performed or [] if item})
 
     # Extract ALL substantive assistant messages (observations, findings, etc.)
-    observations: List[str] = []
+    observations: list[str] = []
     for message in reversed(conversation):
         role = getattr(message, "role", "")
         content = getattr(message, "content", None)
         if role == "assistant" and isinstance(content, str):
             text = content.strip()
             # Skip empty, context summaries, and very short messages
-            if not text or text.startswith('[') or len(text) < 15:
+            if not text or text.startswith("[") or len(text) < 15:
                 continue
             # Skip pure action descriptions
-            if text.lower().startswith(('let me', 'i will', 'i\'ll', 'searching for', 'looking for')):
+            if text.lower().startswith(
+                ("let me", "i will", "i'll", "searching for", "looking for")
+            ):
                 continue
             # Include messages ending with : if they're long enough (might be explanations)
-            if text.endswith(':') and len(text) < 40:
+            if text.endswith(":") and len(text) < 40:
                 continue
             observations.append(text)
 
     # Build comprehensive summary
-    summary_parts: List[str] = []
+    summary_parts: list[str] = []
 
     summary_parts.append("Based on the investigation:")
     summary_parts.append("")
@@ -317,7 +325,7 @@ def auto_generate_summary(
     # Include key observations
     if observations:
         # Take up to 3 most recent substantial observations
-        for i, obs in enumerate(observations[:3]):
+        for _i, obs in enumerate(observations[:3]):
             # Truncate if very long
             if len(obs) > 300:
                 obs = obs[:297] + "..."
@@ -326,7 +334,9 @@ def auto_generate_summary(
 
     # Add investigation scope
     if files or searches:
-        summary_parts.append(f"Investigation scope: {len(files)} file(s) examined, {len(searches)} search(es) performed.")
+        summary_parts.append(
+            f"Investigation scope: {len(files)} file(s) examined, {len(searches)} search(es) performed."
+        )
 
     # If no observations, at least list what was checked
     if not observations and files:
@@ -343,7 +353,7 @@ def auto_generate_summary(
 def combine_partial_responses(*parts: str) -> str:
     """Merge partial text fragments into a cohesive response."""
 
-    combined: List[str] = []
+    combined: list[str] = []
     for part in parts:
         if not part:
             continue
@@ -510,7 +520,7 @@ class AdaptiveBudgetManager(BudgetManager):
         """Get current completion percentage."""
         return (self._current / self.max_iterations) * 100 if self.max_iterations > 0 else 0
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get budget manager statistics."""
         return {
             "current_iteration": self._current,
@@ -530,15 +540,15 @@ class AdaptiveBudgetManager(BudgetManager):
 
 __all__ = [
     "PHASE_PROMPTS",
-    "IterationContext",
-    "BudgetManager",
     "AdaptiveBudgetManager",
+    "BudgetManager",
+    "IterationContext",
     "ReflectionContext",
-    "get_tools_for_iteration",
-    "filter_non_exploratory_tools",
-    "filter_essential_tools",
-    "create_text_only_tool",
-    "extract_text_content",
     "auto_generate_summary",
     "combine_partial_responses",
+    "create_text_only_tool",
+    "extract_text_content",
+    "filter_essential_tools",
+    "filter_non_exploratory_tools",
+    "get_tools_for_iteration",
 ]

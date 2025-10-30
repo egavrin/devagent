@@ -1,13 +1,9 @@
 """Tests for caching utilities (ai_dev_agent.core.cache)."""
-import json
-import pickle
-import tempfile
+
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import networkx as nx
-import pytest
 
 from ai_dev_agent.core.cache import RepoMapCache, SymbolCache
 
@@ -30,10 +26,10 @@ class TestSymbolCache:
 
     def test_init_with_disk_cache_failure(self, tmp_path):
         """Test graceful fallback when disk cache fails."""
-        with patch('ai_dev_agent.core.cache.DiskCache', side_effect=Exception("Disk error")):
+        with patch("ai_dev_agent.core.cache.DiskCache", side_effect=Exception("Disk error")):
             cache = SymbolCache(tmp_path)
             assert cache.cache is None
-            assert hasattr(cache, '_fallback_cache')
+            assert hasattr(cache, "_fallback_cache")
 
     def test_get_symbols_file_not_exists(self, tmp_path):
         """Test getting symbols for non-existent file."""
@@ -67,7 +63,7 @@ class TestSymbolCache:
 
     def test_set_and_get_symbols_fallback_cache(self, tmp_path):
         """Test setting and getting symbols with fallback cache."""
-        with patch('ai_dev_agent.core.cache.DiskCache', side_effect=Exception("Disk error")):
+        with patch("ai_dev_agent.core.cache.DiskCache", side_effect=Exception("Disk error")):
             cache = SymbolCache(tmp_path)
             test_file = tmp_path / "test.py"
             test_file.write_text("def bar(): pass")
@@ -128,7 +124,7 @@ class TestSymbolCache:
 
     def test_invalidate_fallback_cache(self, tmp_path):
         """Test invalidating a specific file's cache entry in fallback cache."""
-        with patch('ai_dev_agent.core.cache.DiskCache', side_effect=Exception("Disk error")):
+        with patch("ai_dev_agent.core.cache.DiskCache", side_effect=Exception("Disk error")):
             cache = SymbolCache(tmp_path)
             test_file = tmp_path / "test.py"
             test_file.write_text("def foo(): pass")
@@ -175,7 +171,7 @@ class TestSymbolCache:
 
     def test_clear_fallback_cache(self, tmp_path):
         """Test clearing all entries in fallback cache."""
-        with patch('ai_dev_agent.core.cache.DiskCache', side_effect=Exception("Disk error")):
+        with patch("ai_dev_agent.core.cache.DiskCache", side_effect=Exception("Disk error")):
             cache = SymbolCache(tmp_path)
 
             test_file = tmp_path / "test.py"
@@ -201,7 +197,7 @@ class TestSymbolCache:
 
     def test_get_stats_fallback_cache(self, tmp_path):
         """Test getting cache statistics for fallback cache."""
-        with patch('ai_dev_agent.core.cache.DiskCache', side_effect=Exception("Disk error")):
+        with patch("ai_dev_agent.core.cache.DiskCache", side_effect=Exception("Disk error")):
             cache = SymbolCache(tmp_path)
             test_file = tmp_path / "test.py"
             test_file.write_text("def foo(): pass")
@@ -218,7 +214,7 @@ class TestSymbolCache:
         test_file.write_text("def foo(): pass")
 
         # Mock the cache to raise an exception
-        with patch.object(cache, 'cache') as mock_cache:
+        with patch.object(cache, "cache") as mock_cache:
             mock_cache.get.side_effect = Exception("Read error")
             result = cache.get_symbols(test_file)
             assert result is None
@@ -230,7 +226,7 @@ class TestSymbolCache:
         test_file.write_text("def foo(): pass")
 
         # Mock the cache to raise an exception on write
-        with patch.object(cache, 'cache') as mock_cache:
+        with patch.object(cache, "cache") as mock_cache:
             mock_cache.__setitem__.side_effect = Exception("Write error")
             # Should not raise
             cache.set_symbols(test_file, ["foo"])
@@ -301,11 +297,7 @@ class TestRepoMapCache:
         """Test saving and loading PageRank scores."""
         cache = RepoMapCache(tmp_path)
 
-        scores = {
-            "fileA.py": 0.5,
-            "fileB.py": 0.3,
-            "fileC.py": 0.2
-        }
+        scores = {"fileA.py": 0.5, "fileB.py": 0.3, "fileC.py": 0.2}
 
         # Save scores
         cache.save_pagerank(scores)

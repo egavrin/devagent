@@ -1,4 +1,5 @@
 """Persistent shell session management for command execution."""
+
 from __future__ import annotations
 
 import os
@@ -10,9 +11,12 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING
 
 from ai_dev_agent.core.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping, Sequence
 
 LOGGER = get_logger(__name__)
 
@@ -51,10 +55,15 @@ def _resolve_shell_executable(shell: str | Sequence[str] | None) -> list[str]:
 
     if isinstance(shell, (list, tuple)):
         return list(shell)
-    return shlex.split(shell)
+    if isinstance(shell, str):
+        return shlex.split(shell)
+    # This shouldn't happen given the type signature, but handle it defensively
+    return [str(shell)]
 
 
-def _make_preexec_fn(cpu_limit: Optional[int], memory_limit_mb: Optional[int]):  # pragma: no cover - posix specific
+def _make_preexec_fn(
+    cpu_limit: int | None, memory_limit_mb: int | None
+):  # pragma: no cover - posix specific
     if resource is None:
         return None
 
@@ -90,10 +99,10 @@ class ShellSession:
         self,
         shell: Sequence[str] | str | None = None,
         *,
-        cwd: Optional[Path] = None,
-        env: Optional[Mapping[str, str]] = None,
-        cpu_time_limit: Optional[int] = None,
-        memory_limit_mb: Optional[int] = None,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        cpu_time_limit: int | None = None,
+        memory_limit_mb: int | None = None,
     ) -> None:
         command = _resolve_shell_executable(shell)
         run_cwd = Path(cwd).resolve() if cwd else Path.cwd()
@@ -134,7 +143,9 @@ class ShellSession:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, command: Sequence[str] | str, *, timeout: Optional[float] = None) -> ShellCommandResult:
+    def run(
+        self, command: Sequence[str] | str, *, timeout: float | None = None
+    ) -> ShellCommandResult:
         """Execute a command in the persistent session."""
 
         if self._closed:
@@ -173,7 +184,9 @@ class ShellSession:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _run_locked(self, command: Sequence[str] | str, *, timeout: Optional[float]) -> ShellCommandResult:
+    def _run_locked(
+        self, command: Sequence[str] | str, *, timeout: float | None
+    ) -> ShellCommandResult:
         cmd_string = self._coerce_command(command)
         sentinel = f"__DEVAGENT_DONE__{uuid.uuid4().hex}__"
         exit_marker = f"{sentinel}:"
@@ -181,12 +194,8 @@ class ShellSession:
         try:
             self._stdin.write(f"{cmd_string}\n")
             self._stdin.write("__DEVAGENT_STATUS=$?\n")
-            self._stdin.write(
-                f'printf "%s%s\\n" "{exit_marker}" "$__DEVAGENT_STATUS"\n'
-            )
-            self._stdin.write(
-                f'printf "%s%s\\n" "{exit_marker}" "$__DEVAGENT_STATUS" >&2\n'
-            )
+            self._stdin.write(f'printf "%s%s\\n" "{exit_marker}" "$__DEVAGENT_STATUS"\n')
+            self._stdin.write(f'printf "%s%s\\n" "{exit_marker}" "$__DEVAGENT_STATUS" >&2\n')
             self._stdin.write("unset __DEVAGENT_STATUS\n")
             self._stdin.flush()
         except BrokenPipeError as exc:
@@ -195,7 +204,7 @@ class ShellSession:
 
         stdout_chunks: list[str] = []
         stderr_chunks: list[str] = []
-        stderr_exit_holder: Dict[str, Optional[int]] = {"code": None}
+        stderr_exit_holder: dict[str, int | None] = {"code": None}
         stderr_done = threading.Event()
 
         def consume_stderr() -> None:
@@ -222,7 +231,7 @@ class ShellSession:
         stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
         stderr_thread.start()
 
-        exit_code: Optional[int] = None
+        exit_code: int | None = None
         start_time = time.perf_counter()
 
         try:
@@ -267,7 +276,9 @@ class ShellSession:
 
         stdout = "".join(stdout_chunks)
         stderr = "".join(stderr_chunks)
-        return ShellCommandResult(exit_code=exit_code, stdout=stdout, stderr=stderr, duration_ms=duration_ms)
+        return ShellCommandResult(
+            exit_code=exit_code, stdout=stdout, stderr=stderr, duration_ms=duration_ms
+        )
 
     def _coerce_command(self, command: Sequence[str] | str) -> str:
         if isinstance(command, str):
@@ -289,24 +300,24 @@ class ShellSessionManager:
         self,
         *,
         shell: Sequence[str] | str | None = None,
-        default_timeout: Optional[float] = None,
-        cpu_time_limit: Optional[int] = None,
-        memory_limit_mb: Optional[int] = None,
+        default_timeout: float | None = None,
+        cpu_time_limit: int | None = None,
+        memory_limit_mb: int | None = None,
     ) -> None:
         self._shell = shell
         self._default_timeout = default_timeout
         self._cpu_limit = cpu_time_limit
         self._memory_limit = memory_limit_mb
-        self._sessions: Dict[str, ShellSession] = {}
+        self._sessions: dict[str, ShellSession] = {}
         self._lock = threading.Lock()
 
     def create_session(
         self,
         *,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
         shell: Sequence[str] | str | None = None,
-        cwd: Optional[Path] = None,
-        env: Optional[Mapping[str, str]] = None,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> str:
         """Create a new shell session and return its ID."""
 
@@ -327,10 +338,10 @@ class ShellSessionManager:
     def start_session(
         self,
         *,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
         shell: Sequence[str] | str | None = None,
-        cwd: Optional[Path] = None,
-        env: Optional[Mapping[str, str]] = None,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> str:
         """
         Backwards-compatible alias for create_session.
@@ -356,7 +367,7 @@ class ShellSessionManager:
         session_id: str,
         command: Sequence[str] | str,
         *,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> ShellCommandResult:
         session = self.get_session(session_id)
         effective_timeout = timeout if timeout is not None else self._default_timeout

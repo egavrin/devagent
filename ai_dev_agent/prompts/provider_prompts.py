@@ -1,12 +1,10 @@
 """Provider-specific prompt templates."""
+
 from __future__ import annotations
 
-import os
-import platform
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
-from dataclasses import dataclass
 
 
 @dataclass
@@ -16,12 +14,12 @@ class PromptContext:
     working_directory: str
     is_git_repo: bool
     platform: str
-    language: Optional[str] = None
-    framework: Optional[str] = None
-    project_structure: Optional[str] = None
-    custom_instructions: Optional[str] = None
-    phase: Optional[str] = None
-    task_description: Optional[str] = None
+    language: str | None = None
+    framework: str | None = None
+    project_structure: str | None = None
+    custom_instructions: str | None = None
+    phase: str | None = None
+    task_description: str | None = None
 
 
 class ProviderPrompts:
@@ -88,7 +86,7 @@ Examples:
 - Include specific file locations and code references
 - Highlight any remaining unknowns or risks
 - Deliver self-contained solution
-"""
+""",
     }
 
     # Language-specific hints
@@ -98,15 +96,11 @@ Examples:
         "javascript": "Check package.json, follow ES6+ patterns, consider async/await",
         "java": "Check pom.xml/gradle files, follow Java naming conventions",
         "go": "Check go.mod for dependencies, follow Go idioms and conventions",
-        "rust": "Check Cargo.toml, follow Rust ownership patterns and idioms"
+        "rust": "Check Cargo.toml, follow Rust ownership patterns and idioms",
     }
 
     @classmethod
-    def get_system_prompt(
-        cls,
-        provider: str,
-        context: PromptContext
-    ) -> str:
+    def get_system_prompt(cls, provider: str, context: PromptContext) -> str:
         """Generate provider-specific system prompt."""
 
         # Start with provider base
@@ -224,7 +218,7 @@ Focus on key outcomes and decisions.
 Write from the user's perspective."""
 
     @classmethod
-    def get_tool_reminder(cls, phase: str, available_tools: List[str]) -> str:
+    def get_tool_reminder(cls, phase: str, available_tools: list[str]) -> str:
         """Generate phase-appropriate tool usage reminder."""
 
         if phase == "exploration":
@@ -257,11 +251,11 @@ class PromptLoader:
         "AGENTS.md",
         "CLAUDE.md",
         "CONTEXT.md",  # deprecated but still checked
-        ".devagent/instructions.md"
+        ".devagent/instructions.md",
     ]
 
     @classmethod
-    def load_custom_instructions(cls, project_root: Optional[Path] = None) -> Optional[str]:
+    def load_custom_instructions(cls, project_root: Path | None = None) -> str | None:
         """Load custom instructions from project files."""
 
         if project_root is None:
@@ -275,7 +269,7 @@ class PromptLoader:
 
             if file_path.exists():
                 try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
+                    with file_path.open(encoding="utf-8") as f:
                         content = f.read().strip()
                         if content:
                             instructions.append(f"# From {filename}\n{content}")
@@ -286,7 +280,7 @@ class PromptLoader:
         home_instructions = Path.home() / ".devagent" / "instructions.md"
         if home_instructions.exists():
             try:
-                with open(home_instructions, 'r', encoding='utf-8') as f:
+                with home_instructions.open(encoding="utf-8") as f:
                     content = f.read().strip()
                     if content:
                         instructions.append(f"# Global Instructions\n{content}")
@@ -299,7 +293,7 @@ class PromptLoader:
         return None
 
     @classmethod
-    def get_language_from_project(cls, project_root: Optional[Path] = None) -> Optional[str]:
+    def get_language_from_project(cls, project_root: Path | None = None) -> str | None:
         """Detect primary language from project files."""
 
         if project_root is None:
@@ -316,7 +310,7 @@ class PromptLoader:
             ("pom.xml", "java"),
             ("build.gradle", "java"),
             ("composer.json", "php"),
-            ("Gemfile", "ruby")
+            ("Gemfile", "ruby"),
         ]
 
         for filename, language in checks:
@@ -340,7 +334,7 @@ class PromptLoader:
                 "ts": "typescript",
                 "java": "java",
                 "go": "go",
-                "rs": "rust"
+                "rs": "rust",
             }.get(most_common, "unknown")
 
         return None

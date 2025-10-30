@@ -5,9 +5,10 @@ Manages work planning lifecycle including task breakdown, dependency management,
 and progress tracking.
 """
 
-from typing import Optional, List, Dict, Any
 from datetime import datetime
-from .models import Task, WorkPlan, TaskStatus, Priority
+from typing import Any, Optional
+
+from .models import Priority, Task, TaskStatus, WorkPlan
 from .storage import WorkPlanStorage
 
 
@@ -26,7 +27,7 @@ class WorkPlanningAgent:
     def create_plan(
         self,
         goal: str,
-        context: Optional[Dict[str, Any]] = None,
+        context: Optional[dict[str, Any]] = None,
         llm_client: Optional[Any] = None,
     ) -> WorkPlan:
         """
@@ -68,9 +69,9 @@ class WorkPlanningAgent:
     def _generate_tasks_with_llm(
         self,
         goal: str,
-        context: Optional[Dict[str, Any]],
+        context: Optional[dict[str, Any]],
         llm_client: Any,
-    ) -> List[Task]:
+    ) -> list[Task]:
         """
         Use LLM to generate structured task breakdown.
 
@@ -131,7 +132,7 @@ class WorkPlanningAgent:
         plan: WorkPlan,
         feedback: str,
         llm_client: Any,
-    ) -> List[Task]:
+    ) -> list[Task]:
         """
         Use LLM to refine tasks based on feedback.
 

@@ -1,11 +1,14 @@
 """Tests for Design Agent."""
-import pytest
-from unittest.mock import Mock, patch, mock_open
-import tempfile
-import os
 
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import mock_open, patch
+
+import pytest
+
+from ai_dev_agent.agents.base import AgentContext
 from ai_dev_agent.agents.specialized.design_agent import DesignAgent
-from ai_dev_agent.agents.base import AgentContext, AgentResult
 
 
 class TestDesignAgent:
@@ -70,12 +73,16 @@ class TestDesignAgent:
                 return success_response(user)
         """
 
-        with patch('builtins.open', mock_open(read_data=reference_code)):
-            patterns = agent.extract_patterns("/ref/user_controller.py", context)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ref_path = Path(tmpdir) / "user_controller.py"
+            ref_path.write_text(reference_code, encoding="utf-8")
+            patterns = agent.extract_patterns(str(ref_path), context)
 
         assert "patterns" in patterns
         assert any("controller" in p.lower() for p in patterns["patterns"])
-        assert any("dependency" in p.lower() or "injection" in p.lower() for p in patterns["patterns"])
+        assert any(
+            "dependency" in p.lower() or "injection" in p.lower() for p in patterns["patterns"]
+        )
         assert "architecture" in patterns
 
     def test_create_design_document(self):
@@ -88,26 +95,22 @@ class TestDesignAgent:
             "requirements": ["JWT tokens", "Refresh tokens", "Password hashing"],
             "architecture": {
                 "components": ["AuthController", "AuthService", "TokenManager"],
-                "flow": "Request → Controller → Service → Database"
+                "flow": "Request → Controller → Service → Database",
             },
             "patterns": ["MVC", "Service Layer", "Repository Pattern"],
-            "references": ["/ref/auth_system.py"]
+            "references": ["/ref/auth_system.py"],
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            doc_path = os.path.join(tmpdir, "auth_design.md")
+            doc_path = str(Path(tmpdir) / "auth_design.md")
 
-            result = agent.create_design_document(
-                design_data,
-                doc_path,
-                context
-            )
+            result = agent.create_design_document(design_data, doc_path, context)
 
             assert result["success"] is True
-            assert os.path.exists(doc_path)
+            assert Path(doc_path).exists()
 
             # Check document content
-            with open(doc_path, 'r') as f:
+            with Path(doc_path).open() as f:
                 content = f.read()
                 assert "# Design: User Authentication" in content
                 assert "## Requirements" in content
@@ -124,16 +127,14 @@ class TestDesignAgent:
         reference_paths = [
             "/Users/eg/Documents/aider",
             "/Users/eg/Documents/cline-1",
-            "/Users/eg/Documents/opencode"
+            "/Users/eg/Documents/opencode",
         ]
 
         # Mock the file system operations
-        with patch('os.path.exists', return_value=True):
-            with patch('os.listdir', return_value=['agent.py', 'core.py']):
+        with patch("os.path.exists", return_value=True):
+            with patch("os.listdir", return_value=["agent.py", "core.py"]):
                 analysis = agent.analyze_references(
-                    feature="multi-agent system",
-                    reference_paths=reference_paths,
-                    context=context
+                    feature="multi-agent system", reference_paths=reference_paths, context=context
                 )
 
         assert "references" in analysis
@@ -150,9 +151,7 @@ class TestDesignAgent:
             "new_modules": ["agents/orchestrator.py"],
             "modified_modules": ["agents/registry.py", "cli/commands.py"],
             "new_dependencies": ["asyncio", "threading"],
-            "api_changes": [
-                {"module": "registry", "change": "added create_agent method"}
-            ]
+            "api_changes": [{"module": "registry", "change": "added create_agent method"}],
         }
 
         assessment = agent.assess_compatibility(proposed_changes, context)
@@ -177,9 +176,9 @@ class TestDesignAgent:
         """
 
         # Mock file operations
-        with patch('os.path.exists', return_value=True):
-            with patch('os.makedirs'):
-                with patch('builtins.open', mock_open()):
+        with patch("os.path.exists", return_value=True):
+            with patch("os.makedirs"):
+                with patch("builtins.open", mock_open()):
                     result = agent.execute(prompt, context)
 
         assert result.success is True
@@ -194,10 +193,10 @@ class TestDesignAgent:
         design = {
             "architecture": {
                 "layers": ["presentation", "business", "data"],
-                "components": ["UserController", "UserService", "UserRepository"]
+                "components": ["UserController", "UserService", "UserRepository"],
             },
             "patterns": ["MVC", "Repository", "Service Layer"],
-            "principles": ["SOLID", "DRY", "KISS"]
+            "principles": ["SOLID", "DRY", "KISS"],
         }
 
         validation = agent.validate_design(design)
@@ -213,11 +212,8 @@ class TestDesignAgent:
         context = AgentContext(session_id="test-error")
 
         # Test with invalid reference path
-        with patch('os.path.exists', return_value=False):
-            result = agent.execute(
-                "Design feature with reference /nonexistent/path",
-                context
-            )
+        with patch("os.path.exists", return_value=False):
+            result = agent.execute("Design feature with reference /nonexistent/path", context)
 
         assert result.success is False
         assert "error" in result.error.lower() or "not found" in result.error.lower()

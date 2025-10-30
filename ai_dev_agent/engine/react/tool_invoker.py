@@ -1,28 +1,33 @@
 """Tool invoker that routes ReAct tool calls to registry-backed implementations."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import time
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any
 
-from ai_dev_agent.tools.code.code_edit.editor import CodeEditor
-# Pipeline module removed - functionality integrated into tool invoker
-from ai_dev_agent.tools.execution.testing.local_tests import TestRunner
-from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
-from ai_dev_agent.tools import ToolContext, registry, READ, WRITE, RUN
-from ai_dev_agent.core.utils.devagent_config import DevAgentConfig, load_devagent_yaml
-from ai_dev_agent.core.utils.logger import get_logger
-from ai_dev_agent.core.utils.config import Settings
-from ai_dev_agent.engine.metrics import MetricsCollector
 from ai_dev_agent.core.utils.artifacts import write_artifact
 from ai_dev_agent.core.utils.constants import MIN_TOOL_OUTPUT_CHARS
 from ai_dev_agent.core.utils.context_budget import DEFAULT_MAX_TOOL_OUTPUT_CHARS, summarize_text
+from ai_dev_agent.core.utils.devagent_config import DevAgentConfig, load_devagent_yaml
+from ai_dev_agent.core.utils.logger import get_logger
 from ai_dev_agent.core.utils.tool_utils import canonical_tool_name
 from ai_dev_agent.session import SessionManager
+from ai_dev_agent.tools import READ, RUN, WRITE, ToolContext, registry
+from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
+
+# Pipeline module removed - functionality integrated into tool invoker
 from .types import ActionRequest, CLIObservation, Observation, ToolCall, ToolResult
+
+if TYPE_CHECKING:
+    from ai_dev_agent.core.utils.config import Settings
+    from ai_dev_agent.engine.metrics import MetricsCollector
+    from ai_dev_agent.tools.code.code_edit.editor import CodeEditor
+    from ai_dev_agent.tools.execution.testing.local_tests import TestRunner
 
 LOGGER = get_logger(__name__)
 
@@ -34,14 +39,14 @@ class RegistryToolInvoker:
         self,
         workspace: Path,
         settings: Settings,
-        code_editor: Optional[CodeEditor] = None,
-        test_runner: Optional[TestRunner] = None,
+        code_editor: CodeEditor | None = None,
+        test_runner: TestRunner | None = None,
         sandbox=None,
-        collector: Optional[MetricsCollector] = None,
-        pipeline_commands: Optional[Any] = None,  # Removed - kept for compatibility
-        devagent_cfg: Optional[DevAgentConfig] = None,
-        shell_session_manager: Optional[ShellSessionManager] = None,
-        shell_session_id: Optional[str] = None,
+        collector: MetricsCollector | None = None,
+        pipeline_commands: Any | None = None,  # Removed - kept for compatibility
+        devagent_cfg: DevAgentConfig | None = None,
+        shell_session_manager: ShellSessionManager | None = None,
+        shell_session_id: str | None = None,
     ) -> None:
         self.workspace = workspace
         self.settings = settings
@@ -53,13 +58,13 @@ class RegistryToolInvoker:
         self.devagent_cfg = devagent_cfg or load_devagent_yaml()
         self.shell_session_manager = shell_session_manager
         self.shell_session_id = shell_session_id
-        self._structure_hints: Dict[str, Any] = {
+        self._structure_hints: dict[str, Any] = {
             "symbols": set(),
             "files": {},
             "project_summary": None,
         }
         # File read cache: path -> (result, timestamp)
-        self._file_read_cache: Dict[str, tuple[Dict[str, Any], float]] = {}
+        self._file_read_cache: dict[str, tuple[dict[str, Any], float]] = {}
         self._cache_ttl = 60.0  # Cache for 60 seconds
 
     # ------------------------------------------------------------------
@@ -102,7 +107,7 @@ class RegistryToolInvoker:
                 tool=tool_name,
                 error=str(exc),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             LOGGER.exception("Tool %s execution failed", tool_name)
             return Observation(
                 success=False,
@@ -113,7 +118,7 @@ class RegistryToolInvoker:
 
         return self._wrap_result(tool_name, result)
 
-    def invoke_batch(self, tool_calls: List[ToolCall]) -> Observation:
+    def invoke_batch(self, tool_calls: list[ToolCall]) -> Observation:
         """Execute multiple tools in parallel and return aggregated observation."""
         if not tool_calls:
             return Observation(
@@ -150,7 +155,7 @@ class RegistryToolInvoker:
             outcome_parts.append(f"{total_calls - success_count} failed")
 
         # Aggregate metrics
-        aggregated_metrics: Dict[str, Any] = {
+        aggregated_metrics: dict[str, Any] = {
             "total_calls": total_calls,
             "successful_calls": success_count,
             "failed_calls": total_calls - success_count,
@@ -160,7 +165,9 @@ class RegistryToolInvoker:
         total_wall_time = sum(r.wall_time for r in results if r.wall_time)
         if total_wall_time > 0:
             aggregated_metrics["total_wall_time"] = total_wall_time
-            aggregated_metrics["max_wall_time"] = max((r.wall_time for r in results if r.wall_time), default=0)
+            aggregated_metrics["max_wall_time"] = max(
+                (r.wall_time for r in results if r.wall_time), default=0
+            )
 
         # Collect all artifacts
         all_artifacts = []
@@ -177,7 +184,7 @@ class RegistryToolInvoker:
             results=results,
         )
 
-    async def _execute_batch_async(self, tool_calls: List[ToolCall]) -> List[ToolResult]:
+    async def _execute_batch_async(self, tool_calls: list[ToolCall]) -> list[ToolResult]:
         """Execute tool calls concurrently using asyncio."""
         with ThreadPoolExecutor(max_workers=min(len(tool_calls), 10)) as executor:
             loop = asyncio.get_event_loop()
@@ -240,7 +247,7 @@ class RegistryToolInvoker:
                 error=str(exc),
                 wall_time=time.time() - start_time,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             LOGGER.exception("Tool %s execution failed", tool_name)
             return ToolResult(
                 call_id=call.call_id,
@@ -265,14 +272,16 @@ class RegistryToolInvoker:
                     LOGGER.debug(f"Cache hit for READ: {cache_key}")
                     return cached_result
 
-        extra: Dict[str, Any] = {
+        extra: dict[str, Any] = {
             "code_editor": self.code_editor,
             "test_runner": self.test_runner,
             "pipeline_commands": self.pipeline_commands,
             "structure_hints": self._export_structure_hints(),
         }
 
-        if isinstance(self.shell_session_manager, ShellSessionManager) and isinstance(self.shell_session_id, str):
+        if isinstance(self.shell_session_manager, ShellSessionManager) and isinstance(
+            self.shell_session_id, str
+        ):
             extra["shell_session_manager"] = self.shell_session_manager
             extra["shell_session_id"] = self.shell_session_id
 
@@ -308,7 +317,7 @@ class RegistryToolInvoker:
 
         return result
 
-    def _get_read_cache_key(self, payload: Mapping[str, Any]) -> Optional[str]:
+    def _get_read_cache_key(self, payload: Mapping[str, Any]) -> str | None:
         """Generate cache key for READ operations."""
         paths = payload.get("paths", [])
         if not paths:
@@ -317,7 +326,7 @@ class RegistryToolInvoker:
         # For multiple paths, could use hash of sorted paths
         return str(paths[0]) if len(paths) == 1 else None
 
-    def _get_from_cache(self, key: str) -> Optional[Dict[str, Any]]:
+    def _get_from_cache(self, key: str) -> dict[str, Any] | None:
         """Get cached result if not expired."""
         if key not in self._file_read_cache:
             return None
@@ -330,7 +339,7 @@ class RegistryToolInvoker:
 
         return result
 
-    def _add_to_cache(self, key: str, result: Dict[str, Any]) -> None:
+    def _add_to_cache(self, key: str, result: dict[str, Any]) -> None:
         """Add result to cache with current timestamp."""
         self._file_read_cache[key] = (result, time.time())
 
@@ -341,10 +350,7 @@ class RegistryToolInvoker:
             LOGGER.debug(f"Invalidated cache for: {path}")
 
     def _invalidate_cache_for_write_or_run(
-        self,
-        tool_name: str,
-        payload: Mapping[str, Any],
-        result: Mapping[str, Any]
+        self, tool_name: str, payload: Mapping[str, Any], result: Mapping[str, Any]
     ) -> None:
         """Invalidate cache entries that might be affected by WRITE or RUN operations."""
         if tool_name == WRITE:
@@ -359,15 +365,15 @@ class RegistryToolInvoker:
             # or try to infer modified files from the command
             # For now, be conservative and clear all cache when RUN is used
             if self._file_read_cache:
-                LOGGER.debug(f"Clearing all file cache due to RUN operation")
+                LOGGER.debug("Clearing all file cache due to RUN operation")
                 self._file_read_cache.clear()
 
     def _wrap_result(self, tool_name: str, result: Mapping[str, Any]) -> Observation:
         success = True
         outcome = f"Executed {tool_name}"
-        metrics: Dict[str, Any] = {}
+        metrics: dict[str, Any] = {}
         artifacts: list[str] = []
-        raw_output: Optional[str] = None
+        raw_output: str | None = None
 
         if tool_name == READ:
             files = result.get("files", [])
@@ -417,7 +423,7 @@ class RegistryToolInvoker:
             files = result.get("files", [])
             success = bool(files)
             outcome = f"Found {len(files)} file(s)"
-            artifacts: List[str] = []
+            artifacts: list[str] = []
             for entry in files:
                 if isinstance(entry, Mapping):
                     candidate = entry.get("path") or entry.get("file")
@@ -441,11 +447,13 @@ class RegistryToolInvoker:
                     artifacts.append(file_path)
                     # Count matches in this file
                     file_matches = group.get("matches", [])
-                    match_counts[file_path] = len(file_matches) if isinstance(file_matches, list) else 0
+                    match_counts[file_path] = (
+                        len(file_matches) if isinstance(file_matches, list) else 0
+                    )
 
             metrics = {
                 "files": len(matches),
-                "match_counts": match_counts  # Add match counts to metrics
+                "match_counts": match_counts,  # Add match counts to metrics
             }
             raw_output = json.dumps(matches[:10], indent=2)
         elif tool_name == "symbols":
@@ -476,7 +484,7 @@ class RegistryToolInvoker:
             metrics = dict(result)
             raw_output = json.dumps(result, indent=2)
 
-        observations_kwargs: Dict[str, Any] = {
+        observations_kwargs: dict[str, Any] = {
             "success": success,
             "outcome": outcome,
             "metrics": metrics,
@@ -486,13 +494,17 @@ class RegistryToolInvoker:
         }
 
         structure_payload = self._export_structure_hints()
-        if structure_payload["symbols"] or structure_payload["files"] or structure_payload["project_summary"]:
+        if (
+            structure_payload["symbols"]
+            or structure_payload["files"]
+            or structure_payload["project_summary"]
+        ):
             observations_kwargs["structure_hints"] = structure_payload
 
         return Observation(**observations_kwargs)
 
-    def _export_structure_hints(self) -> Dict[str, Any]:
-        files_payload: Dict[str, Any] = {}
+    def _export_structure_hints(self) -> dict[str, Any]:
+        files_payload: dict[str, Any] = {}
         file_hints = self._structure_hints.get("files") or {}
         for path, info in file_hints.items():
             outline = info.get("outline") or []
@@ -517,19 +529,19 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         self,
         workspace: Path,
         settings: Settings,
-        code_editor: Optional[CodeEditor] = None,
-        test_runner: Optional[TestRunner] = None,
+        code_editor: CodeEditor | None = None,
+        test_runner: TestRunner | None = None,
         sandbox=None,
-        collector: Optional[MetricsCollector] = None,
-        pipeline_commands: Optional[Any] = None,  # Removed - kept for compatibility
-        devagent_cfg: Optional[DevAgentConfig] = None,
+        collector: MetricsCollector | None = None,
+        pipeline_commands: Any | None = None,  # Removed - kept for compatibility
+        devagent_cfg: DevAgentConfig | None = None,
         *,
-        session_manager: Optional[SessionManager] = None,
-        session_id: Optional[str] = None,
-        shell_session_manager: Optional[ShellSessionManager] = None,
-        shell_session_id: Optional[str] = None,
-        cli_context: Optional[Any] = None,
-        llm_client: Optional[Any] = None,
+        session_manager: SessionManager | None = None,
+        session_id: str | None = None,
+        shell_session_manager: ShellSessionManager | None = None,
+        shell_session_id: str | None = None,
+        cli_context: Any | None = None,
+        llm_client: Any | None = None,
     ) -> None:
         super().__init__(
             workspace=workspace,
@@ -543,7 +555,9 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             shell_session_manager=shell_session_manager,
             shell_session_id=shell_session_id,
         )
-        self.session_manager = session_manager or (SessionManager.get_instance() if session_id else None)
+        self.session_manager = session_manager or (
+            SessionManager.get_instance() if session_id else None
+        )
         self.session_id = session_id
         self.cli_context = cli_context
         self.llm_client = llm_client
@@ -572,7 +586,9 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _to_cli_observation(self, action: ActionRequest, observation: Observation) -> CLIObservation:
+    def _to_cli_observation(
+        self, action: ActionRequest, observation: Observation
+    ) -> CLIObservation:
         payload = observation.model_dump()
 
         raw_text = (observation.raw_output or "").strip()
@@ -591,13 +607,10 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             )
             return CLIObservation.model_validate(payload)
 
-        if canonical == RUN and raw_text:
-            summary_source = raw_text
-        else:
-            summary_source = raw_text or outcome_text
+        summary_source = raw_text if canonical == RUN and raw_text else raw_text or outcome_text
 
         summary_text = summary_source
-        artifact_path: Optional[Path] = None
+        artifact_path: Path | None = None
 
         if summary_source:
             summarized = summarize_text(summary_source, self._max_tool_output_chars)
@@ -605,7 +618,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
                 summary_text = summarized
                 try:
                     artifact_path = write_artifact(summary_source)
-                except Exception:  # noqa: BLE001 - best-effort artifact creation
+                except Exception:
                     artifact_path = None
             else:
                 summary_text = summary_source
@@ -631,8 +644,12 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
                 if total_files > 50:
                     formatted_output += "\n(Tip: Use more specific pattern to narrow results)"
             import os
+
             if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
-                print(f"[DEBUG-FIND] Formatted output for LLM: {len(file_list)}/{total_files} files", flush=True)
+                print(
+                    f"[DEBUG-FIND] Formatted output for LLM: {len(file_list)}/{total_files} files",
+                    flush=True,
+                )
         elif canonical == "grep" and observation.artifacts:
             # For grep, show file list with match counts for better context
             total_files = len(observation.artifacts)
@@ -661,12 +678,16 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
                 if total_files > 50:
                     formatted_output += "\n(Tip: Use more specific pattern to narrow results)"
             import os
+
             if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
-                print(f"[DEBUG-GREP] Formatted output for LLM: {len(file_list)}/{total_files} files with counts", flush=True)
+                print(
+                    f"[DEBUG-GREP] Formatted output for LLM: {len(file_list)}/{total_files} files with counts",
+                    flush=True,
+                )
 
         display_message = self._format_display_message(action, observation, canonical)
 
-        artifact_display: Optional[str] = None
+        artifact_display: str | None = None
         if artifact_path:
             artifact_display = self._normalize_artifact_path(artifact_path)
             if formatted_output:
@@ -702,10 +723,10 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         icon = base_icon_map.get(canonical_name, status_ok if success else status_fail)
         status_suffix = status_ok if success else status_fail
 
-        def quote(value: Optional[str]) -> str:
+        def quote(value: str | None) -> str:
             if not value:
                 return ""
-            return f" \"{value}\""
+            return f' "{value}"'
 
         if canonical_name == "find":
             query = (
@@ -741,7 +762,9 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             if isinstance(matches, (int, float)):
                 matches_text = f"{int(matches)} file{'s' if int(matches) != 1 else ''}"
             else:
-                matches_text = observation.outcome or ("matches located" if success else "no matches")
+                matches_text = observation.outcome or (
+                    "matches located" if success else "no matches"
+                )
             return f"{icon} grep{quote(str(query) if query else None)} → {matches_text}"
 
         if canonical_name == READ:
@@ -772,7 +795,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
                 status = status_ok
             else:
                 status = f"{status_fail} exit {exit_code}" if exit_code is not None else status_fail
-            preview_value: Optional[str] = None
+            preview_value: str | None = None
             preview_label = "stdout"
 
             stdout_tail = observation.metrics.get("stdout_tail")
@@ -832,13 +855,10 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         # This ensures tool messages always have an ID
         if not tool_call_id:
             import uuid
+
             tool_call_id = f"tool-exec-{uuid.uuid4().hex[:8]}"
-            LOGGER.debug(
-                "No tool_call_id found for %s, generated: %s",
-                action.tool,
-                tool_call_id
-            )
-        content_parts: List[str] = []
+            LOGGER.debug("No tool_call_id found for %s, generated: %s", action.tool, tool_call_id)
+        content_parts: list[str] = []
         if observation.display_message:
             content_parts.append(observation.display_message)
         elif observation.outcome:
@@ -848,8 +868,12 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         if canonical in {"find", "grep"} and observation.formatted_output:
             content_parts.append(observation.formatted_output)
             import os
+
             if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
-                print(f"[DEBUG-{canonical.upper()}] Sending to LLM: {len(content_parts[-1])} chars", flush=True)
+                print(
+                    f"[DEBUG-{canonical.upper()}] Sending to LLM: {len(content_parts[-1])} chars",
+                    flush=True,
+                )
 
         if canonical == RUN:
             stdout_preview = observation.metrics.get("stdout_tail")
@@ -863,7 +887,11 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
                 content_parts.append(f"STDOUT:\n{stdout_preview}")
 
             stderr_preview = observation.metrics.get("stderr_tail")
-            if not stderr_preview and observation.raw_output and "STDERR:" in observation.raw_output:
+            if (
+                not stderr_preview
+                and observation.raw_output
+                and "STDERR:" in observation.raw_output
+            ):
                 stderr_section = observation.raw_output.split("STDERR:", 1)[1]
                 stderr_preview = stderr_section.strip()
             if isinstance(stderr_preview, str):
@@ -879,7 +907,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
 
         try:
             self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
-        except Exception:  # noqa: BLE001 - do not fail loop for logging issues
+        except Exception:
             LOGGER.debug("Failed to record tool message for %s", action.tool, exc_info=True)
 
     def _record_batch_tool_message(self, result: ToolResult) -> None:
@@ -901,29 +929,27 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         tool_call_id = result.call_id
         if not tool_call_id:
             import uuid
+
             tool_call_id = f"tool-batch-{uuid.uuid4().hex[:8]}"
             LOGGER.debug(
-                "No call_id found for batch tool %s, generated: %s",
-                result.tool,
-                tool_call_id
+                "No call_id found for batch tool %s, generated: %s", result.tool, tool_call_id
             )
 
         try:
             self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
-        except Exception:  # noqa: BLE001 - do not fail loop for logging issues
+        except Exception:
             LOGGER.debug("Failed to record batch tool message for %s", result.tool, exc_info=True)
-
 
 
 def create_tool_invoker(
     workspace: Path,
     settings: Settings,
-    code_editor: Optional[CodeEditor] = None,
-    test_runner: Optional[TestRunner] = None,
+    code_editor: CodeEditor | None = None,
+    test_runner: TestRunner | None = None,
     sandbox=None,
-    collector: Optional[MetricsCollector] = None,
-    pipeline_commands: Optional[Any] = None,  # Removed - kept for compatibility
-    devagent_cfg: Optional[DevAgentConfig] = None,
+    collector: MetricsCollector | None = None,
+    pipeline_commands: Any | None = None,  # Removed - kept for compatibility
+    devagent_cfg: DevAgentConfig | None = None,
 ) -> RegistryToolInvoker:
     """Factory to create a configured tool invoker."""
 

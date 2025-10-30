@@ -1,15 +1,18 @@
 """Conversation sanitization utilities to ensure API contract compliance."""
+
 from __future__ import annotations
 
 import logging
-from typing import List, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
-from ai_dev_agent.providers.llm.base import Message
+if TYPE_CHECKING:
+    from ai_dev_agent.providers.llm.base import Message
 
 logger = logging.getLogger(__name__)
 
 
-def sanitize_conversation(messages: Sequence[Message]) -> List[Message]:
+def sanitize_conversation(messages: Sequence[Message]) -> list[Message]:
     """Remove tool messages whose IDs are not referenced by assistant tool calls.
 
     This ensures the conversation satisfies LLM API requirements:
@@ -38,7 +41,7 @@ def sanitize_conversation(messages: Sequence[Message]) -> List[Message]:
                         tool_call_ids.add(call_id)
 
     # Second pass: filter out tool messages with invalid/missing tool_call_ids
-    sanitized: List[Message] = []
+    sanitized: list[Message] = []
     for msg in messages:
         if msg.role == "tool":
             if msg.tool_call_id and msg.tool_call_id in tool_call_ids:

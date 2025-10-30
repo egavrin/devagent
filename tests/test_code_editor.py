@@ -5,8 +5,8 @@ import pytest
 
 from ai_dev_agent.core.approval.approvals import ApprovalManager
 from ai_dev_agent.core.approval.policy import ApprovalPolicy
-from ai_dev_agent.tools.code.code_edit.editor import CodeEditor, IterativeFixConfig
 from ai_dev_agent.providers.llm.base import LLMError
+from ai_dev_agent.tools.code.code_edit.editor import CodeEditor, IterativeFixConfig
 
 
 class DiffClient:
@@ -28,7 +28,7 @@ def test_code_editor_applies_diff(tmp_path, monkeypatch):
     # initialize git repository for git apply to work reliably
     import subprocess
 
-    subprocess.run(["git", "init"], cwd=repo_root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True)
     diff_text = (
         "```diff\n"
         "--- a/file.txt\n"

@@ -4,13 +4,15 @@ Enhanced with a two-tier pruning strategy:
 1. Try cheap pruning of old tool outputs first
 2. Fall back to LLM summarization if needed
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence
+from typing import TYPE_CHECKING
 
 from ai_dev_agent.providers.llm.base import LLMClient, Message, ToolCallResult
+
 from .constants import (
     DEFAULT_KEEP_LAST_ASSISTANT,
     DEFAULT_MAX_CONTEXT_TOKENS,
@@ -19,11 +21,15 @@ from .constants import (
     DEFAULT_RESPONSE_HEADROOM,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
+
 LOGGER = logging.getLogger(__name__)
 
 # Two-tier pruning thresholds
 PRUNE_PROTECT_TOKENS = 40000  # Protect recent 40k tokens
 PRUNE_MINIMUM_SAVINGS = 20000  # Only prune if saving 20k+ tokens
+
 
 @dataclass
 class ContextBudgetConfig:
@@ -43,10 +49,10 @@ class ContextBudgetConfig:
     prune_protect_tokens: int = PRUNE_PROTECT_TOKENS
     prune_minimum_savings: int = PRUNE_MINIMUM_SAVINGS
     enable_summarization: bool = True
-    summarization_model: Optional[str] = None
+    summarization_model: str | None = None
 
 
-def estimate_tokens(messages: Sequence[Message], model: Optional[str] = None) -> int:
+def estimate_tokens(messages: Sequence[Message], model: str | None = None) -> int:
     """Estimate token usage for a list of messages.
 
     Enhanced version with optional accurate counting via tiktoken/litellm.
@@ -170,7 +176,7 @@ def _index_of_last_role(messages: Sequence[Message], role: str) -> int:
     return -1
 
 
-def prune_messages(messages: Sequence[Message], config: ContextBudgetConfig) -> List[Message]:
+def prune_messages(messages: Sequence[Message], config: ContextBudgetConfig) -> list[Message]:
     """Produce a pruned copy of messages that fits within the budget.
 
     Enhanced with two-tier pruning strategy:
@@ -194,7 +200,15 @@ def prune_messages(messages: Sequence[Message], config: ContextBudgetConfig) -> 
             return pruned
     else:
         # Original pruning logic
-        pruned = [Message(role=msg.role, content=msg.content, tool_call_id=msg.tool_call_id, tool_calls=msg.tool_calls) for msg in messages]
+        pruned = [
+            Message(
+                role=msg.role,
+                content=msg.content,
+                tool_call_id=msg.tool_call_id,
+                tool_calls=msg.tool_calls,
+            )
+            for msg in messages
+        ]
 
     # Always retain the first system message and the most recent user message
     keep_indices = set()
@@ -209,13 +223,13 @@ def prune_messages(messages: Sequence[Message], config: ContextBudgetConfig) -> 
 
     # Keep the most recent assistant messages
     assistant_indices = [idx for idx, msg in enumerate(pruned) if msg.role == "assistant"]
-    for idx in assistant_indices[-config.keep_last_assistant:]:
+    for idx in assistant_indices[-config.keep_last_assistant :]:
         keep_indices.add(idx)
 
     # Summarize tool messages older than the most recent ones
     tool_indices = [idx for idx, msg in enumerate(pruned) if msg.role == "tool"]
     if len(tool_indices) > config.max_tool_messages:
-        protected = set(tool_indices[-config.max_tool_messages:])
+        protected = set(tool_indices[-config.max_tool_messages :])
     else:
         protected = set(tool_indices)
 
@@ -268,6 +282,7 @@ def prune_messages(messages: Sequence[Message], config: ContextBudgetConfig) -> 
             preserved_id = msg.tool_call_id
             if not preserved_id:
                 from uuid import uuid4
+
                 preserved_id = f"tool-pruned-{uuid4().hex[:8]}"
             pruned[idx] = Message(
                 role="tool",
@@ -282,7 +297,7 @@ def _two_tier_prune(
     messages: Sequence[Message],
     config: ContextBudgetConfig,
     target_tokens: int,
-) -> List[Message]:
+) -> list[Message]:
     """Apply two-tier pruning strategy.
 
     Args:
@@ -294,7 +309,7 @@ def _two_tier_prune(
         Pruned messages
     """
     messages_list = list(messages)
-    initial_tokens = estimate_tokens(messages_list)
+    estimate_tokens(messages_list)
 
     # Find protection boundary (keep recent N tokens)
     protect_from_idx = 0
@@ -335,11 +350,15 @@ def _two_tier_prune(
         return pruned
 
     # Not enough savings - return original for fallback processing
-    LOGGER.debug(f"Two-tier pruning saved only {tokens_saved} tokens, need {config.prune_minimum_savings}")
+    LOGGER.debug(
+        f"Two-tier pruning saved only {tokens_saved} tokens, need {config.prune_minimum_savings}"
+    )
     return messages_list
 
 
-def ensure_context_budget(messages: Iterable[Message], config: ContextBudgetConfig | None = None) -> List[Message]:
+def ensure_context_budget(
+    messages: Iterable[Message], config: ContextBudgetConfig | None = None
+) -> list[Message]:
     """Return a context-limited version of messages according to configuration."""
 
     config = config or ContextBudgetConfig()
@@ -358,8 +377,12 @@ def config_from_settings(settings) -> ContextBudgetConfig:
         max_tokens=getattr(settings, "max_context_tokens", DEFAULT_MAX_CONTEXT_TOKENS),
         headroom_tokens=getattr(settings, "response_headroom_tokens", DEFAULT_RESPONSE_HEADROOM),
         max_tool_messages=getattr(settings, "max_tool_messages_kept", DEFAULT_MAX_TOOL_MESSAGES),
-        max_tool_output_chars=getattr(settings, "max_tool_output_chars", DEFAULT_MAX_TOOL_OUTPUT_CHARS),
-        keep_last_assistant=getattr(settings, "keep_last_assistant_messages", DEFAULT_KEEP_LAST_ASSISTANT),
+        max_tool_output_chars=getattr(
+            settings, "max_tool_output_chars", DEFAULT_MAX_TOOL_OUTPUT_CHARS
+        ),
+        keep_last_assistant=getattr(
+            settings, "keep_last_assistant_messages", DEFAULT_KEEP_LAST_ASSISTANT
+        ),
         # New two-tier pruning settings
         enable_two_tier=getattr(settings, "enable_two_tier_pruning", True),
         prune_protect_tokens=getattr(settings, "prune_protect_tokens", PRUNE_PROTECT_TOKENS),
@@ -372,7 +395,9 @@ def config_from_settings(settings) -> ContextBudgetConfig:
 class BudgetedLLMClient:
     """LLM client wrapper that enforces context budgets before each call."""
 
-    def __init__(self, inner: LLMClient, config: ContextBudgetConfig | None = None, *, disabled: bool = False):
+    def __init__(
+        self, inner: LLMClient, config: ContextBudgetConfig | None = None, *, disabled: bool = False
+    ):
         self._inner = inner
         self._config = config or ContextBudgetConfig()
         self._disabled = disabled
@@ -389,7 +414,7 @@ class BudgetedLLMClient:
         if hasattr(self._inner, "configure_timeout"):
             self._inner.configure_timeout(timeout)
 
-    def _prepare_messages(self, messages: Sequence[Message]) -> List[Message]:
+    def _prepare_messages(self, messages: Sequence[Message]) -> list[Message]:
         original = list(messages)
         if self._disabled:
             return original
@@ -440,7 +465,7 @@ class BudgetedLLMClient:
     def invoke_tools(
         self,
         messages: Sequence[Message],
-        tools: List[dict],
+        tools: list[dict],
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
@@ -476,16 +501,16 @@ class BudgetedLLMClient:
 
 
 __all__ = [
-    "ContextBudgetConfig",
+    "DEFAULT_KEEP_LAST_ASSISTANT",
     "DEFAULT_MAX_CONTEXT_TOKENS",
-    "DEFAULT_RESPONSE_HEADROOM",
     "DEFAULT_MAX_TOOL_MESSAGES",
     "DEFAULT_MAX_TOOL_OUTPUT_CHARS",
-    "DEFAULT_KEEP_LAST_ASSISTANT",
+    "DEFAULT_RESPONSE_HEADROOM",
     "BudgetedLLMClient",
+    "ContextBudgetConfig",
     "config_from_settings",
-    "estimate_tokens",
-    "summarize_text",
-    "prune_messages",
     "ensure_context_budget",
+    "estimate_tokens",
+    "prune_messages",
+    "summarize_text",
 ]

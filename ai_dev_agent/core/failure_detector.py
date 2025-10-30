@@ -1,8 +1,7 @@
 """Failure pattern detection to avoid wasted LLM calls on impossible queries."""
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
 from collections import defaultdict
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -13,8 +12,8 @@ class FailurePatternDetector:
     operations. This detector recognizes failure patterns and surfaces them to the LLM.
     """
 
-    failure_counts: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    failed_operations: List[Tuple[str, str, str]] = field(default_factory=list)
+    failure_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    failed_operations: list[tuple[str, str, str]] = field(default_factory=list)
 
     MAX_SAME_FAILURE = 3  # After 3 identical failures, suggest giving up
     MAX_GREP_FAILURES = 3  # After 3 grep failures for related terms, suggest giving up
@@ -32,7 +31,7 @@ class FailurePatternDetector:
         self.failure_counts[key] += 1
         self.failed_operations.append((operation, target, reason))
 
-    def should_give_up(self, operation: str, target: str) -> Tuple[bool, str]:
+    def should_give_up(self, operation: str, target: str) -> tuple[bool, str]:
         """Check if we should stop trying this operation.
 
         Returns:
@@ -58,7 +57,8 @@ class FailurePatternDetector:
         if operation == "grep":
             target_lower = target.lower()
             grep_failures = [
-                tgt for op, tgt, _ in self.failed_operations
+                tgt
+                for op, tgt, _ in self.failed_operations
                 if op == "grep" and (target_lower in tgt.lower() or tgt.lower() in target_lower)
             ]
             if len(grep_failures) >= self.MAX_GREP_FAILURES:
@@ -77,7 +77,8 @@ class FailurePatternDetector:
         # Pattern 3: Multiple read rejections (files too large, binary, etc.)
         if operation == "read":
             read_rejections = [
-                (tgt, reason) for op, tgt, reason in self.failed_operations
+                (tgt, reason)
+                for op, tgt, reason in self.failed_operations
                 if op == "read" and "reject" in reason.lower()
             ]
             if len(read_rejections) >= self.MAX_READ_REJECTIONS:

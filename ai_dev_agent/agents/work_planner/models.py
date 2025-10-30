@@ -4,11 +4,11 @@ Work Planning Data Models
 Defines Task and WorkPlan models with metadata for intelligent planning.
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional, Dict, Any
-import uuid
+from typing import Any, Optional
 
 
 class TaskStatus(str, Enum):
@@ -40,7 +40,7 @@ class Task:
 
     # Content
     description: str = ""  # Detailed explanation (Aider style)
-    acceptance_criteria: List[str] = field(default_factory=list)
+    acceptance_criteria: list[str] = field(default_factory=list)
 
     # Metadata
     status: TaskStatus = TaskStatus.PENDING
@@ -48,9 +48,9 @@ class Task:
     effort_estimate: str = "unknown"  # "15m", "1h", "2h", "1d", etc.
 
     # Relationships
-    dependencies: List[str] = field(default_factory=list)  # Task IDs
+    dependencies: list[str] = field(default_factory=list)  # Task IDs
     parent_id: Optional[str] = None  # For subtasks
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
 
     # Timestamps
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -59,10 +59,10 @@ class Task:
     completed_at: Optional[datetime] = None
 
     # Context
-    notes: List[str] = field(default_factory=list)
-    files_involved: List[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    files_involved: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         return {
             "id": self.id,
@@ -84,7 +84,7 @@ class Task:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Task":
+    def from_dict(cls, data: dict[str, Any]) -> "Task":
         """Create from dictionary"""
         task = cls(
             id=data["id"],
@@ -120,7 +120,7 @@ class WorkPlan:
     # Content
     goal: str = ""  # High-level objective
     context: str = ""  # Background, constraints, requirements
-    tasks: List[Task] = field(default_factory=list)
+    tasks: list[Task] = field(default_factory=list)
 
     # Metadata
     version: int = 1
@@ -130,7 +130,7 @@ class WorkPlan:
     # Status
     is_active: bool = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         return {
             "id": self.id,
@@ -145,7 +145,7 @@ class WorkPlan:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WorkPlan":
+    def from_dict(cls, data: dict[str, Any]) -> "WorkPlan":
         """Create from dictionary"""
         plan = cls(
             id=data["id"],

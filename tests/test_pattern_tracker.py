@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_dev_agent.dynamic_instructions.pattern_tracker import PatternTracker, QueryRecord, PatternSignal
+from ai_dev_agent.dynamic_instructions.pattern_tracker import PatternTracker
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def test_record_single_query(tracker):
         session_id="session1",
         success=True,
         tools_used=["find", "read", "write"],
-        task_type="feature"
+        task_type="feature",
     )
 
     assert tracker.get_query_count() == 1
@@ -49,7 +49,7 @@ def test_record_multiple_queries(tracker):
             session_id=f"session{i}",
             success=i % 2 == 0,  # Alternate success/failure
             tools_used=["find", "read"],
-            task_type="general"
+            task_type="general",
         )
 
     assert tracker.get_query_count() == 10
@@ -63,7 +63,7 @@ def test_detect_tool_sequence_pattern(tracker):
             session_id=f"session{i}",
             success=True,
             tools_used=["find", "read", "write"],
-            task_type="feature"
+            task_type="feature",
         )
 
     patterns = tracker.detect_patterns(min_sample_size=5, min_success_rate=0.7)
@@ -87,13 +87,13 @@ def test_detect_failure_pattern(tracker):
             session_id=f"session{i}",
             success=False,
             tools_used=["write"],  # Direct write without read
-            task_type="quick_fix"
+            task_type="quick_fix",
         )
 
     patterns = tracker.detect_patterns(min_sample_size=5, min_success_rate=0.7)
 
     # Should detect failure pattern
-    failure_patterns = [p for p in patterns if p.pattern_type == "failure_pattern"]
+    [p for p in patterns if p.pattern_type == "failure_pattern"]
     # Note: detect_patterns only returns high success patterns by default
     # Failure patterns are detected when success_rate < 0.4
     # So we need to check differently
@@ -105,10 +105,7 @@ def test_confidence_calculation(tracker):
     # Small sample with high success
     for i in range(5):
         tracker.record_query(
-            session_id=f"small{i}",
-            success=True,
-            tools_used=["find", "read"],
-            task_type="general"
+            session_id=f"small{i}", success=True, tools_used=["find", "read"], task_type="general"
         )
 
     patterns_small = tracker.detect_patterns(min_sample_size=5, min_success_rate=0.7)
@@ -116,10 +113,7 @@ def test_confidence_calculation(tracker):
     # Large sample with high success
     for i in range(15):
         tracker.record_query(
-            session_id=f"large{i}",
-            success=True,
-            tools_used=["grep", "read"],
-            task_type="general"
+            session_id=f"large{i}", success=True, tools_used=["grep", "read"], task_type="general"
         )
 
     patterns_large = tracker.detect_patterns(min_sample_size=5, min_success_rate=0.7)
@@ -139,10 +133,7 @@ def test_persistence(temp_storage):
     tracker1 = PatternTracker(storage_path=temp_storage)
     for i in range(10):  # Record 10 to trigger auto-save
         tracker1.record_query(
-            session_id=f"session{i}",
-            success=True,
-            tools_used=["find", "read"],
-            task_type="general"
+            session_id=f"session{i}", success=True, tools_used=["find", "read"], task_type="general"
         )
 
     assert tracker1.get_query_count() == 10
@@ -190,7 +181,7 @@ def test_mixed_success_patterns(tracker):
             session_id=f"A{i}",
             success=(i < 9),  # 9 successes, 1 failure
             tools_used=["find", "read", "write"],
-            task_type="feature"
+            task_type="feature",
         )
 
     # Tool sequence B: Low success (30%)
@@ -199,7 +190,7 @@ def test_mixed_success_patterns(tracker):
             session_id=f"B{i}",
             success=(i < 3),  # 3 successes, 7 failures
             tools_used=["write"],  # Direct write
-            task_type="quick_fix"
+            task_type="quick_fix",
         )
 
     patterns = tracker.detect_patterns(min_sample_size=5, min_success_rate=0.7)

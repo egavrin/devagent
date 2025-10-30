@@ -1,9 +1,13 @@
 """OpenRouter API client implementation."""
+
 from __future__ import annotations
 
-from typing import Any, Dict, Sequence
+from typing import TYPE_CHECKING, Any
 
 from .base import HTTPChatLLMClient, Message, RetryConfig
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -20,8 +24,8 @@ class OpenRouterClient(HTTPChatLLMClient):
         timeout: float = 120.0,
         retry_config: RetryConfig | None = None,
         provider_only: Sequence[str] | None = None,
-        provider_config: Dict[str, Any] | None = None,
-        default_headers: Dict[str, str] | None = None,
+        provider_config: dict[str, Any] | None = None,
+        default_headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(
             "OpenRouter",
@@ -37,19 +41,21 @@ class OpenRouterClient(HTTPChatLLMClient):
     @staticmethod
     def _merge_provider_config(
         provider_only: Sequence[str] | None,
-        provider_config: Dict[str, Any] | None,
-    ) -> Dict[str, Any]:
-        config: Dict[str, Any] = dict(provider_config or {})
+        provider_config: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        config: dict[str, Any] = dict(provider_config or {})
         if provider_only:
             config = {**config, "only": list(provider_only)}
         return config
 
-    def _build_headers(self, extra_headers: Dict[str, str] | None = None) -> Dict[str, str]:
+    def _build_headers(self, extra_headers: dict[str, str] | None = None) -> dict[str, str]:
         headers = super()._build_headers()
-        headers.update({
-            "HTTP-Referer": "https://github.com/egavrin/devagent",
-            "X-Title": "devagent",
-        })
+        headers.update(
+            {
+                "HTTP-Referer": "https://github.com/egavrin/devagent",
+                "X-Title": "devagent",
+            }
+        )
         if self._default_headers:
             headers.update(self._default_headers)
         if extra_headers:
@@ -61,8 +67,8 @@ class OpenRouterClient(HTTPChatLLMClient):
         messages: Sequence[Message],
         temperature: float,
         max_tokens: int | None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": [message.to_payload() for message in messages],
             "temperature": temperature,
@@ -74,4 +80,4 @@ class OpenRouterClient(HTTPChatLLMClient):
         return payload
 
 
-__all__ = ["OpenRouterClient", "DEFAULT_BASE_URL"]
+__all__ = ["DEFAULT_BASE_URL", "OpenRouterClient"]

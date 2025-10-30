@@ -1,18 +1,20 @@
 """LLM-backed action provider bridging the CLI to the engine ReAct loop."""
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from ai_dev_agent.core.utils.budget_integration import BudgetIntegration
-
-logger = logging.getLogger(__name__)
 from ai_dev_agent.engine.react.types import ActionRequest, StepRecord, TaskSpec, ToolCall
 from ai_dev_agent.providers.llm.base import LLMClient, ToolCallResult
-from ai_dev_agent.session import SessionManager
 
-from .budget_control import create_text_only_tool
+if TYPE_CHECKING:
+    from ai_dev_agent.core.utils.budget_integration import BudgetIntegration
+    from ai_dev_agent.session import SessionManager
+
+logger = logging.getLogger(__name__)
 
 
 class LLMActionProvider:
@@ -24,10 +26,10 @@ class LLMActionProvider:
         session_manager: SessionManager,
         session_id: str,
         *,
-        tools: Sequence[Dict[str, Any]] | None = None,
-        budget_integration: Optional[BudgetIntegration] = None,
-        format_schema: Optional[Dict[str, Any]] = None,
-        ctx_obj: Optional[Dict[str, Any]] = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        budget_integration: BudgetIntegration | None = None,
+        format_schema: dict[str, Any] | None = None,
+        ctx_obj: dict[str, Any] | None = None,
     ) -> None:
         self.client = llm_client
         self.session_manager = session_manager
@@ -37,7 +39,7 @@ class LLMActionProvider:
         self._base_tools = list(tools or [])
         self._current_phase: str = "exploration"
         self._is_final_iteration: bool = False
-        self._last_response: Optional[ToolCallResult] = None
+        self._last_response: ToolCallResult | None = None
         self._ctx_obj = ctx_obj or {}
 
     def update_phase(self, phase: str, *, is_final: bool = False) -> None:
@@ -61,16 +63,18 @@ class LLMActionProvider:
         # Sanitize conversation to remove orphaned tool messages
         # This prevents API errors from strict providers like DeepSeek
         from ai_dev_agent.session.sanitizer import sanitize_conversation
+
         conversation = sanitize_conversation(conversation)
 
         # Pre-flight check: Ensure conversation fits within model's context limit
         # This prevents "context length exceeded" API errors
         from ai_dev_agent.core.utils.context_budget import estimate_tokens
+
         estimated_tokens = estimate_tokens(conversation, model=getattr(self.client, "model", None))
 
         # Get model-specific context limit if available
         model_limit = getattr(self.client, "_MAX_CONTEXT_TOKENS", None)
-        limit_value: Optional[int]
+        limit_value: int | None
         if isinstance(model_limit, (int, float)):
             limit_value = int(model_limit)
         else:
@@ -92,6 +96,7 @@ class LLMActionProvider:
         # In final iteration, add synthesis instructions to the conversation
         if self._is_final_iteration:
             from ai_dev_agent.providers.llm.base import Message
+
             synthesis_instruction = Message(
                 role="system",
                 content=(
@@ -102,9 +107,9 @@ class LLMActionProvider:
                     "3. Provide actionable recommendations\n"
                     "4. Answer the original question completely\n\n"
                     "Do NOT attempt to search further. Provide your COMPLETE SYNTHESIS now."
-                )
+                ),
             )
-            conversation = conversation + [synthesis_instruction]
+            conversation = [*conversation, synthesis_instruction]
 
         tools = self._get_tools_for_phase(history)
 
@@ -198,8 +203,8 @@ class LLMActionProvider:
                     metadata={
                         "iteration": iteration_index,
                         "phase": "synthesis",
-                        "synthesized_from_text": True
-                    }
+                        "synthesized_from_text": True,
+                    },
                 )
 
             self._record_dummy_tool_messages(normalized_tool_calls)
@@ -207,7 +212,7 @@ class LLMActionProvider:
 
         tool_calls = self._convert_tool_calls(result.calls, used_call_ids)
         primary_call = tool_calls[0]
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, Any] = {
             "iteration": iteration_index,
             "phase": self._current_phase,
         }
@@ -225,7 +230,7 @@ class LLMActionProvider:
             tool_calls=tool_calls_payload,
         )
 
-    def last_response_text(self) -> Optional[str]:
+    def last_response_text(self) -> str | None:
         """Return the most recent assistant message content, if available.
 
         Filters out context summary messages which are internal bookkeeping.
@@ -236,7 +241,7 @@ class LLMActionProvider:
         text = self._last_response.message_content.strip()
 
         # Skip context summary messages (internal bookkeeping from context pruning)
-        if text.startswith('[Context summary]') or text.startswith('['):
+        if text.startswith("[Context summary]") or text.startswith("["):
             return None
 
         return text or None
@@ -245,16 +250,17 @@ class LLMActionProvider:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _get_tools_for_phase(self, _history: Sequence[StepRecord]) -> List[Dict[str, Any]]:
+    def _get_tools_for_phase(self, _history: Sequence[StepRecord]) -> list[dict[str, Any]]:
         if self._is_final_iteration:
             # Return only submit_final_answer tool to force synthesis
             # Use the proper format from create_text_only_tool
             from .budget_control import create_text_only_tool
+
             return [create_text_only_tool()]
         return list(self._base_tools)
 
-    def _convert_tool_calls(self, calls: Sequence[Any], used_ids: set[str]) -> List[ToolCall]:
-        normalized: List[ToolCall] = []
+    def _convert_tool_calls(self, calls: Sequence[Any], used_ids: set[str]) -> list[ToolCall]:
+        normalized: list[ToolCall] = []
         for index, call in enumerate(calls):
             name = getattr(call, "name", None)
             arguments = getattr(call, "arguments", {}) or {}
@@ -279,23 +285,23 @@ class LLMActionProvider:
 
     def _normalize_tool_calls(
         self,
-        raw_tool_calls: Optional[Sequence[Any]],
-        parsed_calls: Optional[Sequence[Any]],
-    ) -> Optional[List[Dict[str, Any]]]:
+        raw_tool_calls: Sequence[Any] | None,
+        parsed_calls: Sequence[Any] | None,
+    ) -> list[dict[str, Any]] | None:
         if not raw_tool_calls:
             return raw_tool_calls  # type: ignore[return-value]
 
         used_ids: set[str] = set()
         for entry in raw_tool_calls:
-            if isinstance(entry, Dict):
+            if isinstance(entry, dict):
                 existing = str(entry.get("id") or entry.get("tool_call_id") or "").strip()
                 if existing:
                     used_ids.add(existing)
 
-        normalized: List[Dict[str, Any]] = []
+        normalized: list[dict[str, Any]] = []
         for index, entry in enumerate(raw_tool_calls):
-            if isinstance(entry, Dict):
-                entry_dict: Dict[str, Any] = dict(entry)
+            if isinstance(entry, dict):
+                entry_dict: dict[str, Any] = dict(entry)
             else:
                 entry_dict = getattr(entry, "__dict__", {}).copy()
                 if not entry_dict:
@@ -311,9 +317,11 @@ class LLMActionProvider:
 
             if parsed_calls and index < len(parsed_calls):
                 parsed_call = parsed_calls[index]
-                parsed_id = getattr(parsed_call, "call_id", None) or getattr(parsed_call, "id", None)
+                parsed_id = getattr(parsed_call, "call_id", None) or getattr(
+                    parsed_call, "id", None
+                )
                 if parsed_id != call_id:
-                    setattr(parsed_call, "call_id", call_id)
+                    parsed_call.call_id = call_id
 
         return normalized
 
@@ -340,12 +348,13 @@ class LLMActionProvider:
 
             # Generate fresh RepoMap with accumulated context
             from ai_dev_agent.cli.context_enhancer import get_context_enhancer
+
             enhancer = get_context_enhancer(repo_root, settings)
-            original_query, repomap_messages = enhancer.get_repomap_messages(
+            _original_query, repomap_messages = enhancer.get_repomap_messages(
                 query=user_prompt,
                 max_files=15,
                 additional_files=dynamic_context.mentioned_files,
-                additional_symbols=dynamic_context.mentioned_symbols
+                additional_symbols=dynamic_context.mentioned_symbols,
             )
 
             if repomap_messages:
@@ -354,16 +363,10 @@ class LLMActionProvider:
                 for msg in repomap_messages:
                     if msg["role"] == "user":
                         # Add as user message to maintain conversation flow
-                        self.session_manager.add_user_message(
-                            self.session_id,
-                            msg["content"]
-                        )
+                        self.session_manager.add_user_message(self.session_id, msg["content"])
                     elif msg["role"] == "assistant":
                         # Add assistant acknowledgment
-                        self.session_manager.add_assistant_message(
-                            self.session_id,
-                            msg["content"]
-                        )
+                        self.session_manager.add_assistant_message(self.session_id, msg["content"])
 
                 if settings and settings.repomap_debug_stdout:
                     logger.debug(f"Updated RepoMap injected: {len(repomap_messages)} messages")
@@ -373,31 +376,29 @@ class LLMActionProvider:
             if settings and settings.repomap_debug_stdout:
                 logger.debug(f"Failed to inject RepoMap update: {e}")
 
-    def _record_dummy_tool_messages(self, raw_tool_calls: Optional[Sequence[Any]]) -> None:
+    def _record_dummy_tool_messages(self, raw_tool_calls: Sequence[Any] | None) -> None:
         if not raw_tool_calls:
             return
         for entry in raw_tool_calls:
             if not isinstance(entry, Mapping):
                 continue
-            function_payload = entry.get("function") if isinstance(entry.get("function"), Mapping) else {}
-            tool_name = (
-                function_payload.get("name")
-                or entry.get("name")
-                or "tool"
+            function_payload = (
+                entry.get("function") if isinstance(entry.get("function"), Mapping) else {}
             )
+            tool_name = function_payload.get("name") or entry.get("name") or "tool"
             # The normalized tool calls always have an "id" field set by _normalize_tool_calls
             call_id = entry.get("id") or entry.get("tool_call_id")
             if not call_id:
                 # This shouldn't happen after normalization, but generate one as fallback
                 import uuid
+
                 call_id = f"tool-dummy-{uuid.uuid4().hex[:8]}"
-            message = (
-                f"Tool '{tool_name}' was referenced but not executed."
-            )
+            message = f"Tool '{tool_name}' was referenced but not executed."
             try:
                 self.session_manager.add_tool_message(self.session_id, call_id, message)
             except Exception as e:
                 # Log the exception for debugging instead of silently failing
                 import logging
+
                 logger = logging.getLogger(__name__)
                 logger.debug(f"Failed to record dummy tool message: {e}")

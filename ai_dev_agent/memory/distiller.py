@@ -7,16 +7,15 @@ and failures to create a compact, generalizable knowledge base.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from ai_dev_agent.providers.llm.base import Message
+if TYPE_CHECKING:
+    from ai_dev_agent.providers.llm.base import Message
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +26,11 @@ class Strategy:
 
     description: str
     context: str  # When to apply this strategy
-    steps: List[str]  # Key steps taken
-    tools_used: List[str]  # Tools that were effective
+    steps: list[str]  # Key steps taken
+    tools_used: list[str]  # Tools that were effective
     effectiveness_score: float = 0.0  # Tracked over time
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -44,7 +43,7 @@ class Lesson:
     correction: str  # How to avoid/fix it
     severity: str  # "critical", "major", "minor"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -56,38 +55,38 @@ class Memory:
     task_type: str = ""  # debugging, feature, refactoring, etc.
     title: str = ""  # Brief description
     query: str = ""  # Original user query
-    strategies: List[Strategy] = field(default_factory=list)
-    lessons: List[Lesson] = field(default_factory=list)
+    strategies: list[Strategy] = field(default_factory=list)
+    lessons: list[Lesson] = field(default_factory=list)
     outcome: str = "unknown"  # success, partial, failure
     context_hash: str = ""  # Hash of original query for deduplication
-    embedding: Optional[List[float]] = None  # Vector for similarity search
+    embedding: list[float] | None = None  # Vector for similarity search
     usage_count: int = 0
     effectiveness_score: float = 0.0
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    last_used: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    last_used: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         data = asdict(self)
-        data["strategies"] = [s.to_dict() if isinstance(s, Strategy) else s for s in self.strategies]
+        data["strategies"] = [
+            s.to_dict() if isinstance(s, Strategy) else s for s in self.strategies
+        ]
         data["lessons"] = [l.to_dict() if isinstance(l, Lesson) else l for l in self.lessons]
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Memory:
+    def from_dict(cls, data: dict[str, Any]) -> Memory:
         """Create from dictionary."""
-        strategies = [Strategy(**s) if isinstance(s, dict) else s for s in data.get("strategies", [])]
+        strategies = [
+            Strategy(**s) if isinstance(s, dict) else s for s in data.get("strategies", [])
+        ]
         lessons = [Lesson(**l) if isinstance(l, dict) else l for l in data.get("lessons", [])]
 
         # Remove strategies and lessons from data to avoid duplicate in kwargs
         memory_data = {k: v for k, v in data.items() if k not in ["strategies", "lessons"]}
 
-        return cls(
-            strategies=strategies,
-            lessons=lessons,
-            **memory_data
-        )
+        return cls(strategies=strategies, lessons=lessons, **memory_data)
 
 
 class MemoryDistiller:
@@ -131,16 +130,31 @@ class MemoryDistiller:
 
     # Success/failure indicators
     SUCCESS_INDICATORS = [
-        "successfully", "fixed", "resolved", "completed", "working",
-        "implemented", "added", "created", "passed", "success"
+        "successfully",
+        "fixed",
+        "resolved",
+        "completed",
+        "working",
+        "implemented",
+        "added",
+        "created",
+        "passed",
+        "success",
     ]
 
     FAILURE_INDICATORS = [
-        "failed", "error", "couldn't", "unable", "timeout",
-        "incorrect", "wrong", "broken", "issue"
+        "failed",
+        "error",
+        "couldn't",
+        "unable",
+        "timeout",
+        "incorrect",
+        "wrong",
+        "broken",
+        "issue",
     ]
 
-    def __init__(self, llm_client: Optional[Any] = None):
+    def __init__(self, llm_client: Any | None = None):
         """Initialize the distiller.
 
         Args:
@@ -149,10 +163,7 @@ class MemoryDistiller:
         self.llm_client = llm_client
 
     def distill_from_session(
-        self,
-        session_id: str,
-        messages: List[Message],
-        metadata: Optional[Dict[str, Any]] = None
+        self, session_id: str, messages: list[Message], metadata: dict[str, Any] | None = None
     ) -> Memory:
         """Distill a memory from a completed session.
 
@@ -188,13 +199,13 @@ class MemoryDistiller:
             lessons=lessons,
             outcome=outcome,
             context_hash=context_hash,
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
 
         logger.debug(f"Distilled memory from session {session_id}: {title}")
         return memory
 
-    def _extract_user_query(self, messages: List[Message]) -> str:
+    def _extract_user_query(self, messages: list[Message]) -> str:
         """Extract the original user query from messages."""
         for msg in messages:
             if msg.role == "user" and msg.content:
@@ -214,7 +225,7 @@ class MemoryDistiller:
 
         return "general"
 
-    def _determine_outcome(self, messages: List[Message]) -> str:
+    def _determine_outcome(self, messages: list[Message]) -> str:
         """Determine if the task was successful, partial, or failed."""
         # Look at the last few assistant messages
         assistant_msgs = [m for m in messages if m.role == "assistant"][-3:]
@@ -239,7 +250,7 @@ class MemoryDistiller:
 
         return "unknown"
 
-    def _extract_strategies(self, messages: List[Message], outcome: str) -> List[Strategy]:
+    def _extract_strategies(self, messages: list[Message], outcome: str) -> list[Strategy]:
         """Extract successful strategies from the conversation."""
         strategies = []
 
@@ -252,10 +263,19 @@ class MemoryDistiller:
                 content = msg.content
 
                 # Look for strategy indicators
-                if any(phrase in content.lower() for phrase in [
-                    "i'll", "let me", "first", "next", "then",
-                    "approach", "strategy", "plan"
-                ]):
+                if any(
+                    phrase in content.lower()
+                    for phrase in [
+                        "i'll",
+                        "let me",
+                        "first",
+                        "next",
+                        "then",
+                        "approach",
+                        "strategy",
+                        "plan",
+                    ]
+                ):
                     # Extract tools used from this message
                     tools = self._extract_tools_from_message(msg)
 
@@ -267,7 +287,7 @@ class MemoryDistiller:
                             description=self._summarize_approach(content),
                             context=self._extract_context(messages[:i]),
                             steps=steps[:5],  # Keep top 5 steps
-                            tools_used=tools
+                            tools_used=tools,
                         )
                         strategies.append(strategy)
 
@@ -277,7 +297,7 @@ class MemoryDistiller:
 
         return strategies
 
-    def _extract_lessons(self, messages: List[Message], outcome: str) -> List[Lesson]:
+    def _extract_lessons(self, messages: list[Message], outcome: str) -> list[Lesson]:
         """Extract lessons from failures and corrections."""
         lessons = []
 
@@ -287,11 +307,20 @@ class MemoryDistiller:
                 content = msg.content
 
                 # Check for error acknowledgment
-                if any(phrase in content.lower() for phrase in [
-                    "error", "mistake", "incorrect", "failed",
-                    "should have", "instead", "actually",
-                    "the issue was", "the problem is"
-                ]):
+                if any(
+                    phrase in content.lower()
+                    for phrase in [
+                        "error",
+                        "mistake",
+                        "incorrect",
+                        "failed",
+                        "should have",
+                        "instead",
+                        "actually",
+                        "the issue was",
+                        "the problem is",
+                    ]
+                ):
                     # Extract the mistake and correction
                     mistake = self._extract_mistake(content)
                     correction = self._extract_correction(content, messages[i:])
@@ -301,32 +330,39 @@ class MemoryDistiller:
                             mistake=mistake,
                             context=self._extract_context(messages[:i]),
                             correction=correction,
-                            severity=self._assess_severity(content)
+                            severity=self._assess_severity(content),
                         )
                         lessons.append(lesson)
 
             # Also learn from user corrections
             elif msg.role == "user" and i > 0:
-                prev_msg = messages[i-1]
-                if prev_msg.role == "assistant":
-                    if any(phrase in msg.content.lower() for phrase in [
-                        "no", "wrong", "incorrect", "actually",
-                        "that's not", "should be", "try"
-                    ]):
-                        mistake = self._summarize_approach(prev_msg.content or "")
-                        correction = msg.content[:200]
+                prev_msg = messages[i - 1]
+                if prev_msg.role == "assistant" and any(
+                    phrase in msg.content.lower()
+                    for phrase in [
+                        "no",
+                        "wrong",
+                        "incorrect",
+                        "actually",
+                        "that's not",
+                        "should be",
+                        "try",
+                    ]
+                ):
+                    mistake = self._summarize_approach(prev_msg.content or "")
+                    correction = msg.content[:200]
 
-                        lesson = Lesson(
-                            mistake=mistake,
-                            context=self._extract_context(messages[:i-1]),
-                            correction=f"User correction: {correction}",
-                            severity="major"
-                        )
-                        lessons.append(lesson)
+                    lesson = Lesson(
+                        mistake=mistake,
+                        context=self._extract_context(messages[: i - 1]),
+                        correction=f"User correction: {correction}",
+                        severity="major",
+                    )
+                    lessons.append(lesson)
 
         return lessons[:3]  # Keep top 3 lessons
 
-    def _extract_tools_from_message(self, msg: Message) -> List[str]:
+    def _extract_tools_from_message(self, msg: Message) -> list[str]:
         """Extract tool names from a message."""
         tools = []
 
@@ -363,33 +399,48 @@ class MemoryDistiller:
 
         return list(set(tools))  # Unique tools
 
-    def _extract_steps_from_content(self, content: str) -> List[str]:
+    def _extract_steps_from_content(self, content: str) -> list[str]:
         """Extract actionable steps from content."""
         steps = []
 
         # Look for numbered or bulleted lists
-        lines = content.split('\n')
+        lines = content.split("\n")
         for line in lines:
             line = line.strip()
 
             # Numbered steps (1., 2., etc)
-            if re.match(r'^\d+\.?\s+', line):
-                step = re.sub(r'^\d+\.?\s+', '', line)
+            if re.match(r"^\d+\.?\s+", line):
+                step = re.sub(r"^\d+\.?\s+", "", line)
                 if len(step) > 10 and len(step) < 200:
                     steps.append(step)
 
             # Bullet points
-            elif re.match(r'^[-*•]\s+', line):
-                step = re.sub(r'^[-*•]\s+', '', line)
+            elif re.match(r"^[-*•]\s+", line):
+                step = re.sub(r"^[-*•]\s+", "", line)
                 if len(step) > 10 and len(step) < 200:
                     steps.append(step)
 
             # Action phrases
-            elif any(line.lower().startswith(word) for word in [
-                "check", "verify", "search", "look for", "find",
-                "read", "examine", "analyze", "implement", "add",
-                "fix", "update", "modify", "create", "write"
-            ]):
+            elif any(
+                line.lower().startswith(word)
+                for word in [
+                    "check",
+                    "verify",
+                    "search",
+                    "look for",
+                    "find",
+                    "read",
+                    "examine",
+                    "analyze",
+                    "implement",
+                    "add",
+                    "fix",
+                    "update",
+                    "modify",
+                    "create",
+                    "write",
+                ]
+            ):
                 if len(line) > 10 and len(line) < 200:
                     steps.append(line)
 
@@ -398,21 +449,21 @@ class MemoryDistiller:
     def _summarize_approach(self, content: str) -> str:
         """Create a brief summary of the approach."""
         # Take first meaningful sentence
-        sentences = content.split('.')
+        sentences = content.split(".")
         for sentence in sentences:
             sentence = sentence.strip()
             if len(sentence) > 20 and len(sentence) < 200:
                 # Clean up the sentence
-                sentence = re.sub(r'\s+', ' ', sentence)
+                sentence = re.sub(r"\s+", " ", sentence)
                 return sentence
 
         # Fallback: take first 150 chars
-        summary = re.sub(r'\s+', ' ', content[:150]).strip()
-        if not summary.endswith('.'):
+        summary = re.sub(r"\s+", " ", content[:150]).strip()
+        if not summary.endswith("."):
             summary += "..."
         return summary
 
-    def _extract_context(self, messages: List[Message]) -> str:
+    def _extract_context(self, messages: list[Message]) -> str:
         """Extract context about when to apply strategy/lesson."""
         # Look for file mentions, error types, etc.
         context_parts = []
@@ -420,18 +471,19 @@ class MemoryDistiller:
         for msg in messages[-3:]:  # Last 3 messages before
             if msg.content:
                 # Look for file extensions
-                extensions = re.findall(r'\.\w{2,4}\b', msg.content)
+                extensions = re.findall(r"\.\w{2,4}\b", msg.content)
                 if extensions:
                     context_parts.append(f"Working with {', '.join(set(extensions))} files")
 
                 # Look for error types
-                errors = re.findall(r'(?:Type|Syntax|Runtime|Import|Attribute)Error', msg.content)
+                errors = re.findall(r"(?:Type|Syntax|Runtime|Import|Attribute)Error", msg.content)
                 if errors:
                     context_parts.append(f"Dealing with {', '.join(set(errors))}")
 
                 # Look for frameworks/libraries
-                frameworks = re.findall(r'\b(?:django|flask|react|vue|numpy|pandas|pytest)\b',
-                                       msg.content.lower())
+                frameworks = re.findall(
+                    r"\b(?:django|flask|react|vue|numpy|pandas|pytest)\b", msg.content.lower()
+                )
                 if frameworks:
                     context_parts.append(f"Using {', '.join(set(frameworks))}")
 
@@ -454,7 +506,7 @@ class MemoryDistiller:
         # Fallback: summarize the content
         return self._summarize_approach(content)
 
-    def _extract_correction(self, content: str, following_msgs: List[Message]) -> str:
+    def _extract_correction(self, content: str, following_msgs: list[Message]) -> str:
         """Extract how to fix the mistake."""
         # Look in current message
         patterns = [
@@ -490,7 +542,7 @@ class MemoryDistiller:
     def _generate_title(self, query: str, task_type: str, outcome: str) -> str:
         """Generate a concise title for the memory."""
         # Clean and truncate query
-        title = re.sub(r'\s+', ' ', query[:100]).strip()
+        title = re.sub(r"\s+", " ", query[:100]).strip()
 
         # Add task type prefix if not already present
         if task_type != "general" and task_type not in title.lower():
@@ -555,5 +607,5 @@ class MemoryDistiller:
             usage_count=total_usage,
             effectiveness_score=max(memory1.effectiveness_score, memory2.effectiveness_score),
             created_at=min(memory1.created_at, memory2.created_at),
-            metadata=merged_metadata
+            metadata=merged_metadata,
         )

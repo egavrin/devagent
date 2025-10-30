@@ -1,10 +1,10 @@
-from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.core.utils.context_budget import (
     BudgetedLLMClient,
     ContextBudgetConfig,
     ensure_context_budget,
     summarize_text,
 )
+from ai_dev_agent.providers.llm.base import Message
 
 
 def test_summarize_text_truncates_and_marks_omission():
@@ -21,7 +21,9 @@ def test_ensure_context_budget_retains_key_messages():
     ]
     for idx in range(5):
         messages.append(Message(role="tool", content="data" * 200))
-    config = ContextBudgetConfig(max_tokens=120, headroom_tokens=0, max_tool_messages=2, max_tool_output_chars=50)
+    config = ContextBudgetConfig(
+        max_tokens=120, headroom_tokens=0, max_tool_messages=2, max_tool_output_chars=50
+    )
 
     pruned = ensure_context_budget(messages, config)
 
@@ -44,7 +46,9 @@ def test_budgeted_client_applies_pruning():
             return "ok"
 
     inner = DummyClient()
-    config = ContextBudgetConfig(max_tokens=80, headroom_tokens=0, max_tool_messages=1, max_tool_output_chars=40)
+    config = ContextBudgetConfig(
+        max_tokens=80, headroom_tokens=0, max_tool_messages=1, max_tool_output_chars=40
+    )
     client = BudgetedLLMClient(inner, config=config)
     msgs = [
         Message(role="system", content="system"),

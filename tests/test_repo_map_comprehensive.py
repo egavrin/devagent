@@ -1,12 +1,10 @@
 """Comprehensive tests for repo_map module to improve coverage."""
 
-import tempfile
-import json
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch, mock_open
+
 import pytest
 
-from ai_dev_agent.core.repo_map import RepoMap, FileInfo, RepoContext, RepoMapManager
+from ai_dev_agent.core.repo_map import FileInfo, RepoContext, RepoMap, RepoMapManager
 
 
 class TestRepoMapManager:
@@ -39,7 +37,7 @@ class TestFileInfo:
             modified_time=1234567890.0,
             language="python",
             file_name="test.py",
-            file_stem="test"
+            file_stem="test",
         )
 
         assert info.path == "test.py"
@@ -57,7 +55,7 @@ class TestRepoContext:
 
     def test_repo_context_creation(self):
         """Test creating RepoContext instance."""
-        from pathlib import Path
+
         context = RepoContext(root_path=Path("/test"))
 
         assert context.root_path == Path("/test")
@@ -160,14 +158,16 @@ class TestRepoMap:
     def test_scan_file_python(self, repo_map, tmp_path):
         """Test scanning Python file."""
         py_file = tmp_path / "test.py"
-        py_file.write_text("""
+        py_file.write_text(
+            """
 class TestClass:
     def test_method(self):
         pass
 
 def test_function():
     return 42
-""")
+"""
+        )
 
         hash_value = repo_map._scan_file(py_file)
 
@@ -180,7 +180,8 @@ def test_function():
     def test_extract_python_info(self, repo_map, tmp_path):
         """Test extracting Python file information."""
         py_file = tmp_path / "module.py"
-        py_file.write_text("""
+        py_file.write_text(
+            """
 import os
 from pathlib import Path
 
@@ -199,7 +200,8 @@ def standalone_function(x, y):
 
 async def async_func():
     pass
-""")
+"""
+        )
 
         file_info = FileInfo(
             path="module.py",
@@ -207,7 +209,7 @@ async def async_func():
             modified_time=0,
             language="python",
             file_name="module.py",
-            file_stem="module"
+            file_stem="module",
         )
 
         repo_map._extract_python_info(py_file, file_info)
@@ -263,13 +265,15 @@ async def async_func():
         """Test finding symbols."""
         # Create test file with symbols
         py_file = tmp_path / "module.py"
-        py_file.write_text("""
+        py_file.write_text(
+            """
 class UserManager:
     def get_user(self): pass
 
 def process_data():
     pass
-""")
+"""
+        )
 
         repo_map.scan_repository()
 
@@ -288,13 +292,15 @@ def process_data():
     def test_get_file_summary(self, repo_map, tmp_path):
         """Test getting file summary."""
         py_file = tmp_path / "example.py"
-        py_file.write_text("""
+        py_file.write_text(
+            """
 class Example:
     def method1(self): pass
     def method2(self): pass
 
 def helper(): pass
-""")
+"""
+        )
 
         repo_map.scan_repository()
 
@@ -351,7 +357,8 @@ def helper(): pass
     def test_extract_javascript_info(self, repo_map, tmp_path):
         """Test extracting JavaScript file information."""
         js_file = tmp_path / "module.js"
-        js_file.write_text("""
+        js_file.write_text(
+            """
 class UserController {
     constructor() {}
     getUser() {}
@@ -363,7 +370,8 @@ function processData(data) {
 
 const helper = () => {};
 export default UserController;
-""")
+"""
+        )
 
         file_info = FileInfo(
             path="module.js",
@@ -371,7 +379,7 @@ export default UserController;
             modified_time=0,
             language="javascript",
             file_name="module.js",
-            file_stem="module"
+            file_stem="module",
         )
 
         repo_map._extract_with_regex(js_file, file_info, "javascript")
@@ -382,7 +390,8 @@ export default UserController;
     def test_extract_typescript_info(self, repo_map, tmp_path):
         """Test extracting TypeScript file information."""
         ts_file = tmp_path / "module.ts"
-        ts_file.write_text("""
+        ts_file.write_text(
+            """
 interface User {
     id: number;
     name: string;
@@ -397,7 +406,8 @@ class UserService {
 export function createUser(name: string): User {
     return { id: 1, name };
 }
-""")
+"""
+        )
 
         file_info = FileInfo(
             path="module.ts",
@@ -405,7 +415,7 @@ export function createUser(name: string): User {
             modified_time=0,
             language="typescript",
             file_name="module.ts",
-            file_stem="module"
+            file_stem="module",
         )
 
         repo_map._extract_typescript_info(ts_file, file_info)
@@ -433,13 +443,15 @@ export function createUser(name: string): User {
         """Test rebuilding symbol indices."""
         # Create test file
         py_file = tmp_path / "indexed.py"
-        py_file.write_text("""
+        py_file.write_text(
+            """
 class IndexedClass:
     pass
 
 def indexed_function():
     pass
-""")
+"""
+        )
 
         repo_map.scan_repository()
 

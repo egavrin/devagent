@@ -1,12 +1,13 @@
 """Orchestrator Agent for coordinating multiple agents."""
+
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Any, Optional
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from typing import Any
 
-from ..base import BaseAgent, AgentContext, AgentResult, AgentCapability, AgentStatus
+from ..base import AgentCapability, AgentContext, AgentResult, BaseAgent
 
 
 class OrchestratorAgent(BaseAgent):
@@ -21,17 +22,17 @@ class OrchestratorAgent(BaseAgent):
                 "coordination",
                 "task_delegation",
                 "workflow_management",
-                "parallel_execution"
+                "parallel_execution",
             ],
             tools=["read", "write", "grep", "find", "run"],
-            max_iterations=50  # Higher for complex coordination
+            max_iterations=50,  # Higher for complex coordination
         )
 
         # Registered subagents
-        self._subagents: Dict[str, BaseAgent] = {}
+        self._subagents: dict[str, BaseAgent] = {}
 
         # Workflow tracking
-        self._workflows: Dict[str, Dict[str, Any]] = {}
+        self._workflows: dict[str, dict[str, Any]] = {}
 
         # Register capabilities
         self._register_capabilities()
@@ -43,26 +44,26 @@ class OrchestratorAgent(BaseAgent):
                 name="coordination",
                 description="Coordinate multiple agents",
                 required_tools=[],
-                optional_tools=["read", "write"]
+                optional_tools=["read", "write"],
             ),
             AgentCapability(
                 name="task_delegation",
                 description="Delegate tasks to appropriate agents",
                 required_tools=[],
-                optional_tools=[]
+                optional_tools=[],
             ),
             AgentCapability(
                 name="workflow_management",
                 description="Manage complex workflows",
                 required_tools=[],
-                optional_tools=["write"]
+                optional_tools=["write"],
             ),
             AgentCapability(
                 name="parallel_execution",
                 description="Execute tasks in parallel",
                 required_tools=[],
-                optional_tools=[]
-            )
+                optional_tools=[],
+            ),
         ]
 
         for capability in capabilities:
@@ -82,16 +83,11 @@ class OrchestratorAgent(BaseAgent):
         """Check if subagent is registered."""
         return name in self._subagents
 
-    def get_subagent(self, name: str) -> Optional[BaseAgent]:
+    def get_subagent(self, name: str) -> BaseAgent | None:
         """Get a registered subagent."""
         return self._subagents.get(name)
 
-    def delegate_task(
-        self,
-        agent_name: str,
-        task: str,
-        context: AgentContext
-    ) -> AgentResult:
+    def delegate_task(self, agent_name: str, task: str, context: AgentContext) -> AgentResult:
         """
         Delegate a task to a subagent.
 
@@ -104,11 +100,7 @@ class OrchestratorAgent(BaseAgent):
             Result from subagent
         """
         if agent_name not in self._subagents:
-            return AgentResult(
-                success=False,
-                output="",
-                error=f"Unknown agent: {agent_name}"
-            )
+            return AgentResult(success=False, output="", error=f"Unknown agent: {agent_name}")
 
         agent = self._subagents[agent_name]
 
@@ -119,11 +111,7 @@ class OrchestratorAgent(BaseAgent):
         return agent.execute(task, child_context)
 
     def delegate_with_retry(
-        self,
-        agent_name: str,
-        task: str,
-        context: AgentContext,
-        max_retries: int = 3
+        self, agent_name: str, task: str, context: AgentContext, max_retries: int = 3
     ) -> AgentResult:
         """
         Delegate task with retry on failure.
@@ -139,7 +127,7 @@ class OrchestratorAgent(BaseAgent):
         """
         last_result = None
 
-        for attempt in range(max_retries):
+        for _attempt in range(max_retries):
             result = self.delegate_task(agent_name, task, context)
 
             if result.success:
@@ -147,17 +135,11 @@ class OrchestratorAgent(BaseAgent):
 
             last_result = result
 
-        return last_result or AgentResult(
-            success=False,
-            output="",
-            error="Max retries exceeded"
-        )
+        return last_result or AgentResult(success=False, output="", error="Max retries exceeded")
 
     def coordinate_workflow(
-        self,
-        workflow: Dict[str, Any],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, workflow: dict[str, Any], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Coordinate a multi-step workflow.
 
@@ -190,15 +172,12 @@ class OrchestratorAgent(BaseAgent):
             "success": steps_completed == len(steps),
             "steps_completed": steps_completed,
             "total_steps": len(steps),
-            "results": results
+            "results": results,
         }
 
     def execute_parallel(
-        self,
-        tasks: List[Dict[str, Any]],
-        context: AgentContext,
-        max_workers: int = 4
-    ) -> List[AgentResult]:
+        self, tasks: list[dict[str, Any]], context: AgentContext, max_workers: int = 4
+    ) -> list[AgentResult]:
         """
         Execute multiple tasks in parallel.
 
@@ -219,12 +198,7 @@ class OrchestratorAgent(BaseAgent):
                 agent_name = task.get("agent")
                 task_desc = task.get("task")
 
-                future = executor.submit(
-                    self.delegate_task,
-                    agent_name,
-                    task_desc,
-                    context
-                )
+                future = executor.submit(self.delegate_task, agent_name, task_desc, context)
                 futures[future] = task
 
             # Collect results
@@ -235,10 +209,8 @@ class OrchestratorAgent(BaseAgent):
         return results
 
     def execute_sequential(
-        self,
-        tasks: List[Dict[str, Any]],
-        context: AgentContext
-    ) -> List[AgentResult]:
+        self, tasks: list[dict[str, Any]], context: AgentContext
+    ) -> list[AgentResult]:
         """
         Execute tasks sequentially respecting dependencies.
 
@@ -263,8 +235,10 @@ class OrchestratorAgent(BaseAgent):
 
                 # Check dependencies
                 depends_on = task.get("depends_on", [])
-                if all(dep in completed_tasks or self._is_task_by_agent(dep, completed_tasks, tasks)
-                       for dep in depends_on):
+                if all(
+                    dep in completed_tasks or self._is_task_by_agent(dep, completed_tasks, tasks)
+                    for dep in depends_on
+                ):
 
                     # Execute task
                     agent_name = task.get("agent")
@@ -286,7 +260,7 @@ class OrchestratorAgent(BaseAgent):
 
         return results
 
-    def _is_task_by_agent(self, agent_or_index: Any, completed: set, tasks: List) -> bool:
+    def _is_task_by_agent(self, agent_or_index: Any, completed: set, tasks: list) -> bool:
         """Check if a dependency is satisfied."""
         # Handle both agent names and task indices
         if isinstance(agent_or_index, int):
@@ -299,10 +273,8 @@ class OrchestratorAgent(BaseAgent):
         return False
 
     def select_agent_for_task(
-        self,
-        task_type: str,
-        required_capabilities: Optional[List[str]] = None
-    ) -> Optional[str]:
+        self, task_type: str, required_capabilities: list[str] | None = None
+    ) -> str | None:
         """
         Select the best agent for a task.
 
@@ -325,10 +297,7 @@ class OrchestratorAgent(BaseAgent):
         # Return first match (could be enhanced with scoring)
         return candidates[0] if candidates else None
 
-    def aggregate_results(
-        self,
-        results: List[AgentResult]
-    ) -> Dict[str, Any]:
+    def aggregate_results(self, results: list[AgentResult]) -> dict[str, Any]:
         """
         Aggregate results from multiple agents.
 
@@ -347,13 +316,10 @@ class OrchestratorAgent(BaseAgent):
             "successful": successful,
             "failed": failed,
             "success_rate": successful / total if total > 0 else 0.0,
-            "results": results
+            "results": results,
         }
 
-    def create_workflow_from_plan(
-        self,
-        plan: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def create_workflow_from_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
         """
         Create a workflow from a work plan.
 
@@ -374,17 +340,11 @@ class OrchestratorAgent(BaseAgent):
             # Map task type to agent
             agent_name = self._map_task_type_to_agent(task_type)
 
-            steps.append({
-                "id": task_id,
-                "agent": agent_name,
-                "task": description,
-                "depends_on": depends_on
-            })
+            steps.append(
+                {"id": task_id, "agent": agent_name, "task": description, "depends_on": depends_on}
+            )
 
-        return {
-            "goal": plan.get("goal", ""),
-            "steps": steps
-        }
+        return {"goal": plan.get("goal", ""), "steps": steps}
 
     def _map_task_type_to_agent(self, task_type: str) -> str:
         """Map task type to agent name."""
@@ -394,7 +354,7 @@ class OrchestratorAgent(BaseAgent):
             "implement": "implement",
             "review": "review",
             "code_review": "review",
-            "implementation": "implement"
+            "implementation": "implement",
         }
         return mapping.get(task_type.lower(), "default")
 
@@ -411,7 +371,7 @@ class OrchestratorAgent(BaseAgent):
             "total_steps": total_steps,
             "completed": 0,
             "started_at": datetime.now().isoformat(),
-            "status": "running"
+            "status": "running",
         }
 
     def update_progress(self, workflow_id: str, completed: int) -> None:
@@ -426,7 +386,7 @@ class OrchestratorAgent(BaseAgent):
             self._workflows[workflow_id]["completed"] = completed
             self._workflows[workflow_id]["updated_at"] = datetime.now().isoformat()
 
-    def get_workflow_status(self, workflow_id: str) -> Dict[str, Any]:
+    def get_workflow_status(self, workflow_id: str) -> dict[str, Any]:
         """
         Get workflow status.
 
@@ -463,7 +423,7 @@ class OrchestratorAgent(BaseAgent):
             steps = []
 
             # Look for numbered steps
-            step_pattern = r'\d+\.\s*(.+?)(?=\n\d+\.|\Z)'
+            step_pattern = r"\d+\.\s*(.+?)(?=\n\d+\.|\Z)"
             matches = re.findall(step_pattern, prompt, re.DOTALL)
 
             for match in matches:
@@ -481,17 +441,11 @@ class OrchestratorAgent(BaseAgent):
                     agent_name = "review"
 
                 if agent_name in self._subagents:
-                    steps.append({
-                        "agent": agent_name,
-                        "task": step_text
-                    })
+                    steps.append({"agent": agent_name, "task": step_text})
 
             # Execute workflow
             if steps:
-                workflow_result = self.coordinate_workflow(
-                    {"steps": steps},
-                    context
-                )
+                workflow_result = self.coordinate_workflow({"steps": steps}, context)
 
                 return AgentResult(
                     success=workflow_result["success"],
@@ -499,19 +453,13 @@ class OrchestratorAgent(BaseAgent):
                     metadata={
                         "workflow_completed": workflow_result["success"],
                         "steps_completed": workflow_result["steps_completed"],
-                        "total_steps": workflow_result["total_steps"]
-                    }
+                        "total_steps": workflow_result["total_steps"],
+                    },
                 )
             else:
                 return AgentResult(
-                    success=False,
-                    output="",
-                    error="No valid workflow steps identified"
+                    success=False, output="", error="No valid workflow steps identified"
                 )
 
         except Exception as e:
-            return AgentResult(
-                success=False,
-                output="",
-                error=str(e)
-            )
+            return AgentResult(success=False, output="", error=str(e))

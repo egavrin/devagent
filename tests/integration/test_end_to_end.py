@@ -4,8 +4,7 @@ This module tests complete workflows from user query to final output.
 """
 
 import pytest
-import json
-from pathlib import Path
+
 from .conftest import IntegrationTest
 
 
@@ -18,7 +17,7 @@ class TestWorkPlanningWorkflow(IntegrationTest):
         # Create a work plan
         result = devagent_cli(
             ["plan", "create", "Add logging system", "--context", "Add structured logging"],
-            cwd=test_project
+            cwd=test_project,
         )
         self.assert_command_success(result)
         assert "Created work plan" in result.stdout
@@ -31,15 +30,12 @@ class TestWorkPlanningWorkflow(IntegrationTest):
     def test_plan_task_execution(self, test_project, devagent_cli, mock_llm_env):
         """Test executing tasks from a plan."""
         # Create plan
-        result = devagent_cli(
-            ["plan", "create", "Refactor calculator"],
-            cwd=test_project
-        )
+        result = devagent_cli(["plan", "create", "Refactor calculator"], cwd=test_project)
         self.assert_command_success(result)
 
         # Extract plan ID from output
         plan_id = None
-        for line in result.stdout.split('\n'):
+        for line in result.stdout.split("\n"):
             if "ID:" in line:
                 plan_id = line.split("ID:")[1].strip()
                 break
@@ -57,11 +53,12 @@ class TestCoverageEnforcement(IntegrationTest):
 
     def test_coverage_gate_passes(self, test_project):
         """Test that coverage gate passes with sufficient coverage."""
-        from ai_dev_agent.testing.coverage_gate import CoverageGate
-
         # Change to test project
         import os
-        original_dir = os.getcwd()
+
+        from ai_dev_agent.testing.coverage_gate import CoverageGate
+
+        original_dir = str(Path.cwd())
         try:
             os.chdir(test_project)
 
@@ -77,8 +74,9 @@ class TestCoverageEnforcement(IntegrationTest):
 
     def test_incremental_coverage(self, test_project):
         """Test incremental coverage calculation."""
-        from ai_dev_agent.testing.coverage_gate import CoverageGate
         import subprocess
+
+        from ai_dev_agent.testing.coverage_gate import CoverageGate
 
         # Make a change to a file
         utils_file = test_project / "src" / "utils.py"
@@ -90,7 +88,8 @@ class TestCoverageEnforcement(IntegrationTest):
 
         # Calculate incremental coverage
         import os
-        original_dir = os.getcwd()
+
+        original_dir = str(Path.cwd())
         try:
             os.chdir(test_project)
             gate = CoverageGate()
@@ -232,29 +231,21 @@ class TestFileOperations(IntegrationTest):
         assert (test_project / new_file).exists()
 
         # Edit file
-        ops.edit_file(
-            new_file,
-            old_content="return True",
-            new_content="return False"
-        )
+        ops.edit_file(new_file, old_content="return True", new_content="return False")
         updated = ops.read_file(new_file)
         assert "return False" in updated
 
     def test_grep_and_glob(self, test_project):
         """Test grep and glob operations."""
-        from ai_dev_agent.tools.grep import grep_search
         from ai_dev_agent.tools.glob import glob_files
+        from ai_dev_agent.tools.grep import grep_search
 
         # Find Python files
         py_files = glob_files("**/*.py", root_dir=str(test_project))
         assert len(py_files) > 0
 
         # Search for pattern
-        results = grep_search(
-            pattern="def greet",
-            path=str(test_project),
-            file_pattern="*.py"
-        )
+        results = grep_search(pattern="def greet", path=str(test_project), file_pattern="*.py")
         assert len(results) > 0
 
 
@@ -287,6 +278,7 @@ class TestPerformance(IntegrationTest):
     def test_concurrent_operations(self, test_project):
         """Test concurrent file operations."""
         import concurrent.futures
+
         from ai_dev_agent.tools.file_operations import FileOperations
 
         ops = FileOperations(workspace=str(test_project))
@@ -330,9 +322,7 @@ class TestErrorHandling(IntegrationTest):
 
         # Try to commit with no changes
         result = subprocess.run(
-            ["git", "commit", "-m", "Empty commit"],
-            cwd=test_project,
-            capture_output=True
+            ["git", "commit", "-m", "Empty commit"], cwd=test_project, capture_output=True
         )
 
         # Should fail gracefully

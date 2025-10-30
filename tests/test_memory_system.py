@@ -1,14 +1,20 @@
 """Tests for the memory system (ReasoningBank pattern)."""
 
-import json
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-from ai_dev_agent.memory import Memory, Strategy, Lesson, MemoryDistiller, MemoryStore, EmbeddingGenerator
+from ai_dev_agent.memory import (
+    EmbeddingGenerator,
+    Lesson,
+    Memory,
+    MemoryDistiller,
+    MemoryStore,
+    Strategy,
+)
 from ai_dev_agent.providers.llm.base import Message
 
 
@@ -21,7 +27,7 @@ class TestMemoryDistiller:
             task_type="debugging",
             title="Fix authentication error",
             query="The login is failing with a TypeError",
-            outcome="success"
+            outcome="success",
         )
 
         assert memory.task_type == "debugging"
@@ -35,7 +41,7 @@ class TestMemoryDistiller:
             description="Check for null values in auth handler",
             context="When dealing with TypeErrors in authentication",
             steps=["Locate auth handler", "Add null check", "Test login flow"],
-            tools_used=["read", "write", "run"]
+            tools_used=["read", "write", "run"],
         )
 
         assert strategy.description == "Check for null values in auth handler"
@@ -48,7 +54,7 @@ class TestMemoryDistiller:
             mistake="Assumed user object always exists",
             context="In authentication middleware",
             correction="Always check if user is None before accessing properties",
-            severity="major"
+            severity="major",
         )
 
         assert lesson.mistake == "Assumed user object always exists"
@@ -60,14 +66,17 @@ class TestMemoryDistiller:
 
         messages = [
             Message(role="user", content="Fix the bug in the authentication system"),
-            Message(role="assistant", content="I'll fix the authentication bug. Let me first check the auth handler."),
-            Message(role="assistant", content="Found the issue - there's a missing null check. Fixed it successfully."),
+            Message(
+                role="assistant",
+                content="I'll fix the authentication bug. Let me first check the auth handler.",
+            ),
+            Message(
+                role="assistant",
+                content="Found the issue - there's a missing null check. Fixed it successfully.",
+            ),
         ]
 
-        memory = distiller.distill_from_session(
-            session_id="test-session",
-            messages=messages
-        )
+        memory = distiller.distill_from_session(session_id="test-session", messages=messages)
 
         assert memory.task_type == "debugging"
         assert "authentication" in memory.query.lower()
@@ -120,7 +129,7 @@ class TestMemoryDistiller:
             lessons=[],
             outcome="success",
             usage_count=5,
-            effectiveness_score=0.8
+            effectiveness_score=0.8,
         )
 
         memory2 = Memory(
@@ -130,7 +139,7 @@ class TestMemoryDistiller:
             strategies=[Strategy("Validate input", "Login flow", [], [])],
             lessons=[Lesson("Check user exists", "Auth", "Add null check", "major")],
             outcome="partial",
-            usage_count=2  # Set usage count for proper testing
+            usage_count=2,  # Set usage count for proper testing
         )
 
         merged = distiller.merge_similar_memories(memory1, memory2)
@@ -175,11 +184,7 @@ class TestEmbeddingGenerator:
         """Test batch embedding generation."""
         generator = EmbeddingGenerator(method="tfidf")
 
-        texts = [
-            "Fix authentication error",
-            "Debug login system",
-            "Refactor code structure"
-        ]
+        texts = ["Fix authentication error", "Debug login system", "Refactor code structure"]
 
         embeddings = generator.generate_embeddings(texts)
 
@@ -246,7 +251,7 @@ class TestMemoryStore:
                 query="Authentication fails",
                 strategies=[],
                 lessons=[],
-                outcome="success"
+                outcome="success",
             )
 
             # Add memory
@@ -271,7 +276,7 @@ class TestMemoryStore:
                 task_type="debugging",
                 title="Test memory",
                 query="Test query",
-                effectiveness_score=0.5
+                effectiveness_score=0.5,
             )
 
             memory_id = store.add_memory(memory)
@@ -299,14 +304,14 @@ class TestMemoryStore:
                 title="Good memory",
                 query="Good",
                 effectiveness_score=0.8,
-                usage_count=5
+                usage_count=5,
             )
             bad_memory = Memory(
                 task_type="debugging",
                 title="Bad memory",
                 query="Bad",
                 effectiveness_score=0.1,
-                usage_count=5
+                usage_count=5,
             )
 
             good_id = store.add_memory(good_memory)
@@ -333,7 +338,7 @@ class TestMemoryStore:
                 query="Add new feature",
                 strategies=[Strategy("Plan first", "Always", ["Step 1"], [])],
                 lessons=[Lesson("Don't rush", "Development", "Take time", "minor")],
-                outcome="success"
+                outcome="success",
             )
             memory_id = store1.add_memory(memory)
             store1.save_store()
@@ -360,7 +365,7 @@ class TestMemoryStore:
                     title=f"Memory {i}",
                     query=f"Query {i}",
                     effectiveness_score=0.5 + i * 0.1,
-                    usage_count=i
+                    usage_count=i,
                 )
                 store.add_memory(memory)
 
@@ -382,7 +387,7 @@ class TestMemoryStore:
                 task_type="debugging",
                 title="Fix auth",
                 query="Authentication error",
-                context_hash="abc123"
+                context_hash="abc123",
             )
             id1 = store.add_memory(memory1)
 
@@ -391,7 +396,7 @@ class TestMemoryStore:
                 task_type="debugging",
                 title="Fix auth again",
                 query="Authentication error",
-                context_hash="abc123"
+                context_hash="abc123",
             )
             id2 = store.add_memory(memory2)
 
@@ -413,7 +418,7 @@ class TestMemoryStore:
                     task_type="debugging",
                     title=f"Memory {i}",
                     query=f"Query {i}",
-                    effectiveness_score=i * 0.2  # Later ones are better
+                    effectiveness_score=i * 0.2,  # Later ones are better
                 )
                 store.add_memory(memory)
 
@@ -441,9 +446,18 @@ class TestMemoryIntegration:
             # Simulate a debugging session
             messages = [
                 Message(role="user", content="Fix the TypeError in user authentication"),
-                Message(role="assistant", content="I'll fix the TypeError. Let me check the auth.py file first."),
-                Message(role="assistant", content="Found it - user object can be None. Adding null check."),
-                Message(role="assistant", content="Fixed! The authentication now handles null users correctly."),
+                Message(
+                    role="assistant",
+                    content="I'll fix the TypeError. Let me check the auth.py file first.",
+                ),
+                Message(
+                    role="assistant",
+                    content="Found it - user object can be None. Adding null check.",
+                ),
+                Message(
+                    role="assistant",
+                    content="Fixed! The authentication now handles null users correctly.",
+                ),
             ]
 
             # Distill memory
@@ -476,7 +490,7 @@ class TestMemoryIntegration:
             assert loaded.effectiveness_score > 0
             assert loaded.usage_count == 1
 
-    @patch('ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE", True)
     def test_context_enhancer_integration(self):
         """Test memory integration with context enhancer."""
         from ai_dev_agent.cli.context_enhancer import ContextEnhancer
@@ -492,7 +506,7 @@ class TestMemoryIntegration:
             settings.repomap_debug_stdout = False
 
             # Mock the MemoryStore initialization to use our test path
-            with patch('ai_dev_agent.cli.context_enhancer.MemoryStore') as MockStore:
+            with patch("ai_dev_agent.cli.context_enhancer.MemoryStore") as MockStore:
                 mock_store = MemoryStore(store_path=store_path, auto_save=False)
                 MockStore.return_value = mock_store
 
@@ -504,26 +518,29 @@ class TestMemoryIntegration:
                     task_type="debugging",
                     title="✓ Fix auth TypeError",
                     query="Fix TypeError in authentication",
-                    strategies=[Strategy(
-                        description="Check for null user objects",
-                        context="Authentication middleware",
-                        steps=["Check user exists", "Add null guard"],
-                        tools_used=["read", "write"]
-                    )],
-                    lessons=[Lesson(
-                        mistake="Assumed user always exists",
-                        context="Auth handler",
-                        correction="Always check user before accessing",
-                        severity="major"
-                    )],
-                    outcome="success"
+                    strategies=[
+                        Strategy(
+                            description="Check for null user objects",
+                            context="Authentication middleware",
+                            steps=["Check user exists", "Add null guard"],
+                            tools_used=["read", "write"],
+                        )
+                    ],
+                    lessons=[
+                        Lesson(
+                            mistake="Assumed user always exists",
+                            context="Auth handler",
+                            correction="Always check user before accessing",
+                            severity="major",
+                        )
+                    ],
+                    outcome="success",
                 )
                 mock_store.add_memory(memory)
 
                 # Test memory retrieval
                 memory_messages, memory_ids = enhancer.get_memory_context(
-                    query="Authentication error TypeError",
-                    limit=5
+                    query="Authentication error TypeError", limit=5
                 )
 
                 assert memory_messages is not None
@@ -540,9 +557,7 @@ class TestMemoryIntegration:
 
                 # Test effectiveness tracking
                 enhancer.track_memory_effectiveness(
-                    memory_ids=memory_ids,
-                    success=True,
-                    feedback="Very helpful"
+                    memory_ids=memory_ids, success=True, feedback="Very helpful"
                 )
 
                 updated = mock_store.get_memory(memory_ids[0])

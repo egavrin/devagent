@@ -1,14 +1,13 @@
 """Test script for unified agent mode."""
-import os
+
 import sys
 from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ai_dev_agent.core.utils.config import Settings
-from ai_dev_agent.session.context_synthesis import ContextSynthesizer
 from ai_dev_agent.providers.llm.base import Message
+from ai_dev_agent.session.context_synthesis import ContextSynthesizer
 from ai_dev_agent.tools import READ
 
 
@@ -19,11 +18,15 @@ def test_context_synthesis():
     # Create sample history
     history = [
         Message(role="user", content="Find the implementation of the search function"),
-        Message(role="assistant", content="I'll search for the search function implementation.", tool_calls=[
-            {"function": {"name": READ, "arguments": {"file_path": "/src/search.py"}}}
-        ]),
+        Message(
+            role="assistant",
+            content="I'll search for the search function implementation.",
+            tool_calls=[{"function": {"name": READ, "arguments": {"file_path": "/src/search.py"}}}],
+        ),
         Message(role="tool", content="Found search function at line 42"),
-        Message(role="assistant", content="I found the search function in /src/search.py at line 42.")
+        Message(
+            role="assistant", content="I found the search function in /src/search.py at line 42."
+        ),
     ]
 
     # Test synthesis

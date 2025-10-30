@@ -11,11 +11,11 @@ import logging
 import math
 import random
 import threading
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -23,18 +23,20 @@ logger = logging.getLogger(__name__)
 
 class ABTestStatus(str, Enum):
     """Status of an A/B test."""
-    DRAFT = "draft"              # Test created but not started
-    RUNNING = "running"          # Test is active
-    PAUSED = "paused"            # Test temporarily paused
-    COMPLETED = "completed"      # Test finished with conclusion
-    CANCELLED = "cancelled"      # Test cancelled without conclusion
+
+    DRAFT = "draft"  # Test created but not started
+    RUNNING = "running"  # Test is active
+    PAUSED = "paused"  # Test temporarily paused
+    COMPLETED = "completed"  # Test finished with conclusion
+    CANCELLED = "cancelled"  # Test cancelled without conclusion
 
 
 class Winner(str, Enum):
     """Winner of an A/B test."""
+
     VARIANT_A = "variant_a"
     VARIANT_B = "variant_b"
-    NO_WINNER = "no_winner"      # No statistically significant difference
+    NO_WINNER = "no_winner"  # No statistically significant difference
 
 
 @dataclass
@@ -42,16 +44,16 @@ class InstructionVariant:
     """A variant in an A/B test."""
 
     variant_id: str
-    instruction_id: str          # ID of the instruction being tested
-    content: str                 # Instruction content
+    instruction_id: str  # ID of the instruction being tested
+    content: str  # Instruction content
     priority: int = 5
-    tags: Set[str] = field(default_factory=set)
+    tags: set[str] = field(default_factory=set)
 
     # Performance tracking
     uses: int = 0
     successes: int = 0
     failures: int = 0
-    total_time_ms: float = 0.0   # Total execution time
+    total_time_ms: float = 0.0  # Total execution time
 
     @property
     def success_rate(self) -> float:
@@ -76,14 +78,14 @@ class InstructionVariant:
             self.failures += 1
         self.total_time_ms += time_ms
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         data = asdict(self)
         data["tags"] = list(self.tags)
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> InstructionVariant:
+    def from_dict(cls, data: dict[str, Any]) -> InstructionVariant:
         """Create from dictionary."""
         if "tags" in data and isinstance(data["tags"], list):
             data["tags"] = set(data["tags"])
@@ -103,9 +105,9 @@ class ABTest:
     variant_b: InstructionVariant = field(default_factory=lambda: InstructionVariant("", "", ""))
 
     # Test configuration
-    target_sample_size: int = 100      # Minimum samples per variant
-    confidence_level: float = 0.95     # Statistical confidence (95%)
-    min_effect_size: float = 0.05      # Minimum detectable effect (5%)
+    target_sample_size: int = 100  # Minimum samples per variant
+    confidence_level: float = 0.95  # Statistical confidence (95%)
+    min_effect_size: float = 0.05  # Minimum detectable effect (5%)
 
     # Status
     status: ABTestStatus = ABTestStatus.DRAFT
@@ -113,12 +115,12 @@ class ABTest:
 
     # Metadata
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
+    started_at: str | None = None
+    completed_at: str | None = None
 
     # Statistics
-    p_value: Optional[float] = None
-    confidence_interval: Optional[Tuple[float, float]] = None
+    p_value: float | None = None
+    confidence_interval: tuple[float, float] | None = None
 
     @property
     def total_uses(self) -> int:
@@ -128,10 +130,12 @@ class ABTest:
     @property
     def is_complete(self) -> bool:
         """Check if test has enough samples."""
-        return (self.variant_a.uses >= self.target_sample_size and
-                self.variant_b.uses >= self.target_sample_size)
+        return (
+            self.variant_a.uses >= self.target_sample_size
+            and self.variant_b.uses >= self.target_sample_size
+        )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         data = asdict(self)
         data["status"] = self.status.value
@@ -141,7 +145,7 @@ class ABTest:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> ABTest:
+    def from_dict(cls, data: dict[str, Any]) -> ABTest:
         """Create from dictionary."""
         if "status" in data and isinstance(data["status"], str):
             data["status"] = ABTestStatus(data["status"])
@@ -159,11 +163,7 @@ class ABTestManager:
 
     DEFAULT_STORAGE_PATH = Path.home() / ".devagent" / "dynamic_instructions" / "ab_tests.json"
 
-    def __init__(
-        self,
-        storage_path: Optional[Path] = None,
-        auto_conclude: bool = True
-    ):
+    def __init__(self, storage_path: Path | None = None, auto_conclude: bool = True):
         """Initialize the A/B test manager.
 
         Args:
@@ -177,8 +177,8 @@ class ABTestManager:
         self._lock = threading.RLock()
 
         # In-memory storage
-        self._tests: Dict[str, ABTest] = {}  # test_id -> test
-        self._active_tests: Dict[str, str] = {}  # instruction_id -> test_id
+        self._tests: dict[str, ABTest] = {}  # test_id -> test
+        self._active_tests: dict[str, str] = {}  # instruction_id -> test_id
 
         # Load existing tests
         self._load_tests()
@@ -189,7 +189,7 @@ class ABTestManager:
             return
 
         try:
-            with open(self.storage_path, "r") as f:
+            with self.storage_path.open() as f:
                 data = json.load(f)
                 for test_data in data.get("tests", []):
                     test = ABTest.from_dict(test_data)
@@ -208,11 +208,15 @@ class ABTestManager:
         """Save tests to storage."""
         try:
             self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.storage_path, "w") as f:
-                json.dump({
-                    "tests": [test.to_dict() for test in self._tests.values()],
-                    "saved_at": datetime.now().isoformat()
-                }, f, indent=2)
+            with self.storage_path.open("w") as f:
+                json.dump(
+                    {
+                        "tests": [test.to_dict() for test in self._tests.values()],
+                        "saved_at": datetime.now().isoformat(),
+                    },
+                    f,
+                    indent=2,
+                )
         except Exception as e:
             logger.error(f"Failed to save A/B tests: {e}")
 
@@ -226,7 +230,7 @@ class ABTestManager:
         priority_a: int = 5,
         priority_b: int = 5,
         target_sample_size: int = 100,
-        confidence_level: float = 0.95
+        confidence_level: float = 0.95,
     ) -> ABTest:
         """Create a new A/B test.
 
@@ -249,14 +253,14 @@ class ABTestManager:
                 variant_id=f"{instruction_id}_a",
                 instruction_id=instruction_id,
                 content=content_a,
-                priority=priority_a
+                priority=priority_a,
             )
 
             variant_b = InstructionVariant(
                 variant_id=f"{instruction_id}_b",
                 instruction_id=instruction_id,
                 content=content_b,
-                priority=priority_b
+                priority=priority_b,
             )
 
             test = ABTest(
@@ -266,7 +270,7 @@ class ABTestManager:
                 variant_b=variant_b,
                 target_sample_size=target_sample_size,
                 confidence_level=confidence_level,
-                status=ABTestStatus.DRAFT
+                status=ABTestStatus.DRAFT,
             )
 
             self._tests[test.test_id] = test
@@ -306,7 +310,7 @@ class ABTestManager:
             logger.info(f"Started A/B test: {test.name}")
             return True
 
-    def get_variant_to_use(self, instruction_id: str) -> Optional[Tuple[str, InstructionVariant]]:
+    def get_variant_to_use(self, instruction_id: str) -> tuple[str, InstructionVariant] | None:
         """Get which variant to use for an instruction.
 
         Args:
@@ -333,11 +337,7 @@ class ABTestManager:
                 return ("variant_b", test.variant_b)
 
     def record_result(
-        self,
-        instruction_id: str,
-        variant_id: str,
-        success: bool,
-        time_ms: float = 0.0
+        self, instruction_id: str, variant_id: str, success: bool, time_ms: float = 0.0
     ) -> None:
         """Record a result for a variant.
 
@@ -385,8 +385,10 @@ class ABTestManager:
 
             # Perform two-proportion z-test
             p_value = self._two_proportion_z_test(
-                test.variant_a.successes, test.variant_a.uses,
-                test.variant_b.successes, test.variant_b.uses
+                test.variant_a.successes,
+                test.variant_a.uses,
+                test.variant_b.successes,
+                test.variant_b.uses,
             )
 
             test.p_value = p_value
@@ -413,15 +415,13 @@ class ABTestManager:
             if inst_id in self._active_tests:
                 del self._active_tests[inst_id]
 
-            logger.info(f"Concluded A/B test '{test.name}': winner={test.winner.value}, p={p_value:.4f}")
+            logger.info(
+                f"Concluded A/B test '{test.name}': winner={test.winner.value}, p={p_value:.4f}"
+            )
             self._save_tests()
 
     def _two_proportion_z_test(
-        self,
-        successes_a: int,
-        total_a: int,
-        successes_b: int,
-        total_b: int
+        self, successes_a: int, total_a: int, successes_b: int, total_b: int
     ) -> float:
         """Perform two-proportion z-test.
 
@@ -444,7 +444,7 @@ class ABTestManager:
         p_pool = (successes_a + successes_b) / (total_a + total_b)
 
         # Standard error
-        se = math.sqrt(p_pool * (1 - p_pool) * (1/total_a + 1/total_b))
+        se = math.sqrt(p_pool * (1 - p_pool) * (1 / total_a + 1 / total_b))
 
         if se == 0:
             return 1.0
@@ -471,7 +471,7 @@ class ABTestManager:
         # Using error function approximation
         return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
 
-    def get_test(self, test_id: str) -> Optional[ABTest]:
+    def get_test(self, test_id: str) -> ABTest | None:
         """Get a test by ID.
 
         Args:
@@ -483,10 +483,7 @@ class ABTestManager:
         with self._lock:
             return self._tests.get(test_id)
 
-    def get_all_tests(
-        self,
-        status: Optional[ABTestStatus] = None
-    ) -> List[ABTest]:
+    def get_all_tests(self, status: ABTestStatus | None = None) -> list[ABTest]:
         """Get all tests with optional status filter.
 
         Args:
@@ -532,7 +529,7 @@ class ABTestManager:
             logger.info(f"Cancelled A/B test: {test.name}")
             return True
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get statistics about A/B tests.
 
         Returns:
@@ -551,9 +548,14 @@ class ABTestManager:
                     winner = test.winner.value
                     by_winner[winner] = by_winner.get(winner, 0) + 1
 
-            completed_tests = [t for t in self._tests.values() if t.status == ABTestStatus.COMPLETED]
-            avg_p_value = (sum(t.p_value for t in completed_tests if t.p_value) / len(completed_tests)
-                          if completed_tests else 0.0)
+            completed_tests = [
+                t for t in self._tests.values() if t.status == ABTestStatus.COMPLETED
+            ]
+            avg_p_value = (
+                sum(t.p_value for t in completed_tests if t.p_value) / len(completed_tests)
+                if completed_tests
+                else 0.0
+            )
 
             return {
                 "total_tests": total_tests,
@@ -561,5 +563,5 @@ class ABTestManager:
                 "by_status": by_status,
                 "by_winner": by_winner,
                 "average_p_value": avg_p_value,
-                "completed_tests": len(completed_tests)
+                "completed_tests": len(completed_tests),
             }

@@ -1,18 +1,16 @@
 """Tests for Agent-Planning System Integration."""
-import pytest
-from unittest.mock import Mock, MagicMock, patch
-from datetime import datetime
 
+from unittest.mock import patch
+
+import pytest
+
+from ai_dev_agent.agents.base import AgentContext, AgentResult
 from ai_dev_agent.agents.integration.planning_integration import (
+    AutomatedWorkflow,
     PlanningIntegration,
     TaskAgentMapper,
-    AutomatedWorkflow
 )
-from ai_dev_agent.agents.work_planner.models import WorkPlan, Task, TaskStatus, Priority
-from ai_dev_agent.agents.specialized import (
-    DesignAgent, TestingAgent, ImplementationAgent, ReviewAgent, OrchestratorAgent
-)
-from ai_dev_agent.agents.base import AgentContext, AgentResult
+from ai_dev_agent.agents.work_planner.models import Task, TaskStatus, WorkPlan
 
 
 class TestTaskAgentMapper:
@@ -90,7 +88,7 @@ class TestPlanningIntegration:
             tasks=[
                 Task(title="Design API", tags=["design"]),
                 Task(title="Write tests", tags=["test"]),
-            ]
+            ],
         )
 
         integration.load_plan(plan)
@@ -107,7 +105,7 @@ class TestPlanningIntegration:
                 Task(id="1", title="Design", tags=["design"]),
                 Task(id="2", title="Test", tags=["test"], dependencies=["1"]),
                 Task(id="3", title="Implement", tags=["implement"], dependencies=["2"]),
-            ]
+            ],
         )
 
         workflow = integration.convert_plan_to_workflow(plan)
@@ -123,17 +121,12 @@ class TestPlanningIntegration:
         context = AgentContext(session_id="test-exec")
 
         plan = WorkPlan(
-            goal="Simple task",
-            tasks=[Task(id="1", title="Design something", tags=["design"])]
+            goal="Simple task", tasks=[Task(id="1", title="Design something", tags=["design"])]
         )
 
         # Mock the orchestrator
-        with patch.object(integration.orchestrator, 'coordinate_workflow') as mock_coord:
-            mock_coord.return_value = {
-                "success": True,
-                "steps_completed": 1,
-                "total_steps": 1
-            }
+        with patch.object(integration.orchestrator, "coordinate_workflow") as mock_coord:
+            mock_coord.return_value = {"success": True, "steps_completed": 1, "total_steps": 1}
 
             result = integration.execute_plan(plan, context)
 
@@ -224,12 +217,18 @@ class TestAutomatedWorkflow:
             tasks=[
                 Task(id="1", title="Task 1", tags=["design"]),
                 Task(id="2", title="Task 2", tags=["test"], dependencies=["1"]),
-            ]
+            ],
         )
 
         # Mock agent executions
-        with patch('ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute') as mock_design, \
-             patch('ai_dev_agent.agents.specialized.testing_agent.TestingAgent.execute') as mock_test:
+        with (
+            patch(
+                "ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute"
+            ) as mock_design,
+            patch(
+                "ai_dev_agent.agents.specialized.testing_agent.TestingAgent.execute"
+            ) as mock_test,
+        ):
 
             mock_design.return_value = AgentResult(success=True, output="Design done")
             mock_test.return_value = AgentResult(success=True, output="Tests done")
@@ -251,7 +250,9 @@ class TestAutomatedWorkflow:
             ]
         )
 
-        with patch('ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute') as mock_design:
+        with patch(
+            "ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute"
+        ) as mock_design:
             mock_design.return_value = AgentResult(success=False, output="", error="Failed")
 
             result = workflow.execute_plan_automatically(plan, context, stop_on_failure=True)
@@ -271,8 +272,14 @@ class TestAutomatedWorkflow:
             ]
         )
 
-        with patch('ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute') as mock_design, \
-             patch('ai_dev_agent.agents.specialized.review_agent.ReviewAgent.execute') as mock_review:
+        with (
+            patch(
+                "ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute"
+            ) as mock_design,
+            patch(
+                "ai_dev_agent.agents.specialized.review_agent.ReviewAgent.execute"
+            ) as mock_review,
+        ):
 
             mock_design.return_value = AgentResult(success=False, output="", error="Failed")
             mock_review.return_value = AgentResult(success=True, output="Review done")
@@ -292,17 +299,11 @@ class TestAutomatedWorkflow:
         def progress_callback(task_id, status, message):
             progress_updates.append((task_id, status, message))
 
-        plan = WorkPlan(
-            tasks=[Task(id="1", title="Task", tags=["design"])]
-        )
+        plan = WorkPlan(tasks=[Task(id="1", title="Task", tags=["design"])])
 
-        with patch('ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute') as mock:
+        with patch("ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute") as mock:
             mock.return_value = AgentResult(success=True, output="Done")
 
-            workflow.execute_plan_automatically(
-                plan,
-                context,
-                progress_callback=progress_callback
-            )
+            workflow.execute_plan_automatically(plan, context, progress_callback=progress_callback)
 
             assert len(progress_updates) > 0

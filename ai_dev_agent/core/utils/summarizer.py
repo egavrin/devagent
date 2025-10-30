@@ -3,14 +3,18 @@
 Implements recursive summarization and asynchronous workflows to preserve context
 when pruning.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Protocol, Sequence
+from typing import TYPE_CHECKING, Protocol
 
 from ai_dev_agent.providers.llm.base import Message
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 LOGGER = logging.getLogger(__name__)
 
@@ -22,7 +26,7 @@ class LLMSummarizer(Protocol):
         self,
         messages: Sequence[Message],
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Complete a prompt with the LLM."""
         ...
@@ -51,7 +55,7 @@ class SummarizationConfig:
     async_summarization: bool = False
 
     # Model to use for summarization (can be cheaper than main model)
-    summarization_model: Optional[str] = None
+    summarization_model: str | None = None
 
 
 class ConversationSummarizer:
@@ -65,7 +69,7 @@ class ConversationSummarizer:
     def __init__(
         self,
         llm: LLMSummarizer,
-        config: Optional[SummarizationConfig] = None,
+        config: SummarizationConfig | None = None,
     ):
         """Initialize the summarizer.
 
@@ -79,10 +83,10 @@ class ConversationSummarizer:
 
     def summarize_if_needed(
         self,
-        messages: List[Message],
+        messages: list[Message],
         target_tokens: int,
         estimate_tokens_func=None,
-    ) -> List[Message]:
+    ) -> list[Message]:
         """Summarize messages if they exceed token budget.
 
         Args:
@@ -114,10 +118,10 @@ class ConversationSummarizer:
 
     def optimize_context(
         self,
-        messages: List[Message],
+        messages: list[Message],
         target_tokens: int,
         estimate_tokens_func=None,
-    ) -> List[Message]:
+    ) -> list[Message]:
         """Alias for summarize_if_needed to provide consistent interface.
 
         This allows both ConversationSummarizer and TwoTierSummarizer
@@ -135,11 +139,11 @@ class ConversationSummarizer:
 
     def _recursive_summarize(
         self,
-        messages: List[Message],
+        messages: list[Message],
         target_tokens: int,
         estimate_tokens_func,
         depth: int,
-    ) -> List[Message]:
+    ) -> list[Message]:
         """Recursively summarize messages using a split strategy.
 
         Args:
@@ -174,7 +178,7 @@ class ConversationSummarizer:
         )
 
         # Combine summary with recent messages
-        combined = [summary_message] + recent_messages
+        combined = [summary_message, *recent_messages]
 
         # Check if we're within budget
         if estimate_tokens_func(combined) <= target_tokens:
@@ -188,7 +192,7 @@ class ConversationSummarizer:
             depth + 1,
         )
 
-    def _summarize_all(self, messages: List[Message]) -> List[Message]:
+    def _summarize_all(self, messages: list[Message]) -> list[Message]:
         """Create a single summary of all messages.
 
         Args:
@@ -205,7 +209,7 @@ class ConversationSummarizer:
             )
         ]
 
-    def _create_summary(self, messages: List[Message]) -> str:
+    def _create_summary(self, messages: list[Message]) -> str:
         """Create a summary of messages using the LLM.
 
         Args:
@@ -256,7 +260,7 @@ class ConversationSummarizer:
             # Fallback to simple truncation
             return f"[Summary generation failed. Last {len(messages)} messages truncated.]"
 
-    def _format_messages_for_summary(self, messages: List[Message]) -> str:
+    def _format_messages_for_summary(self, messages: list[Message]) -> str:
         """Format messages for summarization prompt.
 
         Args:
@@ -278,7 +282,7 @@ class ConversationSummarizer:
 
         return "\n\n".join(lines)
 
-    def _simple_token_estimate(self, messages: List[Message]) -> int:
+    def _simple_token_estimate(self, messages: list[Message]) -> int:
         """Simple token estimation (4 chars = 1 token).
 
         Args:
@@ -293,7 +297,7 @@ class ConversationSummarizer:
             total += len(content) // 4 + 8  # content + overhead
         return total
 
-    def _get_cache_key(self, messages: List[Message]) -> str:
+    def _get_cache_key(self, messages: list[Message]) -> str:
         """Generate cache key for messages.
 
         Args:
@@ -311,9 +315,9 @@ class ConversationSummarizer:
 
     async def summarize_async(
         self,
-        messages: List[Message],
+        messages: list[Message],
         target_tokens: int,
-    ) -> List[Message]:
+    ) -> list[Message]:
         """Asynchronously summarize messages in a background thread.
 
         Args:
@@ -342,7 +346,7 @@ class TwoTierSummarizer(ConversationSummarizer):
     def __init__(
         self,
         llm: LLMSummarizer,
-        config: Optional[SummarizationConfig] = None,
+        config: SummarizationConfig | None = None,
         prune_threshold: int = 20000,
         protect_recent: int = 40000,
     ):
@@ -360,10 +364,10 @@ class TwoTierSummarizer(ConversationSummarizer):
 
     def optimize_context(
         self,
-        messages: List[Message],
+        messages: list[Message],
         target_tokens: int,
         estimate_tokens_func=None,
-    ) -> List[Message]:
+    ) -> list[Message]:
         """Optimize context with two-tier approach.
 
         Args:
@@ -397,9 +401,9 @@ class TwoTierSummarizer(ConversationSummarizer):
 
     def _prune_old_tool_outputs(
         self,
-        messages: List[Message],
+        messages: list[Message],
         estimate_tokens_func,
-    ) -> List[Message]:
+    ) -> list[Message]:
         """Prune old tool outputs while protecting recent messages.
 
         Args:
@@ -468,8 +472,8 @@ def create_summarizer(
 
 
 __all__ = [
-    "SummarizationConfig",
     "ConversationSummarizer",
+    "SummarizationConfig",
     "TwoTierSummarizer",
     "create_summarizer",
 ]

@@ -1,22 +1,21 @@
 """Tests for tree-sitter query functionality."""
+
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import patch
 
 from ai_dev_agent.core.tree_sitter.queries import (
     AST_QUERY_TEMPLATES,
-    SUMMARY_QUERY_TEMPLATES,
     LANGUAGE_ALIASES,
-    normalise_language,
-    get_ast_query,
-    iter_ast_queries,
-    get_summary_queries,
+    SUMMARY_QUERY_TEMPLATES,
     build_capture_query,
     build_field_capture_query,
+    get_ast_query,
     get_scm_file_path,
+    get_summary_queries,
+    iter_ast_queries,
     load_query_from_file,
+    normalise_language,
 )
 
 

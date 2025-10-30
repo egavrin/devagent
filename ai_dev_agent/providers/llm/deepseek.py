@@ -1,11 +1,14 @@
 """DeepSeek API client implementation."""
+
 from __future__ import annotations
 
-import random  # noqa: F401 - used for monkeypatch compatibility in tests
-
-from typing import Any, Dict, Sequence
+import random  # - used for monkeypatch compatibility in tests
+from typing import TYPE_CHECKING, Any
 
 from .base import HTTPChatLLMClient, Message, RetryConfig
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 
@@ -47,8 +50,8 @@ class DeepSeekClient(HTTPChatLLMClient):
         messages: Sequence[Message],
         temperature: float,
         max_tokens: int | None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": [message.to_payload() for message in messages],
             "temperature": temperature,
@@ -58,4 +61,4 @@ class DeepSeekClient(HTTPChatLLMClient):
         return payload
 
 
-__all__ = ["DeepSeekClient", "DEFAULT_BASE_URL"]
+__all__ = ["DEFAULT_BASE_URL", "DeepSeekClient"]

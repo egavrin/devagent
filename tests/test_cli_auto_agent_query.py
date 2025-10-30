@@ -1,5 +1,7 @@
 """Tests for auto agent CLI orchestration to boost coverage."""
+
 from types import SimpleNamespace
+
 from click.testing import CliRunner
 
 from ai_dev_agent.cli import auto_agent_query
@@ -69,7 +71,9 @@ def test_execute_with_auto_agents_multi_agent_verbose(monkeypatch, capsys):
     monkeypatch.setattr(auto_agent_query, "AutomatedWorkflow", lambda: DummyWorkflow())
     monkeypatch.setattr(auto_agent_query, "DesignAgent", lambda: SimpleNamespace(name="design"))
     monkeypatch.setattr(auto_agent_query, "TestingAgent", lambda: SimpleNamespace(name="test"))
-    monkeypatch.setattr(auto_agent_query, "ImplementationAgent", lambda: SimpleNamespace(name="implement"))
+    monkeypatch.setattr(
+        auto_agent_query, "ImplementationAgent", lambda: SimpleNamespace(name="implement")
+    )
     monkeypatch.setattr(auto_agent_query, "ReviewAgent", lambda: SimpleNamespace(name="review"))
 
     result = auto_agent_query.execute_with_auto_agents("Build analytics service", verbose=True)

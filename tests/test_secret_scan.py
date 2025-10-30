@@ -15,7 +15,7 @@ def test_secret_scan_detects_known_patterns(tmp_path: Path) -> None:
 
 def test_secret_scan_detects_high_entropy(tmp_path: Path) -> None:
     target = tmp_path / "tokens.env"
-    target.write_text("TOKEN=\"ABCD1234EFGH5678IJKL9012MNOPQRST\"\n", encoding="utf-8")
+    target.write_text('TOKEN="ABCD1234EFGH5678IJKL9012MNOPQRST"\n', encoding="utf-8")
     result = scan_for_secrets(tmp_path, ["tokens.env"])
     assert result.count >= 1
     assert any(f.detector == "high_entropy" for f in result.findings)

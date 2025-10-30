@@ -4,17 +4,18 @@ Tests for Work Planning Agent
 Following TDD: These tests are written BEFORE implementation.
 """
 
-import pytest
 import tempfile
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+import pytest
+
 from ai_dev_agent.agents.work_planner import (
+    Priority,
     Task,
-    WorkPlan,
+    TaskStatus,
     WorkPlanningAgent,
     WorkPlanStorage,
-    TaskStatus,
-    Priority,
 )
 
 
@@ -204,9 +205,7 @@ class TestWorkPlanningAgent:
         initial_version = plan.version
 
         # Update plan
-        updated_plan = agent.update_plan(
-            plan.id, feedback="Add more detail"
-        )
+        updated_plan = agent.update_plan(plan.id, feedback="Add more detail")
 
         assert updated_plan.version == initial_version + 1
 
@@ -221,9 +220,7 @@ class TestWorkPlanningAgent:
         plan = agent.create_plan(goal="Implement feature")
 
         task1 = Task(title="Step 1", priority=Priority.HIGH)
-        task2 = Task(
-            title="Step 2", priority=Priority.HIGH, dependencies=[task1.id]
-        )
+        task2 = Task(title="Step 2", priority=Priority.HIGH, dependencies=[task1.id])
         plan.tasks = [task1, task2]
         agent.storage.save_plan(plan)
 

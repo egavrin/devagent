@@ -4,36 +4,28 @@ This module provides real-time instruction updates and A/B testing capabilities
 for continuous learning and optimization during task execution.
 """
 
+from .ab_testing import ABTest, ABTestManager, ABTestStatus, InstructionVariant, Winner
 from .manager import (
     DynamicInstructionManager,
-    InstructionUpdate,
     InstructionSnapshot,
+    InstructionUpdate,
     UpdateConfidence,
+    UpdateSource,
     UpdateType,
-    UpdateSource
-)
-
-from .ab_testing import (
-    ABTestManager,
-    ABTest,
-    InstructionVariant,
-    ABTestStatus,
-    Winner
 )
 
 __all__ = [
-    # Manager
-    "DynamicInstructionManager",
-    "InstructionUpdate",
-    "InstructionSnapshot",
-    "UpdateConfidence",
-    "UpdateType",
-    "UpdateSource",
-
+    "ABTest",
     # A/B Testing
     "ABTestManager",
-    "ABTest",
-    "InstructionVariant",
     "ABTestStatus",
+    # Manager
+    "DynamicInstructionManager",
+    "InstructionSnapshot",
+    "InstructionUpdate",
+    "InstructionVariant",
+    "UpdateConfidence",
+    "UpdateSource",
+    "UpdateType",
     "Winner",
 ]

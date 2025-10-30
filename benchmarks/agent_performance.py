@@ -4,7 +4,6 @@
 Run with: python benchmarks/agent_performance.py
 """
 import time
-from pathlib import Path
 
 from ai_dev_agent.agents.base import AgentContext
 from ai_dev_agent.agents.communication.bus import AgentBus, AgentEvent, EventType
@@ -99,9 +98,7 @@ def benchmark_event_bus():
     # Warm-up
     for i in range(100):
         event = AgentEvent(
-            event_type=EventType.TASK_STARTED,
-            source_agent="test",
-            data={"task_id": i}
+            event_type=EventType.TASK_STARTED, source_agent="test", data={"task_id": i}
         )
         bus.publish(event)
 
@@ -114,9 +111,7 @@ def benchmark_event_bus():
 
     for i in range(iterations):
         event = AgentEvent(
-            event_type=EventType.TASK_STARTED,
-            source_agent="test",
-            data={"task_id": i}
+            event_type=EventType.TASK_STARTED, source_agent="test", data={"task_id": i}
         )
         bus.publish(event)
 
@@ -148,7 +143,7 @@ def benchmark_registry_lookups():
     # By name
     iterations = 10000
     start = time.time()
-    for i in range(iterations):
+    for _i in range(iterations):
         agent = registry.get_agent("design_agent")
         assert agent is not None
     duration = time.time() - start
@@ -159,7 +154,7 @@ def benchmark_registry_lookups():
 
     # By capability
     start = time.time()
-    for i in range(iterations):
+    for _i in range(iterations):
         agents = registry.find_agents_by_capability("technical_design")
         assert len(agents) > 0
     duration = time.time() - start
@@ -188,6 +183,7 @@ def main():
     except Exception as e:
         print(f"\n❌ Benchmark failed: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
 

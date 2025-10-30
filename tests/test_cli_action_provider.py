@@ -1,8 +1,6 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from uuid import uuid4
-
-import pytest
 
 from ai_dev_agent.cli.react.action_provider import LLMActionProvider
 from ai_dev_agent.engine.react.types import TaskSpec
@@ -13,7 +11,7 @@ from ai_dev_agent.session import SessionManager
 @dataclass
 class StubLLMClient:
     model: str = "stub-model"
-    last_tools: Optional[List[Dict[str, Any]]] = None
+    last_tools: Optional[list[dict[str, Any]]] = None
 
     def invoke_tools(self, messages, *, tools, temperature: float = 0.1, **kwargs):
         self.last_tools = list(tools)
@@ -89,8 +87,9 @@ def test_llm_action_provider_stop_iteration():
 
 def test_inject_repomap_update_uses_correct_messages():
     """Test that _inject_repomap_update properly injects repomap messages."""
-    from unittest.mock import Mock, patch
     from pathlib import Path
+    from unittest.mock import Mock, patch
+
     from ai_dev_agent.cli.dynamic_context import DynamicContextTracker
 
     # Create session and provider
@@ -119,23 +118,17 @@ def test_inject_repomap_update_uses_correct_messages():
     provider._ctx_obj = {
         "_dynamic_context": dynamic_context,
         "_user_prompt": "Test query",
-        "settings": mock_settings
+        "settings": mock_settings,
     }
 
     # Mock the repomap messages that should be returned
     mock_repomap_messages = [
-        {
-            "role": "user",
-            "content": "Here are the relevant files:\n• /path/to/file.py"
-        },
-        {
-            "role": "assistant",
-            "content": "I can see the relevant files. I'll read them directly."
-        }
+        {"role": "user", "content": "Here are the relevant files:\n• /path/to/file.py"},
+        {"role": "assistant", "content": "I can see the relevant files. I'll read them directly."},
     ]
 
     # Patch the enhancer to return our mock messages
-    with patch('ai_dev_agent.cli.context_enhancer.get_context_enhancer') as mock_get_enhancer:
+    with patch("ai_dev_agent.cli.context_enhancer.get_context_enhancer") as mock_get_enhancer:
         mock_enhancer = Mock()
         mock_enhancer.get_repomap_messages.return_value = ("Test query", mock_repomap_messages)
         mock_get_enhancer.return_value = mock_enhancer
@@ -148,7 +141,7 @@ def test_inject_repomap_update_uses_correct_messages():
             query="Test query",
             max_files=15,
             additional_files=dynamic_context.mentioned_files,
-            additional_symbols=dynamic_context.mentioned_symbols
+            additional_symbols=dynamic_context.mentioned_symbols,
         )
 
     # Verify messages were added to session
@@ -169,8 +162,9 @@ def test_inject_repomap_update_uses_correct_messages():
 
 def test_inject_repomap_update_handles_empty_messages():
     """Test that _inject_repomap_update handles case when no repomap messages returned."""
-    from unittest.mock import Mock, patch
     from pathlib import Path
+    from unittest.mock import Mock, patch
+
     from ai_dev_agent.cli.dynamic_context import DynamicContextTracker
 
     # Create session and provider
@@ -191,11 +185,11 @@ def test_inject_repomap_update_handles_empty_messages():
     provider._ctx_obj = {
         "_dynamic_context": dynamic_context,
         "_user_prompt": "Broad query with no symbols",
-        "settings": Mock(repomap_debug_stdout=False)
+        "settings": Mock(repomap_debug_stdout=False),
     }
 
     # Patch to return no messages
-    with patch('ai_dev_agent.cli.context_enhancer.get_context_enhancer') as mock_get_enhancer:
+    with patch("ai_dev_agent.cli.context_enhancer.get_context_enhancer") as mock_get_enhancer:
         mock_enhancer = Mock()
         mock_enhancer.get_repomap_messages.return_value = ("Broad query with no symbols", None)
         mock_get_enhancer.return_value = mock_enhancer

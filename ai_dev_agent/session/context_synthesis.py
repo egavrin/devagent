@@ -1,12 +1,15 @@
 """Context synthesis for agent-oriented system prompts."""
+
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Set, Any
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
-from ai_dev_agent.providers.llm.base import Message
-from ai_dev_agent.tools import READ, WRITE, RUN
+from ai_dev_agent.tools import READ, RUN, WRITE
+
+if TYPE_CHECKING:
+    from ai_dev_agent.providers.llm.base import Message
 
 
 class ContextSynthesizer:
@@ -15,11 +18,7 @@ class ContextSynthesizer:
     def __init__(self, max_context_chars: int = 2000):
         self.max_context_chars = max_context_chars
 
-    def synthesize_previous_steps(
-        self,
-        history: List[Message],
-        current_step: int
-    ) -> str:
+    def synthesize_previous_steps(self, history: list[Message], current_step: int) -> str:
         """Extract and summarize key findings from previous steps.
 
         Args:
@@ -42,7 +41,7 @@ class ContextSynthesizer:
         errors_encountered = []
 
         # Analyze history for patterns
-        for i, msg in enumerate(history):
+        for _i, msg in enumerate(history):
             if msg.role == "assistant" and msg.tool_calls:
                 for tool_call in msg.tool_calls:
                     if isinstance(tool_call, dict):
@@ -56,14 +55,18 @@ class ContextSynthesizer:
                                 files_examined.update(p for p in paths if p)
 
                         # Track file modifications
-                        elif tool_name == WRITE or "write" in tool_name.lower() or "patch" in tool_name.lower():
+                        elif (
+                            tool_name == WRITE
+                            or "write" in tool_name.lower()
+                            or "patch" in tool_name.lower()
+                        ):
                             if isinstance(args, dict):
                                 if "diff" in args:
                                     # Extract filenames from diff
                                     diff_content = str(args["diff"])
-                                    for line in diff_content.split('\n'):
-                                        if line.startswith('--- a/') or line.startswith('+++ b/'):
-                                            filepath = line.split('/', 1)[1] if '/' in line else ''
+                                    for line in diff_content.split("\n"):
+                                        if line.startswith("--- a/") or line.startswith("+++ b/"):
+                                            filepath = line.split("/", 1)[1] if "/" in line else ""
                                             if filepath:
                                                 files_modified.add(filepath)
 
@@ -100,7 +103,7 @@ class ContextSynthesizer:
                 # Look for key patterns in responses
                 if "found" in content.lower() or "discovered" in content.lower():
                     # Extract first meaningful line
-                    lines = content.split('\n')
+                    lines = content.split("\n")
                     for line in lines[:3]:
                         if len(line) > 20 and len(line) < 200:
                             key_discoveries.append(line.strip())
@@ -136,7 +139,7 @@ class ContextSynthesizer:
 
         if last_assistant_msg:
             # Extract key sentence from last response
-            sentences = re.split(r'[.!?]+', last_assistant_msg)
+            sentences = re.split(r"[.!?]+", last_assistant_msg)
             for sentence in sentences:
                 if len(sentence) > 30 and any(
                     word in sentence.lower()
@@ -151,11 +154,11 @@ class ContextSynthesizer:
         # Truncate if too long
         result = "\n".join(findings)
         if len(result) > self.max_context_chars:
-            result = result[:self.max_context_chars - 20] + "\n... (context truncated)"
+            result = result[: self.max_context_chars - 20] + "\n... (context truncated)"
 
         return result
 
-    def get_redundant_operations(self, history: List[Message]) -> Dict[str, Set[str]]:
+    def get_redundant_operations(self, history: list[Message]) -> dict[str, set[str]]:
         """Identify operations that should not be repeated.
 
         Returns:
@@ -184,24 +187,30 @@ class ContextSynthesizer:
                                     redundant["searches_done"].add(query)
 
                             # Track executed commands
-                            elif tool_name == RUN or "run" in tool_name.lower() or "exec" in tool_name.lower():
+                            elif (
+                                tool_name == RUN
+                                or "run" in tool_name.lower()
+                                or "exec" in tool_name.lower()
+                            ):
                                 cmd = args.get("command") or args.get("cmd")
                                 if cmd:
                                     redundant["commands_run"].add(cmd)
 
         return dict(redundant)
 
-    def build_constraints_section(self, redundant_ops: Dict[str, Set[str]]) -> str:
+    def build_constraints_section(self, redundant_ops: dict[str, set[str]]) -> str:
         """Build constraints section based on redundant operations."""
         constraints = []
 
-        if "files_read" in redundant_ops and redundant_ops["files_read"]:
+        if redundant_ops.get("files_read"):
             files = list(redundant_ops["files_read"])[:3]
             constraints.append(f"Already examined files: {', '.join(files)} (avoid re-reading)")
 
-        if "searches_done" in redundant_ops and redundant_ops["searches_done"]:
+        if redundant_ops.get("searches_done"):
             searches = list(redundant_ops["searches_done"])[:2]
-            constraints.append(f"Already searched for: {', '.join(searches)} (use different patterns)")
+            constraints.append(
+                f"Already searched for: {', '.join(searches)} (use different patterns)"
+            )
 
         if not constraints:
             constraints.append("No redundant operations detected")

@@ -4,11 +4,11 @@ This module centralizes language detection, parser lifecycle management, and
 utility helpers so that tools can share the same configuration instead of
 re-implementing their own variants.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from ai_dev_agent.core.utils.logger import get_logger
 
@@ -23,11 +23,15 @@ from .queries import (
     normalise_language,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
+
 LOGGER = get_logger(__name__)
 
 try:  # Optional dependency – keep imports lazy-friendly
     try:
-        import distutils  # type: ignore  # noqa: F401 - ensure legacy module exists
+        import distutils  # type: ignore
     except ModuleNotFoundError:  # pragma: no cover - Python 3.12 removed distutils
         # tree-sitter still imports ``distutils`` in its public module. When running
         # on Python versions where it was removed we shim the module using the
@@ -67,7 +71,7 @@ except Exception:  # pragma: no cover - dependency is optional in production
 
 # Canonical language identifiers keyed by file suffix. Both tools previously
 # kept their own copies – the new shared mapping prevents divergence.
-EXTENSION_LANGUAGE_MAP: Dict[str, str] = {
+EXTENSION_LANGUAGE_MAP: dict[str, str] = {
     # Python / JS / TS
     ".py": "python",
     ".pyi": "python",
@@ -97,7 +101,7 @@ EXTENSION_LANGUAGE_MAP: Dict[str, str] = {
 
 # Heuristic indicators used for language detection when the extension is not
 # conclusive (e.g. shared headers, plain `.h` files, or extensionless scripts).
-LANGUAGE_INDICATORS: Dict[str, Iterable[str]] = {
+LANGUAGE_INDICATORS: dict[str, Iterable[str]] = {
     "cpp": [
         "class ",
         "namespace ",
@@ -221,7 +225,7 @@ LANGUAGE_INDICATORS: Dict[str, Iterable[str]] = {
 }
 
 
-def _normalise_content(content: Optional[str | bytes]) -> str:
+def _normalise_content(content: str | bytes | None) -> str:
     if content is None:
         return ""
     if isinstance(content, bytes):
@@ -238,7 +242,7 @@ def _match_indicator_score(text: str, language: str) -> int:
     return sum(1 for indicator in indicators if indicator.lower() in lower)
 
 
-def detect_language(path: Path, content: Optional[str | bytes] = None) -> Optional[str]:
+def detect_language(path: Path, content: str | bytes | None = None) -> str | None:
     """Detect the most likely language for the given file."""
 
     suffix = path.suffix.lower()
@@ -261,7 +265,7 @@ def detect_language(path: Path, content: Optional[str | bytes] = None) -> Option
     if not text:
         return EXTENSION_LANGUAGE_MAP.get(suffix)
 
-    best_lang: Optional[str] = None
+    best_lang: str | None = None
     best_score = 0
     lower = text.lower()
 
@@ -288,9 +292,9 @@ class ParserHandle:
 class TreeSitterManager:
     """Singleton manager that caches parsers per language."""
 
-    _instance: Optional["TreeSitterManager"] = None
+    _instance: TreeSitterManager | None = None
 
-    def __new__(cls) -> "TreeSitterManager":
+    def __new__(cls) -> TreeSitterManager:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._init()
@@ -300,15 +304,17 @@ class TreeSitterManager:
         self._parser_factory = get_parser
         self._language_factory = get_language
         self._parser_cls = Parser
-        self._parsers: Dict[str, object] = {}
-        self._languages: Dict[str, object] = {}
+        self._parsers: dict[str, object] = {}
+        self._languages: dict[str, object] = {}
         self._available = self._check_availability()
 
     def _check_availability(self) -> bool:
-        return any([
-            callable(self._parser_factory),
-            callable(self._language_factory) and self._parser_cls is not None,
-        ])
+        return any(
+            [
+                callable(self._parser_factory),
+                callable(self._language_factory) and self._parser_cls is not None,
+            ]
+        )
 
     # Public API -----------------------------------------------------------
 
@@ -316,7 +322,7 @@ class TreeSitterManager:
     def available(self) -> bool:
         return self._available
 
-    def parser_for_language(self, language: str) -> Optional[ParserHandle]:
+    def parser_for_language(self, language: str) -> ParserHandle | None:
         """Return a cached parser for the given language if available."""
         language = language.lower()
         if not self.available:
@@ -333,14 +339,14 @@ class TreeSitterManager:
         return ParserHandle(language, parser)
 
     def parser_for_path(
-        self, path: Path, *, content: Optional[str | bytes] = None
-    ) -> Optional[ParserHandle]:
+        self, path: Path, *, content: str | bytes | None = None
+    ) -> ParserHandle | None:
         language = detect_language(path, content)
         if language is None:
             return None
         return self.parser_for_language(language)
 
-    def language(self, language: str) -> Optional[object]:
+    def language(self, language: str) -> object | None:
         """Return a cached tree-sitter language object."""
 
         language = language.lower()
@@ -365,7 +371,7 @@ class TreeSitterManager:
 
     # Internal helpers ----------------------------------------------------
 
-    def _create_parser(self, language: str) -> Optional[object]:
+    def _create_parser(self, language: str) -> object | None:
         if self._parser_factory is not None:
             try:
                 return self._parser_factory(language)
@@ -395,6 +401,7 @@ MANAGER = TreeSitterManager()
 # Shared utilities
 # ---------------------------------------------------------------------------
 
+
 def node_text(node, source_bytes: bytes) -> str:
     """Return the UTF-8 decoded span covered by *node*."""
 
@@ -410,13 +417,13 @@ def slice_bytes(source: str | bytes) -> bytes:
     return source.encode("utf-8", errors="ignore")
 
 
-def ensure_parser(path: Path, *, content: Optional[str | bytes] = None) -> Optional[ParserHandle]:
+def ensure_parser(path: Path, *, content: str | bytes | None = None) -> ParserHandle | None:
     """Convenience wrapper returning a parser pre-selected for *path*."""
 
     return MANAGER.parser_for_path(path, content=content)
 
 
-def ensure_language(path: Path, *, content: Optional[str | bytes] = None) -> Optional[str]:
+def ensure_language(path: Path, *, content: str | bytes | None = None) -> str | None:
     """Return the detected language if supported by the shared infrastructure."""
 
     language = detect_language(path, content)
@@ -429,7 +436,7 @@ def ensure_language(path: Path, *, content: Optional[str | bytes] = None) -> Opt
     return handle.language
 
 
-def language_object(language: str) -> Optional[object]:
+def language_object(language: str) -> object | None:
     """Expose the underlying tree-sitter language object when available."""
 
     return MANAGER.language(language)
@@ -439,10 +446,10 @@ __all__ = [
     "AST_QUERY_TEMPLATES",
     "EXTENSION_LANGUAGE_MAP",
     "LANGUAGE_INDICATORS",
-    "ParserHandle",
-    "TreeSitterManager",
     "MANAGER",
     "SUMMARY_QUERY_TEMPLATES",
+    "ParserHandle",
+    "TreeSitterManager",
     "build_capture_query",
     "build_field_capture_query",
     "detect_language",
@@ -451,8 +458,8 @@ __all__ = [
     "get_ast_query",
     "get_summary_queries",
     "iter_ast_queries",
+    "language_object",
     "node_text",
     "normalise_language",
-    "language_object",
     "slice_bytes",
 ]

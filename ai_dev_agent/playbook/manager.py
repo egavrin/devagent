@@ -12,11 +12,11 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -51,11 +51,11 @@ class Instruction:
     usage_count: int = 0
     success_count: int = 0  # Times this instruction led to success
     effectiveness_score: float = 0.0  # success_count / usage_count
-    tags: Set[str] = field(default_factory=set)
-    examples: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    tags: set[str] = field(default_factory=set)
+    examples: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         data = asdict(self)
         data["category"] = self.category.value
@@ -63,7 +63,7 @@ class Instruction:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Instruction:
+    def from_dict(cls, data: dict[str, Any]) -> Instruction:
         """Create from dictionary."""
         # Convert category string to enum
         if "category" in data and isinstance(data["category"], str):
@@ -96,9 +96,9 @@ class PlaybookManager:
 
     def __init__(
         self,
-        playbook_path: Optional[Path] = None,
+        playbook_path: Path | None = None,
         max_instructions: int = 50,
-        auto_save: bool = True
+        auto_save: bool = True,
     ):
         """Initialize the playbook manager.
 
@@ -115,14 +115,14 @@ class PlaybookManager:
         self._lock = threading.RLock()
 
         # In-memory storage
-        self._instructions: Dict[str, Instruction] = {}
-        self._instructions_by_category: Dict[InstructionCategory, List[str]] = {
+        self._instructions: dict[str, Instruction] = {}
+        self._instructions_by_category: dict[InstructionCategory, list[str]] = {
             category: [] for category in InstructionCategory
         }
 
         # Version tracking
         self._version: int = 1
-        self._change_history: List[Dict[str, Any]] = []
+        self._change_history: list[dict[str, Any]] = []
 
         # Load existing playbook
         self._load_playbook()
@@ -138,7 +138,7 @@ class PlaybookManager:
             return
 
         try:
-            with open(self.playbook_path, "r") as f:
+            with self.playbook_path.open() as f:
                 data = json.load(f)
 
             # Load version
@@ -170,95 +170,90 @@ class PlaybookManager:
                 category=InstructionCategory.DEBUGGING,
                 content="Always check logs and error messages first before making assumptions",
                 priority=10,
-                tags={"debugging", "errors", "logs"}
+                tags={"debugging", "errors", "logs"},
             ),
             Instruction(
                 category=InstructionCategory.DEBUGGING,
                 content="Reproduce the issue reliably before attempting a fix",
                 priority=9,
-                tags={"debugging", "reproduction"}
+                tags={"debugging", "reproduction"},
             ),
             Instruction(
                 category=InstructionCategory.DEBUGGING,
                 content="Use a debugger or print statements to understand program state",
                 priority=8,
-                tags={"debugging", "inspection"}
+                tags={"debugging", "inspection"},
             ),
-
             # Testing
             Instruction(
                 category=InstructionCategory.TESTING,
                 content="Write tests before implementing fixes (TDD approach)",
                 priority=10,
-                tags={"testing", "tdd"}
+                tags={"testing", "tdd"},
             ),
             Instruction(
                 category=InstructionCategory.TESTING,
                 content="Always run existing tests after making changes",
                 priority=10,
-                tags={"testing", "regression"}
+                tags={"testing", "regression"},
             ),
             Instruction(
                 category=InstructionCategory.TESTING,
                 content="Test edge cases: null values, empty inputs, boundary conditions",
                 priority=8,
-                tags={"testing", "edge-cases"}
+                tags={"testing", "edge-cases"},
             ),
-
             # Code Quality
             Instruction(
                 category=InstructionCategory.REFACTORING,
                 content="Keep functions small and focused on a single responsibility",
                 priority=7,
-                tags={"refactoring", "clean-code"}
+                tags={"refactoring", "clean-code"},
             ),
             Instruction(
                 category=InstructionCategory.REFACTORING,
                 content="Extract duplicated code into reusable functions",
                 priority=7,
-                tags={"refactoring", "dry"}
+                tags={"refactoring", "dry"},
             ),
-
             # Error Handling
             Instruction(
                 category=InstructionCategory.ERROR_HANDLING,
                 content="Always validate user inputs and handle potential errors",
                 priority=9,
-                tags={"error-handling", "validation"}
+                tags={"error-handling", "validation"},
             ),
             Instruction(
                 category=InstructionCategory.ERROR_HANDLING,
                 content="Provide meaningful error messages that help diagnose issues",
                 priority=8,
-                tags={"error-handling", "messages"}
+                tags={"error-handling", "messages"},
             ),
-
             # Security
             Instruction(
                 category=InstructionCategory.SECURITY,
                 content="Never log or store sensitive data like passwords or API keys",
                 priority=10,
-                tags={"security", "credentials"}
+                tags={"security", "credentials"},
             ),
             Instruction(
                 category=InstructionCategory.SECURITY,
                 content="Validate and sanitize all user inputs to prevent injection attacks",
                 priority=10,
-                tags={"security", "validation", "injection"}
+                tags={"security", "validation", "injection"},
             ),
-
             # General
             Instruction(
                 category=InstructionCategory.GENERAL,
                 content="Read existing code and understand the patterns before making changes",
                 priority=8,
-                tags={"general", "code-reading"}
+                tags={"general", "code-reading"},
             ),
             Instruction(
                 category=InstructionCategory.GENERAL,
                 content="Commit changes incrementally with clear messages",
                 priority=7,
-                tags={"general", "git"}
+                tags={"general", "git"},
             ),
         ]
 
@@ -275,6 +270,7 @@ class PlaybookManager:
                 backup_path = self.playbook_path.with_suffix(self.BACKUP_SUFFIX)
                 try:
                     import shutil
+
                     shutil.copy2(self.playbook_path, backup_path)
                 except Exception as e:
                     logger.warning(f"Failed to create backup: {e}")
@@ -284,8 +280,7 @@ class PlaybookManager:
                 "version": self._version,
                 "updated_at": datetime.now().isoformat(),
                 "instructions": [
-                    instruction.to_dict()
-                    for instruction in self._instructions.values()
+                    instruction.to_dict() for instruction in self._instructions.values()
                 ],
                 "change_history": self._change_history[-100:],  # Keep last 100 changes
                 "metadata": {
@@ -293,30 +288,28 @@ class PlaybookManager:
                     "instructions_by_category": {
                         category.value: len(ids)
                         for category, ids in self._instructions_by_category.items()
-                    }
-                }
+                    },
+                },
             }
 
             # Save to file
             try:
                 temp_path = self.playbook_path.with_suffix(".tmp")
-                with open(temp_path, "w") as f:
+                with Path(temp_path).open("w") as f:
                     json.dump(data, f, indent=2, default=str)
 
                 # Atomic rename
                 temp_path.replace(self.playbook_path)
-                logger.debug(f"Saved {len(self._instructions)} instructions to {self.playbook_path}")
+                logger.debug(
+                    f"Saved {len(self._instructions)} instructions to {self.playbook_path}"
+                )
 
             except Exception as e:
                 logger.error(f"Failed to save playbook: {e}")
                 if temp_path.exists():
                     temp_path.unlink()
 
-    def add_instruction(
-        self,
-        instruction: Instruction,
-        source: str = "manual"
-    ) -> str:
+    def add_instruction(self, instruction: Instruction, source: str = "manual") -> str:
         """Add a new instruction to the playbook.
 
         Args:
@@ -334,9 +327,7 @@ class PlaybookManager:
 
             # Add to storage
             self._instructions[instruction.instruction_id] = instruction
-            self._instructions_by_category[instruction.category].append(
-                instruction.instruction_id
-            )
+            self._instructions_by_category[instruction.category].append(instruction.instruction_id)
 
             # Record change
             self._record_change("add", instruction, source)
@@ -351,10 +342,10 @@ class PlaybookManager:
     def update_instruction(
         self,
         instruction_id: str,
-        content: Optional[str] = None,
-        priority: Optional[int] = None,
-        tags: Optional[Set[str]] = None,
-        examples: Optional[List[str]] = None
+        content: str | None = None,
+        priority: int | None = None,
+        tags: set[str] | None = None,
+        examples: list[str] | None = None,
     ) -> bool:
         """Update an existing instruction.
 
@@ -430,7 +421,7 @@ class PlaybookManager:
             logger.info(f"Removed instruction: {instruction_id}")
             return True
 
-    def get_instruction(self, instruction_id: str) -> Optional[Instruction]:
+    def get_instruction(self, instruction_id: str) -> Instruction | None:
         """Get a specific instruction by ID.
 
         Args:
@@ -443,11 +434,8 @@ class PlaybookManager:
             return self._instructions.get(instruction_id)
 
     def get_instructions_by_category(
-        self,
-        category: InstructionCategory,
-        min_priority: int = 1,
-        limit: Optional[int] = None
-    ) -> List[Instruction]:
+        self, category: InstructionCategory, min_priority: int = 1, limit: int | None = None
+    ) -> list[Instruction]:
         """Get instructions for a specific category.
 
         Args:
@@ -467,10 +455,7 @@ class PlaybookManager:
             ]
 
             # Sort by priority (descending) then effectiveness
-            instructions.sort(
-                key=lambda i: (i.priority, i.effectiveness_score),
-                reverse=True
-            )
+            instructions.sort(key=lambda i: (i.priority, i.effectiveness_score), reverse=True)
 
             if limit:
                 instructions = instructions[:limit]
@@ -478,10 +463,8 @@ class PlaybookManager:
             return instructions
 
     def get_all_instructions(
-        self,
-        min_priority: int = 1,
-        min_effectiveness: float = 0.0
-    ) -> List[Instruction]:
+        self, min_priority: int = 1, min_effectiveness: float = 0.0
+    ) -> list[Instruction]:
         """Get all instructions meeting criteria.
 
         Args:
@@ -500,18 +483,13 @@ class PlaybookManager:
             ]
 
             # Sort by priority and effectiveness
-            instructions.sort(
-                key=lambda i: (i.priority, i.effectiveness_score),
-                reverse=True
-            )
+            instructions.sort(key=lambda i: (i.priority, i.effectiveness_score), reverse=True)
 
             return instructions
 
     def get_instructions_by_tags(
-        self,
-        tags: Set[str],
-        match_all: bool = False
-    ) -> List[Instruction]:
+        self, tags: set[str], match_all: bool = False
+    ) -> list[Instruction]:
         """Get instructions matching tags.
 
         Args:
@@ -533,18 +511,15 @@ class PlaybookManager:
                         instructions.append(instruction)
 
             # Sort by relevance (number of matching tags) then priority
-            instructions.sort(
-                key=lambda i: (len(tags & i.tags), i.priority),
-                reverse=True
-            )
+            instructions.sort(key=lambda i: (len(tags & i.tags), i.priority), reverse=True)
 
             return instructions
 
     def format_for_context(
         self,
-        categories: Optional[List[InstructionCategory]] = None,
+        categories: list[InstructionCategory] | None = None,
         max_instructions: int = 10,
-        min_priority: int = 5
+        min_priority: int = 5,
     ) -> str:
         """Format instructions for injection into LLM context.
 
@@ -561,9 +536,7 @@ class PlaybookManager:
             if categories:
                 instructions = []
                 for category in categories:
-                    instructions.extend(
-                        self.get_instructions_by_category(category, min_priority)
-                    )
+                    instructions.extend(self.get_instructions_by_category(category, min_priority))
             else:
                 instructions = self.get_all_instructions(min_priority)
 
@@ -595,12 +568,7 @@ class PlaybookManager:
 
             return "\n".join(lines)
 
-    def track_usage(
-        self,
-        instruction_id: str,
-        success: bool,
-        feedback: Optional[str] = None
-    ) -> None:
+    def track_usage(self, instruction_id: str, success: bool, feedback: str | None = None) -> None:
         """Track instruction usage and effectiveness.
 
         Args:
@@ -618,11 +586,13 @@ class PlaybookManager:
             if feedback:
                 if "feedback" not in instruction.metadata:
                     instruction.metadata["feedback"] = []
-                instruction.metadata["feedback"].append({
-                    "timestamp": datetime.now().isoformat(),
-                    "success": success,
-                    "feedback": feedback
-                })
+                instruction.metadata["feedback"].append(
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "success": success,
+                        "feedback": feedback,
+                    }
+                )
 
             if self.auto_save:
                 self.save_playbook()
@@ -642,26 +612,19 @@ class PlaybookManager:
             return 0
 
         # Get instructions sorted by effectiveness (ascending)
-        instructions = [
-            (iid, self._instructions[iid])
-            for iid in instruction_ids
-        ]
+        instructions = [(iid, self._instructions[iid]) for iid in instruction_ids]
         instructions.sort(key=lambda x: x[1].effectiveness_score)
 
         # Remove least effective
         removed = 0
-        for iid, instruction in instructions[:count]:
+        for iid, _instruction in instructions[:count]:
             if self.remove_instruction(iid):
                 removed += 1
 
         return removed
 
     def _record_change(
-        self,
-        action: str,
-        instruction: Instruction,
-        source: str,
-        details: Optional[Dict] = None
+        self, action: str, instruction: Instruction, source: str, details: dict | None = None
     ) -> None:
         """Record a change to the playbook.
 
@@ -678,13 +641,13 @@ class PlaybookManager:
             "instruction_id": instruction.instruction_id,
             "category": instruction.category.value,
             "source": source,
-            "details": details or {}
+            "details": details or {},
         }
 
         self._change_history.append(change_record)
         self._version += 1
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get statistics about the playbook.
 
         Returns:
@@ -696,13 +659,11 @@ class PlaybookManager:
                     "total_instructions": 0,
                     "instructions_by_category": {},
                     "avg_effectiveness": 0,
-                    "version": self._version
+                    "version": self._version,
                 }
 
             effectiveness_scores = [
-                i.effectiveness_score
-                for i in self._instructions.values()
-                if i.usage_count > 0
+                i.effectiveness_score for i in self._instructions.values() if i.usage_count > 0
             ]
 
             return {
@@ -714,9 +675,10 @@ class PlaybookManager:
                 },
                 "avg_effectiveness": (
                     sum(effectiveness_scores) / len(effectiveness_scores)
-                    if effectiveness_scores else 0
+                    if effectiveness_scores
+                    else 0
                 ),
                 "total_usage": sum(i.usage_count for i in self._instructions.values()),
                 "version": self._version,
-                "change_count": len(self._change_history)
+                "change_count": len(self._change_history),
             }

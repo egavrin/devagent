@@ -1,7 +1,10 @@
 """Tests for chat/interactive command."""
+
 from unittest.mock import MagicMock
+
 import pytest
 from click.testing import CliRunner
+
 from ai_dev_agent.cli.commands import cli
 
 

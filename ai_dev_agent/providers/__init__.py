@@ -1,9 +1,11 @@
 """External service provider integrations."""
+
 from __future__ import annotations
 
 from . import llm
 from .llm import (
     DEEPSEEK_DEFAULT_BASE_URL,
+    OPENROUTER_DEFAULT_BASE_URL,
     LLMClient,
     LLMConnectionError,
     LLMError,
@@ -12,7 +14,6 @@ from .llm import (
     LLMRetryExhaustedError,
     LLMTimeoutError,
     Message,
-    OPENROUTER_DEFAULT_BASE_URL,
     RetryConfig,
     StreamHooks,
     create_client,
@@ -20,6 +21,7 @@ from .llm import (
 
 __all__ = [
     "DEEPSEEK_DEFAULT_BASE_URL",
+    "OPENROUTER_DEFAULT_BASE_URL",
     "LLMClient",
     "LLMConnectionError",
     "LLMError",
@@ -28,7 +30,6 @@ __all__ = [
     "LLMRetryExhaustedError",
     "LLMTimeoutError",
     "Message",
-    "OPENROUTER_DEFAULT_BASE_URL",
     "RetryConfig",
     "StreamHooks",
     "create_client",

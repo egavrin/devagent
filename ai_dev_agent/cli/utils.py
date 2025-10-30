@@ -1,4 +1,5 @@
 """Helper utilities shared across CLI commands."""
+
 from __future__ import annotations
 
 import os
@@ -8,33 +9,34 @@ import shlex
 import shutil
 import tempfile
 import uuid
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any
 
 import click
 
 from ai_dev_agent.core.approval.approvals import ApprovalManager
 from ai_dev_agent.core.approval.policy import ApprovalPolicy
-from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.utils.constants import MAX_HISTORY_ENTRIES
 from ai_dev_agent.core.utils.context_budget import BudgetedLLMClient, config_from_settings
-from ai_dev_agent.core.utils.constants import DEFAULT_IGNORED_REPO_DIRS, MAX_HISTORY_ENTRIES
 from ai_dev_agent.core.utils.devagent_config import load_devagent_yaml
-from ai_dev_agent.core.utils.repo_outline import generate_repo_outline
 from ai_dev_agent.core.utils.keywords import extract_keywords
 from ai_dev_agent.core.utils.logger import get_logger, set_correlation_id
+from ai_dev_agent.core.utils.repo_outline import generate_repo_outline
 from ai_dev_agent.core.utils.state import InMemoryStateStore, StateStore
-from ai_dev_agent.providers.llm import (
-    DEEPSEEK_DEFAULT_BASE_URL,
-    RetryConfig,
-    create_client,
-)
-from ai_dev_agent.tools import ToolContext, registry as tool_registry
-from ai_dev_agent.tools.code.code_edit.tree_sitter_analysis import extract_symbols_from_outline
+from ai_dev_agent.providers.llm import DEEPSEEK_DEFAULT_BASE_URL, RetryConfig, create_client
+
 # Sandbox execution removed - using direct execution only
 from ai_dev_agent.session import SessionManager
 from ai_dev_agent.session.context_service import ContextPruningConfig
 from ai_dev_agent.session.summarizer import LLMConversationSummarizer
+from ai_dev_agent.tools import ToolContext
+from ai_dev_agent.tools import registry as tool_registry
+from ai_dev_agent.tools.code.code_edit.tree_sitter_analysis import extract_symbols_from_outline
+
+if TYPE_CHECKING:
+    from ai_dev_agent.core.utils.config import Settings
 
 LOGGER = get_logger(__name__)
 
@@ -104,7 +106,7 @@ _TOOL_CANDIDATES = (
 )
 
 
-def build_system_context() -> Dict[str, Any]:
+def build_system_context() -> dict[str, Any]:
     """Return runtime environment details useful for prompt construction."""
 
     system = platform.system() or "unknown"
@@ -121,13 +123,10 @@ def build_system_context() -> Dict[str, Any]:
 
     shell = os.environ.get("SHELL")
     if not shell:
-        if system == "Windows":
-            shell = os.environ.get("COMSPEC", "cmd.exe")
-        else:
-            shell = "/bin/sh"
+        shell = os.environ.get("COMSPEC", "cmd.exe") if system == "Windows" else "/bin/sh"
 
-    cwd = os.getcwd()
-    home_dir = os.path.expanduser("~")
+    cwd = str(Path.cwd())
+    home_dir = str(Path.home())
     python_version = platform.python_version()
 
     is_unix = system in {"Darwin", "Linux"}
@@ -180,7 +179,7 @@ def _collect_project_structure_outline(
     *,
     max_entries: int = 160,
     max_depth: int = 3,
-) -> Optional[str]:
+) -> str | None:
     """Return a concise repository outline for prompt context."""
 
     outline = generate_repo_outline(repo_root, max_entries=max_entries, max_depth=max_depth)
@@ -189,7 +188,7 @@ def _collect_project_structure_outline(
     return outline
 
 
-def _get_structure_hints_state(ctx: click.Context) -> Dict[str, Any]:
+def _get_structure_hints_state(ctx: click.Context) -> dict[str, Any]:
     state = ctx.obj.setdefault(
         "_structure_hints_state",
         {"symbols": set(), "files": {}, "project_summary": None},
@@ -204,7 +203,7 @@ def _get_structure_hints_state(ctx: click.Context) -> Dict[str, Any]:
     return state
 
 
-def _export_structure_hints_state(state: Dict[str, Any]) -> Dict[str, Any]:
+def _export_structure_hints_state(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "symbols": sorted(state.get("symbols", set())),
         "files": dict(state.get("files", {})),
@@ -212,7 +211,7 @@ def _export_structure_hints_state(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _merge_structure_hints_state(state: Dict[str, Any], payload: Optional[Dict[str, Any]]) -> None:
+def _merge_structure_hints_state(state: dict[str, Any], payload: dict[str, Any] | None) -> None:
     if not payload:
         return
     symbols = payload.get("symbols")
@@ -237,7 +236,7 @@ def _merge_structure_hints_state(state: Dict[str, Any], payload: Optional[Dict[s
         state["project_summary"] = payload["project_summary"]
 
 
-def _update_files_discovered(files_discovered: Set[str], payload: Optional[Dict[str, Any]]) -> None:
+def _update_files_discovered(files_discovered: set[str], payload: dict[str, Any] | None) -> None:
     if not payload:
         return
     files_value = payload.get("files", [])
@@ -249,10 +248,7 @@ def _update_files_discovered(files_discovered: Set[str], payload: Optional[Dict[
         iterable_files = ()
 
     for file_entry in iterable_files:
-        if isinstance(file_entry, Mapping):
-            path = file_entry.get("path")
-        else:
-            path = file_entry
+        path = file_entry.get("path") if isinstance(file_entry, Mapping) else file_entry
         if path:
             files_discovered.add(str(path))
 
@@ -263,10 +259,7 @@ def _update_files_discovered(files_discovered: Set[str], payload: Optional[Dict[
         matches_iterable = ()
 
     for match in matches_iterable:
-        if isinstance(match, Mapping):
-            path = match.get("path")
-        else:
-            path = match
+        path = match.get("path") if isinstance(match, Mapping) else match
         if path:
             files_discovered.add(str(path))
 
@@ -277,10 +270,7 @@ def _update_files_discovered(files_discovered: Set[str], payload: Optional[Dict[
         summaries_iterable = ()
 
     for summary in summaries_iterable:
-        if isinstance(summary, Mapping):
-            path = summary.get("path")
-        else:
-            path = summary
+        path = summary.get("path") if isinstance(summary, Mapping) else summary
         if path:
             files_discovered.add(str(path))
 
@@ -317,8 +307,8 @@ def _detect_repository_language(
     repo_root: Path,
     *,
     max_files: int = 400,
-) -> Tuple[Optional[str], Optional[int]]:
-    counts: Dict[str, int] = {}
+) -> tuple[str | None, int | None]:
+    counts: dict[str, int] = {}
     total = 0
     try:
         for path in repo_root.rglob("*"):
@@ -338,11 +328,11 @@ def _detect_repository_language(
     return language, total if total else None
 
 
-def infer_task_files(task: Mapping[str, Any], repo_root: Path) -> List[str]:
+def infer_task_files(task: Mapping[str, Any], repo_root: Path) -> list[str]:
     """Infer target files for a task using commands, deliverables, and textual hints."""
     repo_root = repo_root.resolve()
-    results: List[str] = []
-    seen: Set[str] = set()
+    results: list[str] = []
+    seen: set[str] = set()
 
     def _add(candidate: Path) -> None:
         try:
@@ -372,7 +362,7 @@ def infer_task_files(task: Mapping[str, Any], repo_root: Path) -> List[str]:
                         break
                     _add(repo_root / follow)
             elif "/" in token:
-                _add(repo_root / token.strip("\"\'"))
+                _add(repo_root / token.strip("\"'"))
 
     for deliverable in task.get("deliverables") or []:
         if isinstance(deliverable, str):
@@ -408,8 +398,8 @@ def infer_task_files(task: Mapping[str, Any], repo_root: Path) -> List[str]:
 
 def update_task_state(
     store: StateStore,
-    plan: Dict[str, Any],
-    task: Dict[str, Any],
+    plan: dict[str, Any],
+    task: dict[str, Any],
     updates: Mapping[str, Any],
     *,
     reasoning: Any | None = None,
@@ -471,7 +461,9 @@ def _make_tool_context(ctx: click.Context, *, with_sandbox: bool = False) -> Too
 
     structure_hints_state = _get_structure_hints_state(ctx)
 
-    extra: Dict[str, Any] = {"structure_hints": _export_structure_hints_state(structure_hints_state)}
+    extra: dict[str, Any] = {
+        "structure_hints": _export_structure_hints_state(structure_hints_state)
+    }
 
     shell_manager = ctx.obj.get("_shell_session_manager") if isinstance(ctx.obj, dict) else None
     shell_session_id = ctx.obj.get("_shell_session_id") if isinstance(ctx.obj, dict) else None
@@ -492,10 +484,10 @@ def _make_tool_context(ctx: click.Context, *, with_sandbox: bool = False) -> Too
 def _invoke_registry_tool(
     ctx: click.Context,
     tool_name: str,
-    payload: Optional[Dict[str, Any]] = None,
+    payload: dict[str, Any] | None = None,
     *,
     with_sandbox: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Invoke a registry tool with a lazily created ToolContext."""
 
     context = _make_tool_context(ctx, with_sandbox=with_sandbox)
@@ -503,11 +495,11 @@ def _invoke_registry_tool(
 
 
 def _normalize_argument_list(
-    arguments: Dict[str, Any],
+    arguments: dict[str, Any],
     *,
     plural_key: str,
-    singular_key: Optional[str] = None,
-) -> List[str]:
+    singular_key: str | None = None,
+) -> list[str]:
     """Return a normalized list of string arguments for registry handlers."""
 
     values = arguments.get(plural_key)
@@ -520,7 +512,7 @@ def _normalize_argument_list(
     return [str(item) for item in values]
 
 
-def _build_context(settings: Settings) -> Dict[str, Any]:
+def _build_context(settings: Settings) -> dict[str, Any]:
     state_store = StateStore(settings.state_file)
     policy = ApprovalPolicy(
         auto_approve_plan=settings.auto_approve_plan,
@@ -555,7 +547,7 @@ def _prompt_yes_no(
     return approvals.require(purpose, default=default, prompt=message)
 
 
-def _record_invocation(ctx: click.Context, overrides: Optional[Dict[str, Any]] = None) -> None:
+def _record_invocation(ctx: click.Context, overrides: dict[str, Any] | None = None) -> None:
     """Persist command invocation details for history and replay."""
     if not ctx or not ctx.command_path:
         return
@@ -587,7 +579,9 @@ def get_llm_client(ctx: click.Context):
         return client
     settings: Settings = ctx.obj["settings"]
     if not settings.api_key:
-        raise click.ClickException("No API key configured. Set DEVAGENT_API_KEY or update config file.")
+        raise click.ClickException(
+            "No API key configured. Set DEVAGENT_API_KEY or update config file."
+        )
 
     retry_config = RetryConfig(
         max_retries=3,
@@ -599,7 +593,7 @@ def get_llm_client(ctx: click.Context):
 
     provider_key = settings.provider.lower()
     base_url_override: str | None = settings.base_url or None
-    provider_kwargs: Dict[str, Any] = {}
+    provider_kwargs: dict[str, Any] = {}
 
     if provider_key in {"openrouter", "cerebras"}:
         if settings.provider_only:
@@ -637,6 +631,7 @@ def get_llm_client(ctx: click.Context):
     summarizer = None
     try:
         from ai_dev_agent.session.enhanced_summarizer_wrapper import create_enhanced_summarizer
+
         summarizer = create_enhanced_summarizer(wrapped_client)
     except ImportError:
         pass
@@ -648,25 +643,26 @@ def get_llm_client(ctx: click.Context):
     session_manager.configure_context_service(config=pruning_config, summarizer=summarizer)
     return wrapped_client
 
+
 __all__ = [
-    "build_system_context",
-    "_resolve_repo_path",
-    "_collect_project_structure_outline",
-    "_get_structure_hints_state",
-    "_export_structure_hints_state",
-    "_merge_structure_hints_state",
-    "_update_files_discovered",
-    "_detect_repository_language",
-    "infer_task_files",
-    "update_task_state",
-    "get_llm_client",
-    "_create_sandbox",
-    "_make_tool_context",
-    "_invoke_registry_tool",
-    "_normalize_argument_list",
     "_build_context",
+    "_collect_project_structure_outline",
+    "_create_sandbox",
+    "_detect_repository_language",
+    "_export_structure_hints_state",
+    "_get_structure_hints_state",
+    "_invoke_registry_tool",
+    "_make_tool_context",
+    "_merge_structure_hints_state",
+    "_normalize_argument_list",
     "_prompt_yes_no",
     "_record_invocation",
+    "_resolve_repo_path",
+    "_update_files_discovered",
+    "build_system_context",
+    "get_llm_client",
+    "infer_task_files",
+    "update_task_state",
 ]
 
 
@@ -690,7 +686,7 @@ def _build_context_pruning_config_from_settings(settings: Settings) -> ContextPr
     max_events = max(int(settings.context_pruner_max_event_history or 0), 1)
 
     # Get max_tool_messages from settings (defaults to 10 if not set)
-    max_tool_msgs = max(int(getattr(settings, 'max_tool_messages_kept', 10)), 3)
+    max_tool_msgs = max(int(getattr(settings, "max_tool_messages_kept", 10)), 3)
 
     return ContextPruningConfig(
         max_total_tokens=max_total,

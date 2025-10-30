@@ -1,4 +1,5 @@
 """Tests for cli/react/budget_control.py - iteration and budget management."""
+
 from unittest.mock import Mock
 
 import pytest
@@ -209,7 +210,9 @@ class TestGetToolsForIteration:
             {"name": "explore"},
         ]
 
-        tools = get_tools_for_iteration(ctx, all_tools, tool_config={"essential_only_in_final": True})
+        tools = get_tools_for_iteration(
+            ctx, all_tools, tool_config={"essential_only_in_final": True}
+        )
         # Should filter to essential only
         assert len(tools) < len(all_tools)
 
@@ -403,7 +406,9 @@ class TestAutoGenerateSummary:
         files = ["auth.py", "middleware.py", "config.py"]
         searches = ["def authenticate", "token validation"]
 
-        summary = auto_generate_summary(conversation, files_examined=files, searches_performed=searches)
+        summary = auto_generate_summary(
+            conversation, files_examined=files, searches_performed=searches
+        )
 
         assert "3 file(s)" in summary
         assert "2 search(es)" in summary
@@ -624,7 +629,9 @@ class TestReflectionContext:
 
     def test_init_custom(self):
         """Test ReflectionContext with custom values."""
-        ctx = ReflectionContext(max_reflections=5, current_reflection=2, last_error="Test", enabled=False)
+        ctx = ReflectionContext(
+            max_reflections=5, current_reflection=2, last_error="Test", enabled=False
+        )
         assert ctx.max_reflections == 5
         assert ctx.current_reflection == 2
         assert ctx.last_error == "Test"

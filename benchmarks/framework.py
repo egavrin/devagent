@@ -7,13 +7,13 @@ with and without context engineering features (memory, playbook, dynamic instruc
 from __future__ import annotations
 
 import json
-import time
 import logging
-from dataclasses import dataclass, field, asdict
+import time
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Callable
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 class TaskCategory(str, Enum):
     """Categories for benchmark tasks."""
+
     DEBUGGING = "debugging"
     FEATURE_IMPLEMENTATION = "feature_implementation"
     REFACTORING = "refactoring"
@@ -35,20 +36,22 @@ class TaskCategory(str, Enum):
 
 class TaskDifficulty(str, Enum):
     """Difficulty levels for tasks."""
-    EASY = "easy"           # Simple, 1-2 steps
-    MEDIUM = "medium"       # Moderate, 3-5 steps
-    HARD = "hard"           # Complex, 6+ steps
-    EXPERT = "expert"       # Very complex, requires deep reasoning
+
+    EASY = "easy"  # Simple, 1-2 steps
+    MEDIUM = "medium"  # Moderate, 3-5 steps
+    HARD = "hard"  # Complex, 6+ steps
+    EXPERT = "expert"  # Very complex, requires deep reasoning
 
 
 class ContextMode(str, Enum):
     """Context engineering modes for benchmarking."""
-    NONE = "none"                       # No context engineering
-    REPOMAP_ONLY = "repomap_only"      # Only RepoMap (baseline)
-    MEMORY_ONLY = "memory_only"        # RepoMap + Memory
-    PLAYBOOK_ONLY = "playbook_only"    # RepoMap + Playbook
+
+    NONE = "none"  # No context engineering
+    REPOMAP_ONLY = "repomap_only"  # Only RepoMap (baseline)
+    MEMORY_ONLY = "memory_only"  # RepoMap + Memory
+    PLAYBOOK_ONLY = "playbook_only"  # RepoMap + Playbook
     MEMORY_PLAYBOOK = "memory_playbook"  # RepoMap + Memory + Playbook
-    FULL = "full"                      # All features (Memory + Playbook + Dynamic)
+    FULL = "full"  # All features (Memory + Playbook + Dynamic)
 
 
 @dataclass
@@ -62,19 +65,19 @@ class BenchmarkTask:
     difficulty: TaskDifficulty = TaskDifficulty.MEDIUM
 
     # Task definition
-    prompt: str = ""                    # The task prompt
-    expected_outcome: str = ""          # What success looks like
-    validation_fn: Optional[Callable] = None  # Optional validation function
+    prompt: str = ""  # The task prompt
+    expected_outcome: str = ""  # What success looks like
+    validation_fn: Callable | None = None  # Optional validation function
 
     # Context
-    files_needed: List[str] = field(default_factory=list)
-    setup_commands: List[str] = field(default_factory=list)
+    files_needed: list[str] = field(default_factory=list)
+    setup_commands: list[str] = field(default_factory=list)
 
     # Metadata
-    estimated_time_seconds: int = 300   # Estimated completion time
-    tags: List[str] = field(default_factory=list)
+    estimated_time_seconds: int = 300  # Estimated completion time
+    tags: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary (excluding validation_fn)."""
         data = asdict(self)
         data["category"] = self.category.value
@@ -101,12 +104,12 @@ class TaskResult:
     # Detailed metrics
     tokens_prompt: int = 0
     tokens_completion: int = 0
-    context_tokens: int = 0           # Tokens from context engineering
+    context_tokens: int = 0  # Tokens from context engineering
 
     # Quality metrics
     validation_passed: bool = False
     validation_message: str = ""
-    manual_review_score: Optional[float] = None  # 0-1 scale if manually reviewed
+    manual_review_score: float | None = None  # 0-1 scale if manually reviewed
 
     # Context engineering usage
     memories_used: int = 0
@@ -116,20 +119,20 @@ class TaskResult:
 
     # Error tracking
     errors_encountered: int = 0
-    error_messages: List[str] = field(default_factory=list)
+    error_messages: list[str] = field(default_factory=list)
 
     # Timestamps
     started_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    completed_at: Optional[str] = None
+    completed_at: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         data = asdict(self)
         data["context_mode"] = self.context_mode.value
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> TaskResult:
+    def from_dict(cls, data: dict[str, Any]) -> TaskResult:
         """Create from dictionary."""
         if "context_mode" in data and isinstance(data["context_mode"], str):
             data["context_mode"] = ContextMode(data["context_mode"])
@@ -146,19 +149,19 @@ class BenchmarkRun:
     context_mode: ContextMode = ContextMode.NONE
 
     # Tasks and results
-    tasks: List[BenchmarkTask] = field(default_factory=list)
-    results: List[TaskResult] = field(default_factory=list)
+    tasks: list[BenchmarkTask] = field(default_factory=list)
+    results: list[TaskResult] = field(default_factory=list)
 
     # Run metadata
     started_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    completed_at: Optional[str] = None
+    completed_at: str | None = None
 
     # System info
     python_version: str = ""
     devagent_version: str = ""
     llm_model: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         data = asdict(self)
         data["context_mode"] = self.context_mode.value
@@ -167,7 +170,7 @@ class BenchmarkRun:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> BenchmarkRun:
+    def from_dict(cls, data: dict[str, Any]) -> BenchmarkRun:
         """Create from dictionary."""
         if "context_mode" in data and isinstance(data["context_mode"], str):
             data["context_mode"] = ContextMode(data["context_mode"])
@@ -207,7 +210,7 @@ class BenchmarkFramework:
 
     DEFAULT_RESULTS_PATH = Path.home() / ".devagent" / "benchmarks"
 
-    def __init__(self, results_path: Optional[Path] = None):
+    def __init__(self, results_path: Path | None = None):
         """Initialize the benchmark framework.
 
         Args:
@@ -217,7 +220,7 @@ class BenchmarkFramework:
         self.results_path.mkdir(parents=True, exist_ok=True)
 
         # Benchmark runs storage
-        self._runs: Dict[str, BenchmarkRun] = {}
+        self._runs: dict[str, BenchmarkRun] = {}
 
         # Load existing runs
         self._load_runs()
@@ -227,7 +230,7 @@ class BenchmarkFramework:
         runs_file = self.results_path / "runs.json"
         if runs_file.exists():
             try:
-                with open(runs_file, "r") as f:
+                with open(runs_file) as f:
                     data = json.load(f)
                     for run_data in data.get("runs", []):
                         run = BenchmarkRun.from_dict(run_data)
@@ -241,19 +244,23 @@ class BenchmarkFramework:
         runs_file = self.results_path / "runs.json"
         try:
             with open(runs_file, "w") as f:
-                json.dump({
-                    "runs": [run.to_dict() for run in self._runs.values()],
-                    "saved_at": datetime.now().isoformat()
-                }, f, indent=2)
+                json.dump(
+                    {
+                        "runs": [run.to_dict() for run in self._runs.values()],
+                        "saved_at": datetime.now().isoformat(),
+                    },
+                    f,
+                    indent=2,
+                )
         except Exception as e:
             logger.error(f"Failed to save benchmark runs: {e}")
 
     def create_run(
         self,
         name: str,
-        tasks: List[BenchmarkTask],
+        tasks: list[BenchmarkTask],
         context_mode: ContextMode,
-        description: str = ""
+        description: str = "",
     ) -> BenchmarkRun:
         """Create a new benchmark run.
 
@@ -267,10 +274,7 @@ class BenchmarkFramework:
             Created BenchmarkRun
         """
         run = BenchmarkRun(
-            name=name,
-            description=description,
-            context_mode=context_mode,
-            tasks=tasks
+            name=name, description=description, context_mode=context_mode, tasks=tasks
         )
 
         self._runs[run.run_id] = run
@@ -283,7 +287,7 @@ class BenchmarkFramework:
         self,
         task: BenchmarkTask,
         context_mode: ContextMode,
-        executor_fn: Callable[[BenchmarkTask, ContextMode], TaskResult]
+        executor_fn: Callable[[BenchmarkTask, ContextMode], TaskResult],
     ) -> TaskResult:
         """Execute a single benchmark task.
 
@@ -315,7 +319,7 @@ class BenchmarkFramework:
                 execution_time_seconds=time.time() - start_time,
                 errors_encountered=1,
                 error_messages=[str(e)],
-                completed_at=datetime.now().isoformat()
+                completed_at=datetime.now().isoformat(),
             )
             logger.error(f"Task execution failed: {e}")
 
@@ -325,7 +329,7 @@ class BenchmarkFramework:
         self,
         run: BenchmarkRun,
         executor_fn: Callable[[BenchmarkTask, ContextMode], TaskResult],
-        max_tasks: Optional[int] = None
+        max_tasks: int | None = None,
     ) -> BenchmarkRun:
         """Execute all tasks in a benchmark run.
 
@@ -360,11 +364,7 @@ class BenchmarkFramework:
 
         return run
 
-    def compare_runs(
-        self,
-        baseline_run_id: str,
-        comparison_run_id: str
-    ) -> Dict[str, Any]:
+    def compare_runs(self, baseline_run_id: str, comparison_run_id: str) -> dict[str, Any]:
         """Compare two benchmark runs.
 
         Args:
@@ -382,18 +382,27 @@ class BenchmarkFramework:
 
         # Calculate improvements
         success_improvement = (
-            (comparison.total_success_rate - baseline.total_success_rate) /
-            baseline.total_success_rate * 100 if baseline.total_success_rate > 0 else 0
+            (comparison.total_success_rate - baseline.total_success_rate)
+            / baseline.total_success_rate
+            * 100
+            if baseline.total_success_rate > 0
+            else 0
         )
 
         time_improvement = (
-            (baseline.avg_execution_time - comparison.avg_execution_time) /
-            baseline.avg_execution_time * 100 if baseline.avg_execution_time > 0 else 0
+            (baseline.avg_execution_time - comparison.avg_execution_time)
+            / baseline.avg_execution_time
+            * 100
+            if baseline.avg_execution_time > 0
+            else 0
         )
 
         token_improvement = (
-            (baseline.avg_tokens_per_task - comparison.avg_tokens_per_task) /
-            baseline.avg_tokens_per_task * 100 if baseline.avg_tokens_per_task > 0 else 0
+            (baseline.avg_tokens_per_task - comparison.avg_tokens_per_task)
+            / baseline.avg_tokens_per_task
+            * 100
+            if baseline.avg_tokens_per_task > 0
+            else 0
         )
 
         return {
@@ -402,28 +411,28 @@ class BenchmarkFramework:
                 "context_mode": baseline.context_mode.value,
                 "success_rate": baseline.total_success_rate,
                 "avg_time": baseline.avg_execution_time,
-                "avg_tokens": baseline.avg_tokens_per_task
+                "avg_tokens": baseline.avg_tokens_per_task,
             },
             "comparison": {
                 "name": comparison.name,
                 "context_mode": comparison.context_mode.value,
                 "success_rate": comparison.total_success_rate,
                 "avg_time": comparison.avg_execution_time,
-                "avg_tokens": comparison.avg_tokens_per_task
+                "avg_tokens": comparison.avg_tokens_per_task,
             },
             "improvements": {
                 "success_rate_pct": success_improvement,
                 "time_reduction_pct": time_improvement,
-                "token_reduction_pct": token_improvement
+                "token_reduction_pct": token_improvement,
             },
             "meets_targets": {
                 "success_rate": success_improvement >= 30,  # Target: ≥30%
                 "token_reduction": token_improvement >= 30,  # Target: ≥30%
-                "time_reduction": time_improvement >= 20    # Target: ≥20%
-            }
+                "time_reduction": time_improvement >= 20,  # Target: ≥20%
+            },
         }
 
-    def get_run(self, run_id: str) -> Optional[BenchmarkRun]:
+    def get_run(self, run_id: str) -> BenchmarkRun | None:
         """Get a benchmark run by ID.
 
         Args:
@@ -434,7 +443,7 @@ class BenchmarkFramework:
         """
         return self._runs.get(run_id)
 
-    def get_all_runs(self) -> List[BenchmarkRun]:
+    def get_all_runs(self) -> list[BenchmarkRun]:
         """Get all benchmark runs.
 
         Returns:
@@ -442,11 +451,7 @@ class BenchmarkFramework:
         """
         return list(self._runs.values())
 
-    def generate_report(
-        self,
-        run_id: str,
-        output_path: Optional[Path] = None
-    ) -> str:
+    def generate_report(self, run_id: str, output_path: Path | None = None) -> str:
         """Generate a detailed report for a benchmark run.
 
         Args:
@@ -474,7 +479,7 @@ class BenchmarkFramework:
 
         # By category
         report += "## Results by Category\n\n"
-        by_category: Dict[str, List[TaskResult]] = {}
+        by_category: dict[str, list[TaskResult]] = {}
         for result in run.results:
             # Find task to get category
             task = next((t for t in run.tasks if t.task_id == result.task_id), None)

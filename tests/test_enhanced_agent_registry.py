@@ -1,18 +1,14 @@
 """Tests for enhanced agent registry with dynamic discovery."""
-import pytest
-from typing import Dict, Any
-from unittest.mock import Mock, patch
-import tempfile
+
 import json
 import os
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock, patch
 
+from ai_dev_agent.agents.base import BaseAgent
+from ai_dev_agent.agents.enhanced_registry import AgentDiscovery, AgentLoader, EnhancedAgentRegistry
 from ai_dev_agent.agents.registry import AgentSpec
-from ai_dev_agent.agents.enhanced_registry import (
-    EnhancedAgentRegistry,
-    AgentLoader,
-    AgentDiscovery
-)
-from ai_dev_agent.agents.base import BaseAgent, AgentCapability
 
 
 class TestEnhancedAgentRegistry:
@@ -22,11 +18,7 @@ class TestEnhancedAgentRegistry:
         """Test registering a BaseAgent instance."""
         registry = EnhancedAgentRegistry()
 
-        agent = BaseAgent(
-            name="test_agent",
-            description="Test agent",
-            tools=["read", "write"]
-        )
+        agent = BaseAgent(name="test_agent", description="Test agent", tools=["read", "write"])
 
         registry.register_agent(agent)
 
@@ -39,11 +31,7 @@ class TestEnhancedAgentRegistry:
         """Test registering an agent spec."""
         registry = EnhancedAgentRegistry()
 
-        spec = AgentSpec(
-            name="spec_agent",
-            tools=["grep", "find"],
-            max_iterations=20
-        )
+        spec = AgentSpec(name="spec_agent", tools=["grep", "find"], max_iterations=20)
 
         registry.register_spec(spec)
 
@@ -56,10 +44,7 @@ class TestEnhancedAgentRegistry:
         registry = EnhancedAgentRegistry()
 
         spec = AgentSpec(
-            name="spec_agent",
-            tools=["read"],
-            max_iterations=15,
-            description="Created from spec"
+            name="spec_agent", tools=["read"], max_iterations=15, description="Created from spec"
         )
 
         registry.register_spec(spec)
@@ -122,11 +107,7 @@ class TestEnhancedAgentRegistry:
 
         agent = BaseAgent(
             name="meta_agent",
-            metadata={
-                "version": "1.0",
-                "author": "test",
-                "tags": ["experimental", "ml"]
-            }
+            metadata={"version": "1.0", "author": "test", "tags": ["experimental", "ml"]},
         )
 
         registry.register_agent(agent)
@@ -137,7 +118,7 @@ class TestEnhancedAgentRegistry:
 
     def test_registry_persistence(self):
         """Test saving and loading registry state."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             temp_file = f.name
 
         try:
@@ -161,8 +142,8 @@ class TestEnhancedAgentRegistry:
             assert new_registry.has_spec("persist2")
 
         finally:
-            if os.path.exists(temp_file):
-                os.unlink(temp_file)
+            if Path(temp_file).exists():
+                Path(temp_file).unlink()
 
     def test_singleton_registry(self):
         """Test that registry can work as singleton."""
@@ -187,11 +168,13 @@ class TestAgentLoader:
         loader = AgentLoader()
 
         # Mock module import
-        with patch('importlib.import_module') as mock_import:
+        with patch("importlib.import_module") as mock_import:
             mock_module = Mock()
-            mock_module.TestAgent = type('TestAgent', (BaseAgent,), {
-                '__init__': lambda self: BaseAgent.__init__(self, name="loaded_agent")
-            })
+            mock_module.TestAgent = type(
+                "TestAgent",
+                (BaseAgent,),
+                {"__init__": lambda self: BaseAgent.__init__(self, name="loaded_agent")},
+            )
             mock_import.return_value = mock_module
 
             agent_class = loader.load_agent_class("test_module", "TestAgent")
@@ -201,14 +184,14 @@ class TestAgentLoader:
 
     def test_load_agent_from_config(self):
         """Test loading agent from config file."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             config = {
                 "name": "config_agent",
                 "type": "BaseAgent",
                 "tools": ["read", "write"],
                 "max_iterations": 25,
                 "description": "Loaded from config",
-                "capabilities": ["analysis"]
+                "capabilities": ["analysis"],
             }
             json.dump(config, f)
             temp_file = f.name
@@ -223,8 +206,8 @@ class TestAgentLoader:
             assert "analysis" in agent.capabilities
 
         finally:
-            if os.path.exists(temp_file):
-                os.unlink(temp_file)
+            if Path(temp_file).exists():
+                Path(temp_file).unlink()
 
 
 class TestAgentDiscovery:
@@ -248,9 +231,9 @@ class CustomAgent2(BaseAgent):
     def __init__(self):
         super().__init__(name="custom2", tools=["write"])
 """
-            with open(os.path.join(tmpdir, "agent1.py"), 'w') as f:
+            with (Path(tmpdir) / "agent1.py").open("w") as f:
                 f.write(agent1_code)
-            with open(os.path.join(tmpdir, "agent2.py"), 'w') as f:
+            with (Path(tmpdir) / "agent2.py").open("w") as f:
                 f.write(agent2_code)
 
             discovery = AgentDiscovery()

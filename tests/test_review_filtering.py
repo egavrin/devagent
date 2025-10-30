@@ -1,12 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import json
-from pathlib import Path
-from typing import Dict
 
 import click
 import pytest
-import importlib
 
 import ai_dev_agent.cli as cli_package
 from ai_dev_agent.cli.review import run_review
@@ -23,7 +21,7 @@ class DummyCompleteResult:
 class DummyClient:
     """Stubbed LLM client returning the supplied assistant message."""
 
-    def __init__(self, message: Dict[str, any]) -> None:
+    def __init__(self, message: dict[str, any]) -> None:
         self._message = json.dumps(message)
 
     def invoke_tools(self, *args, **kwargs):  # pylint: disable=unused-argument
@@ -56,6 +54,7 @@ stdlib/.*\\.ets$
     class StubCtx:
         command_path = "devagent review"
         invoked_subcommand = "review"
+
         def __init__(self, settings):
             self.obj = {"settings": settings, "silent_mode": True}
             self.params = {}
@@ -220,7 +219,9 @@ def test_review_returns_fallback_when_json_parse_fails(review_context, monkeypat
 
     # Simulate executor raising the JSON enforcement error
     def fake_execute(*args, **kwargs):
-        raise click.ClickException("Assistant response did not contain valid JSON matching the required schema.")
+        raise click.ClickException(
+            "Assistant response did not contain valid JSON matching the required schema."
+        )
 
     monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
 

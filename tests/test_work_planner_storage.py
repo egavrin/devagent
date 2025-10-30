@@ -4,17 +4,13 @@ Tests for Work Planning Storage
 Following TDD: These tests are written BEFORE implementation.
 """
 
-import pytest
-import tempfile
 import json
+import tempfile
 from pathlib import Path
-from ai_dev_agent.agents.work_planner import (
-    Task,
-    WorkPlan,
-    WorkPlanStorage,
-    TaskStatus,
-    Priority,
-)
+
+import pytest
+
+from ai_dev_agent.agents.work_planner import Priority, Task, TaskStatus, WorkPlan, WorkPlanStorage
 
 
 class TestWorkPlanStorage:
@@ -54,7 +50,7 @@ class TestWorkPlanStorage:
         assert plan_file.exists()
 
         # Verify file contents
-        with open(plan_file, "r") as f:
+        with Path(plan_file).open() as f:
             data = json.load(f)
             assert data["name"] == "Test Plan"
             assert data["goal"] == "Test goal"

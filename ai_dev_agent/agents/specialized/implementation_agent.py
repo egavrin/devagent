@@ -1,14 +1,15 @@
 """Implementation Agent for executing designs with TDD workflow."""
+
 from __future__ import annotations
 
 import os
 import re
 import subprocess
-from pathlib import Path
-from typing import Dict, List, Any, Optional
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-from ..base import BaseAgent, AgentContext, AgentResult, AgentCapability
+from ..base import AgentCapability, AgentContext, AgentResult, BaseAgent
 
 
 class ImplementationAgent(BaseAgent):
@@ -23,10 +24,10 @@ class ImplementationAgent(BaseAgent):
                 "code_implementation",
                 "incremental_development",
                 "status_tracking",
-                "error_handling"
+                "error_handling",
             ],
             tools=["read", "write", "grep", "find", "run"],
-            max_iterations=40
+            max_iterations=40,
         )
 
         # Register capabilities
@@ -39,36 +40,32 @@ class ImplementationAgent(BaseAgent):
                 name="code_implementation",
                 description="Implement code from designs",
                 required_tools=["read", "write"],
-                optional_tools=["grep", "find"]
+                optional_tools=["grep", "find"],
             ),
             AgentCapability(
                 name="incremental_development",
                 description="Develop in small incremental steps",
                 required_tools=["write", "run"],
-                optional_tools=["read"]
+                optional_tools=["read"],
             ),
             AgentCapability(
                 name="status_tracking",
                 description="Track implementation progress",
                 required_tools=[],
-                optional_tools=["write"]
+                optional_tools=["write"],
             ),
             AgentCapability(
                 name="error_handling",
                 description="Implement proper error handling",
                 required_tools=["write"],
-                optional_tools=["read"]
-            )
+                optional_tools=["read"],
+            ),
         ]
 
         for capability in capabilities:
             self.register_capability(capability)
 
-    def parse_design_document(
-        self,
-        design_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def parse_design_document(self, design_path: str, context: AgentContext) -> dict[str, Any]:
         """
         Parse a design document to extract implementation details.
 
@@ -80,7 +77,8 @@ class ImplementationAgent(BaseAgent):
             Parsed design information
         """
         try:
-            with open(design_path, 'r') as f:
+            design_path = Path(design_path)
+            with design_path.open() as f:
                 content = f.read()
 
             # Extract components
@@ -108,23 +106,15 @@ class ImplementationAgent(BaseAgent):
                 "components": components,
                 "requirements": [r.strip() for r in requirements],
                 "patterns": patterns,
-                "content": content
+                "content": content,
             }
 
         except Exception as e:
-            return {
-                "error": str(e),
-                "components": [],
-                "requirements": [],
-                "patterns": []
-            }
+            return {"error": str(e), "components": [], "requirements": [], "patterns": []}
 
     def generate_code_from_design(
-        self,
-        design: Dict[str, Any],
-        output_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, design: dict[str, Any], output_path: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Generate code from design specification.
 
@@ -143,12 +133,14 @@ class ImplementationAgent(BaseAgent):
             lines = []
 
             # Generate imports
-            lines.extend([
-                '"""Generated implementation."""',
-                "from typing import Any, Dict, List, Optional",
-                "",
-                ""
-            ])
+            lines.extend(
+                [
+                    '"""Generated implementation."""',
+                    "from typing import Any, Dict, List, Optional",
+                    "",
+                    "",
+                ]
+            )
 
             # Generate classes for each component
             for component in components:
@@ -174,27 +166,19 @@ class ImplementationAgent(BaseAgent):
                     lines.append("")
 
             # Write code
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, 'w') as f:
-                f.write('\n'.join(lines))
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("w") as f:
+                f.write("\n".join(lines))
 
-            return {
-                "success": True,
-                "path": output_path,
-                "lines_generated": len(lines)
-            }
+            return {"success": True, "path": output_path, "lines_generated": len(lines)}
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def implement_incrementally(
-        self,
-        tasks: List[Dict[str, Any]],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, tasks: list[dict[str, Any]], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Implement tasks incrementally.
 
@@ -210,7 +194,7 @@ class ImplementationAgent(BaseAgent):
         # Sort by priority
         sorted_tasks = sorted(
             tasks,
-            key=lambda t: {"high": 0, "medium": 1, "low": 2}.get(t.get("priority", "medium"), 1)
+            key=lambda t: {"high": 0, "medium": 1, "low": 2}.get(t.get("priority", "medium"), 1),
         )
 
         for task in sorted_tasks:
@@ -218,21 +202,13 @@ class ImplementationAgent(BaseAgent):
                 "task": task["name"],
                 "priority": task.get("priority", "medium"),
                 "status": "completed",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
             completed_steps.append(step)
 
-        return {
-            "completed": len(completed_steps),
-            "steps": completed_steps,
-            "status": "done"
-        }
+        return {"completed": len(completed_steps), "steps": completed_steps, "status": "done"}
 
-    def verify_tests_pass(
-        self,
-        test_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def verify_tests_pass(self, test_path: str, context: AgentContext) -> dict[str, Any]:
         """
         Verify that tests pass after implementation.
 
@@ -245,10 +221,7 @@ class ImplementationAgent(BaseAgent):
         """
         try:
             result = subprocess.run(
-                ["pytest", test_path, "-v"],
-                capture_output=True,
-                text=True,
-                timeout=60
+                ["pytest", test_path, "-v"], capture_output=True, text=True, timeout=60
             )
 
             output = result.stdout + result.stderr
@@ -259,21 +232,15 @@ class ImplementationAgent(BaseAgent):
                 "success": result.returncode == 0,
                 "tests_passed": tests_passed,
                 "tests_failed": tests_failed,
-                "output": output
+                "output": output,
             }
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def rollback_changes(
-        self,
-        file_path: str,
-        original_content: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, file_path: str, original_content: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Rollback changes to original state.
 
@@ -286,26 +253,20 @@ class ImplementationAgent(BaseAgent):
             Rollback result
         """
         try:
-            with open(file_path, 'w') as f:
+            file_path = Path(file_path)
+            with file_path.open("w") as f:
                 f.write(original_content)
 
             return {
                 "success": True,
                 "file": file_path,
-                "message": "Changes rolled back successfully"
+                "message": "Changes rolled back successfully",
             }
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
-    def update_status(
-        self,
-        status_update: Dict[str, Any],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def update_status(self, status_update: dict[str, Any], context: AgentContext) -> dict[str, Any]:
         """
         Update implementation status.
 
@@ -321,15 +282,12 @@ class ImplementationAgent(BaseAgent):
             "component": status_update.get("component"),
             "status": status_update.get("status"),
             "progress": status_update.get("progress", 0),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
 
     def apply_minimal_change(
-        self,
-        existing_code: str,
-        new_requirement: Dict[str, Any],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, existing_code: str, new_requirement: dict[str, Any], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Apply minimal change to existing code.
 
@@ -341,7 +299,7 @@ class ImplementationAgent(BaseAgent):
         Returns:
             Updated code with minimal changes
         """
-        lines = existing_code.split('\n')
+        lines = existing_code.split("\n")
         original_line_count = len(lines)
 
         # Add new method if requested
@@ -354,32 +312,26 @@ class ImplementationAgent(BaseAgent):
                 "",
                 f"{indent}def {method_name}(self):",
                 f'{indent}    """New method."""',
-                f"{indent}    pass"
+                f"{indent}    pass",
             ]
 
             # Insert before last line (which is usually empty or end of class)
             insert_pos = len(lines) - 1
             for i in range(len(lines) - 1, -1, -1):
-                if lines[i].strip() and not lines[i].strip().startswith('#'):
+                if lines[i].strip() and not lines[i].strip().startswith("#"):
                     insert_pos = i + 1
                     break
 
             lines[insert_pos:insert_pos] = new_method
 
-        updated_code = '\n'.join(lines)
+        updated_code = "\n".join(lines)
         lines_changed = len(lines) - original_line_count
 
-        return {
-            "updated_code": updated_code,
-            "lines_changed": lines_changed
-        }
+        return {"updated_code": updated_code, "lines_changed": lines_changed}
 
     def check_compatibility_preserved(
-        self,
-        existing_api: Dict[str, Any],
-        new_code: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, existing_api: dict[str, Any], new_code: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Check that existing API is preserved in new code.
 
@@ -404,24 +356,25 @@ class ImplementationAgent(BaseAgent):
             if f"class {cls}" in new_code:
                 preserved_classes.append(cls)
 
-        compatible = (
-            len(preserved_functions) == len(existing_api.get("functions", [])) and
-            len(preserved_classes) == len(existing_api.get("classes", []))
-        )
+        compatible = len(preserved_functions) == len(existing_api.get("functions", [])) and len(
+            preserved_classes
+        ) == len(existing_api.get("classes", []))
 
         return {
             "compatible": compatible,
             "preserved_functions": preserved_functions,
             "preserved_classes": preserved_classes,
-            "missing_functions": [f for f in existing_api.get("functions", []) if f not in preserved_functions],
-            "missing_classes": [c for c in existing_api.get("classes", []) if c not in preserved_classes]
+            "missing_functions": [
+                f for f in existing_api.get("functions", []) if f not in preserved_functions
+            ],
+            "missing_classes": [
+                c for c in existing_api.get("classes", []) if c not in preserved_classes
+            ],
         }
 
     def apply_design_patterns(
-        self,
-        design: Dict[str, Any],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, design: dict[str, Any], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Apply design patterns from design spec.
 
@@ -447,13 +400,11 @@ class ImplementationAgent(BaseAgent):
 
         return {
             "implemented_components": implemented_components,
-            "patterns_applied": patterns_applied
+            "patterns_applied": patterns_applied,
         }
 
     def generate_method_with_error_handling(
-        self,
-        method_spec: Dict[str, Any],
-        context: AgentContext
+        self, method_spec: dict[str, Any], context: AgentContext
     ) -> str:
         """
         Generate method with proper error handling.
@@ -467,15 +418,15 @@ class ImplementationAgent(BaseAgent):
         """
         method_name = method_spec.get("name", "method")
         params = method_spec.get("params", [])
-        error_conditions = method_spec.get("error_conditions", [])
+        method_spec.get("error_conditions", [])
 
         lines = [
             f"def {method_name}(self, {', '.join(params)}):",
             f'    """Process {params[0] if params else "data"} with error handling."""',
             "    try:",
-            f"        # Validate input",
+            "        # Validate input",
             f"        if not {params[0] if params else 'data'}:",
-            f"            raise ValueError('Invalid input')",
+            "            raise ValueError('Invalid input')",
             "",
             "        # Process",
             "        result = None  # Implementation here",
@@ -487,17 +438,14 @@ class ImplementationAgent(BaseAgent):
             "        raise",
             "    except Exception as e:",
             "        # Handle unexpected errors",
-            "        raise RuntimeError(f'Error in {method_name}: {{e}}')"
+            "        raise RuntimeError(f'Error in {method_name}: {{e}}')",
         ]
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def implement_with_tdd(
-        self,
-        design: Dict[str, Any],
-        test_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, design: dict[str, Any], test_path: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Implement following TDD workflow.
 
@@ -527,7 +475,7 @@ class ImplementationAgent(BaseAgent):
             "tests_failed_initially": tests_failed_initially,
             "tests_pass_after_implementation": tests_pass_after,
             "initial_failures": initial_test.get("tests_failed", 0),
-            "final_passes": final_test.get("tests_passed", 0)
+            "final_passes": final_test.get("tests_passed", 0),
         }
 
     def execute(self, prompt: str, context: AgentContext) -> AgentResult:
@@ -545,8 +493,4 @@ class ImplementationAgent(BaseAgent):
         from .executor_bridge import execute_agent_with_react
 
         # Execute using ReAct workflow with LLM and real tools
-        return execute_agent_with_react(
-            agent=self,
-            prompt=prompt,
-            context=context
-        )
+        return execute_agent_with_react(agent=self, prompt=prompt, context=context)

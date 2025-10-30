@@ -1,14 +1,12 @@
 """Tests for the artifacts utility module."""
 
 import hashlib
-from datetime import datetime
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-import pytest
-import tempfile
 import shutil
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from ai_dev_agent.core.utils.artifacts import write_artifact, ARTIFACTS_ROOT
+from ai_dev_agent.core.utils.artifacts import ARTIFACTS_ROOT, write_artifact
 
 
 class TestWriteArtifact:
@@ -88,7 +86,7 @@ class TestWriteArtifact:
         written_bytes = artifact_path.read_bytes()
         assert len(written_bytes) > 0
 
-    @patch('ai_dev_agent.core.utils.artifacts.datetime')
+    @patch("ai_dev_agent.core.utils.artifacts.datetime")
     def test_write_artifact_filename_format(self, mock_datetime):
         """Test the filename format with mocked datetime."""
         # Mock datetime to have consistent timestamp
@@ -114,7 +112,7 @@ class TestWriteArtifact:
         path1 = write_artifact(content, root=self.temp_path)
 
         # Mock different timestamp for second write
-        with patch('ai_dev_agent.core.utils.artifacts.datetime') as mock_dt:
+        with patch("ai_dev_agent.core.utils.artifacts.datetime") as mock_dt:
             mock_now = MagicMock()
             mock_now.strftime.return_value = "20240101_120001"  # Different timestamp
             mock_dt.utcnow.return_value = mock_now
@@ -133,6 +131,7 @@ class TestWriteArtifact:
         original_cwd = Path.cwd()
         try:
             import os
+
             os.chdir(self.temp_dir)
 
             content = "Test without root"

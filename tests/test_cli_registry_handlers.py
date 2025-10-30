@@ -1,4 +1,5 @@
 """Tests for CLI registry handlers."""
+
 from __future__ import annotations
 
 import click

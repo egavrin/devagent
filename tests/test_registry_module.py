@@ -1,19 +1,21 @@
 """Tests for the tool registry module."""
+
 import json
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
-from unittest.mock import MagicMock, Mock, patch
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from jsonschema import Draft7Validator
 
 from ai_dev_agent.tools.registry import (
     ToolContext,
-    ToolSpec,
     ToolRegistry,
-    registry,
+    ToolSpec,
     _load_validator,
+    registry,
 )
 
 
@@ -26,11 +28,7 @@ class TestToolContext:
         settings = {"key": "value"}
         sandbox = MagicMock()
 
-        context = ToolContext(
-            repo_root=repo_root,
-            settings=settings,
-            sandbox=sandbox
-        )
+        context = ToolContext(repo_root=repo_root, settings=settings, sandbox=sandbox)
 
         assert context.repo_root == repo_root
         assert context.settings == settings
@@ -47,7 +45,7 @@ class TestToolContext:
             sandbox=None,
             devagent_config={"config": "value"},
             metrics_collector=MagicMock(),
-            extra={"extra": "data"}
+            extra={"extra": "data"},
         )
 
         assert context.devagent_config == {"config": "value"}
@@ -60,14 +58,12 @@ class TestToolSpec:
 
     def test_tool_spec_minimal(self):
         """Test creating minimal ToolSpec."""
+
         def handler(payload, context):
             return {"result": "ok"}
 
         spec = ToolSpec(
-            name="test_tool",
-            handler=handler,
-            request_schema_path=None,
-            response_schema_path=None
+            name="test_tool", handler=handler, request_schema_path=None, response_schema_path=None
         )
 
         assert spec.name == "test_tool"
@@ -91,7 +87,7 @@ class TestToolSpec:
             response_schema_path=resp_path,
             description="A full tool",
             display_name="Full Tool",
-            category="testing"
+            category="testing",
         )
 
         assert spec.name == "full_tool"
@@ -111,8 +107,10 @@ class TestToolRegistry:
     @pytest.fixture
     def mock_handler(self):
         """Create a mock handler function."""
+
         def handler(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
             return {"output": payload.get("input", "default")}
+
         return handler
 
     @pytest.fixture
@@ -125,7 +123,7 @@ class TestToolRegistry:
             response_schema_path=None,
             description="Sample tool",
             display_name="Sample Tool",
-            category="test_category"
+            category="test_category",
         )
 
     def test_init(self, registry):
@@ -178,7 +176,7 @@ class TestToolRegistry:
                 name=f"tool_{i}",
                 handler=lambda p, c: {},
                 request_schema_path=None,
-                response_schema_path=None
+                response_schema_path=None,
             )
             registry.register(spec)
 
@@ -189,30 +187,20 @@ class TestToolRegistry:
         """Test invoking a tool without schema validation."""
         registry.register(sample_spec)
 
-        context = ToolContext(
-            repo_root=Path("/test"),
-            settings={},
-            sandbox=None
-        )
+        context = ToolContext(repo_root=Path("/test"), settings={}, sandbox=None)
 
-        result = registry.invoke(
-            "sample_tool",
-            {"input": "test_value"},
-            context
-        )
+        result = registry.invoke("sample_tool", {"input": "test_value"}, context)
 
         assert result == {"output": "test_value"}
 
     def test_invoke_with_request_validation(self, registry, mock_handler):
         """Test invoking tool with request schema validation."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             schema = {
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
-                "properties": {
-                    "required_field": {"type": "string"}
-                },
-                "required": ["required_field"]
+                "properties": {"required_field": {"type": "string"}},
+                "required": ["required_field"],
             }
             json.dump(schema, f)
             schema_path = Path(f.name)
@@ -222,44 +210,35 @@ class TestToolRegistry:
                 name="validated_tool",
                 handler=mock_handler,
                 request_schema_path=schema_path,
-                response_schema_path=None
+                response_schema_path=None,
             )
             registry.register(spec)
 
             context = ToolContext(Path("/test"), {}, None)
 
             # Valid request
-            result = registry.invoke(
-                "validated_tool",
-                {"required_field": "value"},
-                context
-            )
+            result = registry.invoke("validated_tool", {"required_field": "value"}, context)
             assert result is not None
 
             # Invalid request - missing required field
             with pytest.raises(ValueError) as exc_info:
-                registry.invoke(
-                    "validated_tool",
-                    {"wrong_field": "value"},
-                    context
-                )
+                registry.invoke("validated_tool", {"wrong_field": "value"}, context)
             assert "Invalid input for validated_tool" in str(exc_info.value)
         finally:
             schema_path.unlink()
 
     def test_invoke_with_response_validation(self, registry):
         """Test invoking tool with response schema validation."""
+
         def bad_handler(payload, context):
             return {"wrong_field": "value"}
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             schema = {
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
-                "properties": {
-                    "expected_field": {"type": "string"}
-                },
-                "required": ["expected_field"]
+                "properties": {"expected_field": {"type": "string"}},
+                "required": ["expected_field"],
             }
             json.dump(schema, f)
             schema_path = Path(f.name)
@@ -269,7 +248,7 @@ class TestToolRegistry:
                 name="response_validated",
                 handler=bad_handler,
                 request_schema_path=None,
-                response_schema_path=schema_path
+                response_schema_path=schema_path,
             )
             registry.register(spec)
 
@@ -344,7 +323,7 @@ class TestToolRegistry:
                 handler=lambda p, c: {},
                 request_schema_path=None,
                 response_schema_path=None,
-                category="shared_category"
+                category="shared_category",
             )
             registry.register(spec)
 
@@ -354,7 +333,7 @@ class TestToolRegistry:
             handler=lambda p, c: {},
             request_schema_path=None,
             response_schema_path=None,
-            category="other_category"
+            category="other_category",
         )
         registry.register(other_spec)
 
@@ -388,7 +367,7 @@ class TestToolRegistry:
             request_schema_path=None,
             response_schema_path=None,
             display_name="Tool One",
-            category="cat1"
+            category="cat1",
         )
 
         spec2 = ToolSpec(
@@ -418,13 +397,11 @@ class TestLoadValidator:
 
     def test_load_validator(self):
         """Test loading a JSON schema validator."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             schema = {
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
-                "properties": {
-                    "name": {"type": "string"}
-                }
+                "properties": {"name": {"type": "string"}},
             }
             json.dump(schema, f)
             schema_path = Path(f.name)
@@ -444,7 +421,7 @@ class TestLoadValidator:
 
     def test_load_validator_invalid_json(self):
         """Test loading invalid JSON raises error."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write("not valid json")
             schema_path = Path(f.name)
 

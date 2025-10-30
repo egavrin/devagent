@@ -12,7 +12,9 @@ from ai_dev_agent.providers.llm.openrouter import OpenRouterClient
 
 
 def test_deepseek_backoff_jitter_range(monkeypatch):
-    config = RetryConfig(initial_delay=1.0, max_delay=10.0, backoff_multiplier=2.0, jitter_ratio=0.25)
+    config = RetryConfig(
+        initial_delay=1.0, max_delay=10.0, backoff_multiplier=2.0, jitter_ratio=0.25
+    )
     client = DeepSeekClient(api_key="test", model="demo", retry_config=config)
 
     captured = {}
@@ -57,7 +59,7 @@ def test_deepseek_tool_call_parsing(monkeypatch):
                                 "id": "call_1",
                                 "function": {
                                     "name": "find",
-                                    "arguments": "{\n  \"query\": \"*.py\"\n}",
+                                    "arguments": '{\n  "query": "*.py"\n}',
                                 },
                             }
                         ],
@@ -71,7 +73,9 @@ def test_deepseek_tool_call_parsing(monkeypatch):
 
     result = client.invoke_tools(
         [Message(role="user", content="search for python files")],
-        tools=[{"type": "function", "function": {"name": "find", "parameters": {"type": "object"}}}],
+        tools=[
+            {"type": "function", "function": {"name": "find", "parameters": {"type": "object"}}}
+        ],
         temperature=0.0,
     )
 
@@ -105,7 +109,7 @@ def test_openrouter_tool_call_parsing_with_provider(monkeypatch):
                                 "id": "call_1",
                                 "function": {
                                     "name": "echo",
-                                    "arguments": "{\"value\": \"hello\"}",
+                                    "arguments": '{"value": "hello"}',
                                 },
                             }
                         ],
@@ -119,7 +123,9 @@ def test_openrouter_tool_call_parsing_with_provider(monkeypatch):
 
     result = client.invoke_tools(
         [Message(role="user", content="say hi")],
-        tools=[{"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}}],
+        tools=[
+            {"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}}
+        ],
     )
 
     assert captured["provider"] == {"allow": ["Cerebras"], "only": ["Cerebras"]}

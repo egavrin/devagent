@@ -1,29 +1,29 @@
 """Enhanced agent registry with dynamic discovery and BaseAgent support."""
+
 from __future__ import annotations
 
-import os
-import json
 import importlib
 import importlib.util
 import inspect
+import json
+import os
 from pathlib import Path
-from typing import Dict, List, Optional, Type, Any, Union
-from dataclasses import asdict
+from typing import Any
 
-from .registry import AgentSpec, AgentRegistry
-from .base import BaseAgent, AgentCapability
+from .base import BaseAgent
+from .registry import AgentRegistry, AgentSpec
 
 
 class EnhancedAgentRegistry:
     """Enhanced registry for managing agents and specs with dynamic discovery."""
 
-    _instance: Optional['EnhancedAgentRegistry'] = None
+    _instance: EnhancedAgentRegistry | None = None
 
     def __init__(self):
         """Initialize enhanced registry."""
-        self._agents: Dict[str, BaseAgent] = {}
-        self._specs: Dict[str, AgentSpec] = {}
-        self._agent_classes: Dict[str, Type[BaseAgent]] = {}
+        self._agents: dict[str, BaseAgent] = {}
+        self._specs: dict[str, AgentSpec] = {}
+        self._agent_classes: dict[str, type[BaseAgent]] = {}
 
         # Register base agent class
         self._agent_classes["BaseAgent"] = BaseAgent
@@ -32,7 +32,7 @@ class EnhancedAgentRegistry:
         self._import_default_agents()
 
     @classmethod
-    def get_instance(cls) -> 'EnhancedAgentRegistry':
+    def get_instance(cls) -> EnhancedAgentRegistry:
         """Get singleton instance of registry."""
         if cls._instance is None:
             cls._instance = cls()
@@ -57,7 +57,7 @@ class EnhancedAgentRegistry:
         """Register an agent spec."""
         self._specs[spec.name] = spec
 
-    def register_agent_class(self, name: str, agent_class: Type[BaseAgent]) -> None:
+    def register_agent_class(self, name: str, agent_class: type[BaseAgent]) -> None:
         """Register an agent class for dynamic instantiation."""
         self._agent_classes[name] = agent_class
 
@@ -117,7 +117,7 @@ class EnhancedAgentRegistry:
             "description": spec.description or "",
             "tools": spec.tools,
             "max_iterations": spec.max_iterations,
-            "metadata": spec.metadata.copy()
+            "metadata": spec.metadata.copy(),
         }
 
         # Add system prompt as metadata if present
@@ -138,12 +138,12 @@ class EnhancedAgentRegistry:
             "tools": template.tools.copy(),
             "max_iterations": template.max_iterations,
             "permissions": template.permissions.copy(),
-            "metadata": template.metadata.copy()
+            "metadata": template.metadata.copy(),
         }
         agent_kwargs.update(kwargs)
         return BaseAgent(**agent_kwargs)
 
-    def find_agents_by_capability(self, capability: str) -> List[str]:
+    def find_agents_by_capability(self, capability: str) -> list[str]:
         """Find all agents with a specific capability."""
         matching = []
         for name, agent in self._agents.items():
@@ -151,7 +151,7 @@ class EnhancedAgentRegistry:
                 matching.append(name)
         return matching
 
-    def find_agents_with_tools(self, required_tools: List[str]) -> List[str]:
+    def find_agents_with_tools(self, required_tools: list[str]) -> list[str]:
         """Find agents that have all required tools."""
         matching = []
         for name, agent in self._agents.items():
@@ -159,19 +159,17 @@ class EnhancedAgentRegistry:
                 matching.append(name)
         return matching
 
-    def list_all_agents(self) -> List[str]:
+    def list_all_agents(self) -> list[str]:
         """List all registered agent names."""
         return list(self._agents.keys())
 
-    def list_all_specs(self) -> List[str]:
+    def list_all_specs(self) -> list[str]:
         """List all registered spec names."""
         return list(self._specs.keys())
 
-    def save_to_file(self, filepath: str) -> None:
+    def save_to_file(self, filepath: str | Path) -> None:
         """Save registry specs to a JSON file."""
-        data = {
-            "specs": {}
-        }
+        data = {"specs": {}}
 
         for name, spec in self._specs.items():
             data["specs"][name] = {
@@ -180,25 +178,27 @@ class EnhancedAgentRegistry:
                 "max_iterations": spec.max_iterations,
                 "description": spec.description,
                 "system_prompt_suffix": spec.system_prompt_suffix,
-                "metadata": spec.metadata
+                "metadata": spec.metadata,
             }
 
-        with open(filepath, 'w') as f:
+        filepath = Path(filepath)
+        with filepath.open("w") as f:
             json.dump(data, f, indent=2)
 
-    def load_from_file(self, filepath: str) -> None:
+    def load_from_file(self, filepath: str | Path) -> None:
         """Load registry specs from a JSON file."""
-        with open(filepath, 'r') as f:
+        filepath = Path(filepath)
+        with filepath.open() as f:
             data = json.load(f)
 
-        for name, spec_data in data.get("specs", {}).items():
+        for _name, spec_data in data.get("specs", {}).items():
             spec = AgentSpec(
                 name=spec_data["name"],
                 tools=spec_data["tools"],
                 max_iterations=spec_data["max_iterations"],
                 description=spec_data.get("description"),
                 system_prompt_suffix=spec_data.get("system_prompt_suffix"),
-                metadata=spec_data.get("metadata", {})
+                metadata=spec_data.get("metadata", {}),
             )
             self.register_spec(spec)
 
@@ -212,7 +212,7 @@ class EnhancedAgentRegistry:
 class AgentLoader:
     """Loads agents from various sources."""
 
-    def load_agent_class(self, module_name: str, class_name: str) -> Type[BaseAgent]:
+    def load_agent_class(self, module_name: str, class_name: str) -> type[BaseAgent]:
         """
         Load an agent class from a module.
 
@@ -241,7 +241,8 @@ class AgentLoader:
         Returns:
             Configured BaseAgent instance
         """
-        with open(config_path, 'r') as f:
+        config_path = Path(config_path)
+        with config_path.open() as f:
             config = json.load(f)
 
         # Get agent type or default to BaseAgent
@@ -259,7 +260,7 @@ class AgentLoader:
             else:
                 raise ValueError(f"Unknown agent type: {agent_type}")
 
-    def load_from_file(self, filepath: str) -> Type[BaseAgent]:
+    def load_from_file(self, filepath: str) -> type[BaseAgent]:
         """
         Load an agent class from a Python file.
 
@@ -274,7 +275,7 @@ class AgentLoader:
         spec.loader.exec_module(module)
 
         # Find BaseAgent subclasses
-        for name, obj in inspect.getmembers(module, inspect.isclass):
+        for _name, obj in inspect.getmembers(module, inspect.isclass):
             if issubclass(obj, BaseAgent) and obj is not BaseAgent:
                 return obj
 
@@ -284,7 +285,7 @@ class AgentLoader:
 class AgentDiscovery:
     """Discovers and auto-registers agents."""
 
-    def discover_in_directory(self, directory: str) -> List[str]:
+    def discover_in_directory(self, directory: str) -> list[str]:
         """
         Discover agent files in a directory.
 
@@ -302,14 +303,14 @@ class AgentDiscovery:
                 continue
 
             # Check if file likely contains an agent
-            with open(py_file, 'r') as f:
+            with py_file.open() as f:
                 content = f.read()
                 if "BaseAgent" in content or "AgentSpec" in content:
                     agent_files.append(str(py_file))
 
         return agent_files
 
-    def discover_builtin_agents(self) -> Dict[str, AgentSpec]:
+    def discover_builtin_agents(self) -> dict[str, AgentSpec]:
         """
         Discover built-in agents from the registry.
 
@@ -330,16 +331,10 @@ class AgentDiscovery:
 
     def is_valid_agent_class(self, obj: Any) -> bool:
         """Check if an object is a valid agent class."""
-        return (
-            inspect.isclass(obj) and
-            issubclass(obj, BaseAgent) and
-            obj is not BaseAgent
-        )
+        return inspect.isclass(obj) and issubclass(obj, BaseAgent) and obj is not BaseAgent
 
     def register_agent_class(
-        self,
-        registry: EnhancedAgentRegistry,
-        agent_class: Type[BaseAgent]
+        self, registry: EnhancedAgentRegistry, agent_class: type[BaseAgent]
     ) -> None:
         """
         Register an agent class with the registry.
@@ -362,9 +357,7 @@ class AgentDiscovery:
             registry.register_agent_class(class_name, agent_class)
 
     def auto_discover_and_register(
-        self,
-        registry: EnhancedAgentRegistry,
-        search_paths: Optional[List[str]] = None
+        self, registry: EnhancedAgentRegistry, search_paths: list[str] | None = None
     ) -> int:
         """
         Auto-discover and register agents from search paths.
@@ -381,17 +374,18 @@ class AgentDiscovery:
         if search_paths is None:
             # Default search paths
             search_paths = [
-                os.path.join(os.path.dirname(__file__), "builtin"),
-                os.path.expanduser("~/.devagent/agents")
+                str(Path(__file__).parent / "builtin"),
+                str(Path("~/.devagent/agents").expanduser()),
             ]
 
         loader = AgentLoader()
 
         for path in search_paths:
-            if not os.path.exists(path):
+            path_obj = Path(path)
+            if not path_obj.exists():
                 continue
 
-            if os.path.isdir(path):
+            if path_obj.is_dir():
                 # Discover in directory
                 agent_files = self.discover_in_directory(path)
 
@@ -403,7 +397,7 @@ class AgentDiscovery:
                     except Exception:
                         pass  # Skip files that don't load properly
 
-            elif path.endswith('.json'):
+            elif path.endswith(".json"):
                 # Load from config
                 try:
                     agent = loader.load_from_config(path)

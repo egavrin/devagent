@@ -1,11 +1,13 @@
 """Tests for Review Agent."""
-import pytest
-from unittest.mock import Mock, patch, mock_open
-import tempfile
-import os
 
+import os
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from ai_dev_agent.agents.base import AgentContext
 from ai_dev_agent.agents.specialized.review_agent import ReviewAgent
-from ai_dev_agent.agents.base import AgentContext, AgentResult
 
 
 class TestReviewAgent:
@@ -88,8 +90,10 @@ def find_duplicates(items):
 
         assert "issues" in result
         assert "complexity" in result
-        assert any("O(n^2)" in str(issue) or "nested loop" in str(issue).lower()
-                   for issue in result["issues"])
+        assert any(
+            "O(n^2)" in str(issue) or "nested loop" in str(issue).lower()
+            for issue in result["issues"]
+        )
 
     def test_check_best_practices(self):
         """Test checking adherence to best practices."""
@@ -125,7 +129,7 @@ def calculate_total(items):
     return total
 """
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(code)
             file_path = f.name
 
@@ -137,7 +141,7 @@ def calculate_total(items):
             assert "issues_found" in result
 
         finally:
-            os.unlink(file_path)
+            Path(file_path).unlink()
 
     def test_generate_review_report(self):
         """Test generating a review report."""
@@ -150,20 +154,25 @@ def calculate_total(items):
             "critical_issues": 1,
             "quality_scores": {"module1.py": 0.8, "module2.py": 0.9},
             "issues": [
-                {"file": "module1.py", "line": 10, "severity": "high", "message": "SQL injection risk"},
-                {"file": "module2.py", "line": 25, "severity": "low", "message": "Unused import"}
-            ]
+                {
+                    "file": "module1.py",
+                    "line": 10,
+                    "severity": "high",
+                    "message": "SQL injection risk",
+                },
+                {"file": "module2.py", "line": 25, "severity": "low", "message": "Unused import"},
+            ],
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            report_path = os.path.join(tmpdir, "review_report.md")
+            report_path = str(Path(tmpdir) / "review_report.md")
 
             result = agent.generate_review_report(review_data, report_path, context)
 
             assert result["success"] is True
-            assert os.path.exists(report_path)
+            assert Path(report_path).exists()
 
-            with open(report_path, 'r') as f:
+            with Path(report_path).open() as f:
                 content = f.read()
                 assert "Code Review Report" in content
                 assert "SQL injection" in content
@@ -204,7 +213,11 @@ def complex_function(a, b, c, d):
 
         code = "print('Hello')"
         rules = [
-            {"name": "no_print_statements", "pattern": r"print\(", "message": "Use logging instead of print"}
+            {
+                "name": "no_print_statements",
+                "pattern": r"print\(",
+                "message": "Use logging instead of print",
+            }
         ]
 
         result = agent.review_with_rules(code, rules, context)
@@ -263,8 +276,8 @@ def slow_function(items):
 """
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            file_path = os.path.join(tmpdir, "code.py")
-            with open(file_path, 'w') as f:
+            file_path = str(Path(tmpdir) / "code.py")
+            with Path(file_path).open("w") as f:
                 f.write(code)
 
             prompt = f"Review the code at {file_path} for security and performance issues"
@@ -279,11 +292,7 @@ def slow_function(items):
         """Test aggregating review scores across multiple files."""
         agent = ReviewAgent()
 
-        file_scores = {
-            "module1.py": 0.9,
-            "module2.py": 0.8,
-            "module3.py": 0.7
-        }
+        file_scores = {"module1.py": 0.9, "module2.py": 0.8, "module3.py": 0.7}
 
         aggregate = agent.aggregate_scores(file_scores)
 

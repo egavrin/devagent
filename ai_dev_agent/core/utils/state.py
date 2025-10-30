@@ -1,11 +1,12 @@
 """State helpers used to share context within a CLI process."""
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .constants import MAX_HISTORY_ENTRIES, MAX_METRICS_ENTRIES
 from .logger import get_logger
@@ -20,11 +21,11 @@ class PlanSession:
     session_id: str
     goal: str
     status: str
-    current_task_id: Optional[str] = None
+    current_task_id: str | None = None
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
             "goal": self.goal,
@@ -35,7 +36,7 @@ class PlanSession:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PlanSession":
+    def from_dict(cls, data: dict[str, Any]) -> PlanSession:
         return cls(
             session_id=data["session_id"],
             goal=data["goal"],
@@ -50,8 +51,8 @@ class PlanSession:
 class InMemoryStateStore:
     """Process-local state container that deliberately avoids persistence."""
 
-    state_file: Optional[Path] = None
-    _cache: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    state_file: Path | None = None
+    _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.state_file is not None and type(self) is InMemoryStateStore:
@@ -61,19 +62,19 @@ class InMemoryStateStore:
                 self.state_file,
             )
 
-    def load(self) -> Dict[str, Any]:
+    def load(self) -> dict[str, Any]:
         """Return the current state data, creating defaults when empty."""
         if not self._cache:
             self._cache = self._create_default_state()
         return self._cache
 
-    def save(self, data: Dict[str, Any]) -> None:
+    def save(self, data: dict[str, Any]) -> None:
         """Replace the in-memory state after validation."""
         self._validate_state(data)
         self._cache = data
         LOGGER.debug("State stored in memory (not persisted)")
 
-    def update(self, **updates: Any) -> Dict[str, Any]:
+    def update(self, **updates: Any) -> dict[str, Any]:
         """Update state with automatic timestamping."""
         data = self.load().copy()
         data.update(updates)
@@ -81,7 +82,7 @@ class InMemoryStateStore:
         self.save(data)
         return data
 
-    def get_current_session(self) -> Optional[PlanSession]:
+    def get_current_session(self) -> PlanSession | None:
         """Get the current active plan session."""
         data = self.load()
         session_data = data.get("current_session")
@@ -89,16 +90,12 @@ class InMemoryStateStore:
             return PlanSession.from_dict(session_data)
         return None
 
-    def start_session(self, goal: str, session_id: Optional[str] = None) -> PlanSession:
+    def start_session(self, goal: str, session_id: str | None = None) -> PlanSession:
         """Start a new plan session."""
         if session_id is None:
             session_id = f"session_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
 
-        session = PlanSession(
-            session_id=session_id,
-            goal=goal,
-            status="active"
-        )
+        session = PlanSession(session_id=session_id, goal=goal, status="active")
 
         history = list(self._get_session_history())
         history.append(session.to_dict())
@@ -111,7 +108,7 @@ class InMemoryStateStore:
         LOGGER.info("Started new in-memory session: %s", session_id)
         return session
 
-    def update_session(self, **updates: Any) -> Optional[PlanSession]:
+    def update_session(self, **updates: Any) -> PlanSession | None:
         """Update the current session."""
         session = self.get_current_session()
         if not session:
@@ -156,18 +153,19 @@ class InMemoryStateStore:
         session = self.get_current_session()
         return session is not None and session.status in ["active", "paused", "interrupted"]
 
-    def get_resumable_tasks(self) -> List[Dict[str, Any]]:
+    def get_resumable_tasks(self) -> list[dict[str, Any]]:
         """Get tasks that can be resumed."""
         data = self.load()
         plan = data.get("last_plan", {})
         tasks = plan.get("tasks", [])
 
         return [
-            task for task in tasks
+            task
+            for task in tasks
             if task.get("status") in ["pending", "in_progress", "needs_attention"]
         ]
 
-    def _create_default_state(self) -> Dict[str, Any]:
+    def _create_default_state(self) -> dict[str, Any]:
         """Create default state structure."""
         now = datetime.utcnow().isoformat()
         return {
@@ -182,7 +180,7 @@ class InMemoryStateStore:
             "metrics": [],
         }
 
-    def _validate_state(self, data: Dict[str, Any]) -> None:
+    def _validate_state(self, data: dict[str, Any]) -> None:
         """Validate state structure."""
         if not isinstance(data, dict):
             raise ValueError("State must be a dictionary")
@@ -190,12 +188,12 @@ class InMemoryStateStore:
         if "last_updated" not in data:
             data["last_updated"] = datetime.utcnow().isoformat()
 
-    def _get_session_history(self) -> List[Dict[str, Any]]:
+    def _get_session_history(self) -> list[dict[str, Any]]:
         """Get session history list."""
         data = self.load()
         return data.get("session_history", [])
 
-    def append_history(self, entry: Dict[str, Any], limit: int = MAX_HISTORY_ENTRIES) -> None:
+    def append_history(self, entry: dict[str, Any], limit: int = MAX_HISTORY_ENTRIES) -> None:
         """Append an entry to the in-memory command history."""
         data = self.load()
         history = list(data.get("command_history", []))
@@ -206,7 +204,7 @@ class InMemoryStateStore:
         data["last_updated"] = datetime.utcnow().isoformat()
         self.save(data)
 
-    def record_metric(self, entry: Dict[str, Any], limit: int = MAX_METRICS_ENTRIES) -> None:
+    def record_metric(self, entry: dict[str, Any], limit: int = MAX_METRICS_ENTRIES) -> None:
         """Record a metrics entry while bounding total storage."""
         data = self.load()
         metrics = list(data.get("metrics", []))
@@ -226,7 +224,7 @@ class StateStore(InMemoryStateStore):
             self.state_file = Path(self.state_file)
         super().__post_init__()
 
-    def load(self) -> Dict[str, Any]:
+    def load(self) -> dict[str, Any]:
         if self.state_file is None:
             return super().load()
 
@@ -251,7 +249,7 @@ class StateStore(InMemoryStateStore):
         self._write_cache_to_disk()
         return self._cache
 
-    def save(self, data: Dict[str, Any]) -> None:
+    def save(self, data: dict[str, Any]) -> None:
         if self.state_file is None:
             super().save(data)
             return
@@ -274,4 +272,4 @@ class StateStore(InMemoryStateStore):
             LOGGER.error("Failed to write state file %s: %s", self.state_file, exc)
 
 
-__all__ = ["InMemoryStateStore", "StateStore", "PlanSession"]
+__all__ = ["InMemoryStateStore", "PlanSession", "StateStore"]

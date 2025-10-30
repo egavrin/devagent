@@ -170,7 +170,7 @@ devagent write-code design.md --test-file tests/test_auth.py
 
 See [CLI Commands Reference](AGENTS.md#cli-commands-reference) for details.
 
-## Testing
+## Testing & Quality
 
 ```bash
 pip install -e .[dev]
@@ -180,9 +180,15 @@ pytest
 
 # Full suite including slow integration tests (~3 minutes)
 pytest -m ""
+
+# Run code quality checks
+make quality
+
+# Auto-fix code issues
+make fix
 ```
 
-See [Development Guide](docs/DEVELOPMENT.md) for testing guidance.
+See [Development Guide](docs/DEVELOPMENT.md) for complete quality tooling and testing guidance.
 
 ## Documentation
 

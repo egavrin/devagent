@@ -4,10 +4,9 @@ Backward Compatibility Tests for Work Planning Agent
 These tests ensure that adding the work planning agent doesn't break existing functionality.
 """
 
-import pytest
-import subprocess
-import sys
 from pathlib import Path
+
+import pytest
 
 
 class TestWorkPlannerBackwardCompatibility:
@@ -19,6 +18,7 @@ class TestWorkPlannerBackwardCompatibility:
         # For now, just verify imports work
         try:
             from ai_dev_agent.agents.work_planner import WorkPlanningAgent
+
             assert True
         except ImportError:
             pytest.fail("Work planner imports should not break")
@@ -64,8 +64,9 @@ class TestWorkPlannerBackwardCompatibility:
     def test_storage_isolation(self):
         """Ensure work planner uses isolated storage"""
         try:
-            from ai_dev_agent.agents.work_planner import WorkPlanStorage
             from pathlib import Path
+
+            from ai_dev_agent.agents.work_planner import WorkPlanStorage
 
             # Default storage should be in dedicated directory
             storage = WorkPlanStorage()
@@ -102,10 +103,9 @@ class TestWorkPlannerIntegrationSafety:
         """Test that importing work planner has no side effects"""
         # Importing should not create files, directories, or modify state
         import tempfile
-        from pathlib import Path
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory():
+            Path.cwd()
             try:
                 # Import in clean environment
                 import importlib
@@ -128,8 +128,9 @@ class TestWorkPlannerIntegrationSafety:
     def test_graceful_storage_failure(self):
         """Test that storage failures don't crash the system"""
         try:
-            from ai_dev_agent.agents.work_planner import WorkPlanningAgent
             from pathlib import Path
+
+            from ai_dev_agent.agents.work_planner import WorkPlanningAgent
 
             # Try to create storage in a read-only location (will fail gracefully)
             # This is a design requirement, not yet implemented

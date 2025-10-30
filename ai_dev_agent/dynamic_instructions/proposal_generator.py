@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from ai_dev_agent.core.utils.config import Settings
-from .manager import InstructionUpdate, UpdateType, UpdateSource, UpdateConfidence
-from .pattern_tracker import PatternSignal
+
+from .manager import InstructionUpdate, UpdateConfidence, UpdateSource, UpdateType
+
+if TYPE_CHECKING:
+    from .pattern_tracker import PatternSignal
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +23,7 @@ logger = logging.getLogger(__name__)
 class ProposalGenerator:
     """Generates instruction update proposals from query patterns using LLM analysis."""
 
-    def __init__(self, settings: Optional[Settings] = None):
+    def __init__(self, settings: Settings | None = None):
         """Initialize the proposal generator.
 
         Args:
@@ -29,10 +32,8 @@ class ProposalGenerator:
         self.settings = settings or Settings()
 
     def generate_proposals(
-        self,
-        patterns: List[PatternSignal],
-        max_proposals: int = 3
-    ) -> List[InstructionUpdate]:
+        self, patterns: list[PatternSignal], max_proposals: int = 3
+    ) -> list[InstructionUpdate]:
         """Generate instruction update proposals from detected patterns.
 
         Args:
@@ -63,7 +64,7 @@ class ProposalGenerator:
             logger.warning(f"Failed to generate proposals: {e}")
             return []
 
-    def _build_proposal_prompt(self, patterns: List[PatternSignal], max_proposals: int) -> str:
+    def _build_proposal_prompt(self, patterns: list[PatternSignal], max_proposals: int) -> str:
         """Build prompt for LLM proposal generation.
 
         Args:
@@ -76,7 +77,9 @@ class ProposalGenerator:
         # Format patterns for the prompt
         pattern_descriptions = []
 
-        success_patterns = [p for p in patterns if p.pattern_type in ("tool_sequence", "success_strategy")]
+        success_patterns = [
+            p for p in patterns if p.pattern_type in ("tool_sequence", "success_strategy")
+        ]
         failure_patterns = [p for p in patterns if p.pattern_type == "failure_pattern"]
         recovery_patterns = [p for p in patterns if p.pattern_type == "error_recovery"]
 
@@ -147,7 +150,7 @@ IMPORTANT:
 
         return prompt
 
-    def _call_llm_for_proposals(self, prompt: str) -> Dict[str, Any]:
+    def _call_llm_for_proposals(self, prompt: str) -> dict[str, Any]:
         """Call the configured LLM to generate proposals.
 
         Args:
@@ -167,18 +170,16 @@ IMPORTANT:
                 model=self.settings.model,
                 api_key=self.settings.api_key,
                 base_url=self.settings.base_url,
-                provider_config=self.settings.provider_config
+                provider_config=self.settings.provider_config,
             )
 
             # Call LLM with the prompt
-            messages = [
-                Message(role="user", content=prompt)
-            ]
+            messages = [Message(role="user", content=prompt)]
 
             response = client.complete(
                 messages=messages,
                 temperature=0.3,  # Lower temperature for more consistent output
-                max_tokens=2000
+                max_tokens=2000,
             )
 
             # Parse JSON response
@@ -204,7 +205,8 @@ IMPORTANT:
                 logger.debug(f"Response was: {response_clean[:200]}")
                 # Try to extract JSON from within the response
                 import re
-                json_match = re.search(r'\{.*\}', response_clean, re.DOTALL)
+
+                json_match = re.search(r"\{.*\}", response_clean, re.DOTALL)
                 if json_match:
                     data = json.loads(json_match.group(0))
                     return data
@@ -215,10 +217,8 @@ IMPORTANT:
             raise
 
     def _parse_proposals(
-        self,
-        proposals_data: Dict[str, Any],
-        patterns: List[PatternSignal]
-    ) -> List[InstructionUpdate]:
+        self, proposals_data: dict[str, Any], patterns: list[PatternSignal]
+    ) -> list[InstructionUpdate]:
         """Parse and validate LLM-generated proposals.
 
         Args:
@@ -228,7 +228,7 @@ IMPORTANT:
         Returns:
             List of validated InstructionUpdate objects
         """
-        proposals: List[InstructionUpdate] = []
+        proposals: list[InstructionUpdate] = []
 
         try:
             proposals_raw = proposals_data.get("proposals", [])
@@ -242,7 +242,7 @@ IMPORTANT:
 
                 # Validate
                 if not content or not reasoning:
-                    logger.warning(f"Skipping proposal with missing content or reasoning")
+                    logger.warning("Skipping proposal with missing content or reasoning")
                     continue
 
                 if confidence < 0.0 or confidence > 1.0:
@@ -276,7 +276,7 @@ IMPORTANT:
                     new_content=content,
                     confidence=confidence,
                     confidence_level=conf_level,
-                    reasoning=reasoning
+                    reasoning=reasoning,
                 )
 
                 proposals.append(update)

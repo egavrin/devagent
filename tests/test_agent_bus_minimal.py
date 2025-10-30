@@ -4,12 +4,7 @@ This test file covers only the functionality actually used in production,
 after removing unused methods identified by vulture analysis.
 """
 
-import time
-from unittest.mock import Mock
-
-from ai_dev_agent.agents.communication.bus import (
-    AgentBus, AgentEvent, EventType
-)
+from ai_dev_agent.agents.communication.bus import AgentBus, AgentEvent, EventType
 
 
 class TestAgentEvent:
@@ -21,7 +16,7 @@ class TestAgentEvent:
             event_type=EventType.TASK_STARTED,
             source_agent="test",
             target_agent="executor",
-            data={"task_id": "123"}
+            data={"task_id": "123"},
         )
 
         assert event.event_type == EventType.TASK_STARTED
@@ -31,10 +26,7 @@ class TestAgentEvent:
 
     def test_event_serialization(self):
         """Test event can be serialized."""
-        event = AgentEvent(
-            event_type=EventType.TASK_COMPLETED,
-            source_agent="worker"
-        )
+        event = AgentEvent(event_type=EventType.TASK_COMPLETED, source_agent="worker")
 
         event_dict = event.to_dict()
 
@@ -56,10 +48,7 @@ class TestAgentBus:
         """Test publishing an event to the queue."""
         bus = AgentBus()
 
-        event = AgentEvent(
-            event_type=EventType.TASK_STARTED,
-            source_agent="test"
-        )
+        event = AgentEvent(event_type=EventType.TASK_STARTED, source_agent="test")
 
         bus.publish(event)
 
@@ -81,10 +70,7 @@ class TestAgentBus:
         with AgentBus() as bus:
             assert bus._running is True
 
-            event = AgentEvent(
-                event_type=EventType.TASK_STARTED,
-                source_agent="test"
-            )
+            event = AgentEvent(event_type=EventType.TASK_STARTED, source_agent="test")
             bus.publish(event)
 
         # Bus should be stopped after context
@@ -94,15 +80,9 @@ class TestAgentBus:
         """Test publishing multiple events."""
         bus = AgentBus()
 
-        event1 = AgentEvent(
-            event_type=EventType.ERROR,
-            source_agent="test"
-        )
+        event1 = AgentEvent(event_type=EventType.ERROR, source_agent="test")
 
-        event2 = AgentEvent(
-            event_type=EventType.PROGRESS_UPDATE,
-            source_agent="test"
-        )
+        event2 = AgentEvent(event_type=EventType.PROGRESS_UPDATE, source_agent="test")
 
         bus.publish(event1)
         bus.publish(event2)

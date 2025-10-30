@@ -3,10 +3,10 @@
 This module connects the specialized agent framework (BaseAgent) with the
 existing ReAct workflow execution system, enabling real tool usage and LLM calls.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import click
 
@@ -20,15 +20,15 @@ class AgentExecutor:
 
     def __init__(self):
         """Initialize the agent executor bridge."""
-        self._settings_cache: Optional[Settings] = None
+        self._settings_cache: Settings | None = None
 
     def execute_with_react(
         self,
         agent: BaseAgent,
         prompt: str,
         context: AgentContext,
-        ctx: Optional[click.Context] = None,
-        cli_client: Optional[Any] = None,
+        ctx: click.Context | None = None,
+        cli_client: Any | None = None,
     ) -> AgentResult:
         """Execute agent task using the ReAct workflow.
 
@@ -45,8 +45,9 @@ class AgentExecutor:
         try:
             # Import here to avoid circular dependencies
             from uuid import uuid4
+
             from ai_dev_agent.cli.react.executor import _execute_react_assistant
-            from ai_dev_agent.cli.utils import get_llm_client, _build_context
+            from ai_dev_agent.cli.utils import get_llm_client
 
             # Get or create settings
             settings = self._get_settings()
@@ -90,11 +91,7 @@ class AgentExecutor:
 
         except Exception as e:
             # Return failure result
-            return AgentResult(
-                success=False,
-                output=f"Agent execution failed: {str(e)}",
-                error=str(e)
-            )
+            return AgentResult(success=False, output=f"Agent execution failed: {e!s}", error=str(e))
 
     def _get_settings(self) -> Settings:
         """Get or create Settings instance."""
@@ -105,6 +102,7 @@ class AgentExecutor:
     def _create_click_context(self, settings: Settings) -> click.Context:
         """Create a Click context for execution."""
         from uuid import uuid4
+
         from ai_dev_agent.cli.utils import _build_context
 
         # Create minimal context
@@ -118,18 +116,12 @@ class AgentExecutor:
         ctx_obj["silent_mode"] = True
 
         # Create Click context
-        ctx = click.Context(
-            click.Command("agent-executor"),
-            obj=ctx_obj
-        )
+        ctx = click.Context(click.Command("agent-executor"), obj=ctx_obj)
 
         return ctx
 
     def _build_agent_prompt(
-        self,
-        agent: BaseAgent,
-        prompt: str,
-        agent_spec: Optional[Any] = None
+        self, agent: BaseAgent, prompt: str, agent_spec: Any | None = None
     ) -> str:
         """Build enhanced prompt with agent role and constraints.
 
@@ -166,7 +158,7 @@ class AgentExecutor:
 
         return enhanced
 
-    def _convert_result(self, react_result: Dict[str, Any], agent_name: str) -> AgentResult:
+    def _convert_result(self, react_result: dict[str, Any], agent_name: str) -> AgentResult:
         """Convert ReAct execution result to AgentResult.
 
         Args:
@@ -193,11 +185,11 @@ class AgentExecutor:
                 error_msg = str(run_result.exception) if run_result.exception else None
             elif hasattr(run_result, "stop_condition"):
                 # Budget exhaustion might indicate partial failure
-                if run_result.stop_condition == "budget":
-                    # Check if we got useful output despite budget limit
-                    if not final_message or len(final_message.strip()) < 10:
-                        success = False
-                        error_msg = "Execution reached iteration limit without completing task"
+                if run_result.stop_condition == "budget" and (
+                    not final_message or len(final_message.strip()) < 10
+                ):
+                    success = False
+                    error_msg = "Execution reached iteration limit without completing task"
 
         # Build metadata
         metadata = {
@@ -214,7 +206,7 @@ class AgentExecutor:
             success=success,
             output=final_message or "Task completed",
             metadata=metadata,
-            error=error_msg
+            error=error_msg,
         )
 
 
@@ -226,8 +218,8 @@ def execute_agent_with_react(
     agent: BaseAgent,
     prompt: str,
     context: AgentContext,
-    ctx: Optional[click.Context] = None,
-    cli_client: Optional[Any] = None,
+    ctx: click.Context | None = None,
+    cli_client: Any | None = None,
 ) -> AgentResult:
     """Convenience function to execute agent with ReAct.
 

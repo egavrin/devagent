@@ -1,19 +1,18 @@
 """Tests for tool utilities module."""
-import json
-from typing import Any, Dict
+
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ai_dev_agent.core.utils.tool_utils import (
-    canonical_tool_name,
-    tool_category,
-    display_tool_name,
-    tool_aliases,
-    expand_tool_aliases,
-    build_tool_signature,
-    tool_signature,
     _registry,
+    build_tool_signature,
+    canonical_tool_name,
+    display_tool_name,
+    expand_tool_aliases,
+    tool_aliases,
+    tool_category,
+    tool_signature,
 )
 
 
@@ -375,4 +374,5 @@ class TestRegistryCache:
 
         # Verify it's a real ToolRegistry
         from ai_dev_agent.tools.registry import ToolRegistry
+
         assert isinstance(reg1, ToolRegistry)

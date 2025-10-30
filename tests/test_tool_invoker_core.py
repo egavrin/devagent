@@ -1,8 +1,6 @@
 """Tests for engine/react/tool_invoker.py - core tool invocation functionality."""
-from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
 
-import pytest
+from unittest.mock import Mock, patch
 
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.engine.react.tool_invoker import RegistryToolInvoker
@@ -64,7 +62,7 @@ class TestRegistryToolInvokerInit:
         settings = Settings()
         invoker = RegistryToolInvoker(workspace=tmp_path, settings=settings)
 
-        assert hasattr(invoker, '_file_read_cache')
+        assert hasattr(invoker, "_file_read_cache")
         assert isinstance(invoker._file_read_cache, dict)
         assert invoker._cache_ttl == 60.0
 
@@ -81,7 +79,7 @@ class TestSubmitFinalAnswer:
             step_id="test-step-1",
             thought="Testing final answer submission",
             tool="submit_final_answer",
-            args={"answer": "This is my final answer"}
+            args={"answer": "This is my final answer"},
         )
 
         result = invoker(action)
@@ -101,7 +99,7 @@ class TestSubmitFinalAnswer:
             step_id="test-step-2",
             thought="Testing empty final answer",
             tool="submit_final_answer",
-            args={"answer": ""}
+            args={"answer": ""},
         )
 
         result = invoker(action)
@@ -123,7 +121,7 @@ class TestBatchExecution:
         assert result.success is False
         assert "No tool calls" in result.outcome
 
-    @patch.object(RegistryToolInvoker, '_execute_single_tool')
+    @patch.object(RegistryToolInvoker, "_execute_single_tool")
     def test_invoke_batch_single_tool(self, mock_execute, tmp_path):
         """Test batch execution with single tool."""
         settings = Settings()
@@ -131,17 +129,11 @@ class TestBatchExecution:
 
         # Mock successful execution
         mock_result = ToolResult(
-            call_id="1",
-            tool="test_tool",
-            success=True,
-            outcome="Success",
-            wall_time=0.5
+            call_id="1", tool="test_tool", success=True, outcome="Success", wall_time=0.5
         )
         mock_execute.return_value = mock_result
 
-        tool_calls = [
-            ToolCall(tool="test_tool", args={"arg": "value"}, call_id="1")
-        ]
+        tool_calls = [ToolCall(tool="test_tool", args={"arg": "value"}, call_id="1")]
 
         result = invoker.invoke_batch(tool_calls)
 
@@ -150,7 +142,7 @@ class TestBatchExecution:
         assert "1 succeeded" in result.outcome
         assert mock_execute.called
 
-    @patch.object(RegistryToolInvoker, '_execute_single_tool')
+    @patch.object(RegistryToolInvoker, "_execute_single_tool")
     def test_invoke_batch_multiple_tools_all_success(self, mock_execute, tmp_path):
         """Test batch execution with multiple successful tools."""
         settings = Settings()
@@ -178,7 +170,7 @@ class TestBatchExecution:
         assert result.metrics["successful_calls"] == 3
         assert result.metrics["failed_calls"] == 0
 
-    @patch.object(RegistryToolInvoker, '_execute_single_tool')
+    @patch.object(RegistryToolInvoker, "_execute_single_tool")
     def test_invoke_batch_partial_failure(self, mock_execute, tmp_path):
         """Test batch execution with some failures."""
         settings = Settings()
@@ -187,7 +179,14 @@ class TestBatchExecution:
         # Mock mixed results
         mock_execute.side_effect = [
             ToolResult(call_id="1", tool="tool1", success=True, outcome="Success", wall_time=0.1),
-            ToolResult(call_id="2", tool="tool2", success=False, outcome="Failed", error="Error", wall_time=0.2),
+            ToolResult(
+                call_id="2",
+                tool="tool2",
+                success=False,
+                outcome="Failed",
+                error="Error",
+                wall_time=0.2,
+            ),
             ToolResult(call_id="3", tool="tool3", success=True, outcome="Success", wall_time=0.15),
         ]
 
@@ -207,7 +206,7 @@ class TestBatchExecution:
         assert result.metrics["successful_calls"] == 2
         assert result.metrics["failed_calls"] == 1
 
-    @patch.object(RegistryToolInvoker, '_execute_single_tool')
+    @patch.object(RegistryToolInvoker, "_execute_single_tool")
     def test_invoke_batch_aggregates_wall_time(self, mock_execute, tmp_path):
         """Test that batch execution aggregates wall time."""
         settings = Settings()
@@ -228,7 +227,7 @@ class TestBatchExecution:
         assert result.metrics["total_wall_time"] == 0.8
         assert result.metrics["max_wall_time"] == 0.5
 
-    @patch.object(RegistryToolInvoker, '_execute_single_tool')
+    @patch.object(RegistryToolInvoker, "_execute_single_tool")
     def test_invoke_batch_aggregates_artifacts(self, mock_execute, tmp_path):
         """Test that batch execution aggregates artifacts."""
         settings = Settings()
@@ -240,14 +239,14 @@ class TestBatchExecution:
                 tool="tool1",
                 success=True,
                 outcome="Done",
-                metrics={"artifacts": ["artifact1.txt"]}
+                metrics={"artifacts": ["artifact1.txt"]},
             ),
             ToolResult(
                 call_id="2",
                 tool="tool2",
                 success=True,
                 outcome="Done",
-                metrics={"artifacts": ["artifact2.txt"]}
+                metrics={"artifacts": ["artifact2.txt"]},
             ),
         ]
 
@@ -275,10 +274,10 @@ class TestSingleToolExecution:
             step_id="test-step-error",
             thought="Testing unknown tool handling",
             tool="nonexistent_tool",
-            args={}
+            args={},
         )
 
-        with patch.object(invoker, '_invoke_registry', side_effect=KeyError("Unknown tool")):
+        with patch.object(invoker, "_invoke_registry", side_effect=KeyError("Unknown tool")):
             result = invoker(action)
 
         assert result.success is False
@@ -294,10 +293,10 @@ class TestSingleToolExecution:
             step_id="test-step-value-error",
             thought="Testing value error handling",
             tool="test_tool",
-            args={}
+            args={},
         )
 
-        with patch.object(invoker, '_invoke_registry', side_effect=ValueError("Invalid input")):
+        with patch.object(invoker, "_invoke_registry", side_effect=ValueError("Invalid input")):
             result = invoker(action)
 
         assert result.success is False
@@ -313,10 +312,12 @@ class TestSingleToolExecution:
             step_id="test-step-general-error",
             thought="Testing general exception handling",
             tool="test_tool",
-            args={}
+            args={},
         )
 
-        with patch.object(invoker, '_invoke_registry', side_effect=RuntimeError("Unexpected error")):
+        with patch.object(
+            invoker, "_invoke_registry", side_effect=RuntimeError("Unexpected error")
+        ):
             result = invoker(action)
 
         assert result.success is False
@@ -341,10 +342,10 @@ class TestCallMethods:
             step_id="test-batch-step",
             thought="Testing batch request routing",
             tool="",  # Empty when using tool_calls
-            tool_calls=tool_calls
+            tool_calls=tool_calls,
         )
 
-        with patch.object(invoker, 'invoke_batch') as mock_batch:
+        with patch.object(invoker, "invoke_batch") as mock_batch:
             mock_batch.return_value = Observation(success=True, outcome="Batch done")
             result = invoker(action)
 
@@ -360,7 +361,7 @@ class TestCallMethods:
             step_id="test-single-step",
             thought="Testing single tool execution",
             tool="submit_final_answer",
-            args={"answer": "Done"}
+            args={"answer": "Done"},
         )
 
         result = invoker(action)
@@ -383,15 +384,15 @@ class TestWrapResult:
             success=True,
             outcome="Command executed successfully",
             error=None,
-            metrics={"exit_code": 0}
+            metrics={"exit_code": 0},
         )
 
-        with patch.object(invoker, '_wrap_result', wraps=invoker._wrap_result) as mock_wrap:
+        with patch.object(invoker, "_wrap_result", wraps=invoker._wrap_result) as mock_wrap:
             mock_wrap.return_value = Observation(
                 success=True,
                 outcome="success",
                 tool="test_tool",
-                raw_output="Command executed successfully"
+                raw_output="Command executed successfully",
             )
 
             result = invoker._wrap_result("test_tool", tool_result)
@@ -407,7 +408,7 @@ class TestWrapResult:
         dict_result = {
             "success": True,
             "output": "Operation complete",
-            "metadata": {"key": "value"}
+            "metadata": {"key": "value"},
         }
 
         result = invoker._wrap_result("test_tool", dict_result)
@@ -445,7 +446,7 @@ class TestEdgeCases:
             step_id="test-none-args",
             thought="Testing empty args handling",
             tool="submit_final_answer",
-            args={}  # Empty dict instead of None
+            args={},  # Empty dict instead of None
         )
 
         # Should handle empty args gracefully
@@ -457,7 +458,7 @@ class TestEdgeCases:
         settings = Settings()
         invoker = RegistryToolInvoker(workspace=tmp_path, settings=settings)
 
-        with patch.object(invoker, '_execute_single_tool') as mock_execute:
+        with patch.object(invoker, "_execute_single_tool") as mock_execute:
             mock_execute.side_effect = [
                 ToolResult(call_id="1", tool="tool1", success=True, outcome="Done"),  # No wall_time
                 ToolResult(call_id="2", tool="tool2", success=True, outcome="Done"),  # No wall_time
@@ -472,19 +473,19 @@ class TestEdgeCases:
 
             # Should handle missing wall_time
             assert result.success is True
-            assert "total_wall_time" not in result.metrics or result.metrics.get("total_wall_time") == 0
+            assert (
+                "total_wall_time" not in result.metrics
+                or result.metrics.get("total_wall_time") == 0
+            )
 
     def test_batch_tool_label(self, tmp_path):
         """Test that batch results have correct tool label."""
         settings = Settings()
         invoker = RegistryToolInvoker(workspace=tmp_path, settings=settings)
 
-        with patch.object(invoker, '_execute_single_tool') as mock_execute:
+        with patch.object(invoker, "_execute_single_tool") as mock_execute:
             mock_execute.return_value = ToolResult(
-                call_id="1",
-                tool="test",
-                success=True,
-                outcome="Done"
+                call_id="1", tool="test", success=True, outcome="Done"
             )
 
             tool_calls = [

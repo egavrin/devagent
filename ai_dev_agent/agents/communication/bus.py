@@ -1,17 +1,19 @@
 """Agent Communication Bus for inter-agent messaging."""
+
 from __future__ import annotations
 
-import uuid
-import threading
 import queue
-from dataclasses import dataclass, field, asdict
+import threading
+import uuid
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Any, Optional, Callable
+from typing import Any, Callable
 
 
 class EventType(Enum):
     """Types of events in the system."""
+
     AGENT_STARTED = "AGENT_STARTED"
     AGENT_STOPPED = "AGENT_STOPPED"
     TASK_STARTED = "TASK_STARTED"
@@ -28,15 +30,16 @@ class EventType(Enum):
 @dataclass
 class AgentEvent:
     """Event published on the bus."""
+
     event_type: EventType
     source_agent: str
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    correlation_id: Optional[str] = None
-    target_agent: Optional[str] = None
+    correlation_id: str | None = None
+    target_agent: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert event to dictionary."""
         result = asdict(self)
         result["event_type"] = self.event_type.value
@@ -53,14 +56,10 @@ class AgentBus:
     def __init__(self):
         """Initialize the agent bus."""
         self._event_queue: queue.Queue = queue.Queue()
-        self._subscribers: Dict[EventType, List[tuple[str, EventHandler]]] = {}
+        self._subscribers: dict[EventType, list[tuple[str, EventHandler]]] = {}
         self._running = False
-        self._worker_thread: Optional[threading.Thread] = None
-        self._metrics = {
-            "events_published": 0,
-            "events_processed": 0,
-            "errors": 0
-        }
+        self._worker_thread: threading.Thread | None = None
+        self._metrics = {"events_published": 0, "events_processed": 0, "errors": 0}
         self._lock = threading.Lock()
 
     @property
@@ -104,7 +103,7 @@ class AgentBus:
         event_type: EventType,
         handler: EventHandler,
         *,
-        subscriber_id: Optional[str] = None,
+        subscriber_id: str | None = None,
     ) -> str:
         """
         Register a handler to receive events of the given type.
@@ -138,7 +137,6 @@ class AgentBus:
 
         return removed
 
-
     def _process_events(self) -> None:
         """Process events from the queue (runs in background thread)."""
         while self._running:
@@ -156,7 +154,7 @@ class AgentBus:
 
             except queue.Empty:
                 continue
-            except Exception as e:
+            except Exception:
                 # Log error but don't crash the bus
                 with self._lock:
                     self._metrics["errors"] += 1
@@ -170,14 +168,13 @@ class AgentBus:
         """
         subscribers = self._subscribers.get(event.event_type, [])
 
-        for subscription_id, handler in subscribers:
+        for _subscription_id, handler in subscribers:
             try:
                 handler(event)
-            except Exception as e:
+            except Exception:
                 # Log error but continue notifying other subscribers
                 with self._lock:
                     self._metrics["errors"] += 1
-
 
     def __enter__(self):
         """Context manager entry."""

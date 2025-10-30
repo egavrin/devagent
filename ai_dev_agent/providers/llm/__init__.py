@@ -1,4 +1,5 @@
 """Factory helpers for LLM providers."""
+
 from __future__ import annotations
 
 from .base import (
@@ -16,8 +17,10 @@ from .base import (
     ToolCall,
     ToolCallResult,
 )
-from .deepseek import DeepSeekClient, DEFAULT_BASE_URL as DEEPSEEK_DEFAULT_BASE_URL
-from .openrouter import OpenRouterClient, DEFAULT_BASE_URL as OPENROUTER_DEFAULT_BASE_URL
+from .deepseek import DEFAULT_BASE_URL as DEEPSEEK_DEFAULT_BASE_URL
+from .deepseek import DeepSeekClient
+from .openrouter import DEFAULT_BASE_URL as OPENROUTER_DEFAULT_BASE_URL
+from .openrouter import OpenRouterClient
 
 _PROVIDER_MAP = {
     "deepseek": {
@@ -57,7 +60,9 @@ def create_client(
         init_kwargs.update(provider_kwargs)
     else:
         # Ignore provider-specific kwargs for other providers to avoid unexpected errors.
-        init_kwargs.update({k: v for k, v in provider_kwargs.items() if k in {"timeout", "retry_config"}})
+        init_kwargs.update(
+            {k: v for k, v in provider_kwargs.items() if k in {"timeout", "retry_config"}}
+        )
 
     effective_base_url = base_url or provider_entry.get("default_base_url")
     if effective_base_url:
@@ -67,20 +72,20 @@ def create_client(
 
 
 __all__ = [
-    "create_client",
-    "HTTPChatLLMClient",
-    "LLMClient",
-    "LLMError",
-    "LLMRateLimitError",
-    "LLMTimeoutError",
-    "LLMConnectionError",
-    "LLMResponseError",
-    "LLMRetryExhaustedError",
-    "Message",
-    "StreamHooks",
-    "RetryConfig",
-    "ToolCall",
-    "ToolCallResult",
     "DEEPSEEK_DEFAULT_BASE_URL",
     "OPENROUTER_DEFAULT_BASE_URL",
+    "HTTPChatLLMClient",
+    "LLMClient",
+    "LLMConnectionError",
+    "LLMError",
+    "LLMRateLimitError",
+    "LLMResponseError",
+    "LLMRetryExhaustedError",
+    "LLMTimeoutError",
+    "Message",
+    "RetryConfig",
+    "StreamHooks",
+    "ToolCall",
+    "ToolCallResult",
+    "create_client",
 ]

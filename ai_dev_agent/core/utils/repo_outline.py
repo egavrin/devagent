@@ -1,10 +1,13 @@
 """Generate lightweight repository structure outlines for prompts."""
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING
 
 from .constants import DEFAULT_IGNORED_REPO_DIRS
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def generate_repo_outline(
@@ -14,7 +17,7 @@ def generate_repo_outline(
     max_depth: int = 4,
     max_chars: int = 4_000,
     directories_only: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """Return a repository outline capped by entry count/length via depth reduction."""
 
     try:
@@ -22,22 +25,20 @@ def generate_repo_outline(
     except OSError:
         return None
 
-    def iter_children(path: Path) -> List[Path]:
+    def iter_children(path: Path) -> list[Path]:
         try:
             children = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
         except OSError:
             return []
 
-        visible: List[Path] = []
-        fallback_files: List[Path] = []
+        visible: list[Path] = []
+        fallback_files: list[Path] = []
         for child in children:
             if child.name in DEFAULT_IGNORED_REPO_DIRS:
                 continue
-            if child.name.startswith('.'):
+            if child.name.startswith("."):
                 continue
-            if child.is_dir():
-                visible.append(child)
-            elif not directories_only:
+            if child.is_dir() or not directories_only:
                 visible.append(child)
             else:
                 fallback_files.append(child)
@@ -47,8 +48,8 @@ def generate_repo_outline(
 
         return visible
 
-    def build_outline(depth_limit: int) -> List[str]:
-        outline: List[str] = [f"{root.name}/"]
+    def build_outline(depth_limit: int) -> list[str]:
+        outline: list[str] = [f"{root.name}/"]
 
         def walk(path: Path, current_depth: int, prefix: str) -> None:
             if current_depth > depth_limit:
@@ -66,15 +67,14 @@ def generate_repo_outline(
         walk(root, 1, "")
         return outline
 
-    def outline_length(lines: List[str]) -> int:
+    def outline_length(lines: list[str]) -> int:
         # Include newline characters between lines.
         return sum(len(line) + 1 for line in lines)
 
     for depth_limit in range(max_depth, 0, -1):
         entries = build_outline(depth_limit)
         if (
-            len(entries) <= max_entries
-            and outline_length(entries) <= max_chars
+            len(entries) <= max_entries and outline_length(entries) <= max_chars
         ) or depth_limit == 1:
             return "\n".join(entries[:max_entries])
 

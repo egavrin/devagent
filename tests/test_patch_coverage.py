@@ -23,7 +23,9 @@ def coverage_repo(tmp_path: Path) -> Path:
     module = repo / "module.py"
     module.write_text("def greet():\n    return 'hi'\n", encoding="utf-8")
     subprocess.run(["git", "add", "module.py"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True, env=env)
+    subprocess.run(
+        ["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True, env=env
+    )
     return repo
 
 

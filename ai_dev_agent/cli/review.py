@@ -1,18 +1,19 @@
 """Review command helpers and execution logic."""
+
 from __future__ import annotations
 
-from importlib import import_module
 import fnmatch
+import re
+from collections import deque
+from collections.abc import Mapping, Sequence
+from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import click
 
-import re
-
 from ai_dev_agent.agents.schemas import VIOLATION_SCHEMA
-from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.core.utils.logger import get_logger
 from ai_dev_agent.tools.patch_analysis import PatchParser
 
@@ -20,13 +21,16 @@ from .react.executor import _execute_react_assistant
 from .review_context import ContextOrchestrator, SourceContextProvider
 from .utils import _record_invocation, get_llm_client
 
+if TYPE_CHECKING:
+    from ai_dev_agent.core.utils.config import Settings
+
 LOGGER = get_logger(__name__)
 
 # Cache for parsed patches: key=(path, mtime, size) -> parsed_data
-_PATCH_CACHE: Dict[Tuple[str, float, Optional[int]], Dict[str, Any]] = {}
+_PATCH_CACHE: dict[tuple[str, float, int | None], dict[str, Any]] = {}
 
 
-def _normalize_applies_to_pattern(raw: str) -> Optional[str]:
+def _normalize_applies_to_pattern(raw: str) -> str | None:
     """Convert a glob-style rule pattern into a regex string."""
     if not raw:
         return None
@@ -36,7 +40,7 @@ def _normalize_applies_to_pattern(raw: str) -> Optional[str]:
     if not tokens:
         return None
 
-    regex_parts: List[str] = []
+    regex_parts: list[str] = []
     for token in tokens:
         if token.lower().startswith("regex:"):
             custom = token[6:].strip()
@@ -62,7 +66,7 @@ def _normalize_applies_to_pattern(raw: str) -> Optional[str]:
     return "|".join(f"(?:{part})" for part in regex_parts)
 
 
-def extract_applies_to_pattern(rule_content: str) -> Optional[str]:
+def extract_applies_to_pattern(rule_content: str) -> str | None:
     """Extract the 'Applies To' pattern from rule content.
 
     Looks for patterns like:
@@ -76,10 +80,10 @@ def extract_applies_to_pattern(rule_content: str) -> Optional[str]:
     """
     # Try multiple patterns to be robust
     patterns = [
-        r'##\s*Applies\s+To\s*\n\s*([^\n]+)',  # ## Applies To\n  pattern
-        r'Applies\s+To:\s*([^\n]+)',            # Applies To: pattern
-        r'scope:\s*([^\n]+)',                   # scope: pattern
-        r'##\s*Scope\s*\n\s*([^\n]+)',         # ## Scope\n  pattern
+        r"##\s*Applies\s+To\s*\n\s*([^\n]+)",  # ## Applies To\n  pattern
+        r"Applies\s+To:\s*([^\n]+)",  # Applies To: pattern
+        r"scope:\s*([^\n]+)",  # scope: pattern
+        r"##\s*Scope\s*\n\s*([^\n]+)",  # ## Scope\n  pattern
     ]
 
     for pattern in patterns:
@@ -87,11 +91,15 @@ def extract_applies_to_pattern(rule_content: str) -> Optional[str]:
         if match:
             extracted = match.group(1).strip()
             # Remove quotes if present
-            extracted = extracted.strip('"\'`')
+            extracted = extracted.strip("\"'`")
             if extracted:
                 normalized = _normalize_applies_to_pattern(extracted)
                 if normalized:
-                    LOGGER.debug("Extracted 'Applies To' pattern (normalized): %s -> %s", extracted, normalized)
+                    LOGGER.debug(
+                        "Extracted 'Applies To' pattern (normalized): %s -> %s",
+                        extracted,
+                        normalized,
+                    )
                     return normalized
                 LOGGER.debug("Extracted 'Applies To' pattern: %s", extracted)
                 return extracted
@@ -100,7 +108,7 @@ def extract_applies_to_pattern(rule_content: str) -> Optional[str]:
     return None
 
 
-def parse_patch_file(patch_path: Path) -> Dict[str, Any]:
+def parse_patch_file(patch_path: Path) -> dict[str, Any]:
     """Parse the patch file into structured data for review.
 
     Uses caching based on file path and modification time to avoid re-parsing
@@ -144,20 +152,20 @@ def parse_patch_file(patch_path: Path) -> Dict[str, Any]:
 
 
 def collect_patch_review_data(
-    parsed_patch: Mapping[str, Any]
-) -> Tuple[Dict[str, Dict[int, str]], Dict[str, Dict[int, str]], Set[str]]:
+    parsed_patch: Mapping[str, Any],
+) -> tuple[dict[str, dict[int, str]], dict[str, dict[int, str]], set[str]]:
     """Collect lookup tables for added/removed lines and parsed file set."""
 
-    added_lines: Dict[str, Dict[int, str]] = {}
-    removed_lines: Dict[str, Dict[int, str]] = {}
-    parsed_files: Set[str] = set()
+    added_lines: dict[str, dict[int, str]] = {}
+    removed_lines: dict[str, dict[int, str]] = {}
+    parsed_files: set[str] = set()
     for file_entry in parsed_patch.get("files", []):
         path = file_entry.get("path")
         if not isinstance(path, str):
             continue
         parsed_files.add(path)
-        added_lookup: Dict[int, str] = {}
-        removed_lookup: Dict[int, str] = {}
+        added_lookup: dict[int, str] = {}
+        removed_lookup: dict[int, str] = {}
         for hunk in file_entry.get("hunks", []):
             if not isinstance(hunk, Mapping):
                 continue
@@ -183,7 +191,7 @@ def collect_patch_review_data(
     return added_lines, removed_lines, parsed_files
 
 
-def format_patch_dataset(parsed_patch: Mapping[str, Any], filter_pattern: Optional[str] = None) -> str:
+def format_patch_dataset(parsed_patch: Mapping[str, Any], filter_pattern: str | None = None) -> str:
     """Format parsed patch data into a text block for the reviewer.
 
     Args:
@@ -193,7 +201,7 @@ def format_patch_dataset(parsed_patch: Mapping[str, Any], filter_pattern: Option
     Returns:
         Formatted text representation of patch data
     """
-    lines: List[str] = []
+    lines: list[str] = []
     files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
 
     if not files:
@@ -308,30 +316,27 @@ def _split_large_file_entries(
     *,
     max_hunks_per_group: int,
     max_lines_per_group: int,
-) -> List[Mapping[str, Any]]:
+) -> list[Mapping[str, Any]]:
     if max_hunks_per_group <= 0 and max_lines_per_group <= 0:
         return list(files)
 
-    results: List[Mapping[str, Any]] = []
+    results: list[Mapping[str, Any]] = []
     for file_entry in files:
         hunks = list(file_entry.get("hunks", []) or [])
         if not hunks:
             results.append(file_entry)
             continue
 
-        groups: List[List[Mapping[str, Any]]] = []
-        current: List[Mapping[str, Any]] = []
+        groups: list[list[Mapping[str, Any]]] = []
+        current: list[Mapping[str, Any]] = []
         hunk_counter = 0
         line_counter = 0
 
         for hunk in hunks:
             impact = _estimate_hunk_impact(hunk)
-            should_split = (
-                current
-                and (
-                    (max_hunks_per_group > 0 and hunk_counter >= max_hunks_per_group)
-                    or (max_lines_per_group > 0 and line_counter + impact > max_lines_per_group)
-                )
+            should_split = current and (
+                (max_hunks_per_group > 0 and hunk_counter >= max_hunks_per_group)
+                or (max_lines_per_group > 0 and line_counter + impact > max_lines_per_group)
             )
             if should_split:
                 groups.append(current)
@@ -368,7 +373,7 @@ def _chunk_patch_files(
     files: Sequence[Mapping[str, Any]],
     max_files_per_chunk: int = 10,
     max_lines_per_chunk: int = 0,
-) -> List[List[Mapping[str, Any]]]:
+) -> list[list[Mapping[str, Any]]]:
     """Split patch files into manageable chunks."""
     if not files:
         return []
@@ -376,18 +381,15 @@ def _chunk_patch_files(
     effective_max_files = max_files_per_chunk if max_files_per_chunk > 0 else len(files)
     effective_max_lines = max_lines_per_chunk if max_lines_per_chunk > 0 else 0
 
-    chunked: List[List[Mapping[str, Any]]] = []
-    current_chunk: List[Mapping[str, Any]] = []
+    chunked: list[list[Mapping[str, Any]]] = []
+    current_chunk: list[Mapping[str, Any]] = []
     current_lines = 0
 
     for entry in files:
         entry_lines = _estimate_entry_lines(entry)
-        should_split = (
-            current_chunk
-            and (
-                (effective_max_files and len(current_chunk) >= effective_max_files)
-                or (effective_max_lines and current_lines + entry_lines > effective_max_lines)
-            )
+        should_split = current_chunk and (
+            (effective_max_files and len(current_chunk) >= effective_max_files)
+            or (effective_max_lines and current_lines + entry_lines > effective_max_lines)
         )
         if should_split:
             chunked.append(current_chunk)
@@ -426,13 +428,68 @@ def _compute_dynamic_line_limit(
     return base_limit
 
 
-def validate_review_response(
-    response: Dict[str, Any],
+def _compute_dynamic_file_limit(
+    configured_limit: int,
+    rule_text: str,
+    files: Sequence[Mapping[str, Any]],
+) -> int:
+    """Derive a file-per-chunk limit considering rule size and patch footprint."""
+    DEFAULT_FILES_LIMIT = 10
+    base_limit = configured_limit if configured_limit > 0 else DEFAULT_FILES_LIMIT
+
+    total_line_impact = sum(_estimate_entry_lines(entry) for entry in files)
+    rule_token_estimate = max(len(rule_text) // 4, 0)
+
+    if rule_token_estimate > 9_000 or total_line_impact > 800:
+        base_limit = min(base_limit, 2)
+    elif rule_token_estimate > 6_000 or total_line_impact > 600:
+        base_limit = min(base_limit, 4)
+    elif rule_token_estimate > 4_000 or total_line_impact > 400:
+        base_limit = min(base_limit, 6)
+
+    if configured_limit <= 0 and base_limit == DEFAULT_FILES_LIMIT:
+        return len(files) or 1
+    return max(1, base_limit)
+
+
+def _estimate_prompt_tokens(*segments: str) -> int:
+    """Approximate token usage by dividing character count by 4."""
+    total_chars = sum(len(segment) for segment in segments if segment)
+    return max(total_chars // 4, 0)
+
+
+def _refine_chunks_for_token_budget(
+    chunks: Sequence[list[Mapping[str, Any]]],
     *,
-    added_lines: Dict[str, Dict[int, str]],
-    removed_lines: Optional[Dict[str, Dict[int, str]]] = None,
-    parsed_files: Set[str],
-) -> Dict[str, Any]:
+    rule_text: str,
+    filter_pattern: str | None,
+    token_budget: int,
+) -> list[list[Mapping[str, Any]]]:
+    """Split chunks further if combined rule+patch text exceeds the budget."""
+    refined: list[list[Mapping[str, Any]]] = []
+    for chunk in chunks:
+        queue: deque[list[Mapping[str, Any]]] = deque([chunk])
+        while queue:
+            current = queue.popleft()
+            subset_patch = {"files": current}
+            dataset_text = format_patch_dataset(subset_patch, filter_pattern=filter_pattern)
+            approx_tokens = _estimate_prompt_tokens(rule_text, dataset_text)
+            if approx_tokens > token_budget and len(current) > 1:
+                midpoint = max(1, len(current) // 2)
+                queue.appendleft(current[midpoint:])
+                queue.appendleft(current[:midpoint])
+                continue
+            refined.append(current)
+    return refined
+
+
+def validate_review_response(
+    response: dict[str, Any],
+    *,
+    added_lines: dict[str, dict[int, str]],
+    removed_lines: dict[str, dict[int, str]] | None = None,
+    parsed_files: set[str],
+) -> dict[str, Any]:
     """Ensure reviewer output references actual lines from the parsed patch."""
 
     if not isinstance(response, dict):
@@ -448,8 +505,8 @@ def validate_review_response(
     if not isinstance(summary, Mapping):
         raise click.ClickException("Reviewer output has invalid 'summary' payload.")
 
-    valid_violations: List[Dict[str, Any]] = []
-    discarded_entries: List[str] = []
+    valid_violations: list[dict[str, Any]] = []
+    discarded_entries: list[str] = []
 
     severity_aliases = {
         "critical": "error",
@@ -479,7 +536,7 @@ def validate_review_response(
             discarded_entries.append("non-object violation entry")
             continue
 
-        sanitized: Dict[str, Any] = dict(entry)
+        sanitized: dict[str, Any] = dict(entry)
         file_path = sanitized.get("file")
         line_number = sanitized.get("line")
         snippet = sanitized.get("code_snippet")
@@ -578,7 +635,7 @@ def _build_review_prompt(
     patch_rel: Path,
     patch_dataset: str,
     *,
-    context_section: Optional[str] = None,
+    context_section: str | None = None,
 ) -> str:
     context_block = ""
     if context_section:
@@ -614,7 +671,7 @@ def run_review(
     rule_file: str,
     json_output: bool,
     settings: Settings,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Execute the review command and return the validated JSON result."""
 
     if not settings.api_key:
@@ -634,10 +691,12 @@ def run_review(
     original_max_tool_output_chars = getattr(settings, "max_tool_output_chars", None)
     original_max_context_tokens = getattr(settings, "max_context_tokens", None)
     original_response_headroom = getattr(settings, "response_headroom_tokens", None)
+    original_enable_dynamic_instructions = getattr(settings, "enable_dynamic_instructions", True)
 
     try:
-        review_workspace: Optional[Path] = None
-        common_parts: List[Path] = []
+        settings.enable_dynamic_instructions = False
+        review_workspace: Path | None = None
+        common_parts: list[Path] = []
         for p1, p2 in zip(patch_path.parents, rule_path.parents):
             if p1 == p2:
                 common_parts.append(p1)
@@ -654,7 +713,9 @@ def run_review(
                     candidate_within_original = True
                 except ValueError:
                     candidate_within_original = False
-            if (original_workspace_root is None or candidate_within_original) and not candidate_is_root:
+            if (
+                original_workspace_root is None or candidate_within_original
+            ) and not candidate_is_root:
                 review_workspace = candidate
 
         if review_workspace is not None:
@@ -673,6 +734,10 @@ def run_review(
 
         parsed_patch = parse_patch_file(patch_path)
         original_files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
+        original_files = sorted(
+            original_files,
+            key=lambda entry: (str(entry.get("path", "")), entry.get("_chunk_index", 0)),
+        )
 
         max_lines_setting = getattr(settings, "review_max_lines_per_chunk", 320)
         dynamic_line_limit = _compute_dynamic_line_limit(
@@ -686,13 +751,17 @@ def run_review(
             max_hunks_per_group=getattr(settings, "review_max_hunks_per_chunk", 8),
             max_lines_per_group=dynamic_line_limit if dynamic_line_limit > 0 else max_lines_setting,
         )
+        expanded_files = sorted(
+            expanded_files,
+            key=lambda entry: (str(entry.get("path", "")), entry.get("_chunk_index", 0)),
+        )
 
         max_files_per_chunk_setting = getattr(settings, "review_max_files_per_chunk", 10)
-        if max_files_per_chunk_setting <= 0:
-            max_files_per_chunk = len(expanded_files) or 1
-        else:
-            max_files_per_chunk = max_files_per_chunk_setting
-
+        max_files_per_chunk = _compute_dynamic_file_limit(
+            max_files_per_chunk_setting,
+            rule_content,
+            expanded_files,
+        )
         max_lines_per_chunk = dynamic_line_limit
 
         chunks = _chunk_patch_files(
@@ -700,22 +769,24 @@ def run_review(
             max_files_per_chunk=max_files_per_chunk,
             max_lines_per_chunk=max_lines_per_chunk,
         )
-        total_chunks = max(1, len(chunks))
+        max(1, len(chunks))
         use_chunking = len(chunks) > 1
 
         context_orchestrator = ContextOrchestrator(
-            [SourceContextProvider(
-                pad_lines=getattr(settings, "review_context_pad_lines", 20),
-                max_lines_per_item=getattr(settings, "review_context_max_lines", 160),
-            )],
+            [
+                SourceContextProvider(
+                    pad_lines=getattr(settings, "review_context_pad_lines", 20),
+                    max_lines_per_item=getattr(settings, "review_context_max_lines", 160),
+                )
+            ],
             max_total_lines=getattr(settings, "review_context_max_total_lines", 320),
         )
 
         def build_fallback_summary(
             file_count: int,
-            existing_summary: Optional[Mapping[str, Any]] = None,
-        ) -> Dict[str, Any]:
-            summary: Dict[str, Any] = dict(existing_summary or {})
+            existing_summary: Mapping[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            summary: dict[str, Any] = dict(existing_summary or {})
             summary["total_violations"] = 0
             summary["files_reviewed"] = file_count
             rule_name_value = summary.get("rule_name")
@@ -732,7 +803,9 @@ def run_review(
 The above rule has been pre-loaded for your review. Do NOT use the read tool to access it.
 Follow the workflow in the user prompt to analyze the patch against this rule."""
 
-        _record_invocation(ctx, overrides={"patch": patch_file, "rule": rule_file, "mode": "review"})
+        _record_invocation(
+            ctx, overrides={"patch": patch_file, "rule": rule_file, "mode": "review"}
+        )
 
         if json_output:
             ctx.obj["silent_mode"] = True
@@ -745,21 +818,42 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
         settings.response_headroom_tokens = 10_000  # Leave room for response generation
 
         try:
-            cli_pkg = import_module('ai_dev_agent.cli')
-            llm_factory = getattr(cli_pkg, 'get_llm_client', get_llm_client)
+            cli_pkg = import_module("ai_dev_agent.cli")
+            llm_factory = getattr(cli_pkg, "get_llm_client", get_llm_client)
         except ModuleNotFoundError:
             llm_factory = get_llm_client
 
         try:
             client = llm_factory(ctx)
         except click.ClickException as exc:
-            raise click.ClickException(f'Failed to create LLM client: {exc}') from exc
+            raise click.ClickException(f"Failed to create LLM client: {exc}") from exc
+
+        class _DeterministicClient:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def complete(self, messages, *args, **kwargs):
+                kwargs.pop("temperature", None)
+                kwargs["temperature"] = 0.0
+                kwargs.setdefault("extra_headers", None)
+                return self._inner.complete(messages, **kwargs)
+
+            def invoke_tools(self, messages, tools, *, temperature=0.0, **kwargs):
+                kwargs["temperature"] = 0.0
+                if "top_p" in kwargs:
+                    kwargs["top_p"] = 0.0
+                return self._inner.invoke_tools(messages, tools, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        client = _DeterministicClient(client)
 
         original_session_id = ctx.obj.get("_session_id")
         review_session_id = f"review-{uuid4()}"
         ctx.obj["_session_id"] = review_session_id
 
-        def reset_session(previous: Optional[str]) -> None:
+        def reset_session(previous: str | None) -> None:
             if previous:
                 ctx.obj["_session_id"] = previous
             else:
@@ -767,14 +861,14 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
 
         def execute_dataset(
             dataset_text: str,
-            chunk_files: List[Mapping[str, Any]],
+            chunk_files: list[Mapping[str, Any]],
             *,
-            chunk_index: Optional[int] = None,
-            total_expected_chunks: Optional[int] = None,
-        ) -> Tuple[Dict[str, Any], Set[str]]:
+            chunk_index: int | None = None,
+            total_expected_chunks: int | None = None,
+        ) -> tuple[dict[str, Any], set[str], bool]:
             if not chunk_files:
                 summary = build_fallback_summary(0)
-                return {"violations": [], "summary": summary}, set()
+                return {"violations": [], "summary": summary}, set(), False
 
             subset_patch = {"files": chunk_files}
             added_lines, removed_lines, parsed_files = collect_patch_review_data(subset_patch)
@@ -810,18 +904,47 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
                 )
             except click.ClickException as exc:
                 message_text = str(exc)
-                if "Assistant response did not contain valid JSON matching the required schema" in message_text:
-                    LOGGER.debug("LLM output missing required JSON; returning fallback summary: %s", exc)
+                if (
+                    "Assistant response did not contain valid JSON matching the required schema"
+                    in message_text
+                ):
+                    LOGGER.debug(
+                        "LLM output missing required JSON; returning fallback summary: %s", exc
+                    )
                     summary = build_fallback_summary(len(parsed_files))
-                    return {"violations": [], "summary": summary}, parsed_files
+                    return {"violations": [], "summary": summary}, parsed_files, False
                 raise
 
             if not isinstance(execution_payload, dict):
-                raise click.ClickException("Review execution did not return diagnostics for validation.")
+                raise click.ClickException(
+                    "Review execution did not return diagnostics for validation."
+                )
 
             run_result = execution_payload.get("result")
+            needs_retry = False
             if run_result is None:
-                raise click.ClickException("Review execution missing run metadata; cannot validate results.")
+                raise click.ClickException(
+                    "Review execution missing run metadata; cannot validate results."
+                )
+            else:
+                try:
+                    for step in getattr(run_result, "steps", []) or []:
+                        observation = getattr(step, "observation", None)
+                        if (
+                            observation
+                            and getattr(observation, "tool", None) == "read"
+                            and not getattr(observation, "success", True)
+                        ):
+                            needs_retry = True
+                            break
+                except AttributeError:
+                    needs_retry = False
+            if needs_retry:
+                return (
+                    {"violations": [], "summary": build_fallback_summary(len(parsed_files))},
+                    parsed_files,
+                    True,
+                )
 
             final_json = execution_payload.get("final_json")
             if final_json is None:
@@ -835,7 +958,7 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
                     parsed_files=parsed_files,
                 )
             except click.ClickException as exc:
-                existing_summary: Dict[str, Any] = {}
+                existing_summary: dict[str, Any] = {}
                 if isinstance(final_json, Mapping):
                     summary_value = final_json.get("summary")
                     if isinstance(summary_value, Mapping):
@@ -847,18 +970,29 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
                 }
                 LOGGER.debug("Reviewer output discarded due to validation failure: %s", exc)
 
-            return validated, parsed_files
+            return validated, parsed_files, False
 
-        datasets: List[Tuple[str, List[Mapping[str, Any]], Optional[int]]] = []
-
-        compiled_pattern: Optional[re.Pattern[str]] = None
+        datasets: list[tuple[int, str, list[Mapping[str, Any]]]] = []
+        compiled_pattern: re.Pattern[str] | None = None
         if filter_pattern:
             try:
                 compiled_pattern = re.compile(filter_pattern)
             except re.error:
-                LOGGER.warning("Invalid filter pattern '%s', processing without filter", filter_pattern)
+                LOGGER.warning(
+                    "Invalid filter pattern '%s', processing without filter", filter_pattern
+                )
                 filter_pattern = None
                 compiled_pattern = None
+
+        token_budget = getattr(settings, "review_token_budget", 12_000)
+        chunks = _refine_chunks_for_token_budget(
+            chunks,
+            rule_text=rule_content,
+            filter_pattern=filter_pattern,
+            token_budget=token_budget,
+        )
+        max(1, len(chunks))
+        use_chunking = len(chunks) > 1
 
         for idx, chunk in enumerate(chunks):
             sub_patch = {"files": chunk}
@@ -876,40 +1010,70 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
             if not filtered_chunk:
                 continue
 
-            datasets.append(
-                (
-                    dataset_text,
-                    filtered_chunk,
-                    idx if use_chunking else None,
-                )
-            )
+            datasets.append((idx, dataset_text, filtered_chunk))
 
         if not datasets:
             reset_session(original_session_id)
             summary = build_fallback_summary(0)
             return {"violations": [], "summary": summary}
 
-        aggregated_violations: List[Dict[str, Any]] = []
-        files_reviewed: Set[str] = set()
-        last_summary: Optional[Dict[str, Any]] = None
+        aggregated_violations: list[dict[str, Any]] = []
+        files_reviewed: set[str] = set()
+        last_summary: dict[str, Any] | None = None
+        unverified_chunks: list[int] = []
 
-        for dataset_text, chunk_subset, chunk_index in datasets:
-            validated, parsed_files = execute_dataset(
+        total_expected_chunks = len(datasets) if use_chunking else None
+        pending = deque(
+            (idx, dataset_text, chunk_subset, False) for idx, dataset_text, chunk_subset in datasets
+        )
+
+        while pending:
+            chunk_index, dataset_text, chunk_subset, retried = pending.popleft()
+
+            if retried:
+                target_workspace = original_workspace_root or settings.workspace_root
+            else:
+                target_workspace = review_workspace or settings.workspace_root
+            if target_workspace is not None:
+                settings.workspace_root = target_workspace
+
+            validated, parsed_files, needs_retry = execute_dataset(
                 dataset_text,
                 chunk_subset,
-                chunk_index=chunk_index,
-                total_expected_chunks=total_chunks if use_chunking else None,
+                chunk_index=chunk_index if use_chunking else None,
+                total_expected_chunks=total_expected_chunks,
             )
+
+            if needs_retry:
+                if not retried:
+                    pending.append((chunk_index, dataset_text, chunk_subset, True))
+                    continue
+                unverified_chunks.append(chunk_index)
+                validated = {
+                    "violations": [],
+                    "summary": build_fallback_summary(len(chunk_subset), {"unverified": True}),
+                }
+                parsed_files = {
+                    entry.get("path", "")
+                    for entry in chunk_subset
+                    if isinstance(entry.get("path"), str)
+                }
+
             aggregated_violations.extend(validated["violations"])
             files_reviewed.update(parsed_files)
             last_summary = validated["summary"]
 
-        final_summary: Dict[str, Any] = dict(last_summary or {})
+            if review_workspace is not None:
+                settings.workspace_root = review_workspace
+
+        final_summary: dict[str, Any] = dict(last_summary or {})
         final_summary["total_violations"] = len(aggregated_violations)
         final_summary["files_reviewed"] = len(files_reviewed)
         rule_name_value = final_summary.get("rule_name")
         if not isinstance(rule_name_value, str) or not rule_name_value.strip():
             final_summary["rule_name"] = rule_path.stem
+        if unverified_chunks:
+            final_summary["unverified_chunks"] = len(unverified_chunks)
 
         reset_session(original_session_id)
 
@@ -926,6 +1090,8 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
             settings.max_context_tokens = original_max_context_tokens
         if original_response_headroom is not None:
             settings.response_headroom_tokens = original_response_headroom
+        if original_enable_dynamic_instructions is not None:
+            settings.enable_dynamic_instructions = original_enable_dynamic_instructions
 
 
 __all__ = [

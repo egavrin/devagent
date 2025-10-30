@@ -1,14 +1,14 @@
 """Design Agent for creating technical designs and analyzing references."""
+
 from __future__ import annotations
 
 import os
-import json
 import re
-from pathlib import Path
-from typing import Dict, List, Any, Optional
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-from ..base import BaseAgent, AgentContext, AgentResult, AgentCapability
+from ..base import AgentCapability, AgentContext, AgentResult, BaseAgent
 
 
 class DesignAgent(BaseAgent):
@@ -23,10 +23,10 @@ class DesignAgent(BaseAgent):
                 "technical_design",
                 "reference_analysis",
                 "architecture_design",
-                "pattern_extraction"
+                "pattern_extraction",
             ],
             tools=["read", "write", "grep", "find", "symbols"],
-            max_iterations=30
+            max_iterations=30,
         )
 
         # Register capabilities
@@ -39,36 +39,32 @@ class DesignAgent(BaseAgent):
                 name="technical_design",
                 description="Create technical design documents",
                 required_tools=["read", "write"],
-                optional_tools=["grep", "find"]
+                optional_tools=["grep", "find"],
             ),
             AgentCapability(
                 name="reference_analysis",
                 description="Analyze reference implementations",
                 required_tools=["read", "grep"],
-                optional_tools=["symbols"]
+                optional_tools=["symbols"],
             ),
             AgentCapability(
                 name="architecture_design",
                 description="Design system architecture",
                 required_tools=["write"],
-                optional_tools=["read", "grep"]
+                optional_tools=["read", "grep"],
             ),
             AgentCapability(
                 name="pattern_extraction",
                 description="Extract design patterns from code",
                 required_tools=["read", "grep"],
-                optional_tools=["symbols"]
-            )
+                optional_tools=["symbols"],
+            ),
         ]
 
         for capability in capabilities:
             self.register_capability(capability)
 
-    def analyze_requirements(
-        self,
-        requirements: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def analyze_requirements(self, requirements: str, context: AgentContext) -> dict[str, Any]:
         """
         Analyze requirements for a feature.
 
@@ -103,14 +99,10 @@ class DesignAgent(BaseAgent):
             "status": "analyzed",
             "features": list(features),
             "raw_requirements": requirements,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
 
-    def extract_patterns(
-        self,
-        file_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def extract_patterns(self, file_path: str, context: AgentContext) -> dict[str, Any]:
         """
         Extract design patterns from a reference file.
 
@@ -125,7 +117,8 @@ class DesignAgent(BaseAgent):
         architecture = {}
 
         try:
-            with open(file_path, 'r') as f:
+            file_path = Path(file_path)
+            with file_path.open() as f:
                 content = f.read()
 
             # Detect common patterns
@@ -156,30 +149,16 @@ class DesignAgent(BaseAgent):
             classes = len(re.findall(r"^class\s+", content, re.MULTILINE))
             functions = len(re.findall(r"^def\s+", content, re.MULTILINE))
 
-            architecture["components"] = {
-                "classes": classes,
-                "functions": functions
-            }
+            architecture["components"] = {"classes": classes, "functions": functions}
 
         except Exception as e:
-            return {
-                "error": str(e),
-                "patterns": [],
-                "architecture": {}
-            }
+            return {"error": str(e), "patterns": [], "architecture": {}}
 
-        return {
-            "patterns": patterns,
-            "architecture": architecture,
-            "file": file_path
-        }
+        return {"patterns": patterns, "architecture": architecture, "file": file_path}
 
     def create_design_document(
-        self,
-        design_data: Dict[str, Any],
-        output_path: str,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, design_data: dict[str, Any], output_path: str, context: AgentContext
+    ) -> dict[str, Any]:
         """
         Create a design document in markdown format.
 
@@ -197,7 +176,7 @@ class DesignAgent(BaseAgent):
                 f"# Design: {design_data.get('feature', 'Feature')}",
                 f"\n**Created**: {datetime.now().isoformat()}",
                 f"\n**Author**: {self.name}",
-                "\n## Requirements\n"
+                "\n## Requirements\n",
             ]
 
             # Add requirements
@@ -232,28 +211,19 @@ class DesignAgent(BaseAgent):
                 doc_lines.append(design_data["notes"])
 
             # Write document
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, 'w') as f:
-                f.write('\n'.join(doc_lines))
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("w") as f:
+                f.write("\n".join(doc_lines))
 
-            return {
-                "success": True,
-                "path": output_path,
-                "lines": len(doc_lines)
-            }
+            return {"success": True, "path": output_path, "lines": len(doc_lines)}
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def analyze_references(
-        self,
-        feature: str,
-        reference_paths: List[str],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, feature: str, reference_paths: list[str], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Analyze reference implementations for a feature.
 
@@ -270,21 +240,18 @@ class DesignAgent(BaseAgent):
         recommendations = []
 
         for ref_path in reference_paths:
-            if not os.path.exists(ref_path):
+            ref_path_obj = Path(ref_path)
+            if not ref_path_obj.exists():
                 continue
 
-            ref_analysis = {
-                "path": ref_path,
-                "patterns": [],
-                "relevant_files": []
-            }
+            ref_analysis = {"path": ref_path, "patterns": [], "relevant_files": []}
 
             # Search for relevant files
-            if os.path.isdir(ref_path):
-                for root, dirs, files in os.walk(ref_path):
+            if ref_path_obj.is_dir():
+                for root, _dirs, files in os.walk(ref_path):
                     for file in files:
-                        if file.endswith(('.py', '.js', '.ts')):
-                            file_path = os.path.join(root, file)
+                        if file.endswith((".py", ".js", ".ts")):
+                            file_path = str(Path(root) / file)
                             # Simple relevance check based on filename
                             if feature.lower() in file.lower():
                                 ref_analysis["relevant_files"].append(file_path)
@@ -308,14 +275,12 @@ class DesignAgent(BaseAgent):
             "references": references,
             "patterns": list(all_patterns),
             "recommendations": recommendations,
-            "feature": feature
+            "feature": feature,
         }
 
     def assess_compatibility(
-        self,
-        proposed_changes: Dict[str, Any],
-        context: AgentContext
-    ) -> Dict[str, Any]:
+        self, proposed_changes: dict[str, Any], context: AgentContext
+    ) -> dict[str, Any]:
         """
         Assess compatibility impact of proposed changes.
 
@@ -372,10 +337,10 @@ class DesignAgent(BaseAgent):
             "risk_level": risk_level,
             "risk_score": min(risk_score, 1.0),
             "impacts": impacts,
-            "recommendations": recommendations
+            "recommendations": recommendations,
         }
 
-    def validate_design(self, design: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_design(self, design: dict[str, Any]) -> dict[str, Any]:
         """
         Validate a design against best practices.
 
@@ -394,7 +359,7 @@ class DesignAgent(BaseAgent):
             arch = design["architecture"]
             if "layers" in arch:
                 layers = arch["layers"]
-                if all(l in layers for l in ["presentation", "business", "data"]):
+                if all(layer in layers for layer in ["presentation", "business", "data"]):
                     score += 0.2
                     checks_passed.append("Proper layer separation")
                 else:
@@ -436,7 +401,7 @@ class DesignAgent(BaseAgent):
             "valid": score >= 0.5,
             "score": score,
             "checks_passed": checks_passed,
-            "suggestions": suggestions
+            "suggestions": suggestions,
         }
 
     def execute(self, prompt: str, context: AgentContext) -> AgentResult:
@@ -454,8 +419,4 @@ class DesignAgent(BaseAgent):
         from .executor_bridge import execute_agent_with_react
 
         # Execute using ReAct workflow with LLM and real tools
-        return execute_agent_with_react(
-            agent=self,
-            prompt=prompt,
-            context=context
-        )
+        return execute_agent_with_react(agent=self, prompt=prompt, context=context)

@@ -3,11 +3,9 @@ from pathlib import Path
 from click.testing import CliRunner
 
 import ai_dev_agent.cli as cli_module
-from ai_dev_agent.cli import infer_task_files, cli
+from ai_dev_agent.cli import cli, infer_task_files
 from ai_dev_agent.cli.router import IntentDecision
 from ai_dev_agent.core.utils.config import Settings
-from ai_dev_agent.providers.llm.base import Message
-from ai_dev_agent.session import SessionManager, build_system_messages
 
 
 def test_infer_task_files_from_commands(tmp_path: Path) -> None:
@@ -92,7 +90,9 @@ def test_cli_rejects_deprecated_list_directory_tool(monkeypatch, tmp_path: Path)
 
         def route(self, prompt: str) -> IntentDecision:
             assert "дир" in prompt
-            return IntentDecision(tool="list_directory", arguments={"path": "."}, rationale="List repo root")
+            return IntentDecision(
+                tool="list_directory", arguments={"path": "."}, rationale="List repo root"
+            )
 
     monkeypatch.setattr(cli_module, "IntentRouter", DummyRouter)
     monkeypatch.chdir(repo_root)

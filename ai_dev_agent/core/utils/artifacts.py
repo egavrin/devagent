@@ -1,15 +1,15 @@
 """Helpers for persisting large tool outputs as artifacts."""
+
 from __future__ import annotations
 
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 ARTIFACTS_ROOT = Path(".devagent") / "artifacts"
 
 
-def _sanitize_suffix(suffix: Optional[str]) -> str:
+def _sanitize_suffix(suffix: str | None) -> str:
     """Return a filesystem-safe suffix while preserving extensions."""
     if not suffix:
         return ".txt"
@@ -31,7 +31,7 @@ def _sanitize_suffix(suffix: Optional[str]) -> str:
     return safe
 
 
-def write_artifact(content: str, *, suffix: str = ".txt", root: Optional[Path] = None) -> Path:
+def write_artifact(content: str, *, suffix: str = ".txt", root: Path | None = None) -> Path:
     """Persist content to an artifact file and return the path.
 
     Files are stored under `.devagent/artifacts` by default using a timestamp and
@@ -59,4 +59,4 @@ def write_artifact(content: str, *, suffix: str = ".txt", root: Optional[Path] =
     return path
 
 
-__all__ = ["write_artifact", "ARTIFACTS_ROOT"]
+__all__ = ["ARTIFACTS_ROOT", "write_artifact"]

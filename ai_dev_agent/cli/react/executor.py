@@ -1,4 +1,5 @@
 """Execution helpers for the CLI ReAct workflow."""
+
 from __future__ import annotations
 
 import json
@@ -6,16 +7,16 @@ import logging
 import os
 import re
 import time
+from collections.abc import Iterable, Mapping, Sequence
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Callable
 from uuid import uuid4
 
 import click
 
-logger = logging.getLogger(__name__)
-
 from ai_dev_agent.agents import AgentRegistry
+from ai_dev_agent.cli.dynamic_context import DynamicContextTracker
 from ai_dev_agent.cli.handlers import INTENT_HANDLERS
 from ai_dev_agent.cli.utils import (
     _collect_project_structure_outline,
@@ -24,15 +25,10 @@ from ai_dev_agent.cli.utils import (
     _merge_structure_hints_state,
     _update_files_discovered,
 )
-from ai_dev_agent.cli.dynamic_context import DynamicContextTracker
+from ai_dev_agent.core.failure_detector import FailurePatternDetector
 from ai_dev_agent.core.utils.budget_integration import BudgetIntegration, create_budget_integration
 from ai_dev_agent.core.utils.config import DEFAULT_MAX_ITERATIONS, Settings
 from ai_dev_agent.core.utils.devagent_config import load_devagent_yaml
-from ai_dev_agent.providers.llm import LLMError
-from ai_dev_agent.providers.llm.base import Message
-from ai_dev_agent.session import SessionManager
-from ai_dev_agent.session.context_synthesis import ContextSynthesizer
-
 from ai_dev_agent.engine.react.loop import ReactiveExecutor
 from ai_dev_agent.engine.react.tool_invoker import SessionAwareToolInvoker
 from ai_dev_agent.engine.react.types import (
@@ -44,16 +40,22 @@ from ai_dev_agent.engine.react.types import (
     StepRecord,
     TaskSpec,
 )
-from ai_dev_agent.core.failure_detector import FailurePatternDetector
+from ai_dev_agent.providers.llm import LLMError
+from ai_dev_agent.providers.llm.base import Message
+from ai_dev_agent.session import SessionManager
+from ai_dev_agent.session.context_synthesis import ContextSynthesizer
 
-from ..router import IntentDecision, IntentRouter as _DEFAULT_INTENT_ROUTER
+from ..router import IntentDecision
+from ..router import IntentRouter as _DEFAULT_INTENT_ROUTER
 from .action_provider import LLMActionProvider
-from .budget_control import AdaptiveBudgetManager, BudgetManager, PHASE_PROMPTS, auto_generate_summary
+from .budget_control import PHASE_PROMPTS, AdaptiveBudgetManager, BudgetManager
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["_execute_react_assistant"]
 
 
-def _build_json_enforcement_instructions(format_schema: Dict[str, Any]) -> str:
+def _build_json_enforcement_instructions(format_schema: dict[str, Any]) -> str:
     """Build strict JSON-only instructions for forced synthesis paths."""
     return (
         "CRITICAL OUTPUT REQUIREMENT - READ CAREFULLY:\n"
@@ -73,17 +75,18 @@ def _build_json_enforcement_instructions(format_schema: Dict[str, Any]) -> str:
     )
 
 
-def _sanitize_conversation_for_llm(messages: Sequence[Message]) -> List[Message]:
+def _sanitize_conversation_for_llm(messages: Sequence[Message]) -> list[Message]:
     """Remove tool messages whose IDs are not referenced by assistant tool calls.
 
     DEPRECATED: Use ai_dev_agent.session.sanitizer.sanitize_conversation instead.
     This wrapper is kept for backward compatibility.
     """
     from ai_dev_agent.session.sanitizer import sanitize_conversation
+
     return sanitize_conversation(messages)
 
 
-def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+def _extract_json(text: str) -> dict[str, Any] | None:
     """Extract JSON from text, handling markdown code fences and surrounding text."""
     if not text:
         return None
@@ -95,7 +98,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         pass
 
     # Try to extract JSON from markdown code fence (greedy to get full content)
-    code_fence_match = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.DOTALL)
+    code_fence_match = re.search(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL)
     if code_fence_match:
         try:
             return json.loads(code_fence_match.group(1).strip())
@@ -104,7 +107,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
     # Find JSON by matching braces/brackets with proper nesting
     # Try objects first (most common), then arrays
-    for start_char, end_char in [('{', '}'), ('[', ']')]:
+    for start_char, end_char in [("{", "}"), ("[", "]")]:
         # Find first occurrence of start character
         start_pos = text.find(start_char)
         if start_pos == -1:
@@ -122,7 +125,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
             if escape_next:
                 escape_next = False
                 continue
-            if char == '\\':
+            if char == "\\":
                 escape_next = True
                 continue
             if char == '"':
@@ -137,7 +140,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
                     depth -= 1
                     if depth == 0:
                         # Found complete JSON structure
-                        candidate = text[start_pos:i + 1]
+                        candidate = text[start_pos : i + 1]
                         try:
                             return json.loads(candidate)
                         except json.JSONDecodeError:
@@ -150,7 +153,9 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 class BudgetAwareExecutor(ReactiveExecutor):
     """Thin wrapper around the engine executor that honours the CLI budget manager."""
 
-    def __init__(self, budget_manager: BudgetManager, format_schema: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self, budget_manager: BudgetManager, format_schema: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(evaluator=None)
         self.budget_manager = budget_manager
         self.failure_detector = FailurePatternDetector()
@@ -164,28 +169,21 @@ class BudgetAwareExecutor(ReactiveExecutor):
         if not observation.success:
             # Extract target from action parameters
             target = ""
-            if hasattr(action, 'parameters') and action.parameters:
+            if hasattr(action, "parameters") and action.parameters:
                 target = (
-                    action.parameters.get('pattern') or
-                    action.parameters.get('file_path') or
-                    action.parameters.get('path') or
-                    action.parameters.get('query') or
-                    str(action.parameters)[:50]
+                    action.parameters.get("pattern")
+                    or action.parameters.get("file_path")
+                    or action.parameters.get("path")
+                    or action.parameters.get("query")
+                    or str(action.parameters)[:50]
                 )
 
             reason = observation.error or observation.outcome or "Unknown failure"
 
-            self.failure_detector.record_failure(
-                action.tool,
-                target,
-                reason
-            )
+            self.failure_detector.record_failure(action.tool, target, reason)
 
             # Check if we should give up
-            should_stop, message = self.failure_detector.should_give_up(
-                action.tool,
-                target
-            )
+            should_stop, message = self.failure_detector.should_give_up(action.tool, target)
 
             if should_stop:
                 # Inject helpful message into observation outcome
@@ -200,14 +198,14 @@ class BudgetAwareExecutor(ReactiveExecutor):
         action_provider: LLMActionProvider,
         tool_invoker: SessionAwareToolInvoker,
         *,
-        prior_steps: Optional[Iterable[StepRecord]] = None,
-        iteration_hook: Optional[Callable[[Any, Sequence[StepRecord]], None]] = None,
-        step_hook: Optional[Callable[[StepRecord, Any], None]] = None,
+        prior_steps: Iterable[StepRecord] | None = None,
+        iteration_hook: Callable[[Any, Sequence[StepRecord]], None] | None = None,
+        step_hook: Callable[[StepRecord, Any], None] | None = None,
     ) -> RunResult:
-        history: List[StepRecord] = list(prior_steps or [])
-        steps: List[StepRecord] = []
+        history: list[StepRecord] = list(prior_steps or [])
+        steps: list[StepRecord] = []
         natural_stop = False
-        stop_condition: Optional[str] = None
+        stop_condition: str | None = None
         start_time = time.perf_counter()
 
         while True:
@@ -216,14 +214,13 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 stop_condition = "budget_exhausted"
                 break
 
-
             action_provider.update_phase(context.phase, is_final=context.is_final)
             if iteration_hook:
                 iteration_hook(context, history + steps)
 
             try:
                 action_payload = action_provider(task, history + steps)
-            except StopIteration as e:
+            except StopIteration:
                 # The LLM stopped without calling a tool (usually submit_final_answer)
                 # We need to force a synthesis response to give the user a comprehensive answer
                 # This can happen in the final iteration OR if the LLM stops early
@@ -239,17 +236,23 @@ class BudgetAwareExecutor(ReactiveExecutor):
                         role="system",
                         content=_build_json_enforcement_instructions(self.format_schema),
                     )
-                    conversation = conversation + [json_instruction_message]
+                    conversation = [*conversation, json_instruction_message]
 
                 try:
-                    if hasattr(action_provider.client, 'complete'):
+                    if hasattr(action_provider.client, "complete"):
                         final_text = action_provider.client.complete(conversation, temperature=0.1)
                     else:
                         # Fallback: try with invoke_tools with empty tools
                         from ai_dev_agent.providers.llm import ToolCallResult
-                        result = action_provider.client.invoke_tools(conversation, tools=[], temperature=0.1)
-                        final_text = result.message_content if isinstance(result, ToolCallResult) else str(result)
 
+                        result = action_provider.client.invoke_tools(
+                            conversation, tools=[], temperature=0.1
+                        )
+                        final_text = (
+                            result.message_content
+                            if isinstance(result, ToolCallResult)
+                            else str(result)
+                        )
 
                     if final_text and final_text.strip():
                         # Create a synthetic submit_final_answer action
@@ -258,7 +261,11 @@ class BudgetAwareExecutor(ReactiveExecutor):
                             thought="Forced synthesis after no tool call",
                             tool="submit_final_answer",
                             args={"answer": final_text.strip()},
-                            metadata={"iteration": len(history) + len(steps) + 1, "phase": context.phase, "forced": True},
+                            metadata={
+                                "iteration": len(history) + len(steps) + 1,
+                                "phase": context.phase,
+                                "forced": True,
+                            },
                         )
                         observation = Observation(
                             success=True,
@@ -271,8 +278,11 @@ class BudgetAwareExecutor(ReactiveExecutor):
                             observation=observation,
                             metrics=MetricsSnapshot(),
                             evaluation=EvaluationResult(
-                                gates={}, required_gates={}, should_stop=True,
-                                stop_reason="Forced synthesis", status="success"
+                                gates={},
+                                required_gates={},
+                                should_stop=True,
+                                stop_reason="Forced synthesis",
+                                status="success",
                             ),
                             step_index=len(history) + len(steps) + 1,
                         )
@@ -281,11 +291,17 @@ class BudgetAwareExecutor(ReactiveExecutor):
                             step_hook(record, context)
                     else:
                         import sys
-                        print(f"ERROR: LLM returned empty response in forced synthesis!", file=sys.stderr)
+
+                        print(
+                            "ERROR: LLM returned empty response in forced synthesis!",
+                            file=sys.stderr,
+                        )
                 except Exception as fallback_error:
                     import sys
+
                     print(f"ERROR: Failed to force synthesis: {fallback_error}", file=sys.stderr)
                     import traceback
+
                     traceback.print_exc(file=sys.stderr)
 
                 stop_condition = "provider_stop"
@@ -349,7 +365,7 @@ class BudgetAwareExecutor(ReactiveExecutor):
                         "4. Give actionable recommendations or answers\n\n"
                         "DO NOT attempt to use any tools. DO NOT search further.\n"
                         "Provide your COMPLETE ANSWER NOW based on what you've learned."
-                    )
+                    ),
                 )
 
                 # Also add a user message to reinforce the synthesis requirement
@@ -359,28 +375,35 @@ class BudgetAwareExecutor(ReactiveExecutor):
                         "Based on your investigation, please provide a comprehensive answer to my original question. "
                         "Include all relevant findings, code examples, and recommendations. "
                         "Do not search further - synthesize what you've learned."
-                    )
+                    ),
                 )
 
                 # Append synthesis prompts to conversation
-                enhanced_conversation = conversation + [synthesis_prompt, synthesis_user_prompt]
+                enhanced_conversation = [*conversation, synthesis_prompt, synthesis_user_prompt]
 
                 if self.format_schema:
                     json_instruction_message = Message(
                         role="system",
                         content=_build_json_enforcement_instructions(self.format_schema),
                     )
-                    enhanced_conversation = enhanced_conversation + [json_instruction_message]
+                    enhanced_conversation = [*enhanced_conversation, json_instruction_message]
 
-
-                if hasattr(action_provider.client, 'complete'):
-                    final_text = action_provider.client.complete(enhanced_conversation, temperature=0.1)
+                if hasattr(action_provider.client, "complete"):
+                    final_text = action_provider.client.complete(
+                        enhanced_conversation, temperature=0.1
+                    )
                 else:
                     from ai_dev_agent.providers.llm import ToolCallResult
-                    # Pass empty tools to prevent any tool calls
-                    result = action_provider.client.invoke_tools(enhanced_conversation, tools=[], temperature=0.1)
-                    final_text = result.message_content if isinstance(result, ToolCallResult) else str(result)
 
+                    # Pass empty tools to prevent any tool calls
+                    result = action_provider.client.invoke_tools(
+                        enhanced_conversation, tools=[], temperature=0.1
+                    )
+                    final_text = (
+                        result.message_content
+                        if isinstance(result, ToolCallResult)
+                        else str(result)
+                    )
 
                 if final_text and final_text.strip():
                     # Create synthetic submit_final_answer
@@ -389,7 +412,11 @@ class BudgetAwareExecutor(ReactiveExecutor):
                         thought="Final synthesis",
                         tool="submit_final_answer",
                         args={"answer": final_text.strip()},
-                        metadata={"iteration": len(history) + len(steps) + 1, "phase": "forced_synthesis", "forced": True},
+                        metadata={
+                            "iteration": len(history) + len(steps) + 1,
+                            "phase": "forced_synthesis",
+                            "forced": True,
+                        },
                     )
                     observation = Observation(
                         success=True,
@@ -402,8 +429,11 @@ class BudgetAwareExecutor(ReactiveExecutor):
                         observation=observation,
                         metrics=MetricsSnapshot(),
                         evaluation=EvaluationResult(
-                            gates={}, required_gates={}, should_stop=True,
-                            stop_reason="Forced synthesis", status="success"
+                            gates={},
+                            required_gates={},
+                            should_stop=True,
+                            stop_reason="Forced synthesis",
+                            status="success",
                         ),
                         step_index=len(history) + len(steps) + 1,
                     )
@@ -413,13 +443,18 @@ class BudgetAwareExecutor(ReactiveExecutor):
                     last_observation = observation
             except Exception as e:
                 import sys
+
                 print(f"ERROR: Failed to force post-loop synthesis: {e}", file=sys.stderr)
                 import traceback
+
                 traceback.print_exc(file=sys.stderr)
 
         successful_result = False
         if last_observation is not None:
-            successful_result = last_observation.success and stop_condition in {"final_iteration", "provider_stop"}
+            successful_result = last_observation.success and stop_condition in {
+                "final_iteration",
+                "provider_stop",
+            }
         else:
             successful_result = natural_stop and stop_condition in {"provider_stop"}
 
@@ -471,11 +506,11 @@ def _resolve_intent_router() -> type[_DEFAULT_INTENT_ROUTER]:
     return getattr(cli_module, "IntentRouter", _DEFAULT_INTENT_ROUTER)
 
 
-def _truncate_shell_history(history: List[Message], max_turns: int) -> List[Message]:
+def _truncate_shell_history(history: list[Message], max_turns: int) -> list[Message]:
     if max_turns <= 0:
         return []
 
-    turns: List[tuple[Message, Message]] = []
+    turns: list[tuple[Message, Message]] = []
     pending_user: Message | None = None
     for msg in history:
         if msg.role == "user":
@@ -485,13 +520,12 @@ def _truncate_shell_history(history: List[Message], max_turns: int) -> List[Mess
                 turns.append((pending_user, msg))
                 pending_user = None
 
-    trimmed: List[Message] = []
+    trimmed: list[Message] = []
     for user_msg, assistant_msg in turns[-max_turns:]:
         trimmed.extend([user_msg, assistant_msg])
 
-    if pending_user is not None:
-        if not trimmed or trimmed[-1] is not pending_user:
-            trimmed.append(pending_user)
+    if pending_user is not None and (not trimmed or trimmed[-1] is not pending_user):
+        trimmed.append(pending_user)
 
     return trimmed
 
@@ -503,9 +537,11 @@ def _build_phase_prompt(
     constraints: str,
     *,
     workspace: str,
-    repository_language: Optional[str],
+    repository_language: str | None,
 ) -> str:
-    guidance = PHASE_PROMPTS.get(phase) or PHASE_PROMPTS.get("exploration", "Focus on the task at hand.")
+    guidance = PHASE_PROMPTS.get(phase) or PHASE_PROMPTS.get(
+        "exploration", "Focus on the task at hand."
+    )
     lang_hint = ""
     if repository_language:
         hint_map = {
@@ -529,7 +565,9 @@ def _build_phase_prompt(
         f"WORKSPACE: {workspace}",
     ]
     if repository_language:
-        prompt_parts.append(f"LANGUAGE: {repository_language}{f' — {lang_hint}' if lang_hint else ''}")
+        prompt_parts.append(
+            f"LANGUAGE: {repository_language}{f' — {lang_hint}' if lang_hint else ''}"
+        )
     if show_discoveries:
         prompt_parts.extend(["", "PREVIOUS DISCOVERIES:", context])
     if constraints.strip():
@@ -573,7 +611,7 @@ def _build_synthesis_prompt(
 def _record_search_query(action: ActionRequest, search_queries: set[str]) -> None:
     if action.tool not in {"find", "grep"}:
         return
-    candidate: Optional[str] = None
+    candidate: str | None = None
     for key in ("query", "pattern"):
         value = action.args.get(key)
         if isinstance(value, str) and value.strip():
@@ -589,11 +627,11 @@ def _execute_react_assistant(
     settings: Settings,
     user_prompt: str,
     use_planning: bool = False,
-    system_extension: Optional[str] = None,
-    format_schema: Optional[Dict[str, Any]] = None,
+    system_extension: str | None = None,
+    format_schema: dict[str, Any] | None = None,
     agent_type: str = "manager",
     suppress_final_output: bool = False,
-    ) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Execute the CLI ReAct loop using the shared engine primitives.
 
     Returns a dictionary containing:
@@ -606,8 +644,12 @@ def _execute_react_assistant(
     # If planning mode is enabled, use the Work Planning Agent
     if use_planning:
         from ai_dev_agent.cli.react.plan_executor import execute_with_planning
+
         return execute_with_planning(
-            ctx, client, settings, user_prompt,
+            ctx,
+            client,
+            settings,
+            user_prompt,
             system_extension=system_extension,
             format_schema=format_schema,
             agent_type=agent_type,
@@ -622,11 +664,13 @@ def _execute_react_assistant(
     # Check for silent mode
     if not isinstance(getattr(ctx, "obj", None), dict):
         ctx.obj = {}
-    ctx_obj: Dict[str, Any] = ctx.obj
+    ctx_obj: dict[str, Any] = ctx.obj
     ctx_obj["settings"] = settings  # Store settings for access by action_provider
     silent_mode = ctx_obj.get("silent_mode", False)
 
-    should_emit_status = (planning_active or supports_tool_calls or bool(ctx.meta.pop("_emit_status_messages", False))) and not silent_mode
+    should_emit_status = (
+        planning_active or supports_tool_calls or bool(ctx.meta.pop("_emit_status_messages", False))
+    ) and not silent_mode
     execution_mode = "with planning" if planning_active else "direct"
 
     if should_emit_status:
@@ -639,7 +683,9 @@ def _execute_react_assistant(
 
     history_raw = ctx_obj.get("_shell_conversation_history")
     history_enabled = isinstance(history_raw, list)
-    history_messages: List[Message] = [msg for msg in history_raw or [] if isinstance(msg, Message)] if history_enabled else []
+    history_messages: list[Message] = (
+        [msg for msg in history_raw or [] if isinstance(msg, Message)] if history_enabled else []
+    )
     max_history_turns = max(1, getattr(settings, "keep_last_assistant_messages", 4))
 
     # Initialize dynamic context tracker for adaptive RepoMap
@@ -671,14 +717,16 @@ def _execute_react_assistant(
             repository_size_estimate = file_count
             ctx_obj["_repo_file_count"] = file_count
 
-    project_profile: Dict[str, Any] = {
+    project_profile: dict[str, Any] = {
         "workspace_root": str(settings.workspace_root or repo_root),
         "language": repository_language,
         "repository_size": repository_size_estimate,
         "project_summary": ctx_obj.get("_project_structure_summary"),
         "active_plan_complexity": ctx_obj.get("_active_plan_complexity"),
     }
-    discovered_files_snapshot = structure_state.get("files") if isinstance(structure_state, dict) else {}
+    discovered_files_snapshot = (
+        structure_state.get("files") if isinstance(structure_state, dict) else {}
+    )
     if isinstance(discovered_files_snapshot, dict) and discovered_files_snapshot:
         project_profile["recent_files"] = sorted(discovered_files_snapshot.keys())[:6]
     style_notes = ctx_obj.get("_latest_style_profile")
@@ -704,10 +752,12 @@ def _execute_react_assistant(
             if text and not silent_mode:
                 click.echo(text)
             if history_enabled:
-                updated = history_messages + [user_message]
+                updated = [*history_messages, user_message]
                 if text:
                     updated.append(Message(role="assistant", content=text))
-                ctx.obj["_shell_conversation_history"] = _truncate_shell_history(updated, max_history_turns)
+                ctx.obj["_shell_conversation_history"] = _truncate_shell_history(
+                    updated, max_history_turns
+                )
             if should_emit_status:
                 elapsed = time.time() - start_time
                 click.echo(f"\n✅ Completed in {elapsed:.1f}s ({execution_mode})")
@@ -719,7 +769,7 @@ def _execute_react_assistant(
         handler(ctx, decision.arguments)
         if history_enabled:
             ctx.obj["_shell_conversation_history"] = _truncate_shell_history(
-                history_messages + [user_message],
+                [*history_messages, user_message],
                 max_history_turns,
             )
         if should_emit_status:
@@ -748,7 +798,7 @@ def _execute_react_assistant(
     ):
         iteration_cap = config_cap
 
-    budget_settings: Dict[str, Any] = {}
+    budget_settings: dict[str, Any] = {}
     if devagent_cfg and getattr(devagent_cfg, "budget_control", None):
         if isinstance(devagent_cfg.budget_control, dict):
             budget_settings = dict(devagent_cfg.budget_control)
@@ -764,11 +814,13 @@ def _execute_react_assistant(
     phase_thresholds = budget_settings.get("phases")
     warning_settings = budget_settings.get("warnings")
     synthesis_settings = budget_settings.get("synthesis") or {}
-    auto_summary_enabled = bool(synthesis_settings.get("auto_summary_on_failure", True))
+    bool(synthesis_settings.get("auto_summary_on_failure", True))
 
     model_context_window = getattr(settings, "model_context_window", 100_000)
 
-    use_adaptive = getattr(settings, "enable_reflection", True) or getattr(settings, "adaptive_budget_scaling", True)
+    use_adaptive = getattr(settings, "enable_reflection", True) or getattr(
+        settings, "adaptive_budget_scaling", True
+    )
     if use_adaptive:
         budget_manager: BudgetManager = AdaptiveBudgetManager(
             iteration_cap,
@@ -786,7 +838,7 @@ def _execute_react_assistant(
             warnings=warning_settings if isinstance(warning_settings, Mapping) else None,
         )
 
-    budget_integration: Optional[BudgetIntegration] = None
+    budget_integration: BudgetIntegration | None = None
     is_test_mode = os.environ.get("PYTEST_CURRENT_TEST") is not None
     if not is_test_mode and (
         settings.enable_cost_tracking or settings.enable_retry or settings.enable_summarization
@@ -821,6 +873,7 @@ def _execute_react_assistant(
     if not is_test_mode:
         try:
             from ai_dev_agent.cli.context_enhancer import get_context_enhancer
+
             context_enhancer = get_context_enhancer(workspace=repo_root, settings=settings)
         except Exception as e:
             logger.debug(f"Failed to initialize context enhancer: {e}")
@@ -830,11 +883,13 @@ def _execute_react_assistant(
             memory_messages_raw, memory_ids = context_enhancer.get_memory_context(
                 query=user_prompt,
                 limit=settings.memory_retrieval_limit,
-                threshold=settings.memory_similarity_threshold
+                threshold=settings.memory_similarity_threshold,
             )
             if memory_messages_raw:
                 # Convert dict messages to Message objects
-                memory_messages = [Message(role=msg["role"], content=msg["content"]) for msg in memory_messages_raw]
+                memory_messages = [
+                    Message(role=msg["role"], content=msg["content"]) for msg in memory_messages_raw
+                ]
                 logger.debug(f"Retrieved {len(memory_messages)} memory context messages")
                 session_manager.extend_history(session_id, memory_messages)
                 # Store memory IDs for effectiveness tracking
@@ -932,7 +987,9 @@ def _execute_react_assistant(
             if is_final:
                 # Final iteration - must output JSON now
                 prompt += "\n\n# Output Format (OVERRIDES ALL OTHER FORMAT INSTRUCTIONS)\n"
-                prompt += "CRITICAL: Your response must be ONLY valid JSON conforming to this schema.\n"
+                prompt += (
+                    "CRITICAL: Your response must be ONLY valid JSON conforming to this schema.\n"
+                )
                 prompt += "This JSON format requirement SUPERSEDES any other output format instructions above.\n"
                 prompt += "Do not include ANY explanatory text, thinking process, markdown formatting, code fences, or line-based output.\n"
                 prompt += "Do not write anything before or after the JSON.\n"
@@ -974,11 +1031,16 @@ def _execute_react_assistant(
                 tool_name = observation.tool or record.action.tool
                 # Skip failure detector warnings (they're meant for the LLM, not the user)
                 # Skip submit_final_answer synthesis messages (internal bookkeeping)
-                if not ("⚠️ **" in outcome and "Detected**" in outcome) and tool_name != "submit_final_answer":
+                if (
+                    not ("⚠️ **" in outcome and "Detected**" in outcome)
+                    and tool_name != "submit_final_answer"
+                ):
                     click.echo(f"{tool_name}: {outcome}")
 
         metrics_payload = observation.metrics if isinstance(observation.metrics, Mapping) else {}
-        _update_files_discovered(files_discovered, metrics_payload if isinstance(metrics_payload, Dict) else {})
+        _update_files_discovered(
+            files_discovered, metrics_payload if isinstance(metrics_payload, dict) else {}
+        )
         for artifact in observation.artifacts or []:
             files_discovered.add(str(artifact))
 
@@ -994,8 +1056,10 @@ def _execute_react_assistant(
                     if settings.repomap_debug_stdout:
                         logger.debug(f"RepoMap refresh scheduled after step {record.step_index}")
                         summary = dynamic_context.get_context_summary()
-                        logger.debug(f"Context: {summary['total_mentions']} mentions "
-                                   f"({len(summary['files'])} files, {len(summary['symbols'])} symbols)")
+                        logger.debug(
+                            f"Context: {summary['total_mentions']} mentions "
+                            f"({len(summary['files'])} files, {len(summary['symbols'])} symbols)"
+                        )
 
                     # Store the pending refresh - will be applied before next LLM call
                     ctx_obj["_repomap_refresh_pending"] = True
@@ -1023,14 +1087,15 @@ def _execute_react_assistant(
             return
         session_local = session_manager.get_session(session_id)
         anchor = session_local.metadata.get("history_anchor", len(session_local.history))
-        new_entries: List[Message] = []
+        new_entries: list[Message] = []
         if user_message.content:
             new_entries.append(user_message)
         with session_local.lock:
             # Collect all assistant messages without tool calls, but only keep the LAST one
             # (to handle multi-step iterations where multiple assistant messages are generated)
             assistant_messages = [
-                msg for msg in session_local.history[anchor:]
+                msg
+                for msg in session_local.history[anchor:]
                 if msg.role == "assistant" and msg.content and not msg.tool_calls
             ]
             if assistant_messages:
@@ -1050,8 +1115,9 @@ def _execute_react_assistant(
     # Debug: Log execution result details
     if os.environ.get("DEVAGENT_DEBUG"):
         import sys
+
         print(f"\n{'='*60}", file=sys.stderr)
-        print(f"DEBUG: FINAL OUTPUT EXTRACTION", file=sys.stderr)
+        print("DEBUG: FINAL OUTPUT EXTRACTION", file=sys.stderr)
         print(f"{'='*60}", file=sys.stderr)
         print(f"DEBUG: Result status: {result.status}", file=sys.stderr)
         print(f"DEBUG: Result stop_reason: {result.stop_reason}", file=sys.stderr)
@@ -1065,6 +1131,7 @@ def _execute_react_assistant(
         # Debug: log what the last tool was
         if os.environ.get("DEVAGENT_DEBUG"):
             import sys
+
             last_tool = last_step.observation.tool if last_step.observation else "no observation"
             last_action_tool = last_step.action.tool if last_step.action else "no action"
             print(f"DEBUG: Last step observation.tool: {last_tool}", file=sys.stderr)
@@ -1072,32 +1139,38 @@ def _execute_react_assistant(
 
         if last_step.observation and last_step.observation.tool == "submit_final_answer":
             # Extract the full answer from submit_final_answer
-            raw_out = getattr(last_step.observation, 'raw_output', None)
-            formatted_out = getattr(last_step.observation, 'formatted_output', None)
+            raw_out = getattr(last_step.observation, "raw_output", None)
+            formatted_out = getattr(last_step.observation, "formatted_output", None)
             final_message = raw_out or formatted_out
 
             # Debug logging
             if not silent_mode and os.environ.get("DEVAGENT_DEBUG"):
-                logger.debug(f"✓ submit_final_answer detected")
+                logger.debug("✓ submit_final_answer detected")
                 logger.debug(f"  raw_output length: {len(raw_out) if raw_out else 0}")
-                logger.debug(f"  formatted_output length: {len(formatted_out) if formatted_out else 0}")
-                logger.debug(f"  final_message length: {len(final_message) if final_message else 0}")
+                logger.debug(
+                    f"  formatted_output length: {len(formatted_out) if formatted_out else 0}"
+                )
+                logger.debug(
+                    f"  final_message length: {len(final_message) if final_message else 0}"
+                )
 
     # Fallback: use the last response text if no submit_final_answer
     if not final_message:
         candidate_message = action_provider.last_response_text()
 
         if not silent_mode and os.environ.get("DEVAGENT_DEBUG"):
-            logger.debug(f"\n✗ No submit_final_answer found")
-            logger.debug(f"Checking action_provider.last_response_text()...")
-            logger.debug(f"  Candidate message: {candidate_message[:200] if candidate_message else 'None'}...")
+            logger.debug("\n✗ No submit_final_answer found")
+            logger.debug("Checking action_provider.last_response_text()...")
+            logger.debug(
+                f"  Candidate message: {candidate_message[:200] if candidate_message else 'None'}..."
+            )
 
         # Check if the candidate message looks incomplete
         is_incomplete = False
         if candidate_message:
             stripped = candidate_message.strip()
             # Message looks incomplete if it's very short, ends with ":", or ends mid-sentence
-            if len(stripped) < 50 or stripped.endswith(':') or stripped.endswith('...'):
+            if len(stripped) < 50 or stripped.endswith(":") or stripped.endswith("..."):
                 is_incomplete = True
 
         # Use the candidate if it looks complete, otherwise we'll use auto_generate_summary later
@@ -1108,7 +1181,7 @@ def _execute_react_assistant(
             logger.debug(f"  is_incomplete: {is_incomplete}")
             logger.debug(f"  Using as final_message: {final_message is not None}")
 
-    final_json: Optional[Dict[str, Any]] = None
+    final_json: dict[str, Any] | None = None
     printed_final = False
 
     if final_message:
@@ -1145,17 +1218,19 @@ def _execute_react_assistant(
 
     # Last resort: if somehow we still don't have a final message, show error
     # This should NOT happen with the forced synthesis above
-    if not final_message and not printed_final:
-        if not silent_mode:
-            import sys
-            print(f"\n⚠️ WARNING: No final answer was generated by the LLM.", file=sys.stderr)
-            print(f"This is unexpected - please report this issue.", file=sys.stderr)
-            print(f"\nPartial findings may be available in the conversation history.", file=sys.stderr)
+    if not final_message and not printed_final and not silent_mode:
+        import sys
+
+        print("\n⚠️ WARNING: No final answer was generated by the LLM.", file=sys.stderr)
+        print("This is unexpected - please report this issue.", file=sys.stderr)
+        print("\nPartial findings may be available in the conversation history.", file=sys.stderr)
 
     if should_emit_status and not silent_mode:
         elapsed = time.time() - start_time
         status_icon = "✅" if execution_completed else "⚠️"
-        message = result.stop_reason or ("Completed" if execution_completed else "Execution stopped")
+        message = result.stop_reason or (
+            "Completed" if execution_completed else "Execution stopped"
+        )
         click.echo(f"\n{status_icon} {message} in {elapsed:.1f}s ({execution_mode})")
 
     # Distill and store memory from this session (Phase 1: Memory System)
@@ -1171,15 +1246,17 @@ def _execute_react_assistant(
                 messages = session.history
 
                 # Infer task type from user prompt
-                task_type = "debugging" if any(word in user_prompt.lower() for word in ["bug", "fix", "error", "issue"]) else "general"
+                task_type = (
+                    "debugging"
+                    if any(word in user_prompt.lower() for word in ["bug", "fix", "error", "issue"])
+                    else "general"
+                )
 
                 context_enhancer = get_context_enhancer(workspace=repo_root, settings=settings)
                 if context_enhancer and context_enhancer._memory_store:
                     metadata = {"task_type": task_type, "user_prompt": user_prompt}
                     memory_id = context_enhancer.distill_and_store_memory(
-                        session_id=session_id,
-                        messages=messages,
-                        metadata=metadata
+                        session_id=session_id, messages=messages, metadata=metadata
                     )
                     if memory_id:
                         logger.debug(f"Stored memory {memory_id} from session {session_id}")
@@ -1189,27 +1266,24 @@ def _execute_react_assistant(
                     if retrieved_memory_ids:
                         success = result.status == "success" and execution_completed
                         context_enhancer.track_memory_effectiveness(
-                            memory_ids=retrieved_memory_ids,
-                            success=success,
-                            feedback=None
+                            memory_ids=retrieved_memory_ids, success=success, feedback=None
                         )
-                        logger.debug(f"Tracked effectiveness for {len(retrieved_memory_ids)} retrieved memories")
+                        logger.debug(
+                            f"Tracked effectiveness for {len(retrieved_memory_ids)} retrieved memories"
+                        )
 
                 # Record query outcome for pattern tracking (Automatic Proposals)
                 if context_enhancer:
                     # Extract tools used from result steps
                     tools_used = []
                     for step in result.steps:
-                        if hasattr(step, 'action') and hasattr(step.action, 'tool'):
+                        if hasattr(step, "action") and hasattr(step.action, "tool"):
                             tools_used.append(step.action.tool)
 
                     # Determine error type if failed
                     error_type = None
                     if not execution_completed or result.status != "success":
-                        if result.stop_reason:
-                            error_type = result.stop_reason
-                        else:
-                            error_type = "unknown_failure"
+                        error_type = result.stop_reason or "unknown_failure"
 
                     # Record the query outcome
                     context_enhancer.record_query_outcome(
@@ -1218,7 +1292,7 @@ def _execute_react_assistant(
                         tools_used=tools_used,
                         task_type=task_type,
                         error_type=error_type,
-                        duration_seconds=None  # Could add timing if needed
+                        duration_seconds=None,  # Could add timing if needed
                     )
 
                 # Save dynamic instruction state (Phase 3: Dynamic Instructions)

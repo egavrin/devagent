@@ -1,11 +1,14 @@
 """Tests for Implementation Agent."""
-import pytest
-from unittest.mock import Mock, patch, mock_open
-import tempfile
-import os
 
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock, mock_open, patch
+
+import pytest
+
+from ai_dev_agent.agents.base import AgentContext
 from ai_dev_agent.agents.specialized.implementation_agent import ImplementationAgent
-from ai_dev_agent.agents.base import AgentContext, AgentResult
 
 
 class TestImplementationAgent:
@@ -53,7 +56,7 @@ class TestImplementationAgent:
 Use bcrypt for password hashing.
 """
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(design_content)
             design_path = f.name
 
@@ -65,7 +68,7 @@ Use bcrypt for password hashing.
             assert "requirements" in result
 
         finally:
-            os.unlink(design_path)
+            Path(design_path).unlink()
 
     def test_generate_code_from_design(self):
         """Test generating code from design."""
@@ -76,23 +79,19 @@ Use bcrypt for password hashing.
             "components": ["UserService"],
             "methods": [
                 {"name": "create_user", "params": ["username", "email"]},
-                {"name": "get_user", "params": ["user_id"]}
-            ]
+                {"name": "get_user", "params": ["user_id"]},
+            ],
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            output_file = os.path.join(tmpdir, "user_service.py")
+            output_file = str(Path(tmpdir) / "user_service.py")
 
-            result = agent.generate_code_from_design(
-                design,
-                output_file,
-                context
-            )
+            result = agent.generate_code_from_design(design, output_file, context)
 
             assert result["success"] is True
-            assert os.path.exists(output_file)
+            assert Path(output_file).exists()
 
-            with open(output_file, 'r') as f:
+            with Path(output_file).open() as f:
                 content = f.read()
                 assert "class UserService" in content
                 assert "def create_user" in content
@@ -106,7 +105,7 @@ Use bcrypt for password hashing.
         tasks = [
             {"name": "Create base class", "priority": "high"},
             {"name": "Add methods", "priority": "medium"},
-            {"name": "Add error handling", "priority": "low"}
+            {"name": "Add error handling", "priority": "low"},
         ]
 
         result = agent.implement_incrementally(tasks, context)
@@ -121,11 +120,11 @@ Use bcrypt for password hashing.
         context = AgentContext(session_id="test-verify")
 
         # Mock test execution
-        with patch('subprocess.run') as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(
                 returncode=0,
                 stdout="test_module.py::test_1 PASSED\ntest_module.py::test_2 PASSED\n5 PASSED in 1.2s",
-                stderr=""
+                stderr="",
             )
 
             result = agent.verify_tests_pass("tests/test_module.py", context)
@@ -140,13 +139,13 @@ Use bcrypt for password hashing.
 
         original_code = "def original_function():\n    return True"
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(original_code)
             file_path = f.name
 
         try:
             # Simulate breaking change
-            with open(file_path, 'w') as f:
+            with Path(file_path).open("w") as f:
                 f.write("def original_function():\n    raise Exception('broken')")
 
             # Rollback
@@ -155,12 +154,12 @@ Use bcrypt for password hashing.
             assert result["success"] is True
 
             # Verify code was restored
-            with open(file_path, 'r') as f:
+            with Path(file_path).open() as f:
                 restored = f.read()
                 assert restored == original_code
 
         finally:
-            os.unlink(file_path)
+            Path(file_path).unlink()
 
     def test_update_status_tracking(self):
         """Test updating implementation status."""
@@ -171,7 +170,7 @@ Use bcrypt for password hashing.
             "component": "AuthService",
             "status": "completed",
             "progress": 75,
-            "notes": "Implemented JWT generation"
+            "notes": "Implemented JWT generation",
         }
 
         result = agent.update_status(status_update, context)
@@ -193,15 +192,9 @@ class ExistingClass:
         pass
 """
 
-        new_requirement = {
-            "add_method": "method3"
-        }
+        new_requirement = {"add_method": "method3"}
 
-        result = agent.apply_minimal_change(
-            existing_code,
-            new_requirement,
-            context
-        )
+        result = agent.apply_minimal_change(existing_code, new_requirement, context)
 
         # Should only add method3, not change existing methods
         assert "method3" in result["updated_code"]
@@ -214,10 +207,7 @@ class ExistingClass:
         agent = ImplementationAgent()
         context = AgentContext(session_id="test-compat-pres")
 
-        existing_api = {
-            "functions": ["get_user", "create_user"],
-            "classes": ["User", "Session"]
-        }
+        existing_api = {"functions": ["get_user", "create_user"], "classes": ["User", "Session"]}
 
         new_code = """
 class User:
@@ -236,11 +226,7 @@ def new_helper_function():
     return None
 """
 
-        result = agent.check_compatibility_preserved(
-            existing_api,
-            new_code,
-            context
-        )
+        result = agent.check_compatibility_preserved(existing_api, new_code, context)
 
         assert result["compatible"] is True
         assert all(f in result["preserved_functions"] for f in existing_api["functions"])
@@ -253,7 +239,7 @@ def new_helper_function():
 
         design = {
             "patterns": ["MVC", "Repository Pattern"],
-            "components": ["UserController", "UserRepository"]
+            "components": ["UserController", "UserRepository"],
         }
 
         result = agent.apply_design_patterns(design, context)
@@ -270,7 +256,7 @@ def new_helper_function():
         method_spec = {
             "name": "process_data",
             "params": ["data"],
-            "error_conditions": ["invalid_data", "network_error"]
+            "error_conditions": ["invalid_data", "network_error"],
         }
 
         code = agent.generate_method_with_error_handling(method_spec, context)
@@ -294,14 +280,14 @@ def new_helper_function():
             context.working_directory = tmpdir
 
             # Create mock design file
-            design_path = os.path.join(tmpdir, "auth_design.md")
-            os.makedirs(os.path.dirname(design_path), exist_ok=True)
-            with open(design_path, 'w') as f:
+            design_path = str(Path(tmpdir) / "auth_design.md")
+            Path(design_path).parent.mkdir(parents=True, exist_ok=True)
+            with Path(design_path).open("w") as f:
                 f.write("# Design: Auth\n## Components\n- AuthService")
 
-            with patch('os.makedirs'):
-                with patch('builtins.open', mock_open()):
-                    with patch('subprocess.run') as mock_run:
+            with patch("os.makedirs"):
+                with patch("builtins.open", mock_open()):
+                    with patch("subprocess.run") as mock_run:
                         mock_run.return_value = Mock(returncode=0, stdout="tests passed")
 
                         result = agent.execute(prompt, context)
@@ -315,18 +301,22 @@ def new_helper_function():
         context = AgentContext(session_id="test-tdd")
 
         # Mock test execution showing tests exist and fail initially
-        with patch('subprocess.run') as mock_run:
+        with patch("subprocess.run") as mock_run:
             # First call: tests fail (expected in TDD)
             # Second call: tests pass after implementation
             mock_run.side_effect = [
-                Mock(returncode=1, stdout="test_1 FAILED\ntest_2 FAILED\n5 FAILED", stderr=""),  # Before implementation
-                Mock(returncode=0, stdout="test_1 PASSED\ntest_2 PASSED\n5 PASSED", stderr="")   # After implementation
+                Mock(
+                    returncode=1, stdout="test_1 FAILED\ntest_2 FAILED\n5 FAILED", stderr=""
+                ),  # Before implementation
+                Mock(
+                    returncode=0, stdout="test_1 PASSED\ntest_2 PASSED\n5 PASSED", stderr=""
+                ),  # After implementation
             ]
 
             result = agent.implement_with_tdd(
                 design={"component": "TestComponent"},
                 test_path="tests/test_component.py",
-                context=context
+                context=context,
             )
 
             assert result["tdd_workflow_followed"] is True

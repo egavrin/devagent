@@ -1,11 +1,15 @@
 """Context providers for the review command."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ai_dev_agent.core.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping, Sequence
+    from pathlib import Path
 
 LOGGER = get_logger(__name__)
 
@@ -16,8 +20,8 @@ class ContextItem:
 
     kind: str
     title: str
-    path: Optional[str]
-    span: Optional[Tuple[int, int]]
+    path: str | None
+    span: tuple[int, int] | None
     body: str
 
     def line_count(self) -> int:
@@ -31,12 +35,11 @@ class ContextProvider(Protocol):
         self,
         workspace_root: Path,
         file_entry: Mapping[str, Any],
-    ) -> Sequence[ContextItem]:
-        ...
+    ) -> Sequence[ContextItem]: ...
 
 
 def _format_context_items(items: Sequence[ContextItem]) -> str:
-    lines: List[str] = ["Context:"]
+    lines: list[str] = ["Context:"]
     for idx, item in enumerate(items, start=1):
         header = f"#{idx} {item.kind.upper()}: {item.title}"
         lines.append(header)
@@ -63,8 +66,8 @@ class ContextOrchestrator:
         workspace_root: Path,
         file_entries: Sequence[Mapping[str, Any]],
     ) -> str:
-        collected: List[ContextItem] = []
-        seen_keys: set[Tuple[str, Optional[str], Optional[Tuple[int, int]], str]] = set()
+        collected: list[ContextItem] = []
+        seen_keys: set[tuple[str, str | None, tuple[int, int] | None, str]] = set()
 
         for entry in file_entries:
             for provider in self._providers:
@@ -83,7 +86,7 @@ class ContextOrchestrator:
         if not collected:
             return ""
 
-        trimmed: List[ContextItem] = []
+        trimmed: list[ContextItem] = []
         total_lines = 0
         for item in collected:
             lines = item.line_count()
@@ -106,7 +109,7 @@ class SourceContextProvider:
     ) -> None:
         self._pad_lines = pad_lines
         self._max_lines_per_item = max_lines_per_item
-        self._content_cache: Dict[Path, Tuple[float, Optional[int], Tuple[str, ...]]] = {}
+        self._content_cache: dict[Path, tuple[float, int | None, tuple[str, ...]]] = {}
 
     def build_items(
         self,
@@ -132,7 +135,7 @@ class SourceContextProvider:
             return []
 
         merged = self._merge_ranges(ranges, len(lines))
-        items: List[ContextItem] = []
+        items: list[ContextItem] = []
         total_lines = 0
 
         for start, end in merged:
@@ -160,7 +163,7 @@ class SourceContextProvider:
 
         return items
 
-    def _get_file_lines(self, abs_path: Path) -> Optional[Tuple[str, ...]]:
+    def _get_file_lines(self, abs_path: Path) -> tuple[str, ...] | None:
         try:
             stat_info = abs_path.stat()
         except OSError:
@@ -180,8 +183,8 @@ class SourceContextProvider:
         self._content_cache[abs_path] = (stat_info.st_mtime, file_size, lines)
         return lines
 
-    def _collect_ranges(self, hunks: Iterable[Mapping[str, Any]]) -> List[Tuple[int, int]]:
-        ranges: List[Tuple[int, int]] = []
+    def _collect_ranges(self, hunks: Iterable[Mapping[str, Any]]) -> list[tuple[int, int]]:
+        ranges: list[tuple[int, int]] = []
         for hunk in hunks:
             new_start = hunk.get("new_start")
             new_count = hunk.get("new_count")
@@ -203,11 +206,11 @@ class SourceContextProvider:
         return ranges
 
     @staticmethod
-    def _merge_ranges(ranges: Sequence[Tuple[int, int]], max_line: int) -> List[Tuple[int, int]]:
+    def _merge_ranges(ranges: Sequence[tuple[int, int]], max_line: int) -> list[tuple[int, int]]:
         if not ranges:
             return []
         ordered = sorted(ranges, key=lambda item: item[0])
-        merged: List[Tuple[int, int]] = []
+        merged: list[tuple[int, int]] = []
         current_start, current_end = ordered[0]
 
         for start, end in ordered[1:]:
@@ -223,7 +226,7 @@ class SourceContextProvider:
 
 __all__ = [
     "ContextItem",
-    "ContextProvider",
     "ContextOrchestrator",
+    "ContextProvider",
     "SourceContextProvider",
 ]

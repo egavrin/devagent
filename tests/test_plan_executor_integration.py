@@ -5,13 +5,14 @@ These tests actually invoke the CLI and can be slow (15-60 seconds each).
 Run with: pytest -m "not slow" to skip these tests during development
 Run with: pytest -m slow to run only these tests
 """
-import pytest
+
 import tempfile
 from pathlib import Path
-from click.testing import CliRunner
-from ai_dev_agent.cli.commands import cli
-from ai_dev_agent.agents.work_planner import WorkPlanningAgent
 
+import pytest
+from click.testing import CliRunner
+
+from ai_dev_agent.cli.commands import cli
 
 # Mark all tests in this module as slow
 pytestmark = pytest.mark.slow
@@ -26,6 +27,7 @@ def temp_plans_dir(monkeypatch):
 
         # Monkeypatch WorkPlanStorage to use temp directory
         from ai_dev_agent.agents.work_planner.storage import WorkPlanStorage
+
         original_storage_init = WorkPlanStorage.__init__
 
         def patched_storage_init(self, storage_dir=None):
@@ -44,9 +46,7 @@ class TestPlanExecutorIntegration:
         """Test that devagent --plan triggers complexity assessment."""
         runner = CliRunner()
         result = runner.invoke(
-            cli,
-            ["--plan", "how many lines in commands.py"],
-            catch_exceptions=False
+            cli, ["--plan", "how many lines in commands.py"], catch_exceptions=False
         )
 
         # Verify assessment happened (may use direct execution or planning)
@@ -59,9 +59,7 @@ class TestPlanExecutorIntegration:
         """Test --plan with a simple calculation query."""
         runner = CliRunner()
         result = runner.invoke(
-            cli,
-            ["--plan", "--system", "Answer in one word", "what is 2+2"],
-            catch_exceptions=False
+            cli, ["--plan", "--system", "Answer in one word", "what is 2+2"], catch_exceptions=False
         )
 
         # Should complete successfully
@@ -71,11 +69,7 @@ class TestPlanExecutorIntegration:
         """Test that plan executor falls back gracefully if planning fails."""
         runner = CliRunner()
         # Use a query that might be difficult to plan
-        result = runner.invoke(
-            cli,
-            ["--plan", "hello"],
-            catch_exceptions=False
-        )
+        result = runner.invoke(cli, ["--plan", "hello"], catch_exceptions=False)
 
         # Should still execute something (either planned or fallback)
         assert result.exit_code == 0 or "Error" not in result.output
@@ -89,11 +83,7 @@ class TestPlanExecutorIntegration:
         count_before = len(existing_plans)
 
         # Execute with --plan
-        result = runner.invoke(
-            cli,
-            ["--plan", "list python files"],
-            catch_exceptions=False
-        )
+        runner.invoke(cli, ["--plan", "list python files"], catch_exceptions=False)
 
         # Should have created a new plan file
         if temp_plans_dir.exists():
@@ -105,9 +95,7 @@ class TestPlanExecutorIntegration:
         """Test that plan executor breaks query into structured tasks."""
         runner = CliRunner()
         result = runner.invoke(
-            cli,
-            ["--plan", "find all TODO comments and count them"],
-            catch_exceptions=False
+            cli, ["--plan", "find all TODO comments and count them"], catch_exceptions=False
         )
 
         output = result.output.lower()
@@ -127,9 +115,7 @@ class TestPlanExecutorIntegration:
         """Test that plan executor works with repository context."""
         runner = CliRunner()
         result = runner.invoke(
-            cli,
-            ["--plan", "analyze the structure of the cli module"],
-            catch_exceptions=False
+            cli, ["--plan", "analyze the structure of the cli module"], catch_exceptions=False
         )
 
         # Should complete without errors
@@ -143,9 +129,7 @@ class TestPlanExecutorTaskManagement:
         """Test that plan executor shows progress through tasks."""
         runner = CliRunner()
         result = runner.invoke(
-            cli,
-            ["--plan", "count python files and show their sizes"],
-            catch_exceptions=False
+            cli, ["--plan", "count python files and show their sizes"], catch_exceptions=False
         )
 
         output = result.output.lower()
@@ -165,9 +149,7 @@ class TestPlanExecutorTaskManagement:
         """Test that plan executor respects task dependencies."""
         runner = CliRunner()
         result = runner.invoke(
-            cli,
-            ["--plan", "first find commands.py, then count its lines"],
-            catch_exceptions=False
+            cli, ["--plan", "first find commands.py, then count its lines"], catch_exceptions=False
         )
 
         # Should execute without errors
@@ -180,11 +162,7 @@ class TestPlanExecutorEdgeCases:
     def test_plan_executor_with_empty_query(self, temp_plans_dir):
         """Test plan executor handles empty query gracefully."""
         runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--plan", ""],
-            catch_exceptions=False
-        )
+        result = runner.invoke(cli, ["--plan", ""], catch_exceptions=False)
 
         # Should handle gracefully (exit code 0 or informative error)
         assert result.exit_code in [0, 1, 2]
@@ -197,9 +175,9 @@ class TestPlanExecutorEdgeCases:
             [
                 "--plan",
                 "analyze all Python files, count their lines, "
-                "find the largest file, and report statistics"
+                "find the largest file, and report statistics",
             ],
-            catch_exceptions=False
+            catch_exceptions=False,
         )
 
         # Should attempt execution
@@ -210,11 +188,7 @@ class TestPlanExecutorEdgeCases:
         # This is implicitly tested by fallback mechanism in plan_executor.py
         # If LLM fails, it creates a simple single-task plan
         runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--plan", "test query"],
-            catch_exceptions=False
-        )
+        result = runner.invoke(cli, ["--plan", "test query"], catch_exceptions=False)
 
         # Should still execute something
         assert result.exit_code in [0, 1]

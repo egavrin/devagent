@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import click
 import pytest
@@ -17,7 +17,9 @@ from ai_dev_agent.core.utils.config import Settings
 
 
 @pytest.fixture
-def cli_test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Tuple[CliRunner, List[Dict[str, Any]], Settings, Path]:
+def cli_test_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[CliRunner, list[dict[str, Any]], Settings, Path]:
     """Provide a configured CLI runner with stubbed LLM execution."""
 
     repo_root = tmp_path / "repo"
@@ -33,7 +35,7 @@ def cli_test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Tuple[CliRu
     monkeypatch.setattr(cli_module, "load_settings", lambda path=None: settings)
     monkeypatch.setattr(cli_module, "get_llm_client", lambda ctx: object())
 
-    recorded_calls: List[Dict[str, Any]] = []
+    recorded_calls: list[dict[str, Any]] = []
 
     def fake_execute(
         ctx: click.Context,
@@ -41,12 +43,12 @@ def cli_test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Tuple[CliRu
         active_settings: Settings,
         prompt: str,
         *,
-        use_planning: Optional[bool] = None,
-        system_extension: Optional[str] = None,
-        format_schema: Optional[Dict[str, Any]] = None,
+        use_planning: bool | None = None,
+        system_extension: str | None = None,
+        format_schema: dict[str, Any] | None = None,
         agent_type: str = "manager",
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         recorded_calls.append(
             {
                 "prompt": prompt,
@@ -68,7 +70,9 @@ def cli_test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Tuple[CliRu
 class TestBackwardCompatibility:
     """Ensure legacy CLI behaviours remain stable."""
 
-    def test_natural_language_query(self, cli_test_env: Tuple[CliRunner, List[Dict[str, Any]], Settings, Path]) -> None:
+    def test_natural_language_query(
+        self, cli_test_env: tuple[CliRunner, list[dict[str, Any]], Settings, Path]
+    ) -> None:
         runner, calls, *_ = cli_test_env
 
         result = runner.invoke(cli, ["inspect", "repo"])
@@ -79,7 +83,7 @@ class TestBackwardCompatibility:
 
     def test_plan_flag_routes_to_planning_mode(
         self,
-        cli_test_env: Tuple[CliRunner, List[Dict[str, Any]], Settings, Path],
+        cli_test_env: tuple[CliRunner, list[dict[str, Any]], Settings, Path],
     ) -> None:
         runner, calls, *_ = cli_test_env
 
@@ -90,7 +94,7 @@ class TestBackwardCompatibility:
 
     def test_review_command_outputs_json(
         self,
-        cli_test_env: Tuple[CliRunner, List[Dict[str, Any]], Settings, Path],
+        cli_test_env: tuple[CliRunner, list[dict[str, Any]], Settings, Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         runner, _, _, repo_root = cli_test_env

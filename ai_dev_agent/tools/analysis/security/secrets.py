@@ -1,13 +1,17 @@
 """Secret detection utilities for changed files."""
+
 from __future__ import annotations
 
 import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence
+from typing import TYPE_CHECKING
 
 from ai_dev_agent.core.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 LOGGER = get_logger(__name__)
 
@@ -32,7 +36,7 @@ class SecretFinding:
 
 @dataclass
 class SecretScanResult:
-    findings: List[SecretFinding]
+    findings: list[SecretFinding]
 
     @property
     def count(self) -> int:
@@ -43,7 +47,7 @@ def scan_for_secrets(repo_root: Path, files: Sequence[str]) -> SecretScanResult:
     """Scan target files for known secret patterns and entropy heuristics."""
 
     repo_root = Path(repo_root)
-    findings: List[SecretFinding] = []
+    findings: list[SecretFinding] = []
 
     for rel_path in files:
         path = repo_root / rel_path
@@ -59,17 +63,23 @@ def scan_for_secrets(repo_root: Path, files: Sequence[str]) -> SecretScanResult:
     return SecretScanResult(findings=findings)
 
 
-def _scan_line(rel_path: str, line_no: int, line: str) -> List[SecretFinding]:
-    matches: List[SecretFinding] = []
+def _scan_line(rel_path: str, line_no: int, line: str) -> list[SecretFinding]:
+    matches: list[SecretFinding] = []
     for name, pattern in _PATTERNS.items():
         if pattern.search(line):
             snippet = line.strip()
-            matches.append(SecretFinding(path=rel_path, line=line_no, detector=name, snippet=snippet[:120]))
+            matches.append(
+                SecretFinding(path=rel_path, line=line_no, detector=name, snippet=snippet[:120])
+            )
     for entropy_match in _ENTROPY_TOKEN.finditer(line):
         token = entropy_match.group(1)
         if _shannon_entropy(token) >= 4.5:
             snippet = line.strip()
-            matches.append(SecretFinding(path=rel_path, line=line_no, detector="high_entropy", snippet=snippet[:120]))
+            matches.append(
+                SecretFinding(
+                    path=rel_path, line=line_no, detector="high_entropy", snippet=snippet[:120]
+                )
+            )
     return matches
 
 

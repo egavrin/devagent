@@ -5,12 +5,12 @@ and generate detailed coverage reports.
 """
 
 import json
+import logging
 import subprocess
 import sys
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-import logging
+from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +18,13 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CoverageResult:
     """Represents coverage test results."""
+
     total_coverage: float
     passed: bool
     threshold: float
-    uncovered_files: List[str]
+    uncovered_files: list[str]
     report: str
-    details: Dict[str, float]
+    details: dict[str, float]
 
 
 class CoverageGate:
@@ -40,10 +41,9 @@ class CoverageGate:
         self.config_file = config_file or Path.cwd() / ".coveragerc"
         self.project_root = Path.cwd()
 
-    def run_coverage(self,
-                    test_path: Optional[str] = None,
-                    parallel: bool = True,
-                    html_report: bool = True) -> CoverageResult:
+    def run_coverage(
+        self, test_path: Optional[str] = None, parallel: bool = True, html_report: bool = True
+    ) -> CoverageResult:
         """Run tests with coverage and return results.
 
         Args:
@@ -57,7 +57,9 @@ class CoverageGate:
         try:
             # Build pytest command
             cmd = [
-                sys.executable, "-m", "pytest",
+                sys.executable,
+                "-m",
+                "pytest",
                 "--cov=ai_dev_agent",
                 f"--cov-config={self.config_file}",
                 "--cov-report=term-missing",
@@ -72,6 +74,7 @@ class CoverageGate:
                 # Add parallel execution if pytest-xdist is available
                 try:
                     import pytest_xdist
+
                     cmd.extend(["-n", "auto"])
                 except ImportError:
                     logger.info("pytest-xdist not installed, running tests sequentially")
@@ -82,12 +85,7 @@ class CoverageGate:
                 cmd.append("tests/")
 
             # Run tests with coverage
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=self.project_root
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.project_root)
 
             # Parse coverage results
             coverage_data = self._parse_coverage_json()
@@ -110,7 +108,7 @@ class CoverageGate:
                 threshold=self.threshold,
                 uncovered_files=uncovered_files,
                 report=result.stdout,
-                details=details
+                details=details,
             )
 
         except Exception as e:
@@ -121,19 +119,19 @@ class CoverageGate:
                 threshold=self.threshold,
                 uncovered_files=[],
                 report=str(e),
-                details={}
+                details={},
             )
 
-    def _parse_coverage_json(self) -> Dict:
+    def _parse_coverage_json(self) -> dict:
         """Parse the coverage.json file."""
         coverage_file = self.project_root / "coverage.json"
         if not coverage_file.exists():
             return {}
 
-        with open(coverage_file, 'r') as f:
+        with Path(coverage_file).open() as f:
             return json.load(f)
 
-    def _get_uncovered_files(self, coverage_data: Dict) -> List[str]:
+    def _get_uncovered_files(self, coverage_data: dict) -> list[str]:
         """Extract list of files with insufficient coverage."""
         uncovered = []
         files = coverage_data.get("files", {})
@@ -145,14 +143,23 @@ class CoverageGate:
 
         return uncovered
 
-    def _get_file_coverage(self, coverage_data: Dict) -> Dict[str, float]:
+    def _get_file_coverage(self, coverage_data: dict) -> dict[str, float]:
         """Get coverage percentage for each file."""
         details = {}
         files = coverage_data.get("files", {})
 
+        root_prefix = str(self.project_root).replace("\\", "/")
+
         for file_path, file_data in files.items():
-            # Simplify file path for readability
-            relative_path = file_path.replace(str(self.project_root) + "/", "")
+            # Simplify file path for readability across operating systems
+            normalized = file_path.replace("\\", "/")
+            if normalized.startswith(root_prefix + "/"):
+                relative_path = normalized[len(root_prefix) + 1 :]
+            elif normalized.startswith(root_prefix):
+                relative_path = normalized[len(root_prefix) :].lstrip("/")
+            else:
+                relative_path = normalized
+
             coverage = file_data.get("summary", {}).get("percent_covered", 0)
             details[relative_path] = coverage
 
@@ -187,9 +194,9 @@ class CoverageGate:
 
             return False
 
-    def get_incremental_coverage(self,
-                                 base_branch: str = "main",
-                                 current_branch: Optional[str] = None) -> Dict:
+    def get_incremental_coverage(
+        self, base_branch: str = "main", current_branch: Optional[str] = None
+    ) -> dict:
         """Calculate coverage for only changed files.
 
         Args:
@@ -203,10 +210,10 @@ class CoverageGate:
             # Get list of changed files
             cmd = ["git", "diff", f"{base_branch}...HEAD", "--name-only"]
             result = subprocess.run(cmd, capture_output=True, text=True)
-            changed_files = result.stdout.strip().split('\n')
+            changed_files = result.stdout.strip().split("\n")
 
             # Filter for Python files
-            py_files = [f for f in changed_files if f.endswith('.py')]
+            py_files = [f for f in changed_files if f.endswith(".py")]
 
             if not py_files:
                 return {"message": "No Python files changed", "coverage": 100.0}
@@ -217,19 +224,18 @@ class CoverageGate:
 
             for file in py_files:
                 if file in coverage_data.get("files", {}):
-                    file_coverage = coverage_data["files"][file].get("summary", {}).get("percent_covered", 0)
+                    file_coverage = (
+                        coverage_data["files"][file].get("summary", {}).get("percent_covered", 0)
+                    )
                     incremental[file] = file_coverage
 
             # Calculate average incremental coverage
-            if incremental:
-                avg_coverage = sum(incremental.values()) / len(incremental)
-            else:
-                avg_coverage = 0.0
+            avg_coverage = sum(incremental.values()) / len(incremental) if incremental else 0.0
 
             return {
                 "files": incremental,
                 "average": avg_coverage,
-                "passed": avg_coverage >= self.threshold
+                "passed": avg_coverage >= self.threshold,
             }
 
         except Exception as e:
@@ -270,14 +276,12 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Enforce code coverage requirements")
-    parser.add_argument("--threshold", type=float, default=95.0,
-                       help="Minimum coverage percentage (default: 95)")
-    parser.add_argument("--no-exit", action="store_true",
-                       help="Don't exit on coverage failure")
-    parser.add_argument("--incremental", action="store_true",
-                       help="Check only changed files")
-    parser.add_argument("--base", default="main",
-                       help="Base branch for incremental coverage")
+    parser.add_argument(
+        "--threshold", type=float, default=95.0, help="Minimum coverage percentage (default: 95)"
+    )
+    parser.add_argument("--no-exit", action="store_true", help="Don't exit on coverage failure")
+    parser.add_argument("--incremental", action="store_true", help="Check only changed files")
+    parser.add_argument("--base", default="main", help="Base branch for incremental coverage")
 
     args = parser.parse_args()
 
@@ -286,7 +290,7 @@ if __name__ == "__main__":
     if args.incremental:
         result = gate.get_incremental_coverage(base_branch=args.base)
         print(f"Incremental coverage: {result.get('average', 0):.1f}%")
-        if not result.get('passed', False):
+        if not result.get("passed", False):
             sys.exit(1 if not args.no_exit else 0)
     else:
         gate.enforce(exit_on_fail=not args.no_exit)

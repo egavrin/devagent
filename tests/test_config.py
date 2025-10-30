@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ai_dev_agent.core.utils.config import Settings, load_settings
+from ai_dev_agent.core.utils.config import load_settings
 
 
 def test_env_overrides(tmp_path, monkeypatch):
@@ -22,9 +22,9 @@ provider = "openrouter"
 provider_only = ["Cerebras"]
 """
         "[provider_config]\n"
-        "priority = [\"Cerebras\"]\n"
+        'priority = ["Cerebras"]\n'
         "[request_headers]\n"
-        "HTTP-Referer = \"https://example.com\"\n"
+        'HTTP-Referer = "https://example.com"\n'
     )
 
     settings = load_settings(config_path)

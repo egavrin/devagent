@@ -1,21 +1,30 @@
 """Lightweight text-based project structure summaries."""
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING
 
 from ai_dev_agent.core.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 LOGGER = get_logger(__name__)
 
 # Patterns capture lightweight structure hints across common languages.
-_OUTLINE_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+_OUTLINE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("class", re.compile(r"^\s*(?:export\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)")),
     ("function", re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)")),
     ("function", re.compile(r"^\s*(?:export\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)")),
-    ("function", re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?\(\s*")),
+    (
+        "function",
+        re.compile(
+            r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?\(\s*"
+        ),
+    ),
     ("interface", re.compile(r"^\s*(?:export\s+)?interface\s+([A-Za-z_][A-Za-z0-9_]*)")),
     ("type", re.compile(r"^\s*(?:export\s+)?type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=")),
     ("enum", re.compile(r"^\s*(?:export\s+)?enum\s+([A-Za-z_][A-Za-z0-9_]*)")),
@@ -48,7 +57,7 @@ class ParsedFileSummary:
     """Structured summary extracted from a source file."""
 
     path: str
-    outline: List[str]
+    outline: list[str]
 
     def to_markdown(self) -> str:
         header = f"### {self.path}"
@@ -71,24 +80,22 @@ class SimpleProjectAnalyzer:
         return True
 
     @property
-    def supported_suffixes(self) -> List[str]:
+    def supported_suffixes(self) -> list[str]:
         return list(self.SUPPORTED_SUFFIXES)
 
-    def summarize_content(self, rel_path: str, content: str) -> List[str]:
+    def summarize_content(self, rel_path: str, content: str) -> list[str]:
         """Return a structural outline for a single file."""
         return _outline_from_text(content, self.max_lines_per_file)
 
-    def build_project_summary(self, file_entries: Iterable[Tuple[str, str]]) -> Optional[str]:
+    def build_project_summary(self, file_entries: Iterable[tuple[str, str]]) -> str | None:
         """Return a markdown summary describing the provided files."""
-        summaries: List[ParsedFileSummary] = []
+        summaries: list[ParsedFileSummary] = []
 
         for rel_path, content in file_entries:
             outline = self.summarize_content(rel_path, content)
             if not outline:
                 continue
-            summaries.append(
-                ParsedFileSummary(rel_path, outline[: self.max_lines_per_file])
-            )
+            summaries.append(ParsedFileSummary(rel_path, outline[: self.max_lines_per_file]))
             if len(summaries) >= self.max_files:
                 break
 
@@ -105,8 +112,8 @@ class SimpleProjectAnalyzer:
         return "\n".join(header) + body
 
 
-def _outline_from_text(content: str, max_lines: int) -> List[str]:
-    outline: List[str] = []
+def _outline_from_text(content: str, max_lines: int) -> list[str]:
+    outline: list[str] = []
     seen_lines = set()
 
     for idx, line in enumerate(content.splitlines(), 1):
@@ -141,9 +148,9 @@ def _outline_from_text(content: str, max_lines: int) -> List[str]:
     return outline
 
 
-def extract_symbols_from_outline(outline: Sequence[str]) -> List[str]:
+def extract_symbols_from_outline(outline: Sequence[str]) -> list[str]:
     """Extract identifier-like tokens from an outline."""
-    symbols: List[str] = []
+    symbols: list[str] = []
     seen = set()
 
     for line in outline:
@@ -161,8 +168,8 @@ def extract_symbols_from_outline(outline: Sequence[str]) -> List[str]:
 TreeSitterProjectAnalyzer = SimpleProjectAnalyzer
 
 __all__ = [
-    "TreeSitterProjectAnalyzer",
-    "SimpleProjectAnalyzer",
     "ParsedFileSummary",
+    "SimpleProjectAnalyzer",
+    "TreeSitterProjectAnalyzer",
     "extract_symbols_from_outline",
 ]

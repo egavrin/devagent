@@ -7,12 +7,12 @@ This module implements an evolving playbook of instructions that:
 4. Tracks instruction effectiveness over time
 """
 
-from .manager import PlaybookManager, Instruction, InstructionCategory
 from .curator import PlaybookCurator
+from .manager import Instruction, InstructionCategory, PlaybookManager
 
 __all__ = [
-    "PlaybookManager",
     "Instruction",
     "InstructionCategory",
     "PlaybookCurator",
+    "PlaybookManager",
 ]

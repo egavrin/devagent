@@ -92,7 +92,9 @@ def test_context_contains_outline_and_symbols(tmp_path):
     gatherer = ContextGatherer(repo)
 
     contexts = gatherer.gather_contexts(["pkg/sample.py"], keywords=["Foo"])
-    sample = next(ctx for ctx in contexts if ctx.path.relative_to(repo).as_posix() == "pkg/sample.py")
+    sample = next(
+        ctx for ctx in contexts if ctx.path.relative_to(repo).as_posix() == "pkg/sample.py"
+    )
 
     assert sample.structure_outline
     assert any("class Foo" in line for line in sample.structure_outline)

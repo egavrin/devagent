@@ -11,11 +11,11 @@ from .coverage_gate import CoverageGate, check_coverage, enforce_coverage
 from .coverage_report import CoverageReporter, generate_report
 
 __all__ = [
-    'CoverageGate',
-    'CoverageReporter',
-    'check_coverage',
-    'enforce_coverage',
-    'generate_report',
+    "CoverageGate",
+    "CoverageReporter",
+    "check_coverage",
+    "enforce_coverage",
+    "generate_report",
 ]
 
-__version__ = '1.0.0'
+__version__ = "1.0.0"

@@ -13,20 +13,13 @@ Usage:
     python3 examples/work_planning_example.py
 """
 
-from ai_dev_agent.agents.work_planner import (
-    Task,
-    WorkPlan,
-    WorkPlanningAgent,
-    WorkPlanStorage,
-    TaskStatus,
-    Priority,
-)
+from ai_dev_agent.agents.work_planner import Priority, Task, TaskStatus, WorkPlanningAgent
 
 
 def main():
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print(" Work Planning Agent - Interactive Example")
-    print("="*70 + "\n")
+    print("=" * 70 + "\n")
 
     # Initialize the agent
     agent = WorkPlanningAgent()
@@ -38,7 +31,7 @@ def main():
         goal="Implement RESTful API for blog platform",
         context={
             "description": "Create CRUD endpoints for posts, comments, and users with authentication"
-        }
+        },
     )
     print(f"✓ Created plan: {plan.id}\n")
 
@@ -57,9 +50,9 @@ def main():
         acceptance_criteria=[
             "FastAPI installed and configured",
             "Folder structure created (routes/, models/, schemas/)",
-            "Basic config file for environment variables"
+            "Basic config file for environment variables",
         ],
-        tags=["setup", "infrastructure"]
+        tags=["setup", "infrastructure"],
     )
     plan.tasks.append(task1)
     print(f"  1. {task1.title} (Priority: {task1.priority.value}, Effort: {task1.effort_estimate})")
@@ -75,13 +68,13 @@ def main():
             "User model with authentication fields",
             "Post model with foreign key to User",
             "Comment model with foreign keys to Post and User",
-            "All relationships properly defined"
+            "All relationships properly defined",
         ],
-        tags=["database", "models"]
+        tags=["database", "models"],
     )
     plan.tasks.append(task2)
     print(f"  2. {task2.title} (Priority: {task2.priority.value}, Effort: {task2.effort_estimate})")
-    print(f"     Dependencies: Task 1")
+    print("     Dependencies: Task 1")
 
     # Task 3: Implement authentication (depends on task2)
     task3 = Task(
@@ -94,13 +87,13 @@ def main():
             "POST /auth/register endpoint",
             "POST /auth/login endpoint with JWT token",
             "JWT validation middleware",
-            "Password hashing with bcrypt"
+            "Password hashing with bcrypt",
         ],
-        tags=["auth", "security"]
+        tags=["auth", "security"],
     )
     plan.tasks.append(task3)
     print(f"  3. {task3.title} (Priority: {task3.priority.value}, Effort: {task3.effort_estimate})")
-    print(f"     Dependencies: Task 2")
+    print("     Dependencies: Task 2")
 
     # Task 4: Create CRUD endpoints (depends on task3)
     task4 = Task(
@@ -114,13 +107,13 @@ def main():
             "GET /posts/{id} (get single post)",
             "POST /posts (create post, requires auth)",
             "PUT /posts/{id} (update post, requires auth)",
-            "DELETE /posts/{id} (delete post, requires auth)"
+            "DELETE /posts/{id} (delete post, requires auth)",
         ],
-        tags=["api", "crud"]
+        tags=["api", "crud"],
     )
     plan.tasks.append(task4)
     print(f"  4. {task4.title} (Priority: {task4.priority.value}, Effort: {task4.effort_estimate})")
-    print(f"     Dependencies: Task 3")
+    print("     Dependencies: Task 3")
 
     # Task 5: Add tests (depends on task4)
     task5 = Task(
@@ -133,25 +126,25 @@ def main():
             "Test all CRUD operations",
             "Test authentication flow",
             "Test error cases",
-            "Achieve 90% code coverage"
+            "Achieve 90% code coverage",
         ],
-        tags=["testing", "quality"]
+        tags=["testing", "quality"],
     )
     plan.tasks.append(task5)
     print(f"  5. {task5.title} (Priority: {task5.priority.value}, Effort: {task5.effort_estimate})")
-    print(f"     Dependencies: Task 4\n")
+    print("     Dependencies: Task 4\n")
 
     # Save the plan
     agent.storage.save_plan(plan)
     print(f"✓ Plan saved with {len(plan.tasks)} tasks\n")
 
     # Display the initial plan summary
-    print("="*70)
+    print("=" * 70)
     print(" Initial Plan Summary")
-    print("="*70)
+    print("=" * 70)
     summary = agent.get_plan_summary(plan.id)
     print(summary)
-    print("="*70 + "\n")
+    print("=" * 70 + "\n")
 
     # Simulate executing tasks
     print("Simulating task execution...\n")
@@ -174,11 +167,11 @@ def main():
         agent.mark_task_started(plan.id, next_task.id)
 
         # Simulate work (in real usage, actual implementation happens here)
-        print(f"      Status: In Progress...")
+        print("      Status: In Progress...")
 
         # Complete the task
         agent.mark_task_complete(plan.id, next_task.id)
-        print(f"      Status: ✓ Completed")
+        print("      Status: ✓ Completed")
 
         # Show progress
         updated_plan = agent.storage.load_plan(plan.id)
@@ -186,12 +179,12 @@ def main():
         print(f"      Overall progress: {progress:.0f}%\n")
 
     # Display the final plan summary
-    print("="*70)
+    print("=" * 70)
     print(" Final Plan Summary (All Tasks Completed)")
-    print("="*70)
+    print("=" * 70)
     final_summary = agent.get_plan_summary(plan.id)
     print(final_summary)
-    print("="*70 + "\n")
+    print("=" * 70 + "\n")
 
     # Show where the plan is stored
     plan_file = agent.storage.storage_dir / f"{plan.id}.json"
@@ -219,9 +212,9 @@ def main():
     else:
         print("❌ Failed to load plan")
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print(" Example Complete!")
-    print("="*70)
+    print("=" * 70)
     print("\nKey Features Demonstrated:")
     print("  ✓ Create work plans with goals and context")
     print("  ✓ Add tasks with priorities, estimates, and acceptance criteria")

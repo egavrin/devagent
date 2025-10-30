@@ -6,7 +6,8 @@ Handles persistence of work plans to disk.
 
 import json
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
+
 from .models import WorkPlan
 
 
@@ -34,7 +35,7 @@ class WorkPlanStorage:
             plan: WorkPlan to save
         """
         file_path = self.storage_dir / f"{plan.id}.json"
-        with open(file_path, "w") as f:
+        with file_path.open("w") as f:
             json.dump(plan.to_dict(), f, indent=2)
 
     def load_plan(self, plan_id: str) -> Optional[WorkPlan]:
@@ -51,11 +52,11 @@ class WorkPlanStorage:
         if not file_path.exists():
             return None
 
-        with open(file_path, "r") as f:
+        with file_path.open() as f:
             data = json.load(f)
             return WorkPlan.from_dict(data)
 
-    def list_plans(self) -> List[WorkPlan]:
+    def list_plans(self) -> list[WorkPlan]:
         """
         List all plans.
 
@@ -65,7 +66,7 @@ class WorkPlanStorage:
         plans = []
         for file_path in self.storage_dir.glob("*.json"):
             try:
-                with open(file_path, "r") as f:
+                with file_path.open() as f:
                     data = json.load(f)
                     plans.append(WorkPlan.from_dict(data))
             except (json.JSONDecodeError, KeyError):

@@ -1,13 +1,21 @@
 """Integration between agent system and work planning system."""
+
 from __future__ import annotations
 
-import re
-from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
+from typing import TYPE_CHECKING, Any, Callable
 
-from ..work_planner.models import WorkPlan, Task, TaskStatus, Priority
-from ..specialized import DesignAgent, TestingAgent, ImplementationAgent, ReviewAgent, OrchestratorAgent
-from ..base import AgentContext, AgentResult
+from ..specialized import (
+    DesignAgent,
+    ImplementationAgent,
+    OrchestratorAgent,
+    ReviewAgent,
+    TestingAgent,
+)
+from ..work_planner.models import Task, TaskStatus, WorkPlan
+
+if TYPE_CHECKING:
+    from ..base import AgentContext, AgentResult
 
 
 class TaskAgentMapper:
@@ -56,7 +64,7 @@ class PlanningIntegration:
         """Initialize planning integration."""
         self.orchestrator = OrchestratorAgent()
         self.mapper = TaskAgentMapper()
-        self.current_plan: Optional[WorkPlan] = None
+        self.current_plan: WorkPlan | None = None
 
         # Register all specialized agents
         self.orchestrator.register_subagent("design", DesignAgent())
@@ -73,7 +81,7 @@ class PlanningIntegration:
         """
         self.current_plan = plan
 
-    def convert_plan_to_workflow(self, plan: WorkPlan) -> Dict[str, Any]:
+    def convert_plan_to_workflow(self, plan: WorkPlan) -> dict[str, Any]:
         """
         Convert a work plan to agent workflow.
 
@@ -92,21 +100,14 @@ class PlanningIntegration:
                 "id": task.id,
                 "agent": agent_name,
                 "task": f"{task.title}: {task.description}",
-                "depends_on": task.dependencies.copy()
+                "depends_on": task.dependencies.copy(),
             }
 
             steps.append(step)
 
-        return {
-            "goal": plan.goal,
-            "steps": steps
-        }
+        return {"goal": plan.goal, "steps": steps}
 
-    def execute_plan(
-        self,
-        plan: WorkPlan,
-        context: AgentContext
-    ) -> Dict[str, Any]:
+    def execute_plan(self, plan: WorkPlan, context: AgentContext) -> dict[str, Any]:
         """
         Execute a work plan using agents.
 
@@ -127,11 +128,7 @@ class PlanningIntegration:
 
         return result
 
-    def update_task_from_result(
-        self,
-        task_id: str,
-        agent_result: AgentResult
-    ) -> None:
+    def update_task_from_result(self, task_id: str, agent_result: AgentResult) -> None:
         """
         Update task status based on agent result.
 
@@ -156,7 +153,7 @@ class PlanningIntegration:
 
         task.updated_at = datetime.utcnow()
 
-    def get_next_task(self) -> Optional[Task]:
+    def get_next_task(self) -> Task | None:
         """
         Get next task to execute.
 
@@ -168,7 +165,7 @@ class PlanningIntegration:
 
         return self.current_plan.get_next_task()
 
-    def get_progress(self) -> Dict[str, Any]:
+    def get_progress(self) -> dict[str, Any]:
         """
         Get execution progress.
 
@@ -181,7 +178,7 @@ class PlanningIntegration:
                 "completed": 0,
                 "in_progress": 0,
                 "pending": 0,
-                "completion_percentage": 0.0
+                "completion_percentage": 0.0,
             }
 
         total = len(self.current_plan.tasks)
@@ -194,7 +191,7 @@ class PlanningIntegration:
             "completed": completed,
             "in_progress": in_progress,
             "pending": pending,
-            "completion_percentage": (completed / total * 100) if total > 0 else 0.0
+            "completion_percentage": (completed / total * 100) if total > 0 else 0.0,
         }
 
 
@@ -210,8 +207,8 @@ class AutomatedWorkflow:
         plan: WorkPlan,
         context: AgentContext,
         stop_on_failure: bool = True,
-        progress_callback: Optional[Callable[[str, str, str], None]] = None
-    ) -> Dict[str, Any]:
+        progress_callback: Callable[[str, str, str], None] | None = None,
+    ) -> dict[str, Any]:
         """
         Execute entire plan automatically.
 
@@ -250,9 +247,7 @@ class AutomatedWorkflow:
             # Execute task
             task_description = f"{next_task.title}: {next_task.description}"
             agent_result = self.integration.orchestrator.delegate_task(
-                agent_name,
-                task_description,
-                context
+                agent_name, task_description, context
             )
 
             # Update task status
@@ -279,5 +274,7 @@ class AutomatedWorkflow:
             "total_tasks": total_tasks,
             "tasks_completed": tasks_completed,
             "tasks_failed": tasks_failed,
-            "completion_percentage": (tasks_completed / total_tasks * 100) if total_tasks > 0 else 0.0
+            "completion_percentage": (
+                (tasks_completed / total_tasks * 100) if total_tasks > 0 else 0.0
+            ),
         }

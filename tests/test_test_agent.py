@@ -1,11 +1,14 @@
 """Tests for Test Agent."""
-import pytest
-from unittest.mock import Mock, patch, mock_open
-import tempfile
-import os
 
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock, mock_open, patch
+
+import pytest
+
+from ai_dev_agent.agents.base import AgentContext
 from ai_dev_agent.agents.specialized.testing_agent import TestingAgent
-from ai_dev_agent.agents.base import AgentContext, AgentResult
 
 
 class TestTestAgent:
@@ -42,8 +45,8 @@ class TestTestAgent:
             "requirements": ["JWT tokens", "Password hashing", "Refresh tokens"],
             "api_endpoints": [
                 {"method": "POST", "path": "/login", "handler": "login"},
-                {"method": "POST", "path": "/refresh", "handler": "refresh_token"}
-            ]
+                {"method": "POST", "path": "/refresh", "handler": "refresh_token"},
+            ],
         }
 
         test_plan = agent.analyze_design_for_tests(design, context)
@@ -64,24 +67,20 @@ class TestTestAgent:
             "class": "AuthService",
             "methods": [
                 {"name": "create_user", "params": ["username", "password"], "returns": "User"},
-                {"name": "authenticate", "params": ["username", "password"], "returns": "bool"}
-            ]
+                {"name": "authenticate", "params": ["username", "password"], "returns": "bool"},
+            ],
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            test_file = os.path.join(tmpdir, "test_auth_service.py")
+            test_file = str(Path(tmpdir) / "test_auth_service.py")
 
-            result = agent.generate_unit_tests(
-                module_spec,
-                test_file,
-                context
-            )
+            result = agent.generate_unit_tests(module_spec, test_file, context)
 
             assert result["success"] is True
-            assert os.path.exists(test_file)
+            assert Path(test_file).exists()
 
             # Check test content
-            with open(test_file, 'r') as f:
+            with Path(test_file).open() as f:
                 content = f.read()
                 assert "def test_create_user" in content
                 assert "def test_authenticate" in content
@@ -96,24 +95,20 @@ class TestTestAgent:
             "system": "User Management API",
             "endpoints": [
                 {"method": "POST", "path": "/users", "expected_status": 201},
-                {"method": "GET", "path": "/users/1", "expected_status": 200}
+                {"method": "GET", "path": "/users/1", "expected_status": 200},
             ],
-            "dependencies": ["database", "auth_service"]
+            "dependencies": ["database", "auth_service"],
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            test_file = os.path.join(tmpdir, "test_integration.py")
+            test_file = str(Path(tmpdir) / "test_integration.py")
 
-            result = agent.generate_integration_tests(
-                integration_spec,
-                test_file,
-                context
-            )
+            result = agent.generate_integration_tests(integration_spec, test_file, context)
 
             assert result["success"] is True
-            assert os.path.exists(test_file)
+            assert Path(test_file).exists()
 
-            with open(test_file, 'r') as f:
+            with Path(test_file).open() as f:
                 content = f.read()
                 assert "integration" in content.lower() or "test" in content.lower()
                 assert "/users" in content
@@ -127,23 +122,19 @@ class TestTestAgent:
             "models": ["User", "Post", "Comment"],
             "data": {
                 "User": {"username": "testuser", "email": "test@example.com"},
-                "Post": {"title": "Test Post", "content": "Content"}
-            }
+                "Post": {"title": "Test Post", "content": "Content"},
+            },
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            fixture_file = os.path.join(tmpdir, "conftest.py")
+            fixture_file = str(Path(tmpdir) / "conftest.py")
 
-            result = agent.create_test_fixtures(
-                fixture_spec,
-                fixture_file,
-                context
-            )
+            result = agent.create_test_fixtures(fixture_spec, fixture_file, context)
 
             assert result["success"] is True
-            assert os.path.exists(fixture_file)
+            assert Path(fixture_file).exists()
 
-            with open(fixture_file, 'r') as f:
+            with Path(fixture_file).open() as f:
                 content = f.read()
                 assert "@pytest.fixture" in content
                 assert "User" in content
@@ -157,7 +148,7 @@ class TestTestAgent:
             "functions": 10,
             "classes": 2,
             "lines": 150,
-            "complexity": "medium"
+            "complexity": "medium",
         }
 
         requirements = agent.calculate_coverage_requirements(module_info)
@@ -177,7 +168,7 @@ class TestTestAgent:
             "total_branches": 50,
             "covered_branches": 45,
             "uncovered_files": ["util.py"],
-            "uncovered_lines": {"main.py": [10, 25, 30]}
+            "uncovered_lines": {"main.py": [10, 25, 30]},
         }
 
         validation = agent.validate_test_coverage(coverage_data, context)
@@ -193,17 +184,10 @@ class TestTestAgent:
         context = AgentContext(session_id="test-run")
 
         # Mock test execution
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout="10 passed in 2.5s",
-                stderr=""
-            )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout="10 passed in 2.5s", stderr="")
 
-            result = agent.run_tests(
-                test_path="tests/test_auth.py",
-                context=context
-            )
+            result = agent.run_tests(test_path="tests/test_auth.py", context=context)
 
             assert result["success"] is True
             assert result["tests_passed"] >= 0
@@ -216,9 +200,7 @@ class TestTestAgent:
 
         test_spec = {
             "module": "new_feature",
-            "test_cases": [
-                {"name": "test_new_functionality", "expected": "NotImplementedError"}
-            ]
+            "test_cases": [{"name": "test_new_functionality", "expected": "NotImplementedError"}],
         }
 
         result = agent.ensure_tests_fail_first(test_spec, context)
@@ -234,24 +216,20 @@ class TestTestAgent:
         api_spec = {
             "existing_functions": [
                 {"name": "get_user", "signature": "get_user(id: int) -> User"},
-                {"name": "create_user", "signature": "create_user(data: dict) -> User"}
+                {"name": "create_user", "signature": "create_user(data: dict) -> User"},
             ],
-            "existing_classes": ["User", "Session"]
+            "existing_classes": ["User", "Session"],
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            compat_file = os.path.join(tmpdir, "test_backward_compatibility.py")
+            compat_file = str(Path(tmpdir) / "test_backward_compatibility.py")
 
-            result = agent.generate_backward_compatibility_tests(
-                api_spec,
-                compat_file,
-                context
-            )
+            result = agent.generate_backward_compatibility_tests(api_spec, compat_file, context)
 
             assert result["success"] is True
-            assert os.path.exists(compat_file)
+            assert Path(compat_file).exists()
 
-            with open(compat_file, 'r') as f:
+            with Path(compat_file).open() as f:
                 content = f.read()
                 assert "compatibility" in content.lower() or "backward" in content.lower()
                 assert "get_user" in content
@@ -273,8 +251,8 @@ class TestTestAgent:
         with tempfile.TemporaryDirectory() as tmpdir:
             context.working_directory = tmpdir
 
-            with patch('os.makedirs'):
-                with patch('builtins.open', mock_open()):
+            with patch("os.makedirs"):
+                with patch("builtins.open", mock_open()):
                     result = agent.execute(prompt, context)
 
             assert result.success is True
@@ -299,21 +277,15 @@ def test_existing_function():
     assert existing_function() == True
 """
 
-        new_spec = {
-            "add_tests_for": ["new_function", "another_function"]
-        }
+        new_spec = {"add_tests_for": ["new_function", "another_function"]}
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            test_file = os.path.join(tmpdir, "test_module.py")
+            test_file = str(Path(tmpdir) / "test_module.py")
 
-            with open(test_file, 'w') as f:
+            with Path(test_file).open("w") as f:
                 f.write(existing_tests)
 
-            result = agent.extend_existing_tests(
-                test_file,
-                new_spec,
-                context
-            )
+            result = agent.extend_existing_tests(test_file, new_spec, context)
 
             assert result["success"] is True
             assert result["tests_added"] > 0

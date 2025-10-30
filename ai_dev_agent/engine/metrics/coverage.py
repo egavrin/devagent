@@ -1,4 +1,5 @@
 """Patch-level coverage computation."""
+
 from __future__ import annotations
 
 import re
@@ -6,7 +7,6 @@ import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Set
 
 from ai_dev_agent.core.utils.logger import get_logger
 
@@ -22,7 +22,7 @@ class PatchCoverageResult:
     covered_lines: int
     total_lines: int
     ratio: float
-    per_file: Dict[str, Dict[str, List[int]]] = field(default_factory=dict)
+    per_file: dict[str, dict[str, list[int]]] = field(default_factory=dict)
 
     @property
     def uncovered_lines(self) -> int:
@@ -50,7 +50,7 @@ def compute_patch_coverage(
     coverage_map = _load_coverage_map(coverage_path, repo_root)
     total = 0
     covered = 0
-    per_file: Dict[str, Dict[str, List[int]]] = {}
+    per_file: dict[str, dict[str, list[int]]] = {}
 
     for path, lines in changed_lines.items():
         total += len(lines)
@@ -71,15 +71,14 @@ def compute_patch_coverage(
     )
 
 
-def _collect_changed_lines(repo_root: Path, compare_ref: str | None) -> Dict[str, Set[int]]:
+def _collect_changed_lines(repo_root: Path, compare_ref: str | None) -> dict[str, set[int]]:
     ref = compare_ref or "HEAD"
     command = ["git", "diff", ref, "--unified=0", "--no-color"]
     try:
         process = subprocess.run(
             command,
             cwd=str(repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             check=False,
         )
@@ -90,7 +89,7 @@ def _collect_changed_lines(repo_root: Path, compare_ref: str | None) -> Dict[str
         LOGGER.debug("git diff returned %s: %s", process.returncode, process.stderr.strip())
         return {}
 
-    changed: Dict[str, Set[int]] = {}
+    changed: dict[str, set[int]] = {}
     current_file: str | None = None
 
     for line in process.stdout.splitlines():
@@ -115,7 +114,7 @@ def _collect_changed_lines(repo_root: Path, compare_ref: str | None) -> Dict[str
     return {path: lines for path, lines in changed.items() if lines}
 
 
-def _load_coverage_map(coverage_xml: Path, repo_root: Path) -> Dict[str, Set[int]]:
+def _load_coverage_map(coverage_xml: Path, repo_root: Path) -> dict[str, set[int]]:
     try:
         tree = ET.parse(str(coverage_xml))
     except (ET.ParseError, OSError) as exc:
@@ -123,14 +122,14 @@ def _load_coverage_map(coverage_xml: Path, repo_root: Path) -> Dict[str, Set[int
         return {}
 
     root = tree.getroot()
-    coverage_map: Dict[str, Set[int]] = {}
+    coverage_map: dict[str, set[int]] = {}
 
     for cls in root.iter("class"):
         filename = cls.get("filename")
         if not filename:
             continue
         normalized = _normalize_path(filename, repo_root)
-        hits: Set[int] = coverage_map.setdefault(normalized, set())
+        hits: set[int] = coverage_map.setdefault(normalized, set())
         for line in cls.findall(".//line"):
             number = line.get("number")
             if not number:

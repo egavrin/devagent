@@ -5,7 +5,6 @@ This script removes or comments out dead code to improve maintainability
 and reduce the codebase size for the AI agent application.
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -27,14 +26,20 @@ def remove_unused_methods():
 
         # Mark methods as deprecated instead of removing (safer)
         methods_to_deprecate = [
-            "subscribe", "unsubscribe", "broadcast",
-            "get_metrics", "clear_metrics", "wait_for_completion"
+            "subscribe",
+            "unsubscribe",
+            "broadcast",
+            "get_metrics",
+            "clear_metrics",
+            "wait_for_completion",
         ]
 
         for method in methods_to_deprecate:
             # Add deprecation comment
             old_pattern = f"    def {method}("
-            new_pattern = f"    # TODO: Remove - unused method identified by vulture\n    def {method}("
+            new_pattern = (
+                f"    # TODO: Remove - unused method identified by vulture\n    def {method}("
+            )
             if old_pattern in content and "TODO: Remove" not in content:
                 content = content.replace(old_pattern, new_pattern, 1)
                 changes.append(f"Marked {method} in bus.py as deprecated")
@@ -56,7 +61,7 @@ def remove_unused_methods():
         file_path = project_root / filepath
         if file_path.exists():
             content = file_path.read_text()
-            for imp in unused_imports:
+            for _imp in unused_imports:
                 # This is already done manually
                 pass
 
@@ -71,12 +76,13 @@ def add_pragma_no_cover():
     # Add pragma to unused but kept methods
     files_to_pragma = {
         "ai_dev_agent/core/cache.py": [
-            "get_memory_usage", "get_disk_usage", "optimize_memory",
-            "optimize_disk", "get_performance_metrics"
+            "get_memory_usage",
+            "get_disk_usage",
+            "optimize_memory",
+            "optimize_disk",
+            "get_performance_metrics",
         ],
-        "ai_dev_agent/core/integration.py": [
-            "validate_config", "check_dependencies"
-        ],
+        "ai_dev_agent/core/integration.py": ["validate_config", "check_dependencies"],
     }
 
     for filepath, methods in files_to_pragma.items():
@@ -87,15 +93,17 @@ def add_pragma_no_cover():
                 pattern = f"def {method}("
                 if pattern in content and "pragma: no cover" not in content:
                     # Add pragma comment to method
-                    lines = content.split('\n')
+                    lines = content.split("\n")
                     for i, line in enumerate(lines):
                         if pattern in line:
                             indent = len(line) - len(line.lstrip())
                             if i + 1 < len(lines):
-                                lines[i + 1] = ' ' * (indent + 4) + "# pragma: no cover\n" + lines[i + 1]
+                                lines[i + 1] = (
+                                    " " * (indent + 4) + "# pragma: no cover\n" + lines[i + 1]
+                                )
                                 pragmas_added.append(f"{filepath}::{method}")
                             break
-                    content = '\n'.join(lines)
+                    content = "\n".join(lines)
 
             if pragmas_added:
                 file_path.write_text(content)
@@ -187,7 +195,7 @@ def main():
     print("Starting code cleanup based on vulture analysis...")
 
     # Generate report first
-    report = generate_report()
+    generate_report()
     print("Generated unused code report")
 
     # Add pragmas to scaffolding code
@@ -200,7 +208,7 @@ def main():
     if changes:
         print(f"Made {len(changes)} deprecation markings")
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("Cleanup complete!")
     print("Next steps:")
     print("1. Review UNUSED_CODE_REPORT.md")

@@ -5,13 +5,13 @@ and track coverage trends over time.
 """
 
 import json
+import logging
 import subprocess
 import sys
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
-import logging
+from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CoverageTrend:
     """Represents coverage trend data over time."""
+
     timestamp: str
     total_coverage: float
     branch_coverage: float
@@ -30,7 +31,7 @@ class CoverageTrend:
 class CoverageReporter:
     """Generate coverage reports and dashboards."""
 
-    def __init__(self, project_root: Path = None):
+    def __init__(self, project_root: Optional[Path] = None):
         """Initialize coverage reporter.
 
         Args:
@@ -49,9 +50,12 @@ class CoverageReporter:
         """
         try:
             cmd = [
-                sys.executable, "-m", "coverage", "html",
+                sys.executable,
+                "-m",
+                "coverage",
+                "html",
                 "--directory=htmlcov",
-                "--title=DevAgent Coverage Report"
+                "--title=DevAgent Coverage Report",
             ]
             subprocess.run(cmd, cwd=self.project_root, check=True)
 
@@ -78,11 +82,7 @@ class CoverageReporter:
                 cmd.append("--show-missing")
 
             result = subprocess.run(
-                cmd,
-                cwd=self.project_root,
-                capture_output=True,
-                text=True,
-                check=True
+                cmd, cwd=self.project_root, capture_output=True, text=True, check=True
             )
             return result.stdout
 
@@ -90,7 +90,7 @@ class CoverageReporter:
             logger.error(f"Failed to generate terminal report: {e}")
             return str(e)
 
-    def get_coverage_summary(self) -> Dict:
+    def get_coverage_summary(self) -> dict:
         """Get coverage summary from coverage.json.
 
         Returns:
@@ -99,10 +99,10 @@ class CoverageReporter:
         if not self.coverage_file.exists():
             return {
                 "error": "No coverage data found. Run tests with coverage first.",
-                "total_coverage": 0.0
+                "total_coverage": 0.0,
             }
 
-        with open(self.coverage_file, 'r') as f:
+        with self.coverage_file.open() as f:
             data = json.load(f)
 
         totals = data.get("totals", {})
@@ -117,10 +117,10 @@ class CoverageReporter:
             "num_branches": totals.get("num_branches", 0),
             "covered_branches": totals.get("covered_branches", 0),
             "missing_branches": totals.get("missing_branches", 0),
-            "files": len(data.get("files", {}))
+            "files": len(data.get("files", {})),
         }
 
-    def get_file_coverage(self, threshold: float = 95.0) -> Dict[str, List[Dict]]:
+    def get_file_coverage(self, threshold: float = 95.0) -> dict[str, list[dict]]:
         """Get coverage by file, categorized by coverage level.
 
         Args:
@@ -132,23 +132,33 @@ class CoverageReporter:
         if not self.coverage_file.exists():
             return {"error": "No coverage data available"}
 
-        with open(self.coverage_file, 'r') as f:
+        with self.coverage_file.open() as f:
             data = json.load(f)
 
         excellent = []  # >= threshold
-        good = []       # 80-threshold
-        fair = []       # 60-80
-        poor = []       # < 60
+        good = []  # 80-threshold
+        fair = []  # 60-80
+        poor = []  # < 60
+
+        root_prefix = str(self.project_root).replace("\\", "/")
 
         for file_path, file_data in data.get("files", {}).items():
             summary = file_data.get("summary", {})
             coverage = summary.get("percent_covered", 0.0)
 
+            normalized = file_path.replace("\\", "/")
+            if normalized.startswith(root_prefix + "/"):
+                display_path = normalized[len(root_prefix) + 1 :]
+            elif normalized.startswith(root_prefix):
+                display_path = normalized[len(root_prefix) :].lstrip("/")
+            else:
+                display_path = normalized
+
             file_info = {
-                "path": file_path,
+                "path": display_path,
                 "coverage": coverage,
                 "statements": summary.get("num_statements", 0),
-                "missing": summary.get("missing_lines", 0)
+                "missing": summary.get("missing_lines", 0),
             }
 
             if coverage >= threshold:
@@ -164,7 +174,7 @@ class CoverageReporter:
             "excellent": sorted(excellent, key=lambda x: x["coverage"], reverse=True),
             "good": sorted(good, key=lambda x: x["coverage"], reverse=True),
             "fair": sorted(fair, key=lambda x: x["coverage"], reverse=True),
-            "poor": sorted(poor, key=lambda x: x["coverage"], reverse=True)
+            "poor": sorted(poor, key=lambda x: x["coverage"], reverse=True),
         }
 
     def save_coverage_trend(self) -> None:
@@ -181,7 +191,7 @@ class CoverageReporter:
                 ["git", "rev-parse", "--short", "HEAD"],
                 capture_output=True,
                 text=True,
-                cwd=self.project_root
+                cwd=self.project_root,
             )
             commit_hash = result.stdout.strip() if result.returncode == 0 else None
         except Exception:
@@ -193,7 +203,7 @@ class CoverageReporter:
             branch_coverage=float(summary["branch_coverage"].rstrip("%")),
             files_covered=summary["files"],
             total_files=summary["files"],
-            commit_hash=commit_hash
+            commit_hash=commit_hash,
         )
 
         # Load existing trends
@@ -204,16 +214,12 @@ class CoverageReporter:
         trends = trends[-100:]
 
         # Save updated trends
-        with open(self.trends_file, 'w') as f:
-            json.dump(
-                [vars(t) for t in trends],
-                f,
-                indent=2
-            )
+        with self.trends_file.open("w") as f:
+            json.dump([vars(t) for t in trends], f, indent=2)
 
         logger.info(f"Coverage trend saved: {trend.total_coverage:.1f}%")
 
-    def load_coverage_trends(self) -> List[CoverageTrend]:
+    def load_coverage_trends(self) -> list[CoverageTrend]:
         """Load coverage trends from file.
 
         Returns:
@@ -223,14 +229,14 @@ class CoverageReporter:
             return []
 
         try:
-            with open(self.trends_file, 'r') as f:
+            with self.trends_file.open() as f:
                 data = json.load(f)
                 return [CoverageTrend(**item) for item in data]
         except Exception as e:
             logger.error(f"Failed to load trends: {e}")
             return []
 
-    def get_coverage_trend_analysis(self) -> Dict:
+    def get_coverage_trend_analysis(self) -> dict:
         """Analyze coverage trends.
 
         Returns:
@@ -239,10 +245,7 @@ class CoverageReporter:
         trends = self.load_coverage_trends()
 
         if len(trends) < 2:
-            return {
-                "message": "Not enough data for trend analysis",
-                "data_points": len(trends)
-            }
+            return {"message": "Not enough data for trend analysis", "data_points": len(trends)}
 
         # Calculate trend direction
         recent = trends[-5:]  # Last 5 data points
@@ -263,13 +266,9 @@ class CoverageReporter:
             "average_recent": avg_recent,
             "data_points": len(trends),
             "history": [
-                {
-                    "timestamp": t.timestamp,
-                    "coverage": t.total_coverage,
-                    "commit": t.commit_hash
-                }
+                {"timestamp": t.timestamp, "coverage": t.total_coverage, "commit": t.commit_hash}
                 for t in trends[-10:]  # Last 10 points
-            ]
+            ],
         }
 
     def generate_markdown_report(self) -> str:
@@ -294,7 +293,7 @@ class CoverageReporter:
         report.append(f"- **Missing Lines:** {summary['missing_lines']}")
 
         # Coverage status indicator
-        total_cov = summary['total_coverage']
+        total_cov = summary["total_coverage"]
         if total_cov >= 95:
             status = "🟢 Excellent"
         elif total_cov >= 80:
@@ -341,22 +340,24 @@ class CoverageReporter:
         report.append("## Recommendations\n")
         if file_coverage.get("poor"):
             report.append("- Focus on improving coverage for files with < 60% coverage")
-        if summary['total_coverage'] < 95:
-            needed = 95 - summary['total_coverage']
-            report.append(f"- Add tests to increase coverage by {needed:.1f}% to meet 95% threshold")
+        if summary["total_coverage"] < 95:
+            needed = 95 - summary["total_coverage"]
+            report.append(
+                f"- Add tests to increase coverage by {needed:.1f}% to meet 95% threshold"
+            )
         else:
             report.append("- ✅ Coverage meets the 95% threshold!")
 
         return "\n".join(report)
 
-    def generate_badge_data(self) -> Dict:
+    def generate_badge_data(self) -> dict:
         """Generate badge data for README/docs.
 
         Returns:
             Badge configuration dict
         """
         summary = self.get_coverage_summary()
-        coverage = summary['total_coverage']
+        coverage = summary["total_coverage"]
 
         # Determine color based on coverage
         if coverage >= 95:
@@ -372,7 +373,7 @@ class CoverageReporter:
             "schemaVersion": 1,
             "label": "coverage",
             "message": f"{coverage:.1f}%",
-            "color": color
+            "color": color,
         }
 
 
@@ -397,6 +398,7 @@ def generate_report(format: str = "terminal", output_file: Optional[Path] = None
         report = reporter.generate_markdown_report()
     elif format == "json":
         import json
+
         summary = reporter.get_coverage_summary()
         report = json.dumps(summary, indent=2)
     else:
@@ -414,13 +416,17 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Generate coverage reports")
-    parser.add_argument("--format", choices=["terminal", "html", "markdown", "json"],
-                       default="terminal", help="Report format")
+    parser.add_argument(
+        "--format",
+        choices=["terminal", "html", "markdown", "json"],
+        default="terminal",
+        help="Report format",
+    )
     parser.add_argument("--output", type=Path, help="Output file path")
-    parser.add_argument("--save-trend", action="store_true",
-                       help="Save current coverage as trend data")
-    parser.add_argument("--show-trends", action="store_true",
-                       help="Show coverage trend analysis")
+    parser.add_argument(
+        "--save-trend", action="store_true", help="Save current coverage as trend data"
+    )
+    parser.add_argument("--show-trends", action="store_true", help="Show coverage trend analysis")
 
     args = parser.parse_args()
 

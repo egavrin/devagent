@@ -22,7 +22,9 @@ from benchmarks.test_cases import TEST_CASES
 def main():
     """Run DevAgent benchmarks."""
     parser = argparse.ArgumentParser(description="Run DevAgent benchmarks")
-    parser.add_argument("--provider", "-p", help="Provider name or partial match (e.g. 'grok', 'claude')")
+    parser.add_argument(
+        "--provider", "-p", help="Provider name or partial match (e.g. 'grok', 'claude')"
+    )
     parser.add_argument("--limit", "-l", type=int, help="Limit number of providers")
     parser.add_argument("--tests", "-t", type=int, help="Limit number of tests")
     parser.add_argument("--skip", help="Comma-separated provider names to skip")
@@ -50,12 +52,12 @@ def main():
         providers_to_test = [p for p in providers_to_test if p.name not in skip_list]
 
     if args.limit:
-        providers_to_test = providers_to_test[:args.limit]
+        providers_to_test = providers_to_test[: args.limit]
 
     # Filter tests
     tests_to_run = TEST_CASES
     if args.tests:
-        tests_to_run = TEST_CASES[:args.tests]
+        tests_to_run = TEST_CASES[: args.tests]
 
     # Print summary
     print("=" * 80)
@@ -87,18 +89,20 @@ def main():
 
                 # Show result
                 status = "✓" if result.correct_answer else ("✗" if result.success else "ERROR")
-                print(f"  {status} {result.execution_time:.2f}s - {result.iterations} iterations - {result.tools_used} tools")
+                print(
+                    f"  {status} {result.execution_time:.2f}s - {result.iterations} iterations - {result.tools_used} tools"
+                )
             except Exception as e:
                 print(f"  ERROR: {e}")
                 continue
 
     # Save results
-    print(f"\nSaving results...")
+    print("\nSaving results...")
     output_name = args.provider.replace(" ", "_") if args.provider else "benchmarks"
     runner.save_results(results, output_name=output_name)
 
     # Summary
-    print(f"\n" + "=" * 80)
+    print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
 
@@ -107,19 +111,21 @@ def main():
 
     print(f"\nTotal runs: {len(results)}")
     if results:
-        print(f"Successful: {len(successful)}/{len(results)} ({len(successful)/len(results)*100:.1f}%)")
+        print(
+            f"Successful: {len(successful)}/{len(results)} ({len(successful)/len(results)*100:.1f}%)"
+        )
         print(f"Correct: {len(correct)}/{len(results)} ({len(correct)/len(results)*100:.1f}%)")
 
         if correct:
             avg_time = sum(r.execution_time for r in correct) / len(correct)
             avg_iterations = sum(r.iterations for r in correct) / len(correct)
             avg_tools = sum(r.tools_used for r in correct) / len(correct)
-            print(f"\nAverages (correct answers):")
+            print("\nAverages (correct answers):")
             print(f"  Time: {avg_time:.2f}s")
             print(f"  Iterations: {avg_iterations:.1f}")
             print(f"  Tools: {avg_tools:.1f}")
 
-    print(f"\n" + "=" * 80)
+    print("\n" + "=" * 80)
     print(f"Results saved to benchmarks/results/{output_name}_*")
     print("=" * 80 + "\n")
 

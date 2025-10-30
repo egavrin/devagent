@@ -24,7 +24,7 @@ def test_approval_policy_custom_values():
         auto_approve_shell=False,
         auto_approve_adr=True,
         emergency_override=False,
-        audit_file=True
+        audit_file=True,
     )
 
     assert policy.auto_approve_plan is True
@@ -37,10 +37,7 @@ def test_approval_policy_custom_values():
 
 def test_approval_policy_partial_values():
     """Test ApprovalPolicy with partial custom values."""
-    policy = ApprovalPolicy(
-        auto_approve_plan=True,
-        audit_file=True
-    )
+    policy = ApprovalPolicy(auto_approve_plan=True, audit_file=True)
 
     # Custom values
     assert policy.auto_approve_plan is True
@@ -55,18 +52,18 @@ def test_approval_policy_partial_values():
 
 def test_approval_policy_is_dataclass():
     """Test that ApprovalPolicy is a proper dataclass."""
-    from dataclasses import is_dataclass, fields
+    from dataclasses import fields, is_dataclass
 
     assert is_dataclass(ApprovalPolicy)
 
     # Check fields
     field_names = [f.name for f in fields(ApprovalPolicy)]
-    assert 'auto_approve_plan' in field_names
-    assert 'auto_approve_code' in field_names
-    assert 'auto_approve_shell' in field_names
-    assert 'auto_approve_adr' in field_names
-    assert 'emergency_override' in field_names
-    assert 'audit_file' in field_names
+    assert "auto_approve_plan" in field_names
+    assert "auto_approve_code" in field_names
+    assert "auto_approve_shell" in field_names
+    assert "auto_approve_adr" in field_names
+    assert "emergency_override" in field_names
+    assert "audit_file" in field_names
 
 
 def test_approval_policy_equality():

@@ -1,12 +1,16 @@
 """Local testing utilities."""
+
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable, List
+from typing import TYPE_CHECKING
 
 from ai_dev_agent.core.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 LOGGER = get_logger(__name__)
 
@@ -17,9 +21,10 @@ class TestExecutionResult:
 
     Note: Not a pytest test class - used to store test command results.
     """
+
     __test__ = False  # Tell pytest this is not a test class
 
-    command: List[str]
+    command: list[str]
     returncode: int
     stdout: str
     stderr: str
@@ -43,11 +48,12 @@ class TestRunner:
         process = subprocess.run(
             cmd,
             cwd=str(self.repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
-        return TestExecutionResult(command=cmd, returncode=process.returncode, stdout=process.stdout, stderr=process.stderr)
+        return TestExecutionResult(
+            command=cmd, returncode=process.returncode, stdout=process.stdout, stderr=process.stderr
+        )
 
 
 __all__ = ["TestExecutionResult", "TestResult", "TestRunner"]

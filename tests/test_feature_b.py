@@ -1,5 +1,4 @@
 """Unit tests for feature B - placeholder."""
-import pytest
 
 
 class TestFeatureB:

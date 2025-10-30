@@ -4,12 +4,13 @@ This module provides fixtures and configuration specific to integration testing.
 """
 
 import os
-import pytest
-import tempfile
-from pathlib import Path
-from typing import Generator
 import subprocess
-import shutil
+import tempfile
+from collections.abc import Generator
+from pathlib import Path
+from typing import Optional
+
+import pytest
 
 
 @pytest.fixture(scope="session")
@@ -44,12 +45,15 @@ def test_project(integration_test_dir) -> Generator[Path, None, None]:
     (project_dir / ".devagent").mkdir()
 
     # Create project files
-    (project_dir / "README.md").write_text("""# Integration Test Project
+    (project_dir / "README.md").write_text(
+        """# Integration Test Project
 
 This is a test project for DevAgent integration testing.
-""")
+"""
+    )
 
-    (project_dir / "pyproject.toml").write_text("""[tool.poetry]
+    (project_dir / "pyproject.toml").write_text(
+        """[tool.poetry]
 name = "integration-test-project"
 version = "0.1.0"
 description = "Test project for integration testing"
@@ -59,10 +63,12 @@ python = "^3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-""")
+"""
+    )
 
     (project_dir / "src" / "__init__.py").touch()
-    (project_dir / "src" / "main.py").write_text("""\"\"\"Main module for test project.\"\"\"
+    (project_dir / "src" / "main.py").write_text(
+        """\"\"\"Main module for test project.\"\"\"
 
 
 def greet(name: str) -> str:
@@ -92,9 +98,11 @@ class Calculator:
         result = a * b
         self.history.append(f"{a} * {b} = {result}")
         return result
-""")
+"""
+    )
 
-    (project_dir / "src" / "utils.py").write_text("""\"\"\"Utility functions.\"\"\"
+    (project_dir / "src" / "utils.py").write_text(
+        """\"\"\"Utility functions.\"\"\"
 
 from typing import List, Dict, Any
 import json
@@ -118,9 +126,11 @@ def format_list(items: List[str]) -> str:
 def validate_email(email: str) -> bool:
     \"\"\"Simple email validation.\"\"\"
     return "@" in email and "." in email.split("@")[1]
-""")
+"""
+    )
 
-    (project_dir / "tests" / "test_main.py").write_text("""\"\"\"Tests for main module.\"\"\"
+    (project_dir / "tests" / "test_main.py").write_text(
+        """\"\"\"Tests for main module.\"\"\"
 
 import pytest
 from src.main import greet, calculate, Calculator
@@ -159,7 +169,8 @@ class TestCalculator:
         assert len(calc.history) == 2
         assert "1 + 2 = 3" in calc.history
         assert "3 * 4 = 12" in calc.history
-""")
+"""
+    )
 
     # Initialize git repo
     subprocess.run(["git", "init"], cwd=project_dir, capture_output=True)
@@ -180,7 +191,8 @@ def devagent_cli():
     Returns:
         Function to run CLI commands
     """
-    def run_command(args: list, cwd: Path = None) -> subprocess.CompletedProcess:
+
+    def run_command(args: list, cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
         """Run a DevAgent CLI command.
 
         Args:
@@ -190,14 +202,8 @@ def devagent_cli():
         Returns:
             Completed process result
         """
-        cmd = ["python", "-m", "ai_dev_agent.cli.main"] + args
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        cmd = ["python", "-m", "ai_dev_agent.cli.main", *args]
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=30)
         return result
 
     return run_command
@@ -260,6 +266,7 @@ class IntegrationTest:
             True if file exists, False if timeout
         """
         import time
+
         start = time.time()
         while time.time() - start < timeout:
             if file_path.exists():

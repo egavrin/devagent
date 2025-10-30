@@ -1,22 +1,19 @@
 """Comprehensive tests for the ReactiveExecutor module."""
 
-import time
-from dataclasses import dataclass
-from unittest.mock import MagicMock, patch, call
-import pytest
-from pydantic import ValidationError
+from unittest.mock import MagicMock, patch
 
-from ai_dev_agent.engine.react.loop import ReactiveExecutor, ActionProvider, ToolInvoker
+import pytest
+
+from ai_dev_agent.engine.react.evaluator import GateEvaluator
+from ai_dev_agent.engine.react.loop import ReactiveExecutor
 from ai_dev_agent.engine.react.types import (
     ActionRequest,
     EvaluationResult,
     MetricsSnapshot,
     Observation,
-    RunResult,
     StepRecord,
     TaskSpec,
 )
-from ai_dev_agent.engine.react.evaluator import GateEvaluator
 
 
 class TestReactiveExecutor:
@@ -37,7 +34,7 @@ class TestReactiveExecutor:
             identifier="test_task",
             goal="Test task goal",
             category="test",
-            instructions="Test instructions"
+            instructions="Test instructions",
         )
 
     def test_init_with_defaults(self):
@@ -63,7 +60,9 @@ class TestReactiveExecutor:
 
     def test_run_simple_success(self):
         """Test successful run with single step."""
-        action = ActionRequest(step_id="S1", thought="Test thought", tool="test_tool", args={"key": "value"})
+        action = ActionRequest(
+            step_id="S1", thought="Test thought", tool="test_tool", args={"key": "value"}
+        )
         observation = Observation(success=True, outcome="Success", tool="test_tool")
 
         action_provider = MagicMock(return_value=action)
@@ -74,7 +73,7 @@ class TestReactiveExecutor:
             required_gates={"gate1": True},
             should_stop=True,
             stop_reason="All gates passed",
-            status="success"
+            status="success",
         )
 
         result = self.executor.run(self.task, action_provider, tool_invoker)
@@ -94,12 +93,9 @@ class TestReactiveExecutor:
             observation=Observation(success=True, outcome="Prior", tool="prior_tool"),
             metrics=MetricsSnapshot(),
             evaluation=EvaluationResult(
-                gates={},
-                required_gates={},
-                should_stop=False,
-                status="in_progress"
+                gates={}, required_gates={}, should_stop=False, status="in_progress"
             ),
-            step_index=1
+            step_index=1,
         )
 
         action = ActionRequest(step_id="S1", thought="Test thought", tool="new_tool", args={})
@@ -109,17 +105,11 @@ class TestReactiveExecutor:
         tool_invoker = MagicMock(return_value=observation)
 
         self.evaluator.evaluate.return_value = EvaluationResult(
-            gates={},
-            required_gates={},
-            should_stop=True,
-            status="success"
+            gates={}, required_gates={}, should_stop=True, status="success"
         )
 
         result = self.executor.run(
-            self.task,
-            action_provider,
-            tool_invoker,
-            prior_steps=[prior_step]
+            self.task, action_provider, tool_invoker, prior_steps=[prior_step]
         )
 
         assert len(result.steps) == 2
@@ -147,18 +137,10 @@ class TestReactiveExecutor:
         tool_invoker = MagicMock(return_value=observation)
 
         self.evaluator.evaluate.return_value = EvaluationResult(
-            gates={},
-            required_gates={},
-            should_stop=False,
-            status="in_progress"
+            gates={}, required_gates={}, should_stop=False, status="in_progress"
         )
 
-        result = self.executor.run(
-            self.task,
-            action_provider,
-            tool_invoker,
-            max_steps=2
-        )
+        result = self.executor.run(self.task, action_provider, tool_invoker, max_steps=2)
 
         assert result.status == "failed"
         assert result.stop_reason == "Execution stopped before gates were satisfied."
@@ -269,11 +251,7 @@ class TestReactiveExecutor:
 
     def test_metrics_from_observation_with_dict(self):
         """Test _metrics_from_observation with dict metrics."""
-        observation = Observation(
-            success=True,
-            outcome="Success",
-            metrics={"tokens_used": 100}
-        )
+        observation = Observation(success=True, outcome="Success", metrics={"tokens_used": 100})
 
         result = self.executor._metrics_from_observation(observation)
         assert isinstance(result, MetricsSnapshot)
@@ -333,12 +311,10 @@ class TestReactiveExecutor:
             required_gates={},
             should_stop=True,
             stop_reason="Completed successfully",
-            status="success"
+            status="success",
         )
 
-        status, reason = self.executor._derive_status(
-            "gates", evaluation, True, []
-        )
+        status, reason = self.executor._derive_status("gates", evaluation, True, [])
 
         assert status == "success"
         assert reason == "Completed successfully"
@@ -346,16 +322,10 @@ class TestReactiveExecutor:
     def test_derive_status_with_evaluator_failed(self):
         """Test _derive_status with evaluator and failure."""
         evaluation = EvaluationResult(
-            gates={},
-            required_gates={},
-            should_stop=False,
-            stop_reason=None,
-            status="in_progress"
+            gates={}, required_gates={}, should_stop=False, stop_reason=None, status="in_progress"
         )
 
-        status, reason = self.executor._derive_status(
-            "budget", evaluation, True, []
-        )
+        status, reason = self.executor._derive_status("budget", evaluation, True, [])
 
         assert status == "failed"
         assert reason == "Execution stopped before gates were satisfied."
@@ -367,17 +337,12 @@ class TestReactiveExecutor:
             observation=Observation(success=True, outcome="Success"),
             metrics=MetricsSnapshot(),
             evaluation=EvaluationResult(
-                gates={},
-                required_gates={},
-                should_stop=False,
-                status="in_progress"
+                gates={}, required_gates={}, should_stop=False, status="in_progress"
             ),
-            step_index=1
+            step_index=1,
         )
 
-        status, reason = self.executor._derive_status(
-            "stop_iteration", None, False, [step]
-        )
+        status, reason = self.executor._derive_status("stop_iteration", None, False, [step])
 
         assert status == "success"
         assert reason == "Completed"
@@ -389,26 +354,19 @@ class TestReactiveExecutor:
             observation=Observation(success=True, outcome="Success"),
             metrics=MetricsSnapshot(),
             evaluation=EvaluationResult(
-                gates={},
-                required_gates={},
-                should_stop=False,
-                status="in_progress"
+                gates={}, required_gates={}, should_stop=False, status="in_progress"
             ),
-            step_index=1
+            step_index=1,
         )
 
-        status, reason = self.executor._derive_status(
-            "budget", None, False, [step]
-        )
+        status, reason = self.executor._derive_status("budget", None, False, [step])
 
         assert status == "failed"
         assert reason == "Step budget exhausted."
 
     def test_derive_status_without_evaluator_no_steps(self):
         """Test _derive_status without evaluator and no steps."""
-        status, reason = self.executor._derive_status(
-            "budget", None, False, []
-        )
+        status, reason = self.executor._derive_status("budget", None, False, [])
 
         assert status == "failed"
         assert reason == "No actions were executed before the step budget was reached."
@@ -420,21 +378,17 @@ class TestReactiveExecutor:
             required_gates={},
             should_stop=True,
             stop_reason="Custom exception message",
-            status="failed"
+            status="failed",
         )
 
-        status, reason = self.executor._derive_status(
-            "exception", evaluation, False, []
-        )
+        status, reason = self.executor._derive_status("exception", evaluation, False, [])
 
         assert status == "failed"
         assert reason == "Custom exception message"
 
     def test_derive_status_gates_condition_no_evaluator(self):
         """Test _derive_status with gates condition but no evaluator."""
-        status, reason = self.executor._derive_status(
-            "gates", None, False, []
-        )
+        status, reason = self.executor._derive_status("gates", None, False, [])
 
         assert status == "failed"  # No steps
         assert reason == "Completed"
@@ -446,17 +400,12 @@ class TestReactiveExecutor:
             observation=Observation(success=True, outcome="Success"),
             metrics=MetricsSnapshot(),
             evaluation=EvaluationResult(
-                gates={},
-                required_gates={},
-                should_stop=False,
-                status="in_progress"
+                gates={}, required_gates={}, should_stop=False, status="in_progress"
             ),
-            step_index=1
+            step_index=1,
         )
 
-        status, reason = self.executor._derive_status(
-            None, None, False, [step]
-        )
+        status, reason = self.executor._derive_status(None, None, False, [step])
 
         assert status == "success"  # Has steps
         assert reason is None
@@ -482,19 +431,14 @@ class TestReactiveExecutor:
         """Test metrics are properly extracted from observations."""
         action = ActionRequest(step_id="S1", thought="Test thought", tool="test", args={})
         observation = Observation(
-            success=True,
-            outcome="Success",
-            metrics={"tokens_used": 50, "time_elapsed": 1.5}
+            success=True, outcome="Success", metrics={"tokens_used": 50, "time_elapsed": 1.5}
         )
 
         action_provider = MagicMock(return_value=action)
         tool_invoker = MagicMock(return_value=observation)
 
         self.evaluator.evaluate.return_value = EvaluationResult(
-            gates={},
-            required_gates={},
-            should_stop=True,
-            status="success"
+            gates={}, required_gates={}, should_stop=True, status="success"
         )
 
         result = self.executor.run(self.task, action_provider, tool_invoker)
@@ -502,7 +446,7 @@ class TestReactiveExecutor:
         assert result.metrics["tokens_used"] == 50
         assert result.metrics["time_elapsed"] == 1.5
 
-    @patch('ai_dev_agent.engine.react.loop.time')
+    @patch("ai_dev_agent.engine.react.loop.time")
     def test_run_runtime_calculation(self, mock_time):
         """Test runtime calculation."""
         mock_time.perf_counter.side_effect = [0.0, 2.5]  # Start and end times
@@ -536,20 +480,20 @@ class TestReactiveExecutor:
                 gates={"g1": False},
                 required_gates={"g1": True, "g2": True},
                 should_stop=False,
-                status="in_progress"
+                status="in_progress",
             ),
             EvaluationResult(
                 gates={"g1": True, "g2": False},
                 required_gates={"g1": True, "g2": True},
                 should_stop=False,
-                status="in_progress"
+                status="in_progress",
             ),
             EvaluationResult(
                 gates={"g1": True, "g2": True},
                 required_gates={"g1": True, "g2": True},
                 should_stop=True,
                 stop_reason="All gates satisfied",
-                status="success"
+                status="success",
             ),
         ]
 

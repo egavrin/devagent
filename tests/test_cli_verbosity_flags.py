@@ -1,9 +1,12 @@
 """Tests for verbosity flags (-v/-vv/-vvv/-q/--json)."""
+
 from unittest.mock import MagicMock
+
 import pytest
 from click.testing import CliRunner
-from ai_dev_agent.cli.commands import cli
+
 from ai_dev_agent.agents.base import AgentResult
+from ai_dev_agent.cli.commands import cli
 
 
 @pytest.fixture
@@ -61,7 +64,7 @@ class TestVerbosityFlags:
             ["generate-tests", "Module", "-vv"],
             ["write-code", "design.md", "-vvv"],
             ["review", "file.py", "-v"],
-            ["chat", "-v"]  # Will need EOF
+            ["chat", "-v"],  # Will need EOF
         ]
 
         for cmd in commands[:-1]:  # Skip chat which needs special handling

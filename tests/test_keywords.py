@@ -1,6 +1,5 @@
 """Comprehensive tests for the keywords utility module."""
 
-import pytest
 from ai_dev_agent.core.utils.keywords import extract_keywords
 
 
@@ -96,7 +95,17 @@ class TestExtractKeywords:
         keywords = extract_keywords(text, include_special_terms=True, limit=20)
 
         # All these should be recognized as special terms
-        special_terms = ["pytest", "unittest", "graphql", "database", "json", "http", "rest", "api", "testing"]
+        special_terms = [
+            "pytest",
+            "unittest",
+            "graphql",
+            "database",
+            "json",
+            "http",
+            "rest",
+            "api",
+            "testing",
+        ]
         found_specials = [k for k in keywords if k in special_terms]
         assert len(found_specials) > 0
 
@@ -119,7 +128,9 @@ class TestExtractKeywords:
 
     def test_identifier_pattern(self):
         """Test that the identifier pattern works correctly."""
-        text = "snake_case camelCase PascalCase kebab-case dot.case 123numbers _underscore __dunder__"
+        text = (
+            "snake_case camelCase PascalCase kebab-case dot.case 123numbers _underscore __dunder__"
+        )
         keywords = extract_keywords(text, limit=20)
 
         # Valid identifiers

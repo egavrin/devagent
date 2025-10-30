@@ -1,10 +1,14 @@
 """Gate evaluation and progress tracking for the ReAct loop."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING
 
 from .types import EvaluationResult, GateConfig, MetricsSnapshot, StepRecord
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 @dataclass
@@ -25,8 +29,8 @@ class GateEvaluator:
 
         status = "in_progress"
         should_stop = False
-        stop_reason: Optional[str] = None
-        next_hint: Optional[str] = None
+        stop_reason: str | None = None
+        next_hint: str | None = None
 
         if all_passed:
             should_stop = True
@@ -51,12 +55,9 @@ class GateEvaluator:
             for key, note in notes.items():
                 if key not in failing_required:
                     continue
-                if next_hint:
-                    next_hint = f"{next_hint} ({note})"
-                else:
-                    next_hint = note
+                next_hint = f"{next_hint} ({note})" if next_hint else note
 
-        required_map = {name: True for name in self._required_gate_names()}
+        required_map = dict.fromkeys(self._required_gate_names(), True)
         return EvaluationResult(
             gates=gates,
             required_gates=required_map,
@@ -71,13 +72,15 @@ class GateEvaluator:
     # Gate helpers
     # ------------------------------------------------------------------
 
-    def _build_gates(self, metrics: MetricsSnapshot) -> Dict[str, bool]:
-        gates: Dict[str, bool] = {}
+    def _build_gates(self, metrics: MetricsSnapshot) -> dict[str, bool]:
+        gates: dict[str, bool] = {}
         gates["tests"] = metrics.tests_passed is True
         gates["lint"] = metrics.lint_errors == 0 if metrics.lint_errors is not None else False
         gates["types"] = metrics.type_errors == 0 if metrics.type_errors is not None else False
         gates["format"] = metrics.format_errors == 0 if metrics.format_errors is not None else False
-        gates["compile"] = metrics.compile_errors == 0 if metrics.compile_errors is not None else False
+        gates["compile"] = (
+            metrics.compile_errors == 0 if metrics.compile_errors is not None else False
+        )
 
         diff_ok = True
         if metrics.diff_lines is None or metrics.diff_files is None:
@@ -94,8 +97,12 @@ class GateEvaluator:
         else:
             gates["patch_coverage"] = metrics.patch_coverage >= self.config.patch_coverage_target
 
-        gates["secrets"] = metrics.secrets_found == 0 if metrics.secrets_found is not None else False
-        gates["sandbox"] = metrics.sandbox_violations == 0 if metrics.sandbox_violations is not None else False
+        gates["secrets"] = (
+            metrics.secrets_found == 0 if metrics.secrets_found is not None else False
+        )
+        gates["sandbox"] = (
+            metrics.sandbox_violations == 0 if metrics.sandbox_violations is not None else False
+        )
         gates["flaky"] = metrics.flaky_tests == 0 if metrics.flaky_tests is not None else False
 
         # Extended/optional gates (default PASS when not required)
@@ -120,7 +127,7 @@ class GateEvaluator:
         }
         return hints.get(gate, f"Address gate '{gate}'.")
 
-    def _required_gate_names(self) -> List[str]:
+    def _required_gate_names(self) -> list[str]:
         cfg = self.config
         mapping = [
             ("tests", cfg.require_tests),
@@ -138,7 +145,7 @@ class GateEvaluator:
         ]
         return [name for name, required in mapping if required]
 
-    def _stuck(self, history: List[StepRecord], current: MetricsSnapshot) -> bool:
+    def _stuck(self, history: list[StepRecord], current: MetricsSnapshot) -> bool:
         if not history:
             return False
         window = self.config.stuck_threshold
@@ -158,7 +165,7 @@ class GateEvaluator:
                 return True
         return False
 
-    def _exceeded_budget(self, history: List[StepRecord]) -> bool:
+    def _exceeded_budget(self, history: list[StepRecord]) -> bool:
         budget = self.config.steps_budget
         if budget <= 0:
             return False
@@ -173,14 +180,14 @@ class GateEvaluator:
             return True
         if self._metric_improved(prev.diff_lines, curr.diff_lines, lower_is_better=True):
             return True
-        if self._metric_improved(prev.patch_coverage, curr.patch_coverage, lower_is_better=False):
-            return True
-        return False
+        return bool(
+            self._metric_improved(prev.patch_coverage, curr.patch_coverage, lower_is_better=False)
+        )
 
     def _metric_improved(
         self,
-        prev_value: Optional[float | int | bool],
-        curr_value: Optional[float | int | bool],
+        prev_value: float | int | bool | None,
+        curr_value: float | int | bool | None,
         *,
         lower_is_better: bool,
     ) -> bool:
@@ -190,16 +197,26 @@ class GateEvaluator:
             return curr_value < prev_value
         return curr_value > prev_value
 
-    def _improvements(self, history: List[StepRecord], current: MetricsSnapshot) -> Dict[str, bool]:
+    def _improvements(self, history: list[StepRecord], current: MetricsSnapshot) -> dict[str, bool]:
         if not history:
             return {}
         prev = history[-1].metrics
-        improvements: Dict[str, bool] = {}
-        improvements["tests_passed"] = prev.tests_passed is not True and current.tests_passed is True
-        improvements["lint_errors"] = self._metric_improved(prev.lint_errors, current.lint_errors, lower_is_better=True)
-        improvements["type_errors"] = self._metric_improved(prev.type_errors, current.type_errors, lower_is_better=True)
-        improvements["diff_lines"] = self._metric_improved(prev.diff_lines, current.diff_lines, lower_is_better=True)
-        improvements["patch_coverage"] = self._metric_improved(prev.patch_coverage, current.patch_coverage, lower_is_better=False)
+        improvements: dict[str, bool] = {}
+        improvements["tests_passed"] = (
+            prev.tests_passed is not True and current.tests_passed is True
+        )
+        improvements["lint_errors"] = self._metric_improved(
+            prev.lint_errors, current.lint_errors, lower_is_better=True
+        )
+        improvements["type_errors"] = self._metric_improved(
+            prev.type_errors, current.type_errors, lower_is_better=True
+        )
+        improvements["diff_lines"] = self._metric_improved(
+            prev.diff_lines, current.diff_lines, lower_is_better=True
+        )
+        improvements["patch_coverage"] = self._metric_improved(
+            prev.patch_coverage, current.patch_coverage, lower_is_better=False
+        )
         return {key: value for key, value in improvements.items() if value}
 
 

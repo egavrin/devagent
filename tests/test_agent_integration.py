@@ -1,18 +1,17 @@
 """Integration tests for multi-agent workflows and coordination."""
+
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
-import pytest
 import time
+from unittest.mock import patch
 
-from ai_dev_agent.agents.base import AgentContext, AgentResult, AgentCapability
+from ai_dev_agent.agents.base import AgentContext, AgentResult
 from ai_dev_agent.agents.communication.bus import AgentBus, AgentEvent, EventType
 from ai_dev_agent.agents.integration.planning_integration import (
-    TaskAgentMapper,
     PlanningIntegration,
+    TaskAgentMapper,
 )
-from ai_dev_agent.agents.work_planner.models import WorkPlan, Task, TaskStatus, Priority
+from ai_dev_agent.agents.work_planner.models import Priority, Task, TaskStatus, WorkPlan
 
 
 class TestAgentCommunicationBus:
@@ -38,7 +37,7 @@ class TestAgentCommunicationBus:
         event = AgentEvent(
             event_type=EventType.TASK_STARTED,
             source_agent="test_agent",
-            data={"task_id": "test-123"}
+            data={"task_id": "test-123"},
         )
 
         # Should not raise error
@@ -58,9 +57,7 @@ class TestAgentCommunicationBus:
             assert bus.is_running
 
             event = AgentEvent(
-                event_type=EventType.MESSAGE,
-                source_agent="sender",
-                data={"content": "hello"}
+                event_type=EventType.MESSAGE, source_agent="sender", data={"content": "hello"}
             )
 
             bus.publish(event)
@@ -79,15 +76,11 @@ class TestAgentCommunicationBus:
             EventType.TASK_COMPLETED,
             EventType.PROGRESS_UPDATE,
             EventType.ERROR,
-            EventType.MESSAGE
+            EventType.MESSAGE,
         ]
 
         for evt_type in event_types:
-            bus.publish(AgentEvent(
-                event_type=evt_type,
-                source_agent="test",
-                data={}
-            ))
+            bus.publish(AgentEvent(event_type=evt_type, source_agent="test", data={}))
 
         time.sleep(0.2)
         bus.stop()
@@ -101,7 +94,7 @@ class TestAgentCommunicationBus:
             event_type=EventType.MESSAGE,
             source_agent="orchestrator",
             target_agent="agent1",
-            data={"instruction": "do something"}
+            data={"instruction": "do something"},
         )
 
         assert event.target_agent == "agent1"
@@ -118,11 +111,13 @@ class TestAgentCommunicationBus:
         subscription_id = bus.subscribe(EventType.ERROR, received.append)
         assert subscription_id
 
-        bus.publish(AgentEvent(
-            event_type=EventType.ERROR,
-            source_agent="implementation_agent",
-            data={"error": "failure"}
-        ))
+        bus.publish(
+            AgentEvent(
+                event_type=EventType.ERROR,
+                source_agent="implementation_agent",
+                data={"error": "failure"},
+            )
+        )
 
         time.sleep(0.1)
         assert len(received) == 1
@@ -131,11 +126,13 @@ class TestAgentCommunicationBus:
         # Unsubscribe and ensure no more events are received
         bus.unsubscribe(subscription_id)
 
-        bus.publish(AgentEvent(
-            event_type=EventType.ERROR,
-            source_agent="implementation_agent",
-            data={"error": "again"}
-        ))
+        bus.publish(
+            AgentEvent(
+                event_type=EventType.ERROR,
+                source_agent="implementation_agent",
+                data={"error": "again"},
+            )
+        )
         time.sleep(0.1)
 
         assert len(received) == 1
@@ -156,7 +153,7 @@ class TestTaskAgentMapper:
             description="Do something",
             tags=["design"],
             status=TaskStatus.PENDING,
-            priority=Priority.MEDIUM
+            priority=Priority.MEDIUM,
         )
 
         agent = mapper.map_task_to_agent(task)
@@ -171,7 +168,7 @@ class TestTaskAgentMapper:
             title="Implement user authentication",
             description="Add auth",
             status=TaskStatus.PENDING,
-            priority=Priority.HIGH
+            priority=Priority.HIGH,
         )
 
         agent = mapper.map_task_to_agent(task)
@@ -186,7 +183,7 @@ class TestTaskAgentMapper:
             title="User feature",
             description="Write tests for the new feature",
             status=TaskStatus.PENDING,
-            priority=Priority.MEDIUM
+            priority=Priority.MEDIUM,
         )
 
         agent = mapper.map_task_to_agent(task)
@@ -201,7 +198,7 @@ class TestTaskAgentMapper:
             title="Generic task",
             description="Do something generic",
             status=TaskStatus.PENDING,
-            priority=Priority.LOW
+            priority=Priority.LOW,
         )
 
         agent = mapper.map_task_to_agent(task)
@@ -216,7 +213,7 @@ class TestTaskAgentMapper:
             title="Review PR #123",
             description="Analyze the changes carefully",
             status=TaskStatus.PENDING,
-            priority=Priority.HIGH
+            priority=Priority.HIGH,
         )
 
         agent = mapper.map_task_to_agent(task)
@@ -231,7 +228,7 @@ class TestTaskAgentMapper:
             title="Code review for implementation",
             description="Review the implemented feature",
             status=TaskStatus.PENDING,
-            priority=Priority.MEDIUM
+            priority=Priority.MEDIUM,
         )
 
         agent = mapper.map_task_to_agent(task)
@@ -241,7 +238,7 @@ class TestTaskAgentMapper:
 class TestPlanningIntegration:
     """Test planning integration workflows."""
 
-    @patch('ai_dev_agent.agents.integration.planning_integration.OrchestratorAgent')
+    @patch("ai_dev_agent.agents.integration.planning_integration.OrchestratorAgent")
     def test_initialization(self, mock_orchestrator_class):
         """Test planning integration initializes correctly."""
         integration = PlanningIntegration()
@@ -250,16 +247,12 @@ class TestPlanningIntegration:
         assert integration.orchestrator is not None
         assert integration.current_plan is None
 
-    @patch('ai_dev_agent.agents.integration.planning_integration.OrchestratorAgent')
+    @patch("ai_dev_agent.agents.integration.planning_integration.OrchestratorAgent")
     def test_load_plan(self, mock_orchestrator_class):
         """Test loading a work plan."""
         integration = PlanningIntegration()
 
-        plan = WorkPlan(
-            id="plan-1",
-            goal="Build feature",
-            tasks=[]
-        )
+        plan = WorkPlan(id="plan-1", goal="Build feature", tasks=[])
 
         integration.current_plan = plan
 
@@ -273,9 +266,7 @@ class TestAgentContext:
     def test_context_creation(self):
         """Test creating agent context."""
         context = AgentContext(
-            session_id="test-session",
-            working_directory="/tmp/test",
-            metadata={"key": "value"}
+            session_id="test-session", working_directory="/tmp/test", metadata={"key": "value"}
         )
 
         assert context.session_id == "test-session"
@@ -286,10 +277,7 @@ class TestAgentContext:
         """Test agent context with communication bus."""
         bus = AgentBus()
 
-        context = AgentContext(
-            session_id="test-session",
-            metadata={"bus": bus}
-        )
+        context = AgentContext(session_id="test-session", metadata={"bus": bus})
 
         # Context can store bus reference
         assert context.metadata["bus"] == bus
@@ -301,9 +289,7 @@ class TestAgentResult:
     def test_success_result(self):
         """Test creating successful agent result."""
         result = AgentResult(
-            success=True,
-            output="Task completed successfully",
-            metadata={"duration": 1.5}
+            success=True, output="Task completed successfully", metadata={"duration": 1.5}
         )
 
         assert result.success is True
@@ -312,11 +298,7 @@ class TestAgentResult:
 
     def test_failure_result(self):
         """Test creating failure agent result."""
-        result = AgentResult(
-            success=False,
-            output="",
-            error="Task failed due to error"
-        )
+        result = AgentResult(success=False, output="", error="Task failed due to error")
 
         assert result.success is False
         assert result.error == "Task failed due to error"
@@ -326,7 +308,7 @@ class TestAgentResult:
         result = AgentResult(
             success=True,
             output="Generated code",
-            metadata={"files": ["file1.py", "file2.py"], "changes": 5}
+            metadata={"files": ["file1.py", "file2.py"], "changes": 5},
         )
 
         assert result.metadata["files"] == ["file1.py", "file2.py"]
@@ -345,7 +327,7 @@ class TestEndToEndWorkflow:
             description="Design REST API",
             tags=["design"],
             status=TaskStatus.PENDING,
-            priority=Priority.HIGH
+            priority=Priority.HIGH,
         )
 
         # Map to agent
@@ -361,23 +343,29 @@ class TestEndToEndWorkflow:
         bus.start()
 
         # Simulate workflow
-        bus.publish(AgentEvent(
-            event_type=EventType.TASK_STARTED,
-            source_agent="design_agent",
-            data={"task_id": "task-1"}
-        ))
+        bus.publish(
+            AgentEvent(
+                event_type=EventType.TASK_STARTED,
+                source_agent="design_agent",
+                data={"task_id": "task-1"},
+            )
+        )
 
-        bus.publish(AgentEvent(
-            event_type=EventType.PROGRESS_UPDATE,
-            source_agent="design_agent",
-            data={"progress": 50}
-        ))
+        bus.publish(
+            AgentEvent(
+                event_type=EventType.PROGRESS_UPDATE,
+                source_agent="design_agent",
+                data={"progress": 50},
+            )
+        )
 
-        bus.publish(AgentEvent(
-            event_type=EventType.TASK_COMPLETED,
-            source_agent="design_agent",
-            data={"task_id": "task-1", "result": "success"}
-        ))
+        bus.publish(
+            AgentEvent(
+                event_type=EventType.TASK_COMPLETED,
+                source_agent="design_agent",
+                data={"task_id": "task-1", "result": "success"},
+            )
+        )
 
         time.sleep(0.2)
         bus.stop()
@@ -386,7 +374,7 @@ class TestEndToEndWorkflow:
         assert bus._metrics["events_published"] == 3
         assert bus._metrics["events_processed"] == 3
 
-    @patch('ai_dev_agent.agents.integration.planning_integration.OrchestratorAgent')
+    @patch("ai_dev_agent.agents.integration.planning_integration.OrchestratorAgent")
     def test_plan_execution_coordination(self, mock_orchestrator_class):
         """Test coordinating plan execution with multiple tasks."""
         integration = PlanningIntegration()
@@ -399,7 +387,7 @@ class TestEndToEndWorkflow:
                 description="Create design",
                 tags=["design"],
                 status=TaskStatus.PENDING,
-                priority=Priority.HIGH
+                priority=Priority.HIGH,
             ),
             Task(
                 id="task-2",
@@ -408,7 +396,7 @@ class TestEndToEndWorkflow:
                 tags=["implement"],
                 status=TaskStatus.PENDING,
                 priority=Priority.MEDIUM,
-                dependencies=["task-1"]
+                dependencies=["task-1"],
             ),
             Task(
                 id="task-3",
@@ -417,15 +405,11 @@ class TestEndToEndWorkflow:
                 tags=["test"],
                 status=TaskStatus.PENDING,
                 priority=Priority.MEDIUM,
-                dependencies=["task-2"]
-            )
+                dependencies=["task-2"],
+            ),
         ]
 
-        plan = WorkPlan(
-            id="integration-plan",
-            goal="Build complete system",
-            tasks=tasks
-        )
+        plan = WorkPlan(id="integration-plan", goal="Build complete system", tasks=tasks)
 
         integration.current_plan = plan
 
@@ -449,14 +433,13 @@ class TestErrorPropagation:
         bus.start()
 
         # Simulate agent error
-        bus.publish(AgentEvent(
-            event_type=EventType.ERROR,
-            source_agent="implementation_agent",
-            data={
-                "error": "Compilation failed",
-                "details": "Syntax error in file.py"
-            }
-        ))
+        bus.publish(
+            AgentEvent(
+                event_type=EventType.ERROR,
+                source_agent="implementation_agent",
+                data={"error": "Compilation failed", "details": "Syntax error in file.py"},
+            )
+        )
 
         time.sleep(0.1)
         bus.stop()
@@ -471,7 +454,7 @@ class TestErrorPropagation:
             success=False,
             output="",
             error="Failed to execute task",
-            metadata={"error_code": "EXEC_FAIL"}
+            metadata={"error_code": "EXEC_FAIL"},
         )
 
         assert result.success is False

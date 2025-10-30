@@ -1,32 +1,23 @@
 """Registry-backed intent handlers used by the CLI."""
+
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable
 
 import click
 
-from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.core.utils.tool_utils import expand_tool_aliases
-from ai_dev_agent.tools import (
-    READ,
-    WRITE,
-    RUN,
-    FIND,
-    GREP,
-    SYMBOLS,
-)
+from ai_dev_agent.tools import FIND, GREP, READ, RUN, SYMBOLS, WRITE
 
-from ..utils import (
-    _invoke_registry_tool,
-    _normalize_argument_list,
-    build_system_context,
-)
+from ..utils import _invoke_registry_tool, _normalize_argument_list, build_system_context
 
+if TYPE_CHECKING:
+    from ai_dev_agent.core.utils.config import Settings
 
-
-_REGEX_HINT_PATTERNS: Tuple[re.Pattern[str], ...] = (
+_REGEX_HINT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?<!\\)\\[AbBdDsSwWZA]"),
     re.compile(r"(?<!\\)\\[pP]\{"),
     re.compile(r"(?<!\\)\\k<"),
@@ -52,15 +43,14 @@ def _should_enable_regex(query: str) -> bool:
     if stripped.endswith("$") and not stripped.endswith(r"\$"):
         return True
 
-    for pattern in _REGEX_HINT_PATTERNS:
-        if pattern.search(query):
-            return True
+    return any(pattern.search(query) for pattern in _REGEX_HINT_PATTERNS)
 
-    return False
 
-PayloadBuilder = Callable[[click.Context, Dict[str, Any]], Tuple[Dict[str, Any], Dict[str, Any]]]
-ResultHandler = Callable[[click.Context, Dict[str, Any], Dict[str, Any], Dict[str, Any]], None]
-RecoveryHandler = Callable[[click.Context, Dict[str, Any], Dict[str, Any], Dict[str, Any], Exception], Dict[str, Any]]
+PayloadBuilder = Callable[[click.Context, dict[str, Any]], tuple[dict[str, Any], dict[str, Any]]]
+ResultHandler = Callable[[click.Context, dict[str, Any], dict[str, Any], dict[str, Any]], None]
+RecoveryHandler = Callable[
+    [click.Context, dict[str, Any], dict[str, Any], dict[str, Any], Exception], dict[str, Any]
+]
 
 
 @dataclass
@@ -71,9 +61,9 @@ class RegistryIntent:
     payload_builder: PayloadBuilder
     result_handler: ResultHandler
     with_sandbox: bool = False
-    recovery_handler: Optional[RecoveryHandler] = None
+    recovery_handler: RecoveryHandler | None = None
 
-    def __call__(self, ctx: click.Context, arguments: Dict[str, Any]) -> Mapping[str, Any]:
+    def __call__(self, ctx: click.Context, arguments: dict[str, Any]) -> Mapping[str, Any]:
         payload, context = self.payload_builder(ctx, arguments)
         extras = context or {}
         try:
@@ -91,12 +81,14 @@ class RegistryIntent:
         return result
 
 
-def _build_find_payload(ctx: click.Context, arguments: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _build_find_payload(
+    ctx: click.Context, arguments: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     query = str(arguments.get("query", "")).strip()
     if not query:
         raise click.ClickException("find requires a 'query' argument.")
 
-    payload: Dict[str, Any] = {"query": query}
+    payload: dict[str, Any] = {"query": query}
     if "path" in arguments and arguments["path"] is not None:
         payload["path"] = str(arguments["path"])
 
@@ -113,12 +105,14 @@ def _build_find_payload(ctx: click.Context, arguments: Dict[str, Any]) -> Tuple[
     return payload, {}
 
 
-def _build_grep_payload(ctx: click.Context, arguments: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _build_grep_payload(
+    ctx: click.Context, arguments: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     pattern = str(arguments.get("pattern", "")).strip()
     if not pattern:
         raise click.ClickException("grep requires a 'pattern' argument.")
 
-    payload: Dict[str, Any] = {"pattern": pattern}
+    payload: dict[str, Any] = {"pattern": pattern}
     if "path" in arguments and arguments["path"] is not None:
         payload["path"] = str(arguments["path"])
 
@@ -136,12 +130,14 @@ def _build_grep_payload(ctx: click.Context, arguments: Dict[str, Any]) -> Tuple[
     return payload, {}
 
 
-def _build_symbols_payload(ctx: click.Context, arguments: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _build_symbols_payload(
+    ctx: click.Context, arguments: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     name = str(arguments.get("name", "")).strip()
     if not name:
         raise click.ClickException("symbols requires a 'name' argument.")
 
-    payload: Dict[str, Any] = {"name": name}
+    payload: dict[str, Any] = {"name": name}
 
     if "path" in arguments and arguments["path"] is not None:
         payload["path"] = str(arguments["path"])
@@ -152,23 +148,23 @@ def _build_symbols_payload(ctx: click.Context, arguments: Dict[str, Any]) -> Tup
         except (TypeError, ValueError):
             raise click.ClickException("--limit must be an integer") from None
 
-    if "kind" in arguments and arguments["kind"]:
+    if arguments.get("kind"):
         payload["kind"] = str(arguments["kind"])
 
-    if "lang" in arguments and arguments["lang"]:
+    if arguments.get("lang"):
         payload["lang"] = str(arguments["lang"])
 
     return payload, {}
 
 
 def _build_read_payload(
-    ctx: click.Context, arguments: Dict[str, Any]
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    ctx: click.Context, arguments: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     paths = _normalize_argument_list(arguments, plural_key="paths", singular_key="path")
     if not paths:
         raise click.ClickException("read requires 'paths' (or a single 'path').")
 
-    payload: Dict[str, Any] = {"paths": paths}
+    payload: dict[str, Any] = {"paths": paths}
     if "context_lines" in arguments:
         try:
             payload["context_lines"] = int(arguments.get("context_lines"))
@@ -185,9 +181,9 @@ def _build_read_payload(
 
 def _handle_read_result(
     ctx: click.Context,
-    arguments: Dict[str, Any],
-    result: Dict[str, Any],
-    _: Dict[str, Any],
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+    _: dict[str, Any],
 ) -> None:
     files = result.get("files", [])
     if not files:
@@ -273,7 +269,9 @@ def _handle_read_result(
         snippet = lines[start_index:end_index]
         if snippet:
             last_line = start_index + len(snippet)
-            click.echo(f"Reading {rel_path} (lines {start_index + 1}-{last_line} of {total_lines}):")
+            click.echo(
+                f"Reading {rel_path} (lines {start_index + 1}-{last_line} of {total_lines}):"
+            )
             for line_number, text in enumerate(snippet, start=start_index + 1):
                 click.echo(f"{line_number:5}: {text.rstrip()}")
             if end_index < total_lines:
@@ -285,9 +283,9 @@ def _handle_read_result(
 
 def _handle_symbols_index_result(
     _: click.Context,
-    __: Dict[str, Any],
-    result: Dict[str, Any],
-    ___: Dict[str, Any],
+    __: dict[str, Any],
+    result: dict[str, Any],
+    ___: dict[str, Any],
 ) -> None:
     stats = result.get("stats", {})
     files_indexed = stats.get("files_indexed")
@@ -306,10 +304,14 @@ def _handle_symbols_index_result(
 
 
 def _build_exec_payload(
-    ctx: click.Context, arguments: Dict[str, Any]
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    ctx: click.Context, arguments: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     ctx_obj = ctx.obj if isinstance(ctx.obj, dict) else {}
-    system_context = ctx_obj.setdefault("_system_context", build_system_context()) if isinstance(ctx_obj, dict) else build_system_context()
+    system_context = (
+        ctx_obj.setdefault("_system_context", build_system_context())
+        if isinstance(ctx_obj, dict)
+        else build_system_context()
+    )
     cmd_value = arguments.get("cmd") or arguments.get("command")
     cmd = str(cmd_value or "").strip()
     if not cmd:
@@ -322,7 +324,7 @@ def _build_exec_payload(
     if system_context.get("os") == "Windows" and cmd.startswith("ls"):
         cmd = cmd.replace("ls", "dir", 1)
 
-    payload: Dict[str, Any] = {"cmd": cmd}
+    payload: dict[str, Any] = {"cmd": cmd}
     if arguments.get("args"):
         payload["args"] = [str(a) for a in (arguments.get("args") or [])]
     if arguments.get("cwd"):
@@ -344,9 +346,9 @@ def _build_exec_payload(
 
 def _handle_exec_result(
     _: click.Context,
-    __: Dict[str, Any],
-    result: Dict[str, Any],
-    ___: Dict[str, Any],
+    __: dict[str, Any],
+    result: dict[str, Any],
+    ___: dict[str, Any],
 ) -> None:
     exit_code = result.get("exit_code", 0)
     click.echo(f"Exit: {exit_code}")
@@ -357,24 +359,26 @@ def _handle_exec_result(
 
 
 def _build_write_payload(
-    ctx: click.Context, arguments: Dict[str, Any]
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    ctx: click.Context, arguments: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     diff = arguments.get("diff")
     if not isinstance(diff, str) or not diff.strip():
         raise click.ClickException("write requires 'diff' content.")
 
     settings: Settings = ctx.obj["settings"]
     if not settings.auto_approve_code:
-        click.echo("Warning: auto_approve_code is disabled; applying patches may require manual review.")
+        click.echo(
+            "Warning: auto_approve_code is disabled; applying patches may require manual review."
+        )
 
     return {"diff": diff}, {}
 
 
 def _handle_write_result(
     _: click.Context,
-    __: Dict[str, Any],
-    result: Dict[str, Any],
-    ___: Dict[str, Any],
+    __: dict[str, Any],
+    result: dict[str, Any],
+    ___: dict[str, Any],
 ) -> None:
     applied = bool(result.get("applied"))
     changed = result.get("changed_files") or []
@@ -392,6 +396,7 @@ def _handle_write_result(
         for filename in changed:
             click.echo(f"- {filename}")
 
+
 def _handle_simple_result(ctx, arguments, result, _) -> None:
     """Simple result handler for tools that return clean output."""
     # Echo file lists
@@ -404,7 +409,11 @@ def _handle_simple_result(ctx, arguments, result, _) -> None:
                 if entry.get("lines") is not None:
                     meta_parts.append(f"{entry['lines']} lines")
                 if entry.get("size_bytes") is not None:
-                    size_kb = entry["size_bytes"] / 1024 if isinstance(entry["size_bytes"], (int, float)) else None
+                    size_kb = (
+                        entry["size_bytes"] / 1024
+                        if isinstance(entry["size_bytes"], (int, float))
+                        else None
+                    )
                     if size_kb is not None:
                         meta_parts.append(f"{size_kb:.1f} KB")
                 if entry.get("mtime"):
@@ -440,14 +449,16 @@ def _handle_simple_result(ctx, arguments, result, _) -> None:
     # Echo symbols
     elif "symbols" in result:
         for symbol in result["symbols"]:
-            click.echo(f"{symbol['file']}:{symbol.get('line', '?')} - {symbol['name']} ({symbol.get('kind', 'unknown')})")
+            click.echo(
+                f"{symbol['file']}:{symbol.get('line', '?')} - {symbol['name']} ({symbol.get('kind', 'unknown')})"
+            )
 
     # Echo errors
     if "error" in result:
         click.secho(f"Error: {result['error']}", fg="red")
 
 
-REGISTRY_INTENTS: Dict[str, RegistryIntent] = {
+REGISTRY_INTENTS: dict[str, RegistryIntent] = {
     FIND: RegistryIntent(
         tool_name=FIND,
         payload_builder=_build_find_payload,
@@ -481,4 +492,4 @@ REGISTRY_INTENTS: Dict[str, RegistryIntent] = {
     ),
 }
 
-INTENT_HANDLERS: Dict[str, RegistryIntent] = expand_tool_aliases(REGISTRY_INTENTS)
+INTENT_HANDLERS: dict[str, RegistryIntent] = expand_tool_aliases(REGISTRY_INTENTS)

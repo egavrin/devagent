@@ -1,4 +1,5 @@
 """Benchmark runner for evaluating LLM provider performance."""
+
 from __future__ import annotations
 
 import json
@@ -10,7 +11,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -18,8 +19,10 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ai_dev_agent.core.utils.config import load_settings
-from ai_dev_agent.tools import READ, WRITE, RUN, FIND, GREP, SYMBOLS
-from benchmarks.test_cases import TestCase
+from ai_dev_agent.tools import FIND, GREP, READ, RUN, SYMBOLS, WRITE
+
+if TYPE_CHECKING:
+    from benchmarks.test_cases import TestCase
 
 
 @dataclass
@@ -52,15 +55,15 @@ class BenchmarkResult:
     iterations: int
     tools_used: int
     answer: str
-    error: Optional[str] = None
+    error: str | None = None
     timeout: bool = False
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     # Enhanced quality metrics
-    quality_metrics: Optional[CodeQualityMetrics] = None
-    pass_rate: Optional[float] = None  # Percentage of tests passed (0-100)
-    task_type: Optional[str] = None  # Type of task (query, code_generation, bug_fix, etc.)
+    quality_metrics: CodeQualityMetrics | None = None
+    pass_rate: float | None = None  # Percentage of tests passed (0-100)
+    task_type: str | None = None  # Type of task (query, code_generation, bug_fix, etc.)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         result = asdict(self)
         # Flatten quality_metrics for easier CSV export
@@ -78,7 +81,7 @@ class ProviderConfig:
     model: str
     base_url: str
     api_key: str
-    max_completion_tokens: Optional[int] = None
+    max_completion_tokens: int | None = None
 
 
 class BenchmarkRunner:
@@ -104,7 +107,7 @@ class BenchmarkRunner:
         self.providers = self._load_providers()
         self.default_settings = self.config.get("default_settings", {})
 
-    def _load_providers(self) -> List[ProviderConfig]:
+    def _load_providers(self) -> list[ProviderConfig]:
         """Load provider configurations from config file."""
         providers = []
 
@@ -142,7 +145,7 @@ class BenchmarkRunner:
             return 1
 
         # Look for patterns like "iteration 3" or "Iteration 5"
-        matches = re.findall(r'iteration[:\s]+(\d+)', output, re.IGNORECASE)
+        matches = re.findall(r"iteration[:\s]+(\d+)", output, re.IGNORECASE)
         if matches:
             return max(int(m) for m in matches)
 
@@ -180,23 +183,26 @@ class BenchmarkRunner:
         tools += len(re.findall(r'📖\s+read\s+"', output))
 
         # File writing/patching (📝 write)
-        tools += len(re.findall(r'📝\s+write', output))
+        tools += len(re.findall(r"📝\s+write", output))
 
         # Symbol operations (🔣 symbols)
-        tools += len(re.findall(r'🔣\s+symbols\.(?:find|index)\s+', output))
+        tools += len(re.findall(r"🔣\s+symbols\.(?:find|index)\s+", output))
 
         # Directory/file listing (📁 list or 📁 ls)
-        tools += len(re.findall(r'📁\s+(?:list|ls)\s+', output))
+        tools += len(re.findall(r"📁\s+(?:list|ls)\s+", output))
 
         # Failed tools (❌ tool_name "arg")
         # Only count if followed by a tool name pattern and quote
-        failed_tools = re.findall(r'❌\s+(?:exec|code\.search|(?:fs\.)?(?:read|write)|symbols\.(?:find|index))\s+"', output)
+        failed_tools = re.findall(
+            r'❌\s+(?:exec|code\.search|(?:fs\.)?(?:read|write)|symbols\.(?:find|index))\s+"',
+            output,
+        )
         tools += len(failed_tools)
 
         # Fallback: if no tools found but task completed, check completion message
         if tools == 0 and ("Completed" in output or "✅" in output):
             # Parse from completion message if available
-            tool_count_match = re.search(r'(\d+)\s+tools?\s+', output)
+            tool_count_match = re.search(r"(\d+)\s+tools?\s+", output)
             if tool_count_match:
                 tools = int(tool_count_match.group(1))
 
@@ -315,7 +321,9 @@ class BenchmarkRunner:
         Returns:
             Path to temporary config file
         """
-        temp_config = Path(f".devagent.benchmark.{provider.provider}.{provider.model.replace('/', '-')}.toml")
+        temp_config = Path(
+            f".devagent.benchmark.{provider.provider}.{provider.model.replace('/', '-')}.toml"
+        )
 
         config_content = f"""# Temporary benchmark config
 provider = "{provider.provider}"
@@ -333,9 +341,9 @@ max_iterations = 20
 
     def run_benchmarks(
         self,
-        test_cases: Optional[List[TestCase]] = None,
-        providers: Optional[List[str]] = None,
-    ) -> List[BenchmarkResult]:
+        test_cases: list[TestCase] | None = None,
+        providers: list[str] | None = None,
+    ) -> list[BenchmarkResult]:
         """Run benchmarks across all providers and test cases.
 
         Args:
@@ -362,7 +370,7 @@ max_iterations = 20
 
         return results
 
-    def save_results(self, results: List[BenchmarkResult], output_name: str = "benchmark"):
+    def save_results(self, results: list[BenchmarkResult], output_name: str = "benchmark"):
         """Save benchmark results in multiple formats.
 
         Args:
@@ -388,7 +396,7 @@ max_iterations = 20
         self._save_markdown(results, md_path)
         print(f"Report saved to: {md_path}")
 
-    def _save_csv(self, results: List[BenchmarkResult], path: Path):
+    def _save_csv(self, results: list[BenchmarkResult], path: Path):
         """Save results as CSV."""
         import csv
 
@@ -421,7 +429,7 @@ max_iterations = 20
                     }
                 )
 
-    def _save_markdown(self, results: List[BenchmarkResult], path: Path):
+    def _save_markdown(self, results: list[BenchmarkResult], path: Path):
         """Save results as Markdown report."""
         lines = [
             "# DevAgent Benchmark Results",

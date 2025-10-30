@@ -1,4 +1,5 @@
 """Tests covering shell session persistence and integration."""
+
 from __future__ import annotations
 
 import os
@@ -8,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from ai_dev_agent.core.utils.config import Settings
-from ai_dev_agent.tools import ToolContext, registry as tool_registry, RUN
+from ai_dev_agent.tools import RUN, ToolContext
+from ai_dev_agent.tools import registry as tool_registry
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
 
 
@@ -179,10 +181,7 @@ def test_shell_session_with_environment(tmp_path: Path) -> None:
     """Test shell session with custom environment."""
     shell_path = _select_shell()
     manager = ShellSessionManager(shell=shell_path)
-    session_id = manager.create_session(
-        cwd=tmp_path,
-        env={"CUSTOM_VAR": "custom_value"}
-    )
+    session_id = manager.create_session(cwd=tmp_path, env={"CUSTOM_VAR": "custom_value"})
 
     try:
         result = manager.execute(session_id, "echo $CUSTOM_VAR")

@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import click
-import pytest
-
 from ai_dev_agent.cli.review import validate_review_response
 
 
@@ -94,6 +91,7 @@ def test_validate_review_response_rejects_wrong_line_numbers() -> None:
     summary = normalized["summary"]
     assert summary["total_violations"] == 0
     assert summary.get("discarded_violations") == 1
+
 
 def test_validate_review_response_allows_removed_line_reference() -> None:
     response = {

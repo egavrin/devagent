@@ -8,16 +8,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
-from .distiller import Memory, Strategy, Lesson
+from .distiller import Memory
 from .embeddings import EmbeddingGenerator
 
 logger = logging.getLogger(__name__)
@@ -38,10 +37,10 @@ class MemoryStore:
 
     def __init__(
         self,
-        store_path: Optional[Path] = None,
-        embedding_generator: Optional[EmbeddingGenerator] = None,
+        store_path: Path | None = None,
+        embedding_generator: EmbeddingGenerator | None = None,
         auto_save: bool = True,
-        backup_on_save: bool = True
+        backup_on_save: bool = True,
     ):
         """Initialize the memory store.
 
@@ -62,12 +61,12 @@ class MemoryStore:
         self.embedding_generator = embedding_generator or EmbeddingGenerator()
 
         # In-memory store
-        self._memories: Dict[str, Memory] = {}
-        self._memories_by_type: Dict[str, List[str]] = defaultdict(list)
-        self._embeddings: Dict[str, np.ndarray] = {}
+        self._memories: dict[str, Memory] = {}
+        self._memories_by_type: dict[str, list[str]] = defaultdict(list)
+        self._embeddings: dict[str, np.ndarray] = {}
 
         # Usage tracking
-        self._usage_stats: Dict[str, Dict[str, Any]] = {}
+        self._usage_stats: dict[str, dict[str, Any]] = {}
 
         # Load existing store
         self._load_store()
@@ -81,7 +80,7 @@ class MemoryStore:
             return
 
         try:
-            with open(self.store_path, "r") as f:
+            with self.store_path.open() as f:
                 data = json.load(f)
 
             # Load memories
@@ -126,6 +125,7 @@ class MemoryStore:
                 backup_path = self.store_path.with_suffix(self.BACKUP_SUFFIX)
                 try:
                     import shutil
+
                     shutil.copy2(self.store_path, backup_path)
                 except Exception as e:
                     logger.warning(f"Failed to create backup: {e}")
@@ -139,17 +139,16 @@ class MemoryStore:
                 "metadata": {
                     "total_memories": len(self._memories),
                     "memories_by_type": {
-                        task_type: len(ids)
-                        for task_type, ids in self._memories_by_type.items()
-                    }
-                }
+                        task_type: len(ids) for task_type, ids in self._memories_by_type.items()
+                    },
+                },
             }
 
             # Save to file
             try:
                 # Write to temporary file first
                 temp_path = self.store_path.with_suffix(".tmp")
-                with open(temp_path, "w") as f:
+                with Path(temp_path).open("w") as f:
                     json.dump(data, f, indent=2, default=str)
 
                 # Atomic rename
@@ -178,6 +177,7 @@ class MemoryStore:
                 # Merge with existing memory
                 logger.debug(f"Merging with similar memory: {similar.memory_id}")
                 from .distiller import MemoryDistiller
+
                 distiller = MemoryDistiller()
                 merged = distiller.merge_similar_memories(similar, memory)
                 memory = merged
@@ -215,10 +215,10 @@ class MemoryStore:
     def search_similar(
         self,
         query: str,
-        task_type: Optional[str] = None,
-        limit: int = None,
-        threshold: float = None
-    ) -> List[Tuple[Memory, float]]:
+        task_type: str | None = None,
+        limit: int | None = None,
+        threshold: float | None = None,
+    ) -> list[tuple[Memory, float]]:
         """Search for similar memories using vector similarity.
 
         Args:
@@ -252,10 +252,7 @@ class MemoryStore:
             # Find similar memories
             candidate_list = [(id, emb) for id, emb in candidates]
             similar_indices = self.embedding_generator.find_similar(
-                query,
-                [(id, emb) for id, emb in candidate_list],
-                top_k=limit,
-                threshold=threshold
+                query, [(id, emb) for id, emb in candidate_list], top_k=limit, threshold=threshold
             )
 
             # Build results
@@ -270,7 +267,7 @@ class MemoryStore:
 
             return results
 
-    def get_memory(self, memory_id: str) -> Optional[Memory]:
+    def get_memory(self, memory_id: str) -> Memory | None:
         """Get a specific memory by ID.
 
         Args:
@@ -312,10 +309,7 @@ class MemoryStore:
             return True
 
     def update_effectiveness(
-        self,
-        memory_id: str,
-        score_delta: float,
-        usage_feedback: Optional[str] = None
+        self, memory_id: str, score_delta: float, usage_feedback: str | None = None
     ) -> None:
         """Update the effectiveness score of a memory.
 
@@ -330,9 +324,7 @@ class MemoryStore:
                 return
 
             # Update score (bounded between 0 and 1)
-            memory.effectiveness_score = max(0, min(1,
-                memory.effectiveness_score + score_delta
-            ))
+            memory.effectiveness_score = max(0, min(1, memory.effectiveness_score + score_delta))
 
             # Update usage count and timestamp
             memory.usage_count += 1
@@ -342,17 +334,16 @@ class MemoryStore:
             if usage_feedback:
                 if "usage_feedback" not in memory.metadata:
                     memory.metadata["usage_feedback"] = []
-                memory.metadata["usage_feedback"].append({
-                    "feedback": usage_feedback,
-                    "timestamp": datetime.now().isoformat()
-                })
+                memory.metadata["usage_feedback"].append(
+                    {"feedback": usage_feedback, "timestamp": datetime.now().isoformat()}
+                )
 
             # Update usage stats
             if memory_id not in self._usage_stats:
                 self._usage_stats[memory_id] = {
                     "retrievals": 0,
                     "positive_feedback": 0,
-                    "negative_feedback": 0
+                    "negative_feedback": 0,
                 }
 
             if score_delta > 0:
@@ -366,7 +357,7 @@ class MemoryStore:
 
             logger.debug(f"Updated effectiveness for {memory_id}: {memory.effectiveness_score:.2f}")
 
-    def prune_ineffective(self, threshold: Optional[float] = None) -> int:
+    def prune_ineffective(self, threshold: float | None = None) -> int:
         """Remove memories with low effectiveness scores.
 
         Args:
@@ -396,7 +387,7 @@ class MemoryStore:
 
         return pruned
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get statistics about the memory store.
 
         Returns:
@@ -409,7 +400,7 @@ class MemoryStore:
                     "total_memories": 0,
                     "memories_by_type": {},
                     "avg_effectiveness": 0,
-                    "total_usage": 0
+                    "total_usage": 0,
                 }
 
             # Calculate statistics
@@ -419,20 +410,26 @@ class MemoryStore:
             stats = {
                 "total_memories": total_memories,
                 "memories_by_type": {
-                    task_type: len(ids)
-                    for task_type, ids in self._memories_by_type.items()
+                    task_type: len(ids) for task_type, ids in self._memories_by_type.items()
                 },
                 "avg_effectiveness": sum(effectiveness_scores) / len(effectiveness_scores),
                 "min_effectiveness": min(effectiveness_scores),
                 "max_effectiveness": max(effectiveness_scores),
                 "total_usage": sum(usage_counts),
                 "avg_usage": sum(usage_counts) / len(usage_counts),
-                "most_used": max(self._memories.values(), key=lambda m: m.usage_count).title
-                if self._memories else "N/A",
-                "most_effective": max(self._memories.values(), key=lambda m: m.effectiveness_score).title
-                if self._memories else "N/A",
-                "storage_size_kb": self.store_path.stat().st_size / 1024
-                if self.store_path.exists() else 0
+                "most_used": (
+                    max(self._memories.values(), key=lambda m: m.usage_count).title
+                    if self._memories
+                    else "N/A"
+                ),
+                "most_effective": (
+                    max(self._memories.values(), key=lambda m: m.effectiveness_score).title
+                    if self._memories
+                    else "N/A"
+                ),
+                "storage_size_kb": (
+                    self.store_path.stat().st_size / 1024 if self.store_path.exists() else 0
+                ),
             }
 
             return stats
@@ -460,7 +457,7 @@ class MemoryStore:
 
         return " ".join(parts)
 
-    def _find_similar_memory(self, memory: Memory, threshold: float = 0.95) -> Optional[Memory]:
+    def _find_similar_memory(self, memory: Memory, threshold: float = 0.95) -> Memory | None:
         """Find an existing similar memory.
 
         Args:
@@ -481,10 +478,7 @@ class MemoryStore:
         if memory.task_type in self._memories_by_type and len(memory.query) < 20:
             embedding_text = self._get_embedding_text(memory)
             similar = self.search_similar(
-                embedding_text,
-                task_type=memory.task_type,
-                limit=1,
-                threshold=threshold
+                embedding_text, task_type=memory.task_type, limit=1, threshold=threshold
             )
             if similar:
                 # Double-check it's really the same query
@@ -537,7 +531,7 @@ class MemoryStore:
                 "retrievals": 0,
                 "positive_feedback": 0,
                 "negative_feedback": 0,
-                "avg_similarity": 0
+                "avg_similarity": 0,
             }
 
         stats = self._usage_stats[memory_id]
@@ -545,9 +539,9 @@ class MemoryStore:
 
         # Update average similarity
         prev_avg = stats.get("avg_similarity", 0)
-        stats["avg_similarity"] = (
-            (prev_avg * (stats["retrievals"] - 1) + similarity) / stats["retrievals"]
-        )
+        stats["avg_similarity"] = (prev_avg * (stats["retrievals"] - 1) + similarity) / stats[
+            "retrievals"
+        ]
 
     def export_memories(self, output_path: Path) -> None:
         """Export memories to a file.
@@ -559,10 +553,10 @@ class MemoryStore:
             data = {
                 "exported_at": datetime.now().isoformat(),
                 "memories": [memory.to_dict() for memory in self._memories.values()],
-                "statistics": self.get_statistics()
+                "statistics": self.get_statistics(),
             }
 
-            with open(output_path, "w") as f:
+            with Path(output_path).open("w") as f:
                 json.dump(data, f, indent=2, default=str)
 
             logger.info(f"Exported {len(self._memories)} memories to {output_path}")
@@ -577,7 +571,7 @@ class MemoryStore:
         Returns:
             Number of memories imported
         """
-        with open(input_path, "r") as f:
+        with Path(input_path).open() as f:
             data = json.load(f)
 
         imported = 0
@@ -587,6 +581,7 @@ class MemoryStore:
             # Generate new ID if merging to avoid conflicts
             if merge:
                 from uuid import uuid4
+
                 memory.memory_id = str(uuid4())
 
             self.add_memory(memory)

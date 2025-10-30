@@ -1,8 +1,9 @@
 """Tests for the context enhancer module."""
-import json
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch, PropertyMock
+
 import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from ai_dev_agent.cli.context_enhancer import ContextEnhancer
@@ -53,15 +54,15 @@ class TestContextEnhancer:
 
     def test_init_with_defaults(self):
         """Test initialization with default values."""
-        with patch('ai_dev_agent.cli.context_enhancer.Path.cwd') as mock_cwd:
+        with patch("ai_dev_agent.cli.context_enhancer.Path.cwd") as mock_cwd:
             mock_cwd.return_value = Path("/test/workspace")
             enhancer = ContextEnhancer()
 
             assert enhancer.workspace == Path("/test/workspace")
             assert isinstance(enhancer.settings, Settings)
 
-    @patch('ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE', True)
-    @patch('ai_dev_agent.cli.context_enhancer.MemoryStore')
+    @patch("ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE", True)
+    @patch("ai_dev_agent.cli.context_enhancer.MemoryStore")
     def test_init_with_memory_system(self, mock_memory_store, temp_workspace):
         """Test initialization with memory system enabled."""
         settings = MagicMock(spec=Settings)
@@ -77,8 +78,8 @@ class TestContextEnhancer:
         expected_path = temp_workspace / ".devagent" / "memory" / "reasoning_bank.json"
         mock_memory_store.assert_called_once_with(store_path=expected_path)
 
-    @patch('ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE', True)
-    @patch('ai_dev_agent.cli.context_enhancer.MemoryStore')
+    @patch("ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE", True)
+    @patch("ai_dev_agent.cli.context_enhancer.MemoryStore")
     def test_init_memory_system_failure(self, mock_memory_store, temp_workspace):
         """Test graceful handling of memory system initialization failure."""
         settings = MagicMock(spec=Settings)
@@ -90,9 +91,9 @@ class TestContextEnhancer:
 
         assert enhancer._memory_store is None
 
-    @patch('ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE', True)
-    @patch('ai_dev_agent.cli.context_enhancer.PlaybookManager')
-    @patch('ai_dev_agent.cli.context_enhancer.PlaybookCurator')
+    @patch("ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE", True)
+    @patch("ai_dev_agent.cli.context_enhancer.PlaybookManager")
+    @patch("ai_dev_agent.cli.context_enhancer.PlaybookCurator")
     def test_init_with_playbook_system(self, mock_curator, mock_manager, temp_workspace):
         """Test initialization with playbook system enabled."""
         settings = MagicMock(spec=Settings)
@@ -115,9 +116,9 @@ class TestContextEnhancer:
         mock_manager.assert_called_once_with(playbook_path=expected_path)
         mock_curator.assert_called_once_with(mock_pm)
 
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', True)
-    @patch('ai_dev_agent.cli.context_enhancer.DynamicInstructionManager')
-    @patch('ai_dev_agent.cli.context_enhancer.ABTestManager')
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", True)
+    @patch("ai_dev_agent.cli.context_enhancer.DynamicInstructionManager")
+    @patch("ai_dev_agent.cli.context_enhancer.ABTestManager")
     def test_init_with_dynamic_instructions(self, mock_ab_test, mock_dim, temp_workspace):
         """Test initialization with dynamic instructions enabled."""
         settings = MagicMock(spec=Settings)
@@ -146,7 +147,7 @@ class TestContextEnhancer:
         assert enhancer._dynamic_instruction_manager == mock_dim_instance
         assert enhancer._ab_test_manager == mock_ab_instance
 
-    @patch('ai_dev_agent.cli.context_enhancer.RepoMapManager')
+    @patch("ai_dev_agent.cli.context_enhancer.RepoMapManager")
     def test_repo_map_property(self, mock_repo_map_manager, enhancer):
         """Test repo_map property initialization."""
         mock_manager = MagicMock()
@@ -191,7 +192,7 @@ class TestContextEnhancer:
         Look at 'utils/helpers.py' for utility functions.
         """
 
-        symbols, files = enhancer.extract_symbols_and_files(text)
+        _symbols, files = enhancer.extract_symbols_and_files(text)
 
         assert "config/settings.json" in files
         assert "utils/helpers.py" in files
@@ -220,7 +221,7 @@ class TestContextEnhancer:
             "config/settings.json",
             "README.md",
             ".gitignore",
-            "requirements.txt"
+            "requirements.txt",
         ]
 
         important = enhancer._get_important_files(all_files, max_files=5)
@@ -233,7 +234,7 @@ class TestContextEnhancer:
             assert isinstance(item[0], str)
             assert isinstance(item[1], float)
 
-    @patch('ai_dev_agent.cli.context_enhancer.RepoMapManager')
+    @patch("ai_dev_agent.cli.context_enhancer.RepoMapManager")
     def test_enhance_query_with_context(self, mock_repo_map_manager, temp_workspace):
         """Test query enhancement with context."""
         settings = MagicMock(spec=Settings)
@@ -245,7 +246,9 @@ class TestContextEnhancer:
         enhancer = ContextEnhancer(workspace=temp_workspace, settings=settings)
 
         mock_manager = MagicMock()
-        mock_manager.get_repo_map.return_value = "Repository structure:\n- src/main.py\n- tests/test.py"
+        mock_manager.get_repo_map.return_value = (
+            "Repository structure:\n- src/main.py\n- tests/test.py"
+        )
         mock_manager.get_all_files.return_value = ["src/main.py", "tests/test.py"]
         # Mock files as a dict with FileInfo objects
         mock_file_info = MagicMock()
@@ -263,7 +266,7 @@ class TestContextEnhancer:
         assert query in enhanced
         assert "Automatic Context from RepoMap" in enhanced
 
-    @patch('ai_dev_agent.cli.context_enhancer.RepoMapManager')
+    @patch("ai_dev_agent.cli.context_enhancer.RepoMapManager")
     def test_get_context_for_files(self, mock_repo_map_manager, temp_workspace):
         """Test getting context for specific files."""
         settings = MagicMock(spec=Settings)
@@ -284,7 +287,7 @@ class TestContextEnhancer:
 
         assert isinstance(context, list)
 
-    @patch('ai_dev_agent.cli.context_enhancer.RepoMapManager')
+    @patch("ai_dev_agent.cli.context_enhancer.RepoMapManager")
     def test_get_repomap_messages(self, mock_repo_map_manager, temp_workspace):
         """Test getting repo map messages."""
         settings = MagicMock(spec=Settings)
@@ -309,55 +312,49 @@ class TestContextEnhancer:
         if messages:
             assert len(messages) > 0
 
-    @patch('ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE", True)
     def test_get_memory_context(self, enhancer):
         """Test getting memory context."""
         mock_store = MagicMock()
         mock_store.search_similar.return_value = [
-            {"pattern": "test pattern", "reasoning": "test reasoning", "confidence": 0.9, "id": "test_id"}
+            {
+                "pattern": "test pattern",
+                "reasoning": "test reasoning",
+                "confidence": 0.9,
+                "id": "test_id",
+            }
         ]
         enhancer._memory_store = mock_store
 
         # Use correct method signature - returns tuple
-        context, memory_ids = enhancer.get_memory_context(
-            query="test query",
-            task_type="code_generation",
-            limit=5,
-            threshold=0.3
+        context, _memory_ids = enhancer.get_memory_context(
+            query="test query", task_type="code_generation", limit=5, threshold=0.3
         )
 
         assert context is not None
         mock_store.search_similar.assert_called_once_with(
-            query="test query",
-            task_type="code_generation",
-            limit=5,
-            threshold=0.3
+            query="test query", task_type="code_generation", limit=5, threshold=0.3
         )
 
-    @patch('ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE", True)
     def test_track_memory_effectiveness(self, enhancer):
         """Test tracking memory effectiveness."""
         mock_store = MagicMock()
-        mock_store.get_memory.return_value = {
-            "id": "test_id",
-            "effectiveness_score": 0.5
-        }
+        mock_store.get_memory.return_value = {"id": "test_id", "effectiveness_score": 0.5}
         enhancer._memory_store = mock_store
 
         # Use correct method signature - takes memory_ids (list)
         memory_ids = ["test_id1", "test_id2"]
         enhancer.track_memory_effectiveness(
-            memory_ids=memory_ids,
-            success=True,
-            feedback="Test feedback"
+            memory_ids=memory_ids, success=True, feedback="Test feedback"
         )
 
         # The method updates effectiveness scores and saves, not calls record_usage
         # Just check it doesn't raise an exception
         assert True  # Test passes if no exception
 
-    @patch('ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE', True)
-    @patch('ai_dev_agent.cli.context_enhancer.MemoryDistiller')
+    @patch("ai_dev_agent.cli.context_enhancer.MEMORY_SYSTEM_AVAILABLE", True)
+    @patch("ai_dev_agent.cli.context_enhancer.MemoryDistiller")
     def test_distill_and_store_memory(self, mock_distiller_class, enhancer):
         """Test distilling and storing memory."""
         mock_store = MagicMock()
@@ -365,11 +362,7 @@ class TestContextEnhancer:
 
         mock_distiller = MagicMock()
         mock_distiller.distill_from_session.return_value = [
-            {
-                "pattern": "distilled pattern",
-                "reasoning": "distilled reasoning",
-                "confidence": 0.85
-            }
+            {"pattern": "distilled pattern", "reasoning": "distilled reasoning", "confidence": 0.85}
         ]
         mock_distiller_class.return_value = mock_distiller
 
@@ -377,13 +370,13 @@ class TestContextEnhancer:
         result = enhancer.distill_and_store_memory(
             session_id="test_session",
             messages=[{"role": "user", "content": "test"}],
-            metadata={"task": "test_task"}
+            metadata={"task": "test_task"},
         )
 
         assert result is not None or result is None  # Can return memory ID or None
         mock_distiller.distill_from_session.assert_called_once()
 
-    @patch('ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE", True)
     def test_get_playbook_context(self, enhancer):
         """Test getting playbook context."""
         mock_manager = MagicMock()
@@ -393,7 +386,7 @@ class TestContextEnhancer:
                 "instruction": "test instruction",
                 "category": "testing",
                 "confidence": 0.9,
-                "examples": ["example1"]
+                "examples": ["example1"],
             }
         ]
         mock_manager.format_for_context.return_value = "Formatted instructions"
@@ -401,14 +394,13 @@ class TestContextEnhancer:
 
         # Use correct method signature
         context = enhancer.get_playbook_context(
-            task_type="testing",  # Use a task type that maps to a category
-            max_instructions=5
+            task_type="testing", max_instructions=5  # Use a task type that maps to a category
         )
 
         # Context should be the formatted string
         assert context == "Formatted instructions"
 
-    @patch('ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE", True)
     def test_track_playbook_effectiveness(self, enhancer):
         """Test tracking playbook effectiveness."""
         mock_manager = MagicMock()
@@ -416,23 +408,20 @@ class TestContextEnhancer:
 
         # Use correct method signature - takes instruction_ids (list)
         instruction_ids = ["test_id1", "test_id2"]
-        enhancer.track_playbook_effectiveness(
-            instruction_ids=instruction_ids,
-            success=True
-        )
+        enhancer.track_playbook_effectiveness(instruction_ids=instruction_ids, success=True)
 
         # Check that track_usage was called
         assert mock_manager.track_usage.call_count >= 1
 
     @pytest.mark.skip(reason="Playbook system not fully implemented")
-    @patch('ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.PLAYBOOK_SYSTEM_AVAILABLE", True)
     def test_optimize_playbook(self, enhancer):
         """Test optimizing playbook."""
         mock_curator = MagicMock()
         mock_curator.curate_and_optimize.return_value = {
             "removed": 2,
             "consolidated": 1,
-            "updated": 3
+            "updated": 3,
         }
         enhancer._playbook_curator = mock_curator
 
@@ -443,7 +432,7 @@ class TestContextEnhancer:
         assert result["updated"] == 3
         mock_curator.curate_and_optimize.assert_called_once_with(dry_run=False)
 
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", True)
     def test_start_instruction_session(self, enhancer):
         """Test starting an instruction session."""
         mock_manager = MagicMock()
@@ -454,26 +443,22 @@ class TestContextEnhancer:
         mock_manager.start_session.assert_called_once_with("test_session")
 
     @pytest.mark.skip(reason="Dynamic instructions not fully implemented")
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", True)
     def test_end_instruction_session(self, enhancer):
         """Test ending an instruction session."""
         mock_manager = MagicMock()
         enhancer._dynamic_instruction_manager = mock_manager
 
         enhancer.end_instruction_session(
-            session_id="test_session",
-            outcome="success",
-            error_details=None
+            session_id="test_session", outcome="success", error_details=None
         )
 
         mock_manager.end_session.assert_called_once_with(
-            "test_session",
-            outcome="success",
-            error_details=None
+            "test_session", outcome="success", error_details=None
         )
 
     @pytest.mark.skip(reason="Dynamic instructions not fully implemented")
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", True)
     def test_propose_instruction_update(self, enhancer):
         """Test proposing an instruction update."""
         mock_manager = MagicMock()
@@ -484,14 +469,14 @@ class TestContextEnhancer:
             pattern="test pattern",
             current_instruction="old instruction",
             proposed_instruction="new instruction",
-            reasoning="needs update"
+            reasoning="needs update",
         )
 
         assert result["status"] == "proposed"
         mock_manager.propose_update.assert_called_once()
 
     @pytest.mark.skip(reason="Dynamic instructions not fully implemented")
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", True)
     def test_create_ab_test(self, enhancer):
         """Test creating an A/B test."""
         mock_ab_manager = MagicMock()
@@ -502,14 +487,14 @@ class TestContextEnhancer:
             pattern="test pattern",
             variant_a="instruction A",
             variant_b="instruction B",
-            hypothesis="B is better"
+            hypothesis="B is better",
         )
 
         assert result["test_id"] == "ab_test_1"
         mock_ab_manager.create_test.assert_called_once()
 
     @pytest.mark.skip(reason="Dynamic instructions not fully implemented")
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", True)
     def test_record_ab_test_result(self, enhancer):
         """Test recording A/B test result."""
         mock_ab_manager = MagicMock()
@@ -517,17 +502,14 @@ class TestContextEnhancer:
         enhancer._ab_test_manager = mock_ab_manager
 
         result = enhancer.record_ab_test_result(
-            test_id="ab_test_1",
-            variant="B",
-            success=True,
-            query="test query"
+            test_id="ab_test_1", variant="B", success=True, query="test query"
         )
 
         assert result["winner"] == "B"
         mock_ab_manager.record_result.assert_called_once()
 
     @pytest.mark.skip(reason="Dynamic instructions not fully implemented")
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", True)
     def test_record_query_outcome(self, enhancer):
         """Test recording query outcome."""
         mock_manager = MagicMock()
@@ -537,20 +519,17 @@ class TestContextEnhancer:
             query="test query",
             pattern="test pattern",
             instruction_used="test instruction",
-            success=True
+            success=True,
         )
 
         mock_manager.record_outcome.assert_called_once()
 
     @pytest.mark.skip(reason="Dynamic instructions not fully implemented")
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", True)
     def test_get_pattern_statistics(self, enhancer):
         """Test getting pattern statistics."""
         mock_manager = MagicMock()
-        mock_manager.get_pattern_stats.return_value = {
-            "total_queries": 100,
-            "success_rate": 0.85
-        }
+        mock_manager.get_pattern_stats.return_value = {"total_queries": 100, "success_rate": 0.85}
         enhancer._dynamic_instruction_manager = mock_manager
 
         stats = enhancer.get_pattern_statistics()
@@ -560,21 +539,15 @@ class TestContextEnhancer:
         mock_manager.get_pattern_stats.assert_called_once()
 
     @pytest.mark.skip(reason="Dynamic instructions not fully implemented")
-    @patch('ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE', True)
+    @patch("ai_dev_agent.cli.context_enhancer.DYNAMIC_INSTRUCTIONS_AVAILABLE", True)
     def test_get_dynamic_instruction_statistics(self, enhancer):
         """Test getting dynamic instruction statistics."""
         mock_manager = MagicMock()
-        mock_manager.get_statistics.return_value = {
-            "total_updates": 50,
-            "success_rate": 0.9
-        }
+        mock_manager.get_statistics.return_value = {"total_updates": 50, "success_rate": 0.9}
         enhancer._dynamic_instruction_manager = mock_manager
 
         mock_ab_manager = MagicMock()
-        mock_ab_manager.get_statistics.return_value = {
-            "active_tests": 3,
-            "completed_tests": 10
-        }
+        mock_ab_manager.get_statistics.return_value = {"active_tests": 3, "completed_tests": 10}
         enhancer._ab_test_manager = mock_ab_manager
 
         stats = enhancer.get_dynamic_instruction_statistics()

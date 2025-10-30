@@ -1,4 +1,5 @@
 """Tests for registry-backed tools."""
+
 from __future__ import annotations
 
 import shutil
@@ -8,13 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from ai_dev_agent.core.utils.constants import RUN_STDOUT_TAIL_CHARS
-from ai_dev_agent.tools import ToolContext, registry as tool_registry, READ, WRITE, RUN  # noqa: F401
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.utils.constants import RUN_STDOUT_TAIL_CHARS
+from ai_dev_agent.tools import READ, RUN, WRITE, ToolContext
+from ai_dev_agent.tools import registry as tool_registry
 
 
 def _init_git_repo(root: Path) -> None:
-    subprocess.run(["git", "init"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.name", "Test User"], cwd=root, check=True)
 

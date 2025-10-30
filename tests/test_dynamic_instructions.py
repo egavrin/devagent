@@ -1,22 +1,19 @@
 """Tests for the dynamic instructions system (ILWS pattern implementation)."""
 
-import os
 import tempfile
 from pathlib import Path
+
 import pytest
 
 from ai_dev_agent.dynamic_instructions import (
+    ABTestManager,
+    ABTestStatus,
     DynamicInstructionManager,
-    InstructionUpdate,
     InstructionSnapshot,
     UpdateConfidence,
-    UpdateType,
     UpdateSource,
-    ABTestManager,
-    ABTest,
-    InstructionVariant,
-    ABTestStatus,
-    Winner
+    UpdateType,
+    Winner,
 )
 
 
@@ -36,7 +33,7 @@ def dynamic_manager(temp_dir):
         history_path=history_path,
         snapshots_path=snapshots_path,
         confidence_threshold=0.5,
-        auto_rollback_on_error=True
+        auto_rollback_on_error=True,
     )
 
 
@@ -79,7 +76,7 @@ class TestDynamicInstructionManager:
             confidence=0.75,
             reasoning="Instruction needs more specificity",
             new_content="Updated instruction content",
-            old_content="Original content"
+            old_content="Original content",
         )
 
         assert update is not None
@@ -102,14 +99,12 @@ class TestDynamicInstructionManager:
             confidence=0.9,
             reasoning="High success rate with this instruction",
             new_priority=8,
-            old_priority=5
+            old_priority=5,
         )
 
         # Create snapshot
         snapshot = InstructionSnapshot(
-            instruction_id="inst_002",
-            content="Original content",
-            priority=5
+            instruction_id="inst_002", content="Original content", priority=5
         )
 
         # Apply update
@@ -134,7 +129,7 @@ class TestDynamicInstructionManager:
             update_source=UpdateSource.USER_FEEDBACK,
             confidence=0.6,
             reasoning="User requested change",
-            new_content="User preferred content"
+            new_content="User preferred content",
         )
 
         dynamic_manager.apply_update(update.update_id)
@@ -156,7 +151,7 @@ class TestDynamicInstructionManager:
             update_type=UpdateType.MODIFY,
             update_source=UpdateSource.AUTOMATIC,
             confidence=0.7,
-            reasoning="Automatic improvement"
+            reasoning="Automatic improvement",
         )
 
         dynamic_manager.apply_update(update.update_id)
@@ -175,7 +170,7 @@ class TestDynamicInstructionManager:
             (0.4, UpdateConfidence.LOW),
             (0.6, UpdateConfidence.MEDIUM),
             (0.8, UpdateConfidence.HIGH),
-            (0.95, UpdateConfidence.VERY_HIGH)
+            (0.95, UpdateConfidence.VERY_HIGH),
         ]
 
         for confidence, expected_level in test_cases:
@@ -184,7 +179,7 @@ class TestDynamicInstructionManager:
                 update_type=UpdateType.MODIFY,
                 update_source=UpdateSource.AUTOMATIC,
                 confidence=confidence,
-                reasoning="Test confidence levels"
+                reasoning="Test confidence levels",
             )
             assert update.confidence_level == expected_level
 
@@ -197,7 +192,7 @@ class TestDynamicInstructionManager:
                 update_type=UpdateType.MODIFY,
                 update_source=UpdateSource.AUTOMATIC,
                 confidence=0.7,
-                reasoning=f"Update {i}"
+                reasoning=f"Update {i}",
             )
             dynamic_manager.apply_update(update.update_id)
 
@@ -218,7 +213,7 @@ class TestDynamicInstructionManager:
             update_type=UpdateType.MODIFY,
             update_source=UpdateSource.AUTOMATIC,
             confidence=0.3,
-            reasoning="Low confidence"
+            reasoning="Low confidence",
         )
 
         dynamic_manager.propose_update(
@@ -226,7 +221,7 @@ class TestDynamicInstructionManager:
             update_type=UpdateType.MODIFY,
             update_source=UpdateSource.AUTOMATIC,
             confidence=0.8,
-            reasoning="High confidence"
+            reasoning="High confidence",
         )
 
         # Get all pending
@@ -249,7 +244,7 @@ class TestDynamicInstructionManager:
             update_type=UpdateType.MODIFY,
             update_source=UpdateSource.EXECUTION_FEEDBACK,
             confidence=0.7,
-            reasoning="Improvement"
+            reasoning="Improvement",
         )
         dynamic_manager.apply_update(update1.update_id)
 
@@ -271,8 +266,7 @@ class TestDynamicInstructionManager:
 
         # Create first manager and add updates
         manager1 = DynamicInstructionManager(
-            history_path=history_path,
-            snapshots_path=snapshots_path
+            history_path=history_path, snapshots_path=snapshots_path
         )
 
         update = manager1.propose_update(
@@ -280,15 +274,14 @@ class TestDynamicInstructionManager:
             update_type=UpdateType.MODIFY,
             update_source=UpdateSource.USER_FEEDBACK,
             confidence=0.8,
-            reasoning="Test persistence"
+            reasoning="Test persistence",
         )
         manager1.apply_update(update.update_id)
         manager1._save_data()
 
         # Create second manager from same files
         manager2 = DynamicInstructionManager(
-            history_path=history_path,
-            snapshots_path=snapshots_path
+            history_path=history_path, snapshots_path=snapshots_path
         )
 
         # Should have the update in history
@@ -321,7 +314,7 @@ class TestABTestManager:
             content_a="Check logs first",
             content_b="Use debugger first",
             description="Testing which approach is more effective",
-            target_sample_size=50
+            target_sample_size=50,
         )
 
         assert test is not None
@@ -337,7 +330,7 @@ class TestABTestManager:
             name="Test Feature A",
             instruction_id="inst_feature_001",
             content_a="Variant A",
-            content_b="Variant B"
+            content_b="Variant B",
         )
 
         result = ab_test_manager.start_test(test.test_id)
@@ -351,7 +344,7 @@ class TestABTestManager:
             name="Test Variant Selection",
             instruction_id="inst_variant_001",
             content_a="Variant A",
-            content_b="Variant B"
+            content_b="Variant B",
         )
 
         ab_test_manager.start_test(test.test_id)
@@ -361,7 +354,7 @@ class TestABTestManager:
         for _ in range(20):
             result = ab_test_manager.get_variant_to_use("inst_variant_001")
             assert result is not None
-            variant_name, variant = result
+            variant_name, _variant = result
             variants_seen.add(variant_name)
 
         # Should have seen both variants (probabilistically)
@@ -375,7 +368,7 @@ class TestABTestManager:
             instruction_id="inst_results_001",
             content_a="Variant A",
             content_b="Variant B",
-            target_sample_size=10
+            target_sample_size=10,
         )
 
         ab_test_manager.start_test(test.test_id)
@@ -386,7 +379,7 @@ class TestABTestManager:
                 instruction_id="inst_results_001",
                 variant_id=test.variant_a.variant_id,
                 success=True,
-                time_ms=100.0
+                time_ms=100.0,
             )
 
         # Record some results for variant B
@@ -395,7 +388,7 @@ class TestABTestManager:
                 instruction_id="inst_results_001",
                 variant_id=test.variant_b.variant_id,
                 success=False,
-                time_ms=150.0
+                time_ms=150.0,
             )
 
         # Check results were recorded
@@ -417,7 +410,7 @@ class TestABTestManager:
             instruction_id="inst_conclude_001",
             content_a="Variant A",
             content_b="Variant B",
-            target_sample_size=30
+            target_sample_size=30,
         )
 
         manager.start_test(test.test_id)
@@ -427,14 +420,14 @@ class TestABTestManager:
             manager.record_result(
                 instruction_id="inst_conclude_001",
                 variant_id=test.variant_a.variant_id,
-                success=True
+                success=True,
             )
 
         for _ in range(30):
             manager.record_result(
                 instruction_id="inst_conclude_001",
                 variant_id=test.variant_b.variant_id,
-                success=False
+                success=False,
             )
 
         # Should have auto-concluded
@@ -448,7 +441,7 @@ class TestABTestManager:
             name="Test Cancel",
             instruction_id="inst_cancel_001",
             content_a="Variant A",
-            content_b="Variant B"
+            content_b="Variant B",
         )
 
         ab_test_manager.start_test(test.test_id)
@@ -466,7 +459,7 @@ class TestABTestManager:
                 name=f"Test {i}",
                 instruction_id=f"inst_{i}",
                 content_a=f"Variant A {i}",
-                content_b=f"Variant B {i}"
+                content_b=f"Variant B {i}",
             )
 
         # Get all tests
@@ -484,7 +477,7 @@ class TestABTestManager:
             name="Stats Test",
             instruction_id="inst_stats",
             content_a="Variant A",
-            content_b="Variant B"
+            content_b="Variant B",
         )
         ab_test_manager.start_test(test.test_id)
 
@@ -506,7 +499,7 @@ class TestABTestManager:
             name="Persistence Test",
             instruction_id="inst_persist",
             content_a="Variant A",
-            content_b="Variant B"
+            content_b="Variant B",
         )
         test_id = test.test_id
 
@@ -537,15 +530,13 @@ class TestIntegration:
             confidence=0.85,
             reasoning="Strong evidence for improvement",
             new_content="Improved instruction",
-            old_content="Original instruction"
+            old_content="Original instruction",
         )
 
         # Apply if not auto-applied
         if not update.applied:
             snapshot = InstructionSnapshot(
-                instruction_id="inst_integration_001",
-                content="Original instruction",
-                priority=5
+                instruction_id="inst_integration_001", content="Original instruction", priority=5
             )
             dynamic_manager.apply_update(update.update_id, snapshot_before=snapshot)
 
@@ -562,13 +553,10 @@ class TestIntegration:
     def test_combined_ab_test_and_updates(self, temp_dir):
         """Test using A/B tests with dynamic updates."""
         # Create managers
-        ab_manager = ABTestManager(
-            storage_path=temp_dir / "combined_ab.json",
-            auto_conclude=False
-        )
+        ab_manager = ABTestManager(storage_path=temp_dir / "combined_ab.json", auto_conclude=False)
         dynamic_manager = DynamicInstructionManager(
             history_path=temp_dir / "combined_history.json",
-            snapshots_path=temp_dir / "combined_snapshots.json"
+            snapshots_path=temp_dir / "combined_snapshots.json",
         )
 
         # Create A/B test
@@ -577,7 +565,7 @@ class TestIntegration:
             instruction_id="inst_combined_001",
             content_a="Original approach",
             content_b="New approach",
-            target_sample_size=20
+            target_sample_size=20,
         )
         ab_manager.start_test(test.test_id)
 
@@ -587,14 +575,14 @@ class TestIntegration:
             ab_manager.record_result(
                 instruction_id="inst_combined_001",
                 variant_id=test.variant_a.variant_id,
-                success=True
+                success=True,
             )
 
             # Use variant B
             ab_manager.record_result(
                 instruction_id="inst_combined_001",
                 variant_id=test.variant_b.variant_id,
-                success=True
+                success=True,
             )
 
         # Based on results, propose update to use winning variant
@@ -608,8 +596,8 @@ class TestIntegration:
             update_type=UpdateType.MODIFY,
             update_source=UpdateSource.AB_TEST,
             confidence=0.9,
-            reasoning=f"A/B test concluded in favor of this variant",
-            new_content=winner_content
+            reasoning="A/B test concluded in favor of this variant",
+            new_content=winner_content,
         )
 
         assert update is not None

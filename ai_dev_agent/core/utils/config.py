@@ -1,16 +1,20 @@
 """Configuration loading utilities for the dev agent."""
+
 from __future__ import annotations
 
 import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 try:
     import tomllib  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover - fallback for <3.11
-    import tomli as tomllib  # type: ignore
+    import tomli as tomllib
 
 
 CONFIG_FILENAMES: tuple[str, ...] = (".devagent.toml", "devagent.toml")
@@ -23,7 +27,7 @@ DEFAULT_CONFIG_PATHS = (
 
 def find_config_in_parents(
     start_path: Path, config_name: str | Sequence[str] = ".devagent.toml"
-) -> Optional[Path]:
+) -> Path | None:
     """Search parent directories starting from ``start_path`` for configuration files."""
 
     if isinstance(config_name, str):
@@ -52,12 +56,12 @@ class Settings:
 
     provider: str = "deepseek"
     model: str = "deepseek-coder"
-    api_key: Optional[str] = None
+    api_key: str | None = None
     base_url: str = "https://api.deepseek.com/v1"
     provider_only: Sequence[str] = ()
-    provider_config: Dict[str, Any] = field(default_factory=dict)
-    request_headers: Dict[str, str] = field(default_factory=dict)
-    workspace_root: Path = Path(".")
+    provider_config: dict[str, Any] = field(default_factory=dict)
+    request_headers: dict[str, str] = field(default_factory=dict)
+    workspace_root: Path = Path()
     auto_approve_plan: bool = False
     auto_approve_code: bool = False
     auto_approve_shell: bool = False
@@ -74,22 +78,22 @@ class Settings:
     stuck_threshold: int = 3
     steps_budget: int = 25
     max_iterations: int = 120
-    lint_command: Optional[str] = None
-    format_command: Optional[str] = None
-    typecheck_command: Optional[str] = None
-    compile_command: Optional[str] = None
+    lint_command: str | None = None
+    format_command: str | None = None
+    typecheck_command: str | None = None
+    compile_command: str | None = None
     test_command: str = "pytest"
     coverage_xml_path: Path = Path("coverage.xml")
     sandbox_allowlist: tuple[str, ...] = ()
     sandbox_memory_limit_mb: int = 2048
     sandbox_cpu_time_limit: int = 120
-    shell_executable: Optional[str] = None
-    shell_session_timeout: Optional[float] = None
-    shell_session_cpu_time_limit: Optional[int] = None
-    shell_session_memory_limit_mb: Optional[int] = None
+    shell_executable: str | None = None
+    shell_session_timeout: float | None = None
+    shell_session_cpu_time_limit: int | None = None
+    shell_session_memory_limit_mb: int | None = None
     # Extras / Phase 4
     flake_check_runs: int = 0
-    perf_command: Optional[str] = None
+    perf_command: str | None = None
     max_context_tokens: int = 100_000
     response_headroom_tokens: int = 2_000
     max_tool_output_chars: int = 4_000
@@ -110,7 +114,7 @@ class Settings:
     max_reflections: int = 3
     # Summarization settings
     enable_summarization: bool = True
-    summarization_model: Optional[str] = None  # Use cheaper model if specified
+    summarization_model: str | None = None  # Use cheaper model if specified
     # Adaptive budget settings
     adaptive_budget_scaling: bool = True
     enable_two_tier_pruning: bool = True
@@ -120,33 +124,33 @@ class Settings:
     retry_initial_delay: float = 0.125
     retry_max_delay: float = 60.0
     context_pruner_max_total_tokens: int = 12_000
-    context_pruner_trigger_tokens: Optional[int] = None
+    context_pruner_trigger_tokens: int | None = None
     context_pruner_trigger_ratio: float = 0.8
     context_pruner_keep_recent_messages: int = 10
     context_pruner_summary_max_chars: int = 1_200
     context_pruner_max_event_history: int = 10
 
     # Agent context synthesis settings (unified mode is now always enabled)
-    agent_context_synthesis: bool = True    # Synthesize context from previous steps
-    agent_max_context_chars: int = 2000     # Max chars for context synthesis
+    agent_context_synthesis: bool = True  # Synthesize context from previous steps
+    agent_max_context_chars: int = 2000  # Max chars for context synthesis
 
     # Memory Bank settings (ReasoningBank pattern)
-    enable_memory_bank: bool = True         # Enable memory system
-    memory_retrieval_limit: int = 5         # Max memories to retrieve
+    enable_memory_bank: bool = True  # Enable memory system
+    memory_retrieval_limit: int = 5  # Max memories to retrieve
     memory_similarity_threshold: float = 0.3  # Minimum similarity for retrieval
-    memory_prune_threshold: float = 0.2     # Prune memories below this effectiveness
-    memory_max_per_type: int = 100          # Max memories per task type
+    memory_prune_threshold: float = 0.2  # Prune memories below this effectiveness
+    memory_max_per_type: int = 100  # Max memories per task type
 
     # Playbook settings (ACE pattern)
-    enable_playbook: bool = True            # Enable evolving playbook
-    playbook_max_bullets: int = 50          # Maximum instruction bullets
-    playbook_dedup_threshold: float = 0.9   # Deduplication similarity threshold
+    enable_playbook: bool = True  # Enable evolving playbook
+    playbook_max_bullets: int = 50  # Maximum instruction bullets
+    playbook_dedup_threshold: float = 0.9  # Deduplication similarity threshold
 
     # Dynamic instruction settings (ILWS pattern)
     enable_dynamic_instructions: bool = True  # Enable instruction updates
     instruction_update_confidence: float = 0.8  # Minimum confidence for updates
     instruction_rollback_on_error: bool = True  # Rollback failed instructions
-    instruction_max_history: int = 100       # Maximum instruction history
+    instruction_max_history: int = 100  # Maximum instruction history
 
     # Automatic proposal settings (Pattern-Based Learning)
     instruction_analysis_interval: int = 15  # Analyze patterns every N queries
@@ -167,7 +171,7 @@ class Settings:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
 
-DEFAULT_MAX_ITERATIONS: int = Settings.__dataclass_fields__["max_iterations"].default
+DEFAULT_MAX_ITERATIONS: int = Settings.__dataclass_fields__["max_iterations"].default  # type: ignore[assignment]
 
 
 def _cast_bool(value: Any) -> bool:
@@ -178,7 +182,7 @@ def _cast_bool(value: Any) -> bool:
     return bool(value)
 
 
-def _load_from_file(path: Path) -> Dict[str, Any]:
+def _load_from_file(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     with path.open("rb") as handle:
@@ -186,8 +190,8 @@ def _load_from_file(path: Path) -> Dict[str, Any]:
     return {k.replace("-", "_"): v for k, v in data.items()}
 
 
-def _load_from_env(prefix: str = "DEVAGENT_") -> Dict[str, Any]:
-    env: Dict[str, Any] = {}
+def _load_from_env(prefix: str = "DEVAGENT_") -> dict[str, Any]:
+    env: dict[str, Any] = {}
     for key, value in os.environ.items():
         if not key.startswith(prefix):
             continue
@@ -211,9 +215,7 @@ def _load_from_env(prefix: str = "DEVAGENT_") -> Dict[str, Any]:
             env[field] = _cast_bool(value)
         elif field in {
             "flake_check_runs",
-        }:
-            env[field] = int(value)
-        elif field in {
+        } or field in {
             "diff_limit_lines",
             "diff_limit_files",
             "stuck_threshold",
@@ -240,19 +242,22 @@ def _load_from_env(prefix: str = "DEVAGENT_") -> Dict[str, Any]:
             "instruction_max_history",
         }:
             env[field] = int(value)
-        elif field in {"patch_coverage_target", "context_pruner_trigger_ratio",
-                       "memory_similarity_threshold", "memory_prune_threshold",
-                       "playbook_dedup_threshold", "instruction_update_confidence"}:
+        elif (
+            field
+            in {
+                "patch_coverage_target",
+                "context_pruner_trigger_ratio",
+                "memory_similarity_threshold",
+                "memory_prune_threshold",
+                "playbook_dedup_threshold",
+                "instruction_update_confidence",
+            }
+            or field == "shell_session_timeout"
+        ):
             env[field] = float(value)
-        elif field == "shell_session_timeout":
-            env[field] = float(value)
-        elif field == "state_file":
+        elif field == "state_file" or field == "coverage_xml_path":
             env[field] = Path(value)
-        elif field == "coverage_xml_path":
-            env[field] = Path(value)
-        elif field == "sandbox_allowlist":
-            env[field] = tuple(filter(None, (item.strip() for item in value.split(","))))
-        elif field == "provider_only":
+        elif field == "sandbox_allowlist" or field == "provider_only":
             env[field] = tuple(filter(None, (item.strip() for item in value.split(","))))
         elif field in {"provider_config", "request_headers"}:
             try:
@@ -266,10 +271,10 @@ def _load_from_env(prefix: str = "DEVAGENT_") -> Dict[str, Any]:
     return env
 
 
-def load_settings(explicit_path: Optional[Path] = None) -> Settings:
+def load_settings(explicit_path: Path | None = None) -> Settings:
     """Load configuration, merging file and environment sources."""
 
-    file_data: Dict[str, Any] = {}
+    file_data: dict[str, Any] = {}
     if explicit_path:
         file_data.update(_load_from_file(explicit_path))
     else:
@@ -291,7 +296,7 @@ def load_settings(explicit_path: Optional[Path] = None) -> Settings:
                 break
 
     env_data = _load_from_env()
-    merged: Dict[str, Any] = {**file_data, **env_data}
+    merged: dict[str, Any] = {**file_data, **env_data}
 
     # Normalize state_file path relative to cwd if provided as string
     if "workspace_root" in merged and isinstance(merged["workspace_root"], str):
@@ -303,14 +308,18 @@ def load_settings(explicit_path: Optional[Path] = None) -> Settings:
     allowlist = merged.get("sandbox_allowlist")
     if allowlist is not None and not isinstance(allowlist, tuple):
         if isinstance(allowlist, str):
-            merged["sandbox_allowlist"] = tuple(filter(None, (item.strip() for item in allowlist.split(","))))
+            merged["sandbox_allowlist"] = tuple(
+                filter(None, (item.strip() for item in allowlist.split(",")))
+            )
         else:
             merged["sandbox_allowlist"] = tuple(allowlist)
 
     provider_only = merged.get("provider_only")
     if provider_only is not None and not isinstance(provider_only, tuple):
         if isinstance(provider_only, str):
-            merged["provider_only"] = tuple(filter(None, (item.strip() for item in provider_only.split(","))))
+            merged["provider_only"] = tuple(
+                filter(None, (item.strip() for item in provider_only.split(",")))
+            )
         else:
             merged["provider_only"] = tuple(provider_only)
 
@@ -342,4 +351,4 @@ def load_settings(explicit_path: Optional[Path] = None) -> Settings:
     return settings
 
 
-__all__ = ["Settings", "load_settings", "DEFAULT_MAX_ITERATIONS"]
+__all__ = ["DEFAULT_MAX_ITERATIONS", "Settings", "load_settings"]

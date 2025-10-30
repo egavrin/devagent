@@ -1,17 +1,19 @@
 """Test parallel tool execution capabilities."""
+
 from __future__ import annotations
 
 import time
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.engine.react.tool_invoker import RegistryToolInvoker
 from ai_dev_agent.engine.react.types import ActionRequest, ToolCall
+from ai_dev_agent.providers.llm.base import Message
+from ai_dev_agent.providers.llm.base import ToolCall as LLMToolCall
+from ai_dev_agent.providers.llm.base import ToolCallResult
 from ai_dev_agent.tools import READ
-from ai_dev_agent.providers.llm.base import Message, ToolCallResult, ToolCall as LLMToolCall
 
 
 @pytest.fixture
@@ -182,23 +184,20 @@ def test_llm_client_parallel_tool_calls_parameter():
 
     # Mock the _post method to capture the payload
     captured_payload = {}
+
     def mock_post(payload, extra_headers=None):
         captured_payload.update(payload)
         return {
-            "choices": [{
-                "message": {
-                    "content": "test response",
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "function": {
-                                "name": "test_tool",
-                                "arguments": "{}"
-                            }
-                        }
-                    ]
+            "choices": [
+                {
+                    "message": {
+                        "content": "test response",
+                        "tool_calls": [
+                            {"id": "call_1", "function": {"name": "test_tool", "arguments": "{}"}}
+                        ],
+                    }
                 }
-            }]
+            ]
         }
 
     client._post = mock_post
@@ -227,8 +226,8 @@ def test_llm_client_parallel_tool_calls_parameter():
 def test_action_provider_enables_parallel_tool_calls():
     """Test that ActionProvider enables parallel_tool_calls by default."""
     from ai_dev_agent.cli.react.action_provider import LLMActionProvider
-    from ai_dev_agent.session import SessionManager
     from ai_dev_agent.engine.react.types import TaskSpec
+    from ai_dev_agent.session import SessionManager
 
     # Create mock LLM client
     mock_client = MagicMock()
@@ -278,8 +277,8 @@ def test_action_provider_enables_parallel_tool_calls():
 def test_action_provider_handles_non_numeric_model_limit():
     """LLMActionProvider should ignore non-numeric model limits."""
     from ai_dev_agent.cli.react.action_provider import LLMActionProvider
-    from ai_dev_agent.session import SessionManager
     from ai_dev_agent.engine.react.types import TaskSpec
+    from ai_dev_agent.session import SessionManager
 
     mock_client = MagicMock()
     mock_client.invoke_tools.return_value = ToolCallResult(
@@ -311,8 +310,8 @@ def test_action_provider_handles_non_numeric_model_limit():
 
 def test_deepseek_client_does_not_send_parallel_tool_calls():
     """Test that DeepSeekClient excludes parallel_tool_calls from API payload."""
-    from ai_dev_agent.providers.llm.deepseek import DeepSeekClient
     from ai_dev_agent.providers.llm.base import Message
+    from ai_dev_agent.providers.llm.deepseek import DeepSeekClient
 
     # Create DeepSeek client
     client = DeepSeekClient(
@@ -322,23 +321,20 @@ def test_deepseek_client_does_not_send_parallel_tool_calls():
 
     # Mock the _post method to capture the payload
     captured_payload = {}
+
     def mock_post(payload, extra_headers=None):
         captured_payload.update(payload)
         return {
-            "choices": [{
-                "message": {
-                    "content": "test response",
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "function": {
-                                "name": "test_tool",
-                                "arguments": "{}"
-                            }
-                        }
-                    ]
+            "choices": [
+                {
+                    "message": {
+                        "content": "test response",
+                        "tool_calls": [
+                            {"id": "call_1", "function": {"name": "test_tool", "arguments": "{}"}}
+                        ],
+                    }
                 }
-            }]
+            ]
         }
 
     client._post = mock_post

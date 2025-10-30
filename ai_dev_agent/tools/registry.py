@@ -1,15 +1,19 @@
 """Tool registry and validation helpers."""
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable
 
 from jsonschema import Draft7Validator
 
 from ai_dev_agent.core.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+    from pathlib import Path
 
 LOGGER = get_logger(__name__)
 
@@ -23,7 +27,7 @@ class ToolContext:
     sandbox: Any
     devagent_config: Any = None
     metrics_collector: Any = None
-    extra: Dict[str, Any] | None = None
+    extra: dict[str, Any] | None = None
 
 
 @dataclass
@@ -32,21 +36,21 @@ class ToolSpec:
 
     name: str
     handler: Callable[[Mapping[str, Any], ToolContext], Mapping[str, Any]]
-    request_schema_path: Optional[Path]
-    response_schema_path: Optional[Path]
+    request_schema_path: Path | None
+    response_schema_path: Path | None
     description: str = ""
-    display_name: Optional[str] = None
-    category: Optional[str] = None
+    display_name: str | None = None
+    category: str | None = None
 
 
 class ToolRegistry:
     """Registry that manages tool specifications and validation."""
 
     def __init__(self) -> None:
-        self._tools: Dict[str, ToolSpec] = {}
-        self._display_names: Dict[str, str] = {}
-        self._categories: Dict[str, str] = {}
-        self._category_members: Dict[str, set[str]] = {}
+        self._tools: dict[str, ToolSpec] = {}
+        self._display_names: dict[str, str] = {}
+        self._categories: dict[str, str] = {}
+        self._category_members: dict[str, set[str]] = {}
 
     def register(self, spec: ToolSpec) -> None:
         if spec.name in self._tools:
@@ -62,7 +66,9 @@ class ToolRegistry:
     def available(self) -> Iterable[str]:
         return sorted(self._tools.keys())
 
-    def invoke(self, name: str, payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
+    def invoke(
+        self, name: str, payload: Mapping[str, Any], context: ToolContext
+    ) -> Mapping[str, Any]:
         spec = self.get(name)
 
         # Validate request payload if schema is provided
@@ -87,32 +93,32 @@ class ToolRegistry:
 
     # Metadata helpers --------------------------------------------------
 
-    def canonical_name(self, name: Optional[str]) -> str:
+    def canonical_name(self, name: str | None) -> str:
         if not name:
             return "generic"
         if name in self._tools:
             return name
         return name
 
-    def display_name(self, name: Optional[str]) -> str:
+    def display_name(self, name: str | None) -> str:
         canonical = self.canonical_name(name)
         return self._display_names.get(canonical, canonical)
 
-    def category(self, name: Optional[str]) -> str:
+    def category(self, name: str | None) -> str:
         canonical = self.canonical_name(name)
         return self._categories.get(canonical, "generic")
 
-    def aliases(self, name: Optional[str], *, include_canonical: bool = True) -> Tuple[str, ...]:
+    def aliases(self, name: str | None, *, include_canonical: bool = True) -> tuple[str, ...]:
         canonical = self.canonical_name(name)
         if canonical not in self._tools:
             return (canonical,) if include_canonical and canonical != "generic" else ()
         return (canonical,) if include_canonical else ()
 
-    def aliases_by_category(self, category: str) -> Tuple[str, ...]:
+    def aliases_by_category(self, category: str) -> tuple[str, ...]:
         members = self._category_members.get(category, set())
         return tuple(sorted(members))
 
-    def tool_in_category(self, name: Optional[str], category: str) -> bool:
+    def tool_in_category(self, name: str | None, category: str) -> bool:
         canonical = self.canonical_name(name)
         return canonical in self._categories and self._categories[canonical] == category
 
@@ -146,4 +152,4 @@ def _load_validator(schema_path: Path) -> Draft7Validator:
 registry = ToolRegistry()
 
 
-__all__ = ["ToolContext", "ToolSpec", "ToolRegistry", "registry"]
+__all__ = ["ToolContext", "ToolRegistry", "ToolSpec", "registry"]

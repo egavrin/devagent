@@ -1,9 +1,10 @@
 """End-to-end tests for CLI commands."""
+
 import json
+import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-import os
+from unittest.mock import MagicMock, patch
 
 import click
 import pytest
@@ -27,8 +28,11 @@ class TestCLIEndToEnd:
             workspace = Path(tmpdir)
             # Initialize git repo
             import subprocess
+
             subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=workspace, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"], cwd=workspace, check=True
+            )
             subprocess.run(["git", "config", "user.name", "Test User"], cwd=workspace, check=True)
 
             # Create a sample file
@@ -48,7 +52,7 @@ class TestCLIEndToEnd:
         mock_client.return_value = MagicMock()
         mock_execute.return_value = None  # _execute_react_assistant doesn't return a value
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             # Set environment variable to mock API key
@@ -69,15 +73,19 @@ class TestCLIEndToEnd:
     @pytest.mark.skip(reason="Requires complex mocking of LLM client")
     @patch("ai_dev_agent.cli.react.executor._execute_react_assistant")
     @patch("ai_dev_agent.cli.commands.get_llm_client")
-    def test_query_command_with_json_output(self, mock_client, mock_execute, runner, temp_workspace):
+    def test_query_command_with_json_output(
+        self, mock_client, mock_execute, runner, temp_workspace
+    ):
         """Test query command with JSON output."""
         mock_client.return_value = MagicMock()
+
         # Mock json output written to stdout
         def mock_execute_json(*args, **kwargs):
             click.echo(json.dumps({"status": "success", "data": "test"}))
+
         mock_execute.side_effect = mock_execute_json
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -99,10 +107,10 @@ class TestCLIEndToEnd:
         mock_execute.return_value = MagicMock(
             success=True,
             output="Code review complete",
-            metadata={"findings": [], "issues_found": 0, "quality_score": 1.0}
+            metadata={"findings": [], "issues_found": 0, "quality_score": 1.0},
         )
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -124,7 +132,7 @@ class TestCLIEndToEnd:
         """Test review command with nonexistent file."""
         mock_client.return_value = MagicMock()
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -142,12 +150,10 @@ class TestCLIEndToEnd:
         """Test create-design command."""
         mock_client.return_value = MagicMock()
         mock_execute.return_value = MagicMock(
-            success=True,
-            output="# Design Document\n\n## Architecture\n...",
-            metadata={}
+            success=True, output="# Design Document\n\n## Architecture\n...", metadata={}
         )
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -164,17 +170,15 @@ class TestCLIEndToEnd:
 
     @patch("ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute")
     @patch("ai_dev_agent.cli.commands.get_llm_client")
-    def test_create_design_with_output_file(self, mock_client, mock_execute, runner, temp_workspace):
+    def test_create_design_with_output_file(
+        self, mock_client, mock_execute, runner, temp_workspace
+    ):
         """Test create-design command with output file."""
         mock_client.return_value = MagicMock()
         design_content = "# Design Document\n\n## Overview\nTest design"
-        mock_execute.return_value = MagicMock(
-            success=True,
-            output=design_content,
-            metadata={}
-        )
+        mock_execute.return_value = MagicMock(success=True, output=design_content, metadata={})
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -195,12 +199,10 @@ class TestCLIEndToEnd:
         mock_client.return_value = MagicMock()
         test_code = "def test_feature():\n    assert True"
         mock_execute.return_value = MagicMock(
-            success=True,
-            output=test_code,
-            metadata={"coverage": 90}
+            success=True, output=test_code, metadata={"coverage": 90}
         )
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -214,16 +216,14 @@ class TestCLIEndToEnd:
 
     @patch("ai_dev_agent.agents.specialized.testing_agent.TestingAgent.execute")
     @patch("ai_dev_agent.cli.commands.get_llm_client")
-    def test_generate_tests_with_coverage_target(self, mock_client, mock_execute, runner, temp_workspace):
+    def test_generate_tests_with_coverage_target(
+        self, mock_client, mock_execute, runner, temp_workspace
+    ):
         """Test generate-tests command with coverage target."""
         mock_client.return_value = MagicMock()
-        mock_execute.return_value = MagicMock(
-            success=True,
-            output="test code",
-            metadata={}
-        )
+        mock_execute.return_value = MagicMock(success=True, output="test code", metadata={})
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -243,13 +243,9 @@ class TestCLIEndToEnd:
         """Test write-code command."""
         mock_client.return_value = MagicMock()
         implementation = "class AuthSystem:\n    pass"
-        mock_execute.return_value = MagicMock(
-            success=True,
-            output=implementation,
-            metadata={}
-        )
+        mock_execute.return_value = MagicMock(success=True, output=implementation, metadata={})
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -273,7 +269,7 @@ class TestCLIEndToEnd:
         mock_client.return_value = MagicMock()
         mock_execute.return_value = None
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -293,7 +289,7 @@ class TestCLIEndToEnd:
         mock_client.return_value = MagicMock()
         mock_execute.return_value = None
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -328,7 +324,7 @@ class TestCLIEndToEnd:
         mock_session = MagicMock()
         mock_chat_session.return_value = mock_session
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -359,7 +355,7 @@ class TestCLIEndToEnd:
         mock_client.return_value = MagicMock()
         mock_execute.return_value = None
 
-        original_cwd = os.getcwd()
+        original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -378,20 +374,20 @@ class TestCLIEndToEnd:
         """Test review command with JSON output format."""
         mock_client.return_value = MagicMock()
 
-        with patch("ai_dev_agent.agents.specialized.review_agent.ReviewAgent.execute") as mock_execute:
+        with patch(
+            "ai_dev_agent.agents.specialized.review_agent.ReviewAgent.execute"
+        ) as mock_execute:
             mock_execute.return_value = MagicMock(
                 success=True,
                 output="Review complete",
                 metadata={
-                    "findings": [
-                        {"severity": "high", "issue": "security vulnerability"}
-                    ],
+                    "findings": [{"severity": "high", "issue": "security vulnerability"}],
                     "issues_found": 1,
-                    "quality_score": 0.7
-                }
+                    "quality_score": 0.7,
+                },
             )
 
-            original_cwd = os.getcwd()
+            original_cwd = str(Path.cwd())
             try:
                 os.chdir(temp_workspace)
                 os.environ["DEVAGENT_API_KEY"] = "test-key"
@@ -407,4 +403,4 @@ class TestCLIEndToEnd:
             # Should output valid JSON
             output = json.loads(result.output)
             assert "success" in output
-            assert output["success"] == True
+            assert output["success"]

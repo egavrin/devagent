@@ -1,16 +1,11 @@
 """Tests for the playbook system (ACE pattern implementation)."""
 
-import os
 import tempfile
 from pathlib import Path
+
 import pytest
 
-from ai_dev_agent.playbook import (
-    PlaybookManager,
-    Instruction,
-    InstructionCategory,
-    PlaybookCurator
-)
+from ai_dev_agent.playbook import Instruction, InstructionCategory, PlaybookCurator, PlaybookManager
 
 
 @pytest.fixture
@@ -24,11 +19,7 @@ def temp_playbook_dir():
 def playbook_manager(temp_playbook_dir):
     """Create a PlaybookManager instance for testing."""
     playbook_path = temp_playbook_dir / "instructions.json"
-    manager = PlaybookManager(
-        playbook_path=playbook_path,
-        max_instructions=50,
-        auto_save=True
-    )
+    manager = PlaybookManager(playbook_path=playbook_path, max_instructions=50, auto_save=True)
     return manager
 
 
@@ -36,9 +27,7 @@ def playbook_manager(temp_playbook_dir):
 def curator(playbook_manager):
     """Create a PlaybookCurator instance for testing."""
     return PlaybookCurator(
-        playbook_manager=playbook_manager,
-        similarity_threshold=0.9,
-        quality_threshold=0.3
+        playbook_manager=playbook_manager, similarity_threshold=0.9, quality_threshold=0.3
     )
 
 
@@ -61,7 +50,7 @@ class TestPlaybookManager:
             content="Always check logs first when debugging",
             priority=8,
             tags={"debugging", "logs"},
-            examples=["Check /var/log/app.log for errors"]
+            examples=["Check /var/log/app.log for errors"],
         )
 
         playbook_manager.add_instruction(instruction, source="test")
@@ -81,7 +70,7 @@ class TestPlaybookManager:
             content="Write tests before code",
             priority=5,
             tags={"tdd"},
-            examples=[]
+            examples=[],
         )
         playbook_manager.add_instruction(instruction, source="test")
 
@@ -91,7 +80,7 @@ class TestPlaybookManager:
             content="Always write tests before implementation (TDD)",
             priority=9,
             tags={"tdd", "best_practice"},
-            examples=["Write failing test, then make it pass"]
+            examples=["Write failing test, then make it pass"],
         )
 
         # Verify update
@@ -109,7 +98,7 @@ class TestPlaybookManager:
             content="Temporary instruction",
             priority=1,
             tags=set(),
-            examples=[]
+            examples=[],
         )
         playbook_manager.add_instruction(instruction, source="test")
 
@@ -132,7 +121,7 @@ class TestPlaybookManager:
             content="Debug instruction 1",
             priority=5,
             tags=set(),
-            examples=[]
+            examples=[],
         )
         inst2 = Instruction(
             instruction_id="test_cat_2",
@@ -140,7 +129,7 @@ class TestPlaybookManager:
             content="Debug instruction 2",
             priority=8,
             tags=set(),
-            examples=[]
+            examples=[],
         )
         inst3 = Instruction(
             instruction_id="test_cat_3",
@@ -148,7 +137,7 @@ class TestPlaybookManager:
             content="Testing instruction",
             priority=5,
             tags=set(),
-            examples=[]
+            examples=[],
         )
 
         playbook_manager.add_instruction(inst1, source="test")
@@ -167,7 +156,11 @@ class TestPlaybookManager:
         assert "test_cat_3" not in debug_ids
 
         # Check sorting (higher priority first)
-        priorities = [inst.priority for inst in debug_instructions if inst.instruction_id.startswith("test_cat")]
+        priorities = [
+            inst.priority
+            for inst in debug_instructions
+            if inst.instruction_id.startswith("test_cat")
+        ]
         assert priorities[0] >= priorities[1]
 
     def test_get_instructions_by_tags(self, playbook_manager):
@@ -178,7 +171,7 @@ class TestPlaybookManager:
             content="Cache frequently accessed data",
             priority=7,
             tags={"performance", "caching"},
-            examples=[]
+            examples=[],
         )
         inst2 = Instruction(
             instruction_id="test_tag_2",
@@ -186,7 +179,7 @@ class TestPlaybookManager:
             content="Use database indexes",
             priority=8,
             tags={"performance", "database"},
-            examples=[]
+            examples=[],
         )
 
         playbook_manager.add_instruction(inst1, source="test")
@@ -212,7 +205,7 @@ class TestPlaybookManager:
             content="Extract complex logic into functions",
             priority=6,
             tags={"clean_code"},
-            examples=[]
+            examples=[],
         )
         playbook_manager.add_instruction(instruction, source="test")
 
@@ -247,7 +240,7 @@ class TestPlaybookManager:
             content="Use breakpoints for step-by-step debugging",
             priority=9,
             tags={"debugging"},
-            examples=[]
+            examples=[],
         )
         inst2 = Instruction(
             instruction_id="test_fmt_2",
@@ -255,7 +248,7 @@ class TestPlaybookManager:
             content="Aim for 90% test coverage",
             priority=8,
             tags={"testing", "coverage"},
-            examples=[]
+            examples=[],
         )
 
         playbook_manager.add_instruction(inst1, source="test")
@@ -264,7 +257,7 @@ class TestPlaybookManager:
         # Format for context
         context = playbook_manager.format_for_context(
             categories=[InstructionCategory.DEBUGGING, InstructionCategory.TESTING],
-            max_instructions=10
+            max_instructions=10,
         )
 
         # Should be a string with structured content
@@ -281,9 +274,7 @@ class TestPlaybookManager:
         playbook_path.write_text("{}")
 
         playbook_manager = PlaybookManager(
-            playbook_path=playbook_path,
-            max_instructions=5,
-            auto_save=False
+            playbook_path=playbook_path, max_instructions=5, auto_save=False
         )
 
         # Add 3 high-priority instructions
@@ -294,7 +285,7 @@ class TestPlaybookManager:
                 content=f"High priority instruction {i}",
                 priority=9,
                 tags=set(),
-                examples=[]
+                examples=[],
             )
             playbook_manager.add_instruction(inst, source="test")
 
@@ -306,7 +297,7 @@ class TestPlaybookManager:
                 content=f"Low priority instruction {i}",
                 priority=2,
                 tags=set(),
-                examples=[]
+                examples=[],
             )
             playbook_manager.add_instruction(inst, source="test")
 
@@ -331,7 +322,7 @@ class TestPlaybookManager:
             content="Always validate user input",
             priority=10,
             tags={"security", "validation"},
-            examples=["Sanitize SQL queries", "Escape HTML"]
+            examples=["Sanitize SQL queries", "Escape HTML"],
         )
         manager1.add_instruction(instruction, source="test")
         manager1.save_playbook()
@@ -359,7 +350,7 @@ class TestPlaybookCurator:
             content="Always check error logs when debugging issues",
             priority=7,
             tags={"debugging", "logs"},
-            examples=[]
+            examples=[],
         )
         inst2 = Instruction(
             instruction_id="dup_2",
@@ -367,7 +358,7 @@ class TestPlaybookCurator:
             content="Always check error logs when debugging issues",
             priority=6,
             tags={"debugging", "errors"},
-            examples=[]
+            examples=[],
         )
 
         playbook_manager.add_instruction(inst1, source="test")
@@ -395,7 +386,7 @@ class TestPlaybookCurator:
             content="Write unit tests for all functions",
             priority=8,
             tags={"testing", "unit_tests"},
-            examples=[]
+            examples=[],
         )
         inst2 = Instruction(
             instruction_id="sim_2",
@@ -403,7 +394,7 @@ class TestPlaybookCurator:
             content="Create unit tests for every function",
             priority=7,
             tags={"testing", "unit_tests"},
-            examples=[]
+            examples=[],
         )
 
         playbook_manager.add_instruction(inst1, source="test")
@@ -429,7 +420,7 @@ class TestPlaybookCurator:
             success_count=9,
             effectiveness_score=0.9,
             tags={"caching"},
-            examples=[]
+            examples=[],
         )
         inst2 = Instruction(
             instruction_id="merge_2",
@@ -440,7 +431,7 @@ class TestPlaybookCurator:
             success_count=1,
             effectiveness_score=0.5,
             tags={"caching"},
-            examples=[]
+            examples=[],
         )
 
         playbook_manager.add_instruction(inst1, source="test")
@@ -456,11 +447,13 @@ class TestPlaybookCurator:
 
         if our_group:
             # Merge should keep the better performing one
-            merged = curator.merge_duplicates(our_group, auto_merge=True)
+            curator.merge_duplicates(our_group, auto_merge=True)
 
             # Check that one was removed
-            assert (playbook_manager.get_instruction("merge_1") is None or
-                    playbook_manager.get_instruction("merge_2") is None)
+            assert (
+                playbook_manager.get_instruction("merge_1") is None
+                or playbook_manager.get_instruction("merge_2") is None
+            )
 
     def test_check_quality_low_effectiveness(self, curator, playbook_manager):
         """Test quality check for low effectiveness instructions."""
@@ -474,7 +467,7 @@ class TestPlaybookCurator:
             success_count=2,
             effectiveness_score=0.2,
             tags=set(),
-            examples=[]
+            examples=[],
         )
         playbook_manager.add_instruction(instruction, source="test")
 
@@ -483,7 +476,8 @@ class TestPlaybookCurator:
 
         # Should find low effectiveness issue
         low_eff_issues = [
-            issue for issue in issues
+            issue
+            for issue in issues
             if issue.instruction.instruction_id == "low_eff"
             and issue.issue_type == "low_effectiveness"
         ]
@@ -497,7 +491,7 @@ class TestPlaybookCurator:
             content="Do it well",  # Too short/vague
             priority=5,
             tags=set(),
-            examples=[]
+            examples=[],
         )
         playbook_manager.add_instruction(instruction, source="test")
 
@@ -505,9 +499,9 @@ class TestPlaybookCurator:
 
         # Should find vague instruction issue
         vague_issues = [
-            issue for issue in issues
-            if issue.instruction.instruction_id == "vague"
-            and issue.issue_type == "too_vague"
+            issue
+            for issue in issues
+            if issue.instruction.instruction_id == "vague" and issue.issue_type == "too_vague"
         ]
         assert len(vague_issues) > 0
 
@@ -520,7 +514,7 @@ class TestPlaybookCurator:
             content="When you encounter an error, check the debug logs and trace the execution",
             priority=5,
             tags={"debugging"},
-            examples=[]
+            examples=[],
         )
         suggested = curator.suggest_category(debug_inst)
         assert suggested == InstructionCategory.DEBUGGING
@@ -532,7 +526,7 @@ class TestPlaybookCurator:
             content="Write comprehensive unit tests with mocks and verify test coverage",
             priority=5,
             tags={"testing"},
-            examples=[]
+            examples=[],
         )
         suggested = curator.suggest_category(test_inst)
         assert suggested == InstructionCategory.TESTING
@@ -544,7 +538,7 @@ class TestPlaybookCurator:
             content="Always validate and sanitize user input to prevent security vulnerabilities",
             priority=5,
             tags={"security"},
-            examples=[]
+            examples=[],
         )
         suggested = curator.suggest_category(sec_inst)
         assert suggested == InstructionCategory.SECURITY
@@ -558,7 +552,7 @@ class TestPlaybookCurator:
             content="Check logs",
             priority=5,
             tags=set(),
-            examples=[]
+            examples=[],
         )
         inst2 = Instruction(
             instruction_id="opt_2",
@@ -566,7 +560,7 @@ class TestPlaybookCurator:
             content="Check logs",
             priority=4,
             tags=set(),
-            examples=[]
+            examples=[],
         )
 
         playbook_manager.add_instruction(inst1, source="test")
@@ -597,14 +591,13 @@ class TestIntegration:
             content="Extract duplicate code into reusable functions",
             priority=7,
             tags={"dry", "refactoring"},
-            examples=["Extract common validation logic"]
+            examples=["Extract common validation logic"],
         )
         playbook_manager.add_instruction(inst1, source="test")
 
         # Step 2: Format for context (simulate usage)
         context = playbook_manager.format_for_context(
-            categories=[InstructionCategory.REFACTORING],
-            max_instructions=5
+            categories=[InstructionCategory.REFACTORING], max_instructions=5
         )
         assert "duplicate code" in context or "Extract duplicate" in context
 
@@ -632,7 +625,7 @@ class TestIntegration:
             content="Extract duplicate code into reusable functions",
             priority=5,
             tags={"dry"},
-            examples=[]
+            examples=[],
         )
         playbook_manager.add_instruction(inst2, source="test")
 
@@ -646,7 +639,7 @@ class TestIntegration:
         categories_to_test = [
             InstructionCategory.DEBUGGING,
             InstructionCategory.TESTING,
-            InstructionCategory.SECURITY
+            InstructionCategory.SECURITY,
         ]
 
         for i, category in enumerate(categories_to_test):
@@ -656,7 +649,7 @@ class TestIntegration:
                 content=f"Instruction for {category.value}",
                 priority=7,
                 tags={category.value},
-                examples=[]
+                examples=[],
             )
             playbook_manager.add_instruction(inst, source="test")
 

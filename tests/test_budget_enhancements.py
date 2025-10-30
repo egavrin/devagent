@@ -2,46 +2,32 @@
 
 This combines the key tests from the standalone test files into the main test suite.
 """
-import os
-import sys
-import time
-from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
 
-import pytest
+from unittest.mock import MagicMock, Mock
 
 from ai_dev_agent.cli.react.budget_control import (
     AdaptiveBudgetManager,
     IterationContext,
-    ReflectionContext,
     get_tools_for_iteration,
-    create_text_only_tool,
 )
-from ai_dev_agent.core.utils.budget_integration import (
-    create_budget_integration,
-    BudgetIntegration,
+from ai_dev_agent.core.utils.budget_integration import create_budget_integration
+from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.utils.context_budget import (
+    ContextBudgetConfig,
+    config_from_settings,
+    prune_messages,
 )
 from ai_dev_agent.core.utils.cost_tracker import (
     CostTracker,
     TokenUsage,
     create_token_usage_from_response,
 )
-from ai_dev_agent.core.utils.context_budget import (
-    ContextBudgetConfig,
-    config_from_settings,
-    prune_messages,
-)
-from ai_dev_agent.core.utils.retry_handler import (
-    RetryConfig,
-    RetryHandler,
-    create_retry_handler,
-)
+from ai_dev_agent.core.utils.retry_handler import RetryConfig, RetryHandler
 from ai_dev_agent.core.utils.summarizer import (
-    create_summarizer,
     ConversationSummarizer,
     TwoTierSummarizer,
+    create_summarizer,
 )
-from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.providers.llm.base import Message
 
 
@@ -103,7 +89,7 @@ class TestCostTracking:
                 "completion_tokens": 500,
                 "total_tokens": 1500,
                 "cache_creation_input_tokens": 200,  # Should be write
-                "cache_read_input_tokens": 100,      # Should be read
+                "cache_read_input_tokens": 100,  # Should be read
             }
         }
 
@@ -121,7 +107,7 @@ class TestCostTracking:
             cache_write_tokens=200,
         )
 
-        record = tracker.track_request(
+        tracker.track_request(
             model="gpt-4o",
             usage=usage,
             operation="test",
@@ -234,10 +220,7 @@ class TestRetryHandler:
         def on_retry(attempt, error, delay):
             delays.append(delay)
 
-        result = handler.execute_with_retry(
-            flaky_function,
-            on_retry=on_retry
-        )
+        result = handler.execute_with_retry(flaky_function, on_retry=on_retry)
 
         assert result == "success"
         assert attempt_count == 3
@@ -256,8 +239,8 @@ class TestSummarizerIntegration:
 
         summarizer = create_summarizer(mock_llm, two_tier=False)
         assert isinstance(summarizer, ConversationSummarizer)
-        assert hasattr(summarizer, 'summarize_if_needed')
-        assert hasattr(summarizer, 'optimize_context')
+        assert hasattr(summarizer, "summarize_if_needed")
+        assert hasattr(summarizer, "optimize_context")
 
     def test_two_tier_summarizer_has_both_methods(self):
         """Test TwoTierSummarizer has both interface methods."""
@@ -266,8 +249,8 @@ class TestSummarizerIntegration:
 
         summarizer = create_summarizer(mock_llm, two_tier=True)
         assert isinstance(summarizer, TwoTierSummarizer)
-        assert hasattr(summarizer, 'optimize_context')
-        assert hasattr(summarizer, 'summarize_if_needed')
+        assert hasattr(summarizer, "optimize_context")
+        assert hasattr(summarizer, "summarize_if_needed")
 
     def test_budget_integration_works_with_both_summarizers(self):
         """Test BudgetIntegration works with both summarizer types."""
@@ -309,8 +292,8 @@ class TestContextBudgetConfig:
 
         config = config_from_settings(settings)
 
-        assert config.enable_two_tier == False
-        assert config.enable_summarization == False
+        assert not config.enable_two_tier
+        assert not config.enable_summarization
         assert config.prune_protect_tokens == 50000
         assert config.prune_minimum_savings == 25000
         assert config.summarization_model == "gpt-3.5-turbo"
@@ -326,9 +309,7 @@ class TestContextBudgetConfig:
         for i in range(20):
             messages.append(
                 Message(
-                    role="tool",
-                    content=f"Tool output {i}: " + "x" * 2000,
-                    tool_call_id=f"call_{i}"
+                    role="tool", content=f"Tool output {i}: " + "x" * 2000, tool_call_id=f"call_{i}"
                 )
             )
 
@@ -404,23 +385,18 @@ class TestRawResponseTracking:
 
     def test_tool_call_result_preserves_raw_response(self):
         """Test that ToolCallResult includes raw response with usage data."""
-        from ai_dev_agent.providers.llm.base import ToolCallResult, ToolCall
+        from ai_dev_agent.providers.llm.base import ToolCallResult
 
         # Create a mock raw response with usage data
         raw_response = {
-            "choices": [{
-                "message": {
-                    "content": "Test response",
-                    "tool_calls": []
-                }
-            }],
+            "choices": [{"message": {"content": "Test response", "tool_calls": []}}],
             "usage": {
                 "prompt_tokens": 100,
                 "completion_tokens": 50,
                 "total_tokens": 150,
                 "cache_creation_input_tokens": 10,
-                "cache_read_input_tokens": 20
-            }
+                "cache_read_input_tokens": 20,
+            },
         }
 
         # Create ToolCallResult with raw response
@@ -428,7 +404,7 @@ class TestRawResponseTracking:
             calls=[],
             message_content="Test response",
             raw_tool_calls=None,
-            _raw_response=raw_response
+            _raw_response=raw_response,
         )
 
         # Verify raw response is preserved

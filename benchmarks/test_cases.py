@@ -1,4 +1,5 @@
 """Benchmark test cases for DevAgent."""
+
 from __future__ import annotations
 
 import re
@@ -27,44 +28,52 @@ class TestCase:
 # Validation helpers
 def _validate_line_count(answer: str) -> bool:
     """Validate that answer contains correct line count for commands.py."""
-    numbers = re.findall(r'\b(\d+)\b', answer)
+    numbers = re.findall(r"\b(\d+)\b", answer)
     return any(270 <= int(n) <= 280 for n in numbers)
 
 
 def _validate_python_files_count(answer: str) -> bool:
     """Validate count of Python files in the project."""
-    numbers = re.findall(r'\b(\d+)\b', answer)
+    numbers = re.findall(r"\b(\d+)\b", answer)
     return any(135 <= int(n) <= 155 for n in numbers)
 
 
 def _validate_contains_keyword(keyword: str):
     """Create a validator that checks if answer contains a keyword."""
+
     def validator(answer: str) -> bool:
         return keyword.lower() in answer.lower()
+
     return validator
 
 
 def _validate_number_range(min_val: int, max_val: int):
     """Create validator for numeric range."""
+
     def validator(answer: str) -> bool:
-        numbers = re.findall(r'\b(\d+)\b', answer)
+        numbers = re.findall(r"\b(\d+)\b", answer)
         return any(min_val <= int(n) <= max_val for n in numbers)
+
     return validator
 
 
 def _validate_contains_all(keywords: list[str]):
     """Create validator that checks for ALL keywords."""
+
     def validator(answer: str) -> bool:
         lower_answer = answer.lower()
         return all(kw.lower() in lower_answer for kw in keywords)
+
     return validator
 
 
 def _validate_contains_any(keywords: list[str]):
     """Create validator that checks for ANY keyword."""
+
     def validator(answer: str) -> bool:
         lower_answer = answer.lower()
         return any(kw.lower() in lower_answer for kw in keywords)
+
     return validator
 
 
@@ -95,7 +104,6 @@ TEST_CASES = [
         timeout=90,
         max_iterations=15,
     ),
-
     # Extended tests
     TestCase(
         name="find_all_test_files",
@@ -220,4 +228,4 @@ TEST_CASES = [
 ]
 
 
-__all__ = ["TestCase", "TEST_CASES"]
+__all__ = ["TEST_CASES", "TestCase"]

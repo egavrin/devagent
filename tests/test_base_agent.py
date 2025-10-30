@@ -1,23 +1,18 @@
 """Tests for base agent framework."""
-import pytest
-import pytest_asyncio
-from typing import Any, Dict, List, Optional
-from dataclasses import dataclass
-from unittest.mock import Mock, patch, MagicMock
-import asyncio
 
-pytest_plugins = ('pytest_asyncio',)
+import pytest
 
 from ai_dev_agent.agents.base import (
-    BaseAgent,
     AgentCapability,
     AgentContext,
+    AgentMessage,
     AgentResult,
     AgentSession,
     AgentStatus,
-    AgentMessage,
-    AgentError
+    BaseAgent,
 )
+
+pytest_plugins = ("pytest_asyncio",)
 
 
 class TestAgentCapability:
@@ -29,7 +24,7 @@ class TestAgentCapability:
             name="code_analysis",
             description="Analyze code quality",
             required_tools=["read", "grep"],
-            optional_tools=["symbols"]
+            optional_tools=["symbols"],
         )
 
         assert capability.name == "code_analysis"
@@ -40,9 +35,7 @@ class TestAgentCapability:
     def test_capability_validation(self):
         """Test capability validates tool availability."""
         capability = AgentCapability(
-            name="test",
-            required_tools=["read", "write"],
-            optional_tools=["run"]
+            name="test", required_tools=["read", "write"], optional_tools=["run"]
         )
 
         # All required tools present
@@ -65,7 +58,7 @@ class TestAgentContext:
             parent_id="parent-456",
             working_directory="/test/dir",
             environment={"TEST": "value"},
-            metadata={"key": "value"}
+            metadata={"key": "value"},
         )
 
         assert context.session_id == "test-123"
@@ -94,7 +87,7 @@ class TestAgentResult:
             success=True,
             output="Task completed",
             metadata={"lines_changed": 10},
-            tool_calls=[{"tool": "write", "file": "test.py"}]
+            tool_calls=[{"tool": "write", "file": "test.py"}],
         )
 
         assert result.success is True
@@ -106,10 +99,7 @@ class TestAgentResult:
     def test_failure_result(self):
         """Test creating a failure result."""
         result = AgentResult(
-            success=False,
-            output="",
-            error="Failed to compile",
-            metadata={"error_code": 1}
+            success=False, output="", error="Failed to compile", metadata={"error_code": 1}
         )
 
         assert result.success is False
@@ -125,7 +115,7 @@ class TestBaseAgent:
         agent = BaseAgent(
             name="test_agent",
             description="Test agent for unit tests",
-            capabilities=["code_review", "test_generation"]
+            capabilities=["code_review", "test_generation"],
         )
 
         assert agent.name == "test_agent"
@@ -136,11 +126,7 @@ class TestBaseAgent:
 
     def test_agent_with_tools(self):
         """Test agent with tool permissions."""
-        agent = BaseAgent(
-            name="test",
-            tools=["read", "write", "grep"],
-            max_iterations=10
-        )
+        agent = BaseAgent(name="test", tools=["read", "write", "grep"], max_iterations=10)
 
         assert agent.has_tool("read")
         assert agent.has_tool("write")
@@ -151,10 +137,7 @@ class TestBaseAgent:
         """Test registering capabilities."""
         agent = BaseAgent(name="test")
 
-        capability = AgentCapability(
-            name="analysis",
-            required_tools=["read"]
-        )
+        capability = AgentCapability(name="analysis", required_tools=["read"])
 
         agent.register_capability(capability)
         assert agent.has_capability("analysis")
@@ -179,10 +162,7 @@ class TestBaseAgent:
 
         # Mock the execution
         async def mock_execute(prompt, context):
-            return AgentResult(
-                success=True,
-                output="Executed successfully"
-            )
+            return AgentResult(success=True, output="Executed successfully")
 
         agent._execute_async = mock_execute
 
@@ -198,10 +178,7 @@ class TestBaseAgent:
 
         # Mock the execution
         def mock_execute(prompt, context):
-            return AgentResult(
-                success=True,
-                output="Sync execution"
-            )
+            return AgentResult(success=True, output="Sync execution")
 
         agent._execute_sync = mock_execute
 
@@ -231,9 +208,7 @@ class TestBaseAgent:
         agent = BaseAgent(name="test")
 
         message = agent.create_message(
-            content="Processing task",
-            message_type="info",
-            metadata={"progress": 50}
+            content="Processing task", message_type="info", metadata={"progress": 50}
         )
 
         assert message.agent_name == "test"
@@ -261,11 +236,7 @@ class TestBaseAgent:
         agent = BaseAgent(
             name="test",
             tools=["read", "grep"],
-            permissions={
-                "write": "deny",
-                "run": "ask",
-                "read": "allow"
-            }
+            permissions={"write": "deny", "run": "ask", "read": "allow"},
         )
 
         assert agent.can_use_tool("read") is True
@@ -276,10 +247,7 @@ class TestBaseAgent:
     def test_agent_with_parent_child_relationship(self):
         """Test parent-child agent relationships."""
         parent_agent = BaseAgent(name="parent")
-        child_agent = BaseAgent(
-            name="child",
-            parent_agent=parent_agent
-        )
+        child_agent = BaseAgent(name="child", parent_agent=parent_agent)
 
         assert child_agent.parent_agent == parent_agent
         assert child_agent.name == "child"
@@ -298,9 +266,7 @@ class TestAgentSession:
     def test_session_creation(self):
         """Test creating an agent session."""
         session = AgentSession(
-            session_id="test-123",
-            agent_name="test_agent",
-            parent_id="parent-456"
+            session_id="test-123", agent_name="test_agent", parent_id="parent-456"
         )
 
         assert session.session_id == "test-123"
@@ -311,21 +277,10 @@ class TestAgentSession:
 
     def test_session_message_history(self):
         """Test session message history."""
-        session = AgentSession(
-            session_id="test",
-            agent_name="test"
-        )
+        session = AgentSession(session_id="test", agent_name="test")
 
-        message1 = AgentMessage(
-            agent_name="test",
-            content="Starting task",
-            message_type="info"
-        )
-        message2 = AgentMessage(
-            agent_name="test",
-            content="Task completed",
-            message_type="success"
-        )
+        message1 = AgentMessage(agent_name="test", content="Starting task", message_type="info")
+        message2 = AgentMessage(agent_name="test", content="Task completed", message_type="success")
 
         session.add_message(message1)
         session.add_message(message2)
@@ -336,16 +291,9 @@ class TestAgentSession:
 
     def test_session_result_tracking(self):
         """Test session result tracking."""
-        session = AgentSession(
-            session_id="test",
-            agent_name="test"
-        )
+        session = AgentSession(session_id="test", agent_name="test")
 
-        result = AgentResult(
-            success=True,
-            output="Completed",
-            metadata={"tasks": 5}
-        )
+        result = AgentResult(success=True, output="Completed", metadata={"tasks": 5})
 
         session.set_result(result)
         assert session.result == result

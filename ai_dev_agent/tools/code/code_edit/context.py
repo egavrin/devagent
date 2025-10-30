@@ -1,4 +1,5 @@
 """Simplified context gathering with text-based heuristics."""
+
 from __future__ import annotations
 
 import os
@@ -6,12 +7,16 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING
 
+from ai_dev_agent.core.repo_map import RepoMapManager
 from ai_dev_agent.core.utils.constants import DEFAULT_IGNORED_REPO_DIRS
 from ai_dev_agent.core.utils.logger import get_logger
-from ai_dev_agent.core.repo_map import RepoMapManager
+
 from .tree_sitter_analysis import TreeSitterProjectAnalyzer, extract_symbols_from_outline
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 LOGGER = get_logger(__name__)
 
@@ -24,8 +29,8 @@ class FileContext:
     content: str
     relevance_score: float = 0.0
     reason: str = "explicitly_requested"
-    structure_outline: List[str] = field(default_factory=list)
-    symbols: List[str] = field(default_factory=list)
+    structure_outline: list[str] = field(default_factory=list)
+    symbols: list[str] = field(default_factory=list)
     size_bytes: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
@@ -58,7 +63,7 @@ class ContextGatherer:
     def __init__(
         self,
         repo_root: Path,
-        options: Optional[ContextGatheringOptions] = None,
+        options: ContextGatheringOptions | None = None,
     ) -> None:
         self.repo_root = Path(repo_root)
         self.options = options or ContextGatheringOptions()
@@ -79,13 +84,13 @@ class ContextGatherer:
     def gather_contexts(
         self,
         files: Iterable[str],
-        task_description: Optional[str] = None,
-        keywords: Optional[List[str]] = None,
-        chat_files: Optional[List[Path]] = None,  # NEW: For PageRank personalization
-    ) -> List[FileContext]:
+        task_description: str | None = None,
+        keywords: list[str] | None = None,
+        chat_files: list[Path] | None = None,  # NEW: For PageRank personalization
+    ) -> list[FileContext]:
         """Load requested files and optionally augment with keyword matches or RepoMap ranking."""
         requested = {self._normalize_rel_path(path) for path in files}
-        contexts: List[FileContext] = []
+        contexts: list[FileContext] = []
         loaded_paths = set()
 
         # Load explicitly requested files first
@@ -100,9 +105,9 @@ class ContextGatherer:
 
             # Try keyword-based discovery first (higher priority)
             if keywords:
-                discovered.extend(self._discover_related_files(
-                    loaded_paths, task_description, keywords
-                ))
+                discovered.extend(
+                    self._discover_related_files(loaded_paths, task_description, keywords)
+                )
 
             # Then add RepoMap ranking if available (fills remaining slots)
             if self.repo_map and self.options.use_repo_map:
@@ -131,7 +136,7 @@ class ContextGatherer:
         contexts.sort(key=lambda ctx: ctx.relevance_score, reverse=True)
         return self._apply_size_limits(contexts)
 
-    def search_files(self, pattern: str, file_types: Optional[Sequence[str]] = None) -> List[str]:
+    def search_files(self, pattern: str, file_types: Sequence[str] | None = None) -> list[str]:
         """Search for files containing a pattern using rg or git grep."""
         if self._rg_available:
             return self._rg_search(pattern, file_types)
@@ -139,7 +144,7 @@ class ContextGatherer:
             return self._git_grep_search(pattern, file_types)
         return self._fallback_search(pattern, file_types)
 
-    def find_symbol_references(self, symbol: str) -> List[Tuple[str, int]]:
+    def find_symbol_references(self, symbol: str) -> list[tuple[str, int]]:
         """Return files and line numbers containing the symbol."""
         pattern = rf"\b{re.escape(symbol)}\b"
         if self._rg_available:
@@ -154,15 +159,15 @@ class ContextGatherer:
 
     def _discover_via_repo_map(
         self,
-        existing: Set[str],
-        task_description: Optional[str],
-        chat_files: Optional[List[Path]],
-    ) -> List[Tuple[str, str, float]]:
+        existing: set[str],
+        task_description: str | None,
+        chat_files: list[Path] | None,
+    ) -> list[tuple[str, str, float]]:
         """Discover related files using RepoMap PageRank ranking."""
         if not self.repo_map:
             return []
 
-        discovered: List[Tuple[str, str, float]] = []
+        discovered: list[tuple[str, str, float]] = []
         limit = max(0, self.options.max_files - len(existing))
         if limit == 0:
             return []
@@ -172,11 +177,26 @@ class ContextGatherer:
         if task_description:
             # Simple pattern matching for potential symbols
             import re
-            pattern = r'\b[a-zA-Z_][a-zA-Z0-9_]*\b'
+
+            pattern = r"\b[a-zA-Z_][a-zA-Z0-9_]*\b"
             potential_symbols = re.findall(pattern, task_description)
             # Filter out common English words
-            stopwords = {'the', 'this', 'that', 'with', 'from', 'have', 'should', 'could', 'and', 'or', 'but'}
-            mentioned_symbols = {s for s in potential_symbols if s.lower() not in stopwords and len(s) > 2}
+            stopwords = {
+                "the",
+                "this",
+                "that",
+                "with",
+                "from",
+                "have",
+                "should",
+                "could",
+                "and",
+                "or",
+                "but",
+            }
+            mentioned_symbols = {
+                s for s in potential_symbols if s.lower() not in stopwords and len(s) > 2
+            }
 
         # Get ranked files from RepoMap
         mentioned_files = set(existing)
@@ -203,14 +223,14 @@ class ContextGatherer:
 
     def _discover_related_files(
         self,
-        existing: Set[str],
-        task_description: Optional[str],
-        keywords: Optional[List[str]],
-    ) -> List[Tuple[str, str, float]]:
+        existing: set[str],
+        task_description: str | None,
+        keywords: list[str] | None,
+    ) -> list[tuple[str, str, float]]:
         if not keywords:
             return []
 
-        discovered: List[Tuple[str, str, float]] = []
+        discovered: list[tuple[str, str, float]] = []
         seen = set(existing)
         limit = max(0, self.options.max_files - len(existing))
         if limit == 0:
@@ -230,7 +250,7 @@ class ContextGatherer:
                     return discovered
         return discovered
 
-    def _load_file_context(self, rel_path: str, reason: str, score: float) -> Optional[FileContext]:
+    def _load_file_context(self, rel_path: str, reason: str, score: float) -> FileContext | None:
         full_path = (self.repo_root / rel_path).resolve()
         if not full_path.exists():
             LOGGER.debug("File not found: %s", rel_path)
@@ -256,7 +276,7 @@ class ContextGatherer:
             context.symbols = extract_symbols_from_outline(outline)
         return context
 
-    def _build_structure_summary(self, contexts: List[FileContext]) -> Optional[FileContext]:
+    def _build_structure_summary(self, contexts: list[FileContext]) -> FileContext | None:
         outlines = []
         for context in contexts:
             if not context.structure_outline:
@@ -270,7 +290,7 @@ class ContextGatherer:
         if not outlines:
             return None
 
-        lines: List[str] = [
+        lines: list[str] = [
             "# Project Structure",
             "",
             "Key definitions discovered in the requested files.",
@@ -290,8 +310,8 @@ class ContextGatherer:
             reason="project_structure_summary",
         )
 
-    def _apply_size_limits(self, contexts: List[FileContext]) -> List[FileContext]:
-        limited: List[FileContext] = []
+    def _apply_size_limits(self, contexts: list[FileContext]) -> list[FileContext]:
+        limited: list[FileContext] = []
         total = 0
         for context in contexts:
             if len(limited) >= self.options.max_files:
@@ -346,7 +366,7 @@ class ContextGatherer:
                 return True
         return False
 
-    def _rg_search(self, pattern: str, file_types: Optional[Sequence[str]]) -> List[str]:
+    def _rg_search(self, pattern: str, file_types: Sequence[str] | None) -> list[str]:
         cmd = ["rg", "--files-with-matches", "--no-messages", pattern]
         if file_types:
             for file_type in file_types:
@@ -366,7 +386,7 @@ class ContextGatherer:
             LOGGER.debug("rg search failed for %s: %s", pattern, exc)
         return []
 
-    def _git_grep_search(self, pattern: str, file_types: Optional[Sequence[str]]) -> List[str]:
+    def _git_grep_search(self, pattern: str, file_types: Sequence[str] | None) -> list[str]:
         cmd = ["git", "grep", "-l", pattern]
         if file_types:
             for file_type in file_types:
@@ -386,13 +406,13 @@ class ContextGatherer:
             LOGGER.debug("git grep failed for %s: %s", pattern, exc)
         return []
 
-    def _fallback_search(self, pattern: str, file_types: Optional[Sequence[str]]) -> List[str]:
+    def _fallback_search(self, pattern: str, file_types: Sequence[str] | None) -> list[str]:
         try:
             regex = re.compile(pattern)
         except re.error:
             return []
 
-        matches: List[str] = []
+        matches: list[str] = []
         suffixes = {f".{ft}" for ft in file_types} if file_types else None
         for path in self.repo_root.rglob("*"):
             if not path.is_file():
@@ -406,7 +426,7 @@ class ContextGatherer:
                 continue
         return matches
 
-    def _rg_symbol_search(self, pattern: str) -> List[Tuple[str, int]]:
+    def _rg_symbol_search(self, pattern: str) -> list[tuple[str, int]]:
         cmd = ["rg", "--line-number", "--no-messages", pattern]
         try:
             result = subprocess.run(
@@ -417,7 +437,7 @@ class ContextGatherer:
                 timeout=10,
                 check=False,
             )
-            hits: List[Tuple[str, int]] = []
+            hits: list[tuple[str, int]] = []
             for line in result.stdout.splitlines():
                 parts = line.split(":", 2)
                 if len(parts) >= 2 and parts[1].isdigit():
@@ -427,7 +447,7 @@ class ContextGatherer:
             LOGGER.debug("rg symbol search failed: %s", exc)
             return []
 
-    def _git_symbol_search(self, pattern: str) -> List[Tuple[str, int]]:
+    def _git_symbol_search(self, pattern: str) -> list[tuple[str, int]]:
         cmd = ["git", "grep", "-n", pattern]
         try:
             result = subprocess.run(
@@ -438,7 +458,7 @@ class ContextGatherer:
                 timeout=10,
                 check=False,
             )
-            hits: List[Tuple[str, int]] = []
+            hits: list[tuple[str, int]] = []
             for line in result.stdout.splitlines():
                 parts = line.split(":", 2)
                 if len(parts) >= 2 and parts[1].isdigit():
@@ -448,13 +468,13 @@ class ContextGatherer:
             LOGGER.debug("git symbol search failed: %s", exc)
             return []
 
-    def _fallback_symbol_search(self, pattern: str) -> List[Tuple[str, int]]:
+    def _fallback_symbol_search(self, pattern: str) -> list[tuple[str, int]]:
         try:
             regex = re.compile(pattern)
         except re.error:
             return []
 
-        hits: List[Tuple[str, int]] = []
+        hits: list[tuple[str, int]] = []
         for path in self.repo_root.rglob("*"):
             if not path.is_file():
                 continue
@@ -476,10 +496,10 @@ def gather_file_contexts(
     repo_root: Path,
     files: Iterable[str],
     *,
-    task_description: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
-    options: Optional[ContextGatheringOptions] = None,
-) -> List[FileContext]:
+    task_description: str | None = None,
+    keywords: list[str] | None = None,
+    options: ContextGatheringOptions | None = None,
+) -> list[FileContext]:
     """Convenience wrapper mirroring the historical public API."""
 
     gatherer = ContextGatherer(repo_root, options)

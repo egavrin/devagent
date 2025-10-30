@@ -7,6 +7,7 @@ This module provides a command that automatically:
 4. Executes and coordinates them
 5. Returns results
 """
+
 from pathlib import Path
 from typing import Optional
 
@@ -36,12 +37,23 @@ def should_use_multi_agent(query: str) -> bool:
     """
     # Keywords that suggest multi-agent workflow
     multi_agent_keywords = [
-        "build", "create", "implement", "develop",
-        "design and", "test and", "review",
-        "add feature", "new feature",
-        "authentication", "api", "endpoint",
-        "with tests", "with security",
-        "full", "complete", "entire"
+        "build",
+        "create",
+        "implement",
+        "develop",
+        "design and",
+        "test and",
+        "review",
+        "add feature",
+        "new feature",
+        "authentication",
+        "api",
+        "endpoint",
+        "with tests",
+        "with security",
+        "full",
+        "complete",
+        "entire",
     ]
 
     query_lower = query.lower()
@@ -56,11 +68,7 @@ def should_use_multi_agent(query: str) -> bool:
     return keyword_match or (has_and and is_long)
 
 
-def execute_with_auto_agents(
-    query: str,
-    cwd: Optional[Path] = None,
-    verbose: bool = False
-) -> dict:
+def execute_with_auto_agents(query: str, cwd: Optional[Path] = None, verbose: bool = False) -> dict:
     """Execute query with automatic agent spawning.
 
     Args:
@@ -87,7 +95,7 @@ def execute_with_auto_agents(
             "success": True,
             "mode": "single",
             "message": "Query will be handled by single agent",
-            "recommendation": f"devagent query \"{query}\""
+            "recommendation": f'devagent query "{query}"',
         }
 
     # Step 2: Create a work plan
@@ -95,10 +103,7 @@ def execute_with_auto_agents(
         click.echo("📋 Creating work plan...")
 
     planner = WorkPlanningAgent()
-    plan = planner.create_plan(
-        goal=query,
-        context={"auto_generated": True}
-    )
+    plan = planner.create_plan(goal=query, context={"auto_generated": True})
 
     if verbose:
         click.echo(f"✓ Plan created with {len(plan.tasks)} tasks")
@@ -110,12 +115,7 @@ def execute_with_auto_agents(
         click.echo("\n🤖 Initializing agents...")
 
     registry = EnhancedAgentRegistry()
-    agents_to_register = [
-        DesignAgent(),
-        TestingAgent(),
-        ImplementationAgent(),
-        ReviewAgent()
-    ]
+    agents_to_register = [DesignAgent(), TestingAgent(), ImplementationAgent(), ReviewAgent()]
 
     for agent in agents_to_register:
         registry.register_agent(agent)
@@ -142,10 +142,7 @@ def execute_with_auto_agents(
             click.echo(f"{symbols.get(status, '•')} {message}")
 
     result = workflow.execute_plan_automatically(
-        plan,
-        context,
-        stop_on_failure=False,
-        progress_callback=progress if verbose else None
+        plan, context, stop_on_failure=False, progress_callback=progress if verbose else None
     )
 
     # Step 5: Return results
@@ -159,7 +156,7 @@ def execute_with_auto_agents(
         "tasks_completed": result["tasks_completed"],
         "total_tasks": result["total_tasks"],
         "completion_rate": plan.get_completion_percentage(),
-        "message": f"Executed with {len(agents_to_register)} specialized agents"
+        "message": f"Executed with {len(agents_to_register)} specialized agents",
     }
 
 
@@ -197,14 +194,14 @@ def auto_agent_command(query: tuple, verbose: bool, force_multi: bool, force_sin
         use_multi = True
     elif force_single:
         click.echo("🤖 Forced single-agent mode\n")
-        click.echo("Use: devagent query \"" + query_str + "\"")
+        click.echo('Use: devagent query "' + query_str + '"')
         return
     else:
         use_multi = should_use_multi_agent(query_str)
 
     if not use_multi and not force_multi:
         click.echo("💡 This query can be handled by a single agent.")
-        click.echo("   Run: devagent query \"" + query_str + "\"")
+        click.echo('   Run: devagent query "' + query_str + '"')
         click.echo("\n   Or use --force-multi to use multi-agent system anyway.")
         return
 

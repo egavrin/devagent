@@ -1,4 +1,5 @@
 """Public package interface for the DevAgent toolkit."""
+
 from __future__ import annotations
 
 try:  # pragma: no cover - fallback for very old Python versions
@@ -42,6 +43,7 @@ from .engine.react import (
 )
 from .providers.llm import (
     DEEPSEEK_DEFAULT_BASE_URL,
+    OPENROUTER_DEFAULT_BASE_URL,
     LLMClient,
     LLMConnectionError,
     LLMError,
@@ -50,7 +52,6 @@ from .providers.llm import (
     LLMRetryExhaustedError,
     LLMTimeoutError,
     Message,
-    OPENROUTER_DEFAULT_BASE_URL,
     RetryConfig,
     StreamHooks,
     create_client,
@@ -61,17 +62,17 @@ from .tools.code.code_edit.tree_sitter_analysis import TreeSitterProjectAnalyzer
 from .tools.registry import ToolContext, ToolRegistry, ToolSpec, registry
 
 __all__ = [
-    "__version__",
+    "ARTIFACTS_ROOT",
+    "DEEPSEEK_DEFAULT_BASE_URL",
+    "OPENROUTER_DEFAULT_BASE_URL",
     "ActionRequest",
     "ApprovalManager",
     "ApprovalPolicy",
-    "ARTIFACTS_ROOT",
     "BudgetedLLMClient",
     "CodeEditor",
     "ContextBudgetConfig",
     "ContextGatherer",
     "ContextGatheringOptions",
-    "DEEPSEEK_DEFAULT_BASE_URL",
     "DevAgentConfig",
     "DiffProposal",
     "EvaluationResult",
@@ -86,7 +87,6 @@ __all__ = [
     "LLMTimeoutError",
     "Message",
     "MetricsSnapshot",
-    "OPENROUTER_DEFAULT_BASE_URL",
     "Observation",
     "ReactiveExecutor",
     "RetryConfig",
@@ -99,6 +99,7 @@ __all__ = [
     "ToolRegistry",
     "ToolSpec",
     "TreeSitterProjectAnalyzer",
+    "__version__",
     "configure_logging",
     "core",
     "create_client",

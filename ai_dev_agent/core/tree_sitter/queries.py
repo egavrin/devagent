@@ -1,8 +1,12 @@
 """Shared tree-sitter query templates and helpers."""
+
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # Path to query files directory
 QUERIES_DIR = Path(__file__).parent / "queries"
@@ -19,7 +23,7 @@ LANGUAGE_ALIASES = {
 
 # Canonical AST query templates migrated from tool_strategy so tools can
 # consistently ask for common structural patterns.
-AST_QUERY_TEMPLATES: Dict[str, Dict[str, str]] = {
+AST_QUERY_TEMPLATES: dict[str, dict[str, str]] = {
     "cpp": {
         "find_classes": "(class_declaration name: (type_identifier) @name)",
         "find_functions": "(function_definition declarator: (function_declarator) @func)",
@@ -89,7 +93,7 @@ AST_QUERY_TEMPLATES: Dict[str, Dict[str, str]] = {
         "find_modules": "(module name: (constant) @name)",
         "find_methods": "(method name: (identifier) @name)",
         "find_blocks": "(block) @block",
-        "find_requires": "(call method: (identifier) @req (#eq? @req \"require\"))",
+        "find_requires": '(call method: (identifier) @req (#eq? @req "require"))',
     },
     "csharp": {
         "find_classes": "(class_declaration name: (identifier) @name)",
@@ -109,7 +113,7 @@ AST_QUERY_TEMPLATES: Dict[str, Dict[str, str]] = {
 
 # Outline-oriented queries used by the project summariser. These provide a
 # shared set of building blocks so summary extraction can stay declarative.
-SUMMARY_QUERY_TEMPLATES: Dict[str, Dict[str, str]] = {
+SUMMARY_QUERY_TEMPLATES: dict[str, dict[str, str]] = {
     "python": {
         "module": "(module) @module",
         "classes": "(class_definition name: (identifier) @name)",
@@ -165,7 +169,7 @@ def normalise_language(language: str) -> str:
     return LANGUAGE_ALIASES.get(language.lower(), language.lower())
 
 
-def get_ast_query(language: str, name: str) -> Optional[str]:
+def get_ast_query(language: str, name: str) -> str | None:
     """Return a template by name if defined for the language."""
 
     lang = normalise_language(language)
@@ -179,7 +183,7 @@ def iter_ast_queries(language: str) -> Iterable[tuple[str, str]]:
     return AST_QUERY_TEMPLATES.get(lang, {}).items()
 
 
-def get_summary_queries(language: str) -> Dict[str, str]:
+def get_summary_queries(language: str) -> dict[str, str]:
     """Return summary query definitions for a language (empty if unsupported)."""
 
     lang = normalise_language(language)
@@ -198,7 +202,7 @@ def build_field_capture_query(node_type: str, field: str, capture: str = "node")
     return f"({node_type} {field}: (_) @{capture})"
 
 
-def get_scm_file_path(language: str) -> Optional[Path]:
+def get_scm_file_path(language: str) -> Path | None:
     """Get path to .scm query file for a language.
 
     Args:
@@ -214,11 +218,7 @@ def get_scm_file_path(language: str) -> Optional[Path]:
         return scm_file
 
     # Try alternate name patterns
-    alternate_names = [
-        f"{lang}.scm",
-        f"{language}-tags.scm",
-        f"{language}.scm"
-    ]
+    alternate_names = [f"{lang}.scm", f"{language}-tags.scm", f"{language}.scm"]
 
     for name in alternate_names:
         alt_file = QUERIES_DIR / name
@@ -228,7 +228,7 @@ def get_scm_file_path(language: str) -> Optional[Path]:
     return None
 
 
-def load_query_from_file(language: str) -> Optional[str]:
+def load_query_from_file(language: str) -> str | None:
     """Load query text from .scm file.
 
     Args:
@@ -247,9 +247,9 @@ def load_query_from_file(language: str) -> Optional[str]:
 
 __all__ = [
     "AST_QUERY_TEMPLATES",
-    "SUMMARY_QUERY_TEMPLATES",
     "LANGUAGE_ALIASES",
     "QUERIES_DIR",
+    "SUMMARY_QUERY_TEMPLATES",
     "build_capture_query",
     "build_field_capture_query",
     "get_ast_query",

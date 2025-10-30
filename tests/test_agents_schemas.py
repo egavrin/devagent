@@ -1,5 +1,7 @@
 """Tests for agents schemas module."""
+
 import json
+
 from ai_dev_agent.agents.schemas import VIOLATION_SCHEMA
 
 

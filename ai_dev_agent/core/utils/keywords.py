@@ -1,8 +1,12 @@
 """Utility functions for extracting task and query keywords."""
+
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Set
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 _IDENTIFIER_PATTERN = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
 _SPECIAL_TERMS_PATTERN = re.compile(
@@ -83,17 +87,17 @@ def extract_keywords(
     limit: int = 10,
     include_special_terms: bool = False,
     extra_stopwords: Iterable[str] | None = None,
-) -> List[str]:
+) -> list[str]:
     """Return notable keywords from *text* suitable for repository searches."""
     if not text:
         return []
 
-    stops: Set[str] = {word.lower() for word in _BASE_STOPWORDS}
+    stops: set[str] = {word.lower() for word in _BASE_STOPWORDS}
     if extra_stopwords:
         stops.update(word.lower() for word in extra_stopwords)
 
-    keywords: List[str] = []
-    seen: Set[str] = set()
+    keywords: list[str] = []
+    seen: set[str] = set()
 
     for token in _IDENTIFIER_PATTERN.findall(text):
         lower = token.lower()

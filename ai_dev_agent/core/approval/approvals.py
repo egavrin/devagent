@@ -1,13 +1,18 @@
 """Local approval manager implementation."""
+
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from ..utils.logger import get_logger
-from .policy import ApprovalPolicy
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from .policy import ApprovalPolicy
 
 LOGGER = get_logger(__name__)
 

@@ -1,22 +1,22 @@
 """Repository mapping and caching system with PageRank-based intelligent ranking."""
+
 from __future__ import annotations
 
-import hashlib
 import json
+import logging
 import math
-import os
 import time
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-from collections import defaultdict, Counter
+from typing import Any
 
-import logging
 import networkx as nx
 
 # Import tree-sitter parser if available
 try:
     from ai_dev_agent.core.tree_sitter.parser import TreeSitterParser
+
     TREE_SITTER_AVAILABLE = True
 except ImportError:
     TREE_SITTER_AVAILABLE = False
@@ -24,6 +24,7 @@ except ImportError:
 # Import msgpack for faster cache serialization (optional)
 try:
     import msgpack
+
     MSGPACK_AVAILABLE = True
 except ImportError:
     MSGPACK_AVAILABLE = False
@@ -36,16 +37,18 @@ class FileInfo:
     path: str
     size: int
     modified_time: float
-    language: Optional[str] = None
-    symbols: List[str] = field(default_factory=list)  # Symbols defined in this file
-    imports: List[str] = field(default_factory=list)
-    exports: List[str] = field(default_factory=list)
-    dependencies: Set[str] = field(default_factory=set)
-    references: Dict[str, List[Tuple[str, int]]] = field(default_factory=dict)  # symbol -> [(file, line)]
-    symbols_used: List[str] = field(default_factory=list)  # Symbols referenced/used in this file
-    file_name: Optional[str] = None
-    file_stem: Optional[str] = None
-    path_parts: Tuple[str, ...] = field(default_factory=tuple)
+    language: str | None = None
+    symbols: list[str] = field(default_factory=list)  # Symbols defined in this file
+    imports: list[str] = field(default_factory=list)
+    exports: list[str] = field(default_factory=list)
+    dependencies: set[str] = field(default_factory=set)
+    references: dict[str, list[tuple[str, int]]] = field(
+        default_factory=dict
+    )  # symbol -> [(file, line)]
+    symbols_used: list[str] = field(default_factory=list)  # Symbols referenced/used in this file
+    file_name: str | None = None
+    file_stem: str | None = None
+    path_parts: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -53,22 +56,23 @@ class RepoContext:
     """Context information about the repository."""
 
     root_path: Path
-    files: Dict[str, FileInfo] = field(default_factory=dict)
-    symbol_index: Dict[str, Set[str]] = field(default_factory=lambda: defaultdict(set))
-    import_graph: Dict[str, Set[str]] = field(default_factory=lambda: defaultdict(set))
-    file_rankings: Dict[str, float] = field(default_factory=dict)
-    pagerank_scores: Dict[str, float] = field(default_factory=dict)  # PageRank scores
-    dependency_graph: Optional[nx.DiGraph] = None  # NetworkX graph for PageRank
+    files: dict[str, FileInfo] = field(default_factory=dict)
+    symbol_index: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
+    import_graph: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
+    file_rankings: dict[str, float] = field(default_factory=dict)
+    pagerank_scores: dict[str, float] = field(default_factory=dict)  # PageRank scores
+    dependency_graph: nx.DiGraph | None = None  # NetworkX graph for PageRank
     last_updated: float = 0.0
     last_pagerank_update: float = 0.0  # Track when PageRank was last computed
 
 
 class RepoMapManager:
     """Singleton manager to prevent re-scanning repositories."""
-    _instances: Dict[str, 'RepoMap'] = {}
+
+    _instances: dict[str, RepoMap] = {}
 
     @classmethod
-    def get_instance(cls, root_path: Path) -> 'RepoMap':
+    def get_instance(cls, root_path: Path) -> RepoMap:
         """Get or create a RepoMap instance for the given root path."""
         key = str(root_path.absolute())
         if key not in cls._instances:
@@ -101,55 +105,135 @@ class RepoMap:
 
     # Smart filtering - generated/build files to skip
     GENERATED_FILE_PATTERNS = {
-        '_generated', '.generated', '.gen.',
-        '_pb2.py', '.pb.cc', '.pb.h',  # Protocol buffers
-        '.min.js', '.min.css',  # Minified
-        '-lock.', 'lock.json',  # Lock files
-        '.cache', '.bundle',
+        "_generated",
+        ".generated",
+        ".gen.",
+        "_pb2.py",
+        ".pb.cc",
+        ".pb.h",  # Protocol buffers
+        ".min.js",
+        ".min.css",  # Minified
+        "-lock.",
+        "lock.json",  # Lock files
+        ".cache",
+        ".bundle",
     }
 
     GENERATED_DIR_PATTERNS = {
-        'generated', '.generated', 'gen', '__generated__',
-        'dist', 'build', 'target', 'out', 'output',
-        '.next', '.nuxt', '.vuepress',  # Framework build dirs
-        'coverage', '.coverage',  # Test coverage
+        "generated",
+        ".generated",
+        "gen",
+        "__generated__",
+        "dist",
+        "build",
+        "target",
+        "out",
+        "output",
+        ".next",
+        ".nuxt",
+        ".vuepress",  # Framework build dirs
+        "coverage",
+        ".coverage",  # Test coverage
     }
 
     # File priority heuristics (all tokens lowercased for comparison)
-    TEST_KEYWORDS = frozenset({'test', 'tests', 'spec', 'specs', 'fixture', 'fixtures'})
-    TEST_FILENAME_MARKERS = frozenset({'test', 'tests', 'spec', 'specs'})
-    TEMPLATE_KEYWORDS = frozenset({'template', 'templates', 'scaffold', 'scaffolds'})
-    TEMPLATE_EXTENSIONS = frozenset({
-        '.erb', '.ejs', '.jinja', '.jinja2', '.mustache', '.hbs', '.tpl', '.template'
-    })
-    EXAMPLE_KEYWORDS = frozenset({'example', 'examples', 'demo', 'demos', 'sample', 'samples', 'playground'})
-    BENCHMARK_KEYWORDS = frozenset({'benchmark', 'benchmarks', 'perf', 'performance'})
-    SOURCE_KEYWORDS = frozenset({'src', 'source', 'lib', 'include', 'app', 'services'})
-    CORE_KEYWORDS = frozenset({'core', 'engine', 'runtime', 'kernel', 'internal'})
-    PLUGIN_KEYWORDS = frozenset({'plugin', 'plugins', 'extension', 'extensions', 'addon', 'addons'})
+    TEST_KEYWORDS = frozenset({"test", "tests", "spec", "specs", "fixture", "fixtures"})
+    TEST_FILENAME_MARKERS = frozenset({"test", "tests", "spec", "specs"})
+    TEMPLATE_KEYWORDS = frozenset({"template", "templates", "scaffold", "scaffolds"})
+    TEMPLATE_EXTENSIONS = frozenset(
+        {".erb", ".ejs", ".jinja", ".jinja2", ".mustache", ".hbs", ".tpl", ".template"}
+    )
+    EXAMPLE_KEYWORDS = frozenset(
+        {"example", "examples", "demo", "demos", "sample", "samples", "playground"}
+    )
+    BENCHMARK_KEYWORDS = frozenset({"benchmark", "benchmarks", "perf", "performance"})
+    SOURCE_KEYWORDS = frozenset({"src", "source", "lib", "include", "app", "services"})
+    CORE_KEYWORDS = frozenset({"core", "engine", "runtime", "kernel", "internal"})
+    PLUGIN_KEYWORDS = frozenset({"plugin", "plugins", "extension", "extensions", "addon", "addons"})
 
     # Symbol noise filter: common symbols that create noisy dependency edges
-    NOISE_SYMBOLS = frozenset({
-        # Single-letter variables
-        'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
-        'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-        # Generic names (too common)
-        'data', 'value', 'result', 'temp', 'tmp', 'ret', 'val',
-        'obj', 'item', 'elem', 'node', 'ptr', 'ref',
-        # Common method/variable names
-        'id', 'name', 'type', 'key', 'size', 'len', 'length', 'count',
-        'index', 'idx', 'num', 'number', 'str', 'string',
-        # Too generic
-        'get', 'set', 'put', 'add', 'remove', 'delete', 'clear',
-        'init', 'update', 'reset', 'close', 'open', 'read', 'write',
-    })
+    NOISE_SYMBOLS = frozenset(
+        {
+            # Single-letter variables
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+            "f",
+            "g",
+            "h",
+            "i",
+            "j",
+            "k",
+            "l",
+            "m",
+            "n",
+            "o",
+            "p",
+            "q",
+            "r",
+            "s",
+            "t",
+            "u",
+            "v",
+            "w",
+            "x",
+            "y",
+            "z",
+            # Generic names (too common)
+            "data",
+            "value",
+            "result",
+            "temp",
+            "tmp",
+            "ret",
+            "val",
+            "obj",
+            "item",
+            "elem",
+            "node",
+            "ptr",
+            "ref",
+            # Common method/variable names
+            "id",
+            "name",
+            "type",
+            "key",
+            "size",
+            "len",
+            "length",
+            "count",
+            "index",
+            "idx",
+            "num",
+            "number",
+            "str",
+            "string",
+            # Too generic
+            "get",
+            "set",
+            "put",
+            "add",
+            "remove",
+            "delete",
+            "clear",
+            "init",
+            "update",
+            "reset",
+            "close",
+            "open",
+            "read",
+            "write",
+        }
+    )
 
     def __init__(
         self,
-        root_path: Optional[Path] = None,
+        root_path: Path | None = None,
         cache_enabled: bool = True,
-        logger: Optional[logging.Logger] = None,
-        use_tree_sitter: bool = True
+        logger: logging.Logger | None = None,
+        use_tree_sitter: bool = True,
     ):
         self.root_path = Path(root_path) if root_path else Path.cwd()
         self.cache_enabled = cache_enabled
@@ -159,7 +243,7 @@ class RepoMap:
         self.cache_path = self.root_path / self.CACHE_DIR / "repo_map.json"
 
         # Performance optimization: Cache for symbol name validation
-        self._symbol_name_cache: Dict[str, bool] = {}
+        self._symbol_name_cache: dict[str, bool] = {}
 
         # Initialize tree-sitter parser if available
         self.tree_sitter_parser = None
@@ -178,10 +262,10 @@ class RepoMap:
         """Load repository map from cache (supports both msgpack and JSON)."""
         # Try msgpack first (faster)
         if MSGPACK_AVAILABLE:
-            msgpack_path = self.cache_path.with_suffix('.msgpack')
+            msgpack_path = self.cache_path.with_suffix(".msgpack")
             if msgpack_path.exists():
                 try:
-                    with open(msgpack_path, 'rb') as f:
+                    with msgpack_path.open("rb") as f:
                         data = msgpack.unpack(f, raw=False)
                     return self._restore_from_cache_data(data)
                 except Exception as e:
@@ -190,7 +274,7 @@ class RepoMap:
         # Fall back to JSON
         if self.cache_path.exists():
             try:
-                with open(self.cache_path, 'r') as f:
+                with self.cache_path.open() as f:
                     data = json.load(f)
                 return self._restore_from_cache_data(data)
             except Exception as e:
@@ -202,35 +286,35 @@ class RepoMap:
         """Restore context from cache data (shared by msgpack and JSON loaders)."""
         try:
             # Check cache version
-            if data.get('version') != self.CACHE_VERSION:
+            if data.get("version") != self.CACHE_VERSION:
                 return False
 
             # Restore context
-            self.context.last_updated = data.get('last_updated', 0)
+            self.context.last_updated = data.get("last_updated", 0)
 
             # Restore files
-            for file_data in data.get('files', []):
-                file_parts = tuple(Path(file_data['path']).parts)
+            for file_data in data.get("files", []):
+                file_parts = tuple(Path(file_data["path"]).parts)
                 file_info = FileInfo(
-                    path=file_data['path'],
-                    size=file_data['size'],
-                    modified_time=file_data['modified_time'],
-                    language=file_data.get('language'),
-                    symbols=file_data.get('symbols', []),
-                    imports=file_data.get('imports', []),
-                    exports=file_data.get('exports', []),
-                    dependencies=set(file_data.get('dependencies', [])),
-                    references=file_data.get('references', {}),
-                    symbols_used=file_data.get('symbols_used', []),
-                    file_name=file_data.get('file_name') or Path(file_data['path']).name,
-                    file_stem=file_data.get('file_stem') or Path(file_data['path']).stem,
-                    path_parts=tuple(file_data.get('path_parts', file_parts))
+                    path=file_data["path"],
+                    size=file_data["size"],
+                    modified_time=file_data["modified_time"],
+                    language=file_data.get("language"),
+                    symbols=file_data.get("symbols", []),
+                    imports=file_data.get("imports", []),
+                    exports=file_data.get("exports", []),
+                    dependencies=set(file_data.get("dependencies", [])),
+                    references=file_data.get("references", {}),
+                    symbols_used=file_data.get("symbols_used", []),
+                    file_name=file_data.get("file_name") or Path(file_data["path"]).name,
+                    file_stem=file_data.get("file_stem") or Path(file_data["path"]).stem,
+                    path_parts=tuple(file_data.get("path_parts", file_parts)),
                 )
-                self.context.files[file_data['path']] = file_info
+                self.context.files[file_data["path"]] = file_info
 
             # Restore PageRank scores if available
-            self.context.pagerank_scores = data.get('pagerank_scores', {})
-            self.context.last_pagerank_update = data.get('last_pagerank_update', 0.0)
+            self.context.pagerank_scores = data.get("pagerank_scores", {})
+            self.context.last_pagerank_update = data.get("last_pagerank_update", 0.0)
 
             # Rebuild indices
             self._rebuild_indices()
@@ -251,47 +335,49 @@ class RepoMap:
 
             # Prepare data
             data = {
-                'version': self.CACHE_VERSION,
-                'last_updated': self.context.last_updated,
-                'last_pagerank_update': self.context.last_pagerank_update,
-                'pagerank_scores': self.context.pagerank_scores,
-                'files': []
+                "version": self.CACHE_VERSION,
+                "last_updated": self.context.last_updated,
+                "last_pagerank_update": self.context.last_pagerank_update,
+                "pagerank_scores": self.context.pagerank_scores,
+                "files": [],
             }
 
             for file_info in self.context.files.values():
-                data['files'].append({
-                    'path': file_info.path,
-                    'size': file_info.size,
-                    'modified_time': file_info.modified_time,
-                    'language': file_info.language,
-                    'symbols': file_info.symbols,
-                    'imports': file_info.imports,
-                    'exports': file_info.exports,
-                    'dependencies': list(file_info.dependencies),
-                    'references': file_info.references,
-                    'symbols_used': file_info.symbols_used,
-                    'file_name': file_info.file_name,
-                    'file_stem': file_info.file_stem,
-                    'path_parts': list(file_info.path_parts)
-                })
+                data["files"].append(
+                    {
+                        "path": file_info.path,
+                        "size": file_info.size,
+                        "modified_time": file_info.modified_time,
+                        "language": file_info.language,
+                        "symbols": file_info.symbols,
+                        "imports": file_info.imports,
+                        "exports": file_info.exports,
+                        "dependencies": list(file_info.dependencies),
+                        "references": file_info.references,
+                        "symbols_used": file_info.symbols_used,
+                        "file_name": file_info.file_name,
+                        "file_stem": file_info.file_stem,
+                        "path_parts": list(file_info.path_parts),
+                    }
+                )
 
             # Use msgpack if available (5-10x faster than JSON)
             if MSGPACK_AVAILABLE:
-                msgpack_path = self.cache_path.with_suffix('.msgpack')
-                with open(msgpack_path, 'wb') as f:
+                msgpack_path = self.cache_path.with_suffix(".msgpack")
+                with msgpack_path.open("wb") as f:
                     msgpack.pack(data, f, use_bin_type=True)
                 # Remove old JSON cache if it exists
                 if self.cache_path.exists():
                     self.cache_path.unlink()
             else:
                 # Fall back to JSON
-                with open(self.cache_path, 'w') as f:
+                with self.cache_path.open("w") as f:
                     json.dump(data, f, indent=2)
 
         except Exception as e:
             self.logger.warning(f"Failed to save cache: {e}")
 
-    def _should_skip_file(self, file_path: Path) -> Tuple[bool, str]:
+    def _should_skip_file(self, file_path: Path) -> tuple[bool, str]:
         """Check if a file should be skipped. Returns (should_skip, reason)."""
         file_name = file_path.name.lower()
 
@@ -338,22 +424,50 @@ class RepoMap:
         # Get all supported language files
         extensions = {
             # Python
-            '.py', '.pyi',
+            ".py",
+            ".pyi",
             # TypeScript/JavaScript
-            '.ts', '.tsx', '.ets', '.sts', '.js', '.jsx', '.mjs', '.cjs',
+            ".ts",
+            ".tsx",
+            ".ets",
+            ".sts",
+            ".js",
+            ".jsx",
+            ".mjs",
+            ".cjs",
             # C/C++
-            '.c', '.h', '.hpp', '.cpp', '.cc', '.cxx', '.hh', '.hxx',
+            ".c",
+            ".h",
+            ".hpp",
+            ".cpp",
+            ".cc",
+            ".cxx",
+            ".hh",
+            ".hxx",
             # Java
-            '.java',
+            ".java",
             # Go
-            '.go',
+            ".go",
             # Rust
-            '.rs',
+            ".rs",
             # Ruby
-            '.rb', '.erb',
+            ".rb",
+            ".erb",
             # Others
-            '.cs', '.swift', '.kt', '.scala', '.lua', '.dart', '.r', '.m', '.mm',
-            '.sh', '.bash', '.zsh', '.proto', '.pa'
+            ".cs",
+            ".swift",
+            ".kt",
+            ".scala",
+            ".lua",
+            ".dart",
+            ".r",
+            ".m",
+            ".mm",
+            ".sh",
+            ".bash",
+            ".zsh",
+            ".proto",
+            ".pa",
         }
 
         # Track scanned files to detect deletions
@@ -361,43 +475,45 @@ class RepoMap:
 
         # Statistics for logging
         stats = {
-            'total': 0,
-            'scanned': 0,
-            'skipped_generated': 0,
-            'skipped_large': 0,
-            'skipped_hidden': 0,
-            'errors': 0
+            "total": 0,
+            "scanned": 0,
+            "skipped_generated": 0,
+            "skipped_large": 0,
+            "skipped_hidden": 0,
+            "errors": 0,
         }
 
         # Scan all files with supported extensions
-        for file_path in self.root_path.rglob('*'):
-            stats['total'] += 1
+        for file_path in self.root_path.rglob("*"):
+            stats["total"] += 1
 
             if not file_path.is_file():
                 continue
 
             # Skip cache and common ignore directories
-            if any(part.startswith('.') or part in {'node_modules', '__pycache__', 'venv'}
-                   for part in file_path.parts):
-                stats['skipped_hidden'] += 1
+            if any(
+                part.startswith(".") or part in {"node_modules", "__pycache__", "venv"}
+                for part in file_path.parts
+            ):
+                stats["skipped_hidden"] += 1
                 continue
 
             # Smart filtering - skip generated files
             should_skip, skip_reason = self._should_skip_file(file_path)
             if should_skip:
-                stats['skipped_generated'] += 1
+                stats["skipped_generated"] += 1
                 self.logger.debug(f"Skipping {file_path.name}: {skip_reason}")
                 continue
 
             # Check if file has a supported extension
             if file_path.suffix.lower() in extensions:
                 result = self._scan_file(file_path)
-                if result == 'scanned':
-                    stats['scanned'] += 1
-                elif result == 'skipped_large':
-                    stats['skipped_large'] += 1
-                elif result == 'error':
-                    stats['errors'] += 1
+                if result == "scanned":
+                    stats["scanned"] += 1
+                elif result == "skipped_large":
+                    stats["skipped_large"] += 1
+                elif result == "error":
+                    stats["errors"] += 1
 
                 # Track this file as scanned (even if skipped for size)
                 relative_path = str(file_path.relative_to(self.root_path))
@@ -433,12 +549,14 @@ class RepoMap:
             # Check if file needs updating
             existing = self.context.files.get(relative_path)
             if existing and existing.modified_time >= stat.st_mtime:
-                return 'skipped_cached'
+                return "skipped_cached"
 
             # File size checks
             if stat.st_size > self.MAX_FILE_SIZE:
-                self.logger.debug(f"Skipping large file {file_path.name}: {stat.st_size / 1024 / 1024:.1f}MB")
-                return 'skipped_large'
+                self.logger.debug(
+                    f"Skipping large file {file_path.name}: {stat.st_size / 1024 / 1024:.1f}MB"
+                )
+                return "skipped_large"
             elif stat.st_size > self.LARGE_FILE_SIZE:
                 self.logger.debug(f"Large file {file_path.name}: {stat.st_size / 1024:.1f}KB")
 
@@ -455,17 +573,17 @@ class RepoMap:
                 language=language,
                 file_name=path_obj.name,
                 file_stem=path_obj.stem,
-                path_parts=tuple(path_obj.parts)
+                path_parts=tuple(path_obj.parts),
             )
 
             # Extract symbols and imports based on language
             # Try tree-sitter first if available
             if self.tree_sitter_parser and language:
                 tree_sitter_result = self.tree_sitter_parser.extract_symbols(file_path, language)
-                if tree_sitter_result.get('symbols'):
-                    file_info.symbols.extend(tree_sitter_result['symbols'])
-                    file_info.imports.extend(tree_sitter_result.get('imports', []))
-                    file_info.symbols_used.extend(tree_sitter_result.get('references', []))
+                if tree_sitter_result.get("symbols"):
+                    file_info.symbols.extend(tree_sitter_result["symbols"])
+                    file_info.imports.extend(tree_sitter_result.get("imports", []))
+                    file_info.symbols_used.extend(tree_sitter_result.get("references", []))
                 else:
                     # Fall back to regex-based extraction
                     self._extract_with_regex(file_path, file_info, language)
@@ -474,98 +592,100 @@ class RepoMap:
                 self._extract_with_regex(file_path, file_info, language)
 
             self.context.files[relative_path] = file_info
-            return 'scanned'
+            return "scanned"
 
         except Exception as e:
             self.logger.warning(f"Error scanning {file_path}: {e}")
-            return 'error'
+            return "error"
 
-    def _detect_language(self, file_path: Path) -> Optional[str]:
+    def _detect_language(self, file_path: Path) -> str | None:
         """Detect programming language from file extension."""
         ext = file_path.suffix.lower()
         return {
             # Python
-            '.py': 'python',
-            '.pyi': 'python',
+            ".py": "python",
+            ".pyi": "python",
             # TypeScript/JavaScript
-            '.ts': 'typescript',
-            '.tsx': 'typescript',
-            '.ets': 'typescript',  # EcmaScript TypeScript
-            '.sts': 'typescript',  # Static TypeScript
-            '.js': 'javascript',
-            '.jsx': 'javascript',
-            '.mjs': 'javascript',
-            '.cjs': 'javascript',
+            ".ts": "typescript",
+            ".tsx": "typescript",
+            ".ets": "typescript",  # EcmaScript TypeScript
+            ".sts": "typescript",  # Static TypeScript
+            ".js": "javascript",
+            ".jsx": "javascript",
+            ".mjs": "javascript",
+            ".cjs": "javascript",
             # C/C++
-            '.c': 'c',
-            '.h': 'c',
-            '.hpp': 'cpp',
-            '.cpp': 'cpp',
-            '.cc': 'cpp',
-            '.cxx': 'cpp',
-            '.c++': 'cpp',
-            '.hh': 'cpp',
-            '.hxx': 'cpp',
-            '.h++': 'cpp',
+            ".c": "c",
+            ".h": "c",
+            ".hpp": "cpp",
+            ".cpp": "cpp",
+            ".cc": "cpp",
+            ".cxx": "cpp",
+            ".c++": "cpp",
+            ".hh": "cpp",
+            ".hxx": "cpp",
+            ".h++": "cpp",
             # Java
-            '.java': 'java',
+            ".java": "java",
             # Ruby
-            '.rb': 'ruby',
-            '.erb': 'ruby',
+            ".rb": "ruby",
+            ".erb": "ruby",
             # Go
-            '.go': 'go',
+            ".go": "go",
             # Rust
-            '.rs': 'rust',
+            ".rs": "rust",
             # Assembly
-            '.s': 'assembly',
-            '.asm': 'assembly',
+            ".s": "assembly",
+            ".asm": "assembly",
             # Proto
-            '.proto': 'protobuf',
+            ".proto": "protobuf",
             # Pascal/Panda Assembly
-            '.pa': 'panda-assembly',
+            ".pa": "panda-assembly",
             # Others
-            '.php': 'php',
-            '.cs': 'csharp',
-            '.swift': 'swift',
-            '.kt': 'kotlin',
-            '.scala': 'scala',
-            '.lua': 'lua',
-            '.dart': 'dart',
-            '.r': 'r',
-            '.m': 'objc',
-            '.mm': 'objcpp',
-            '.sh': 'bash',
-            '.bash': 'bash',
-            '.zsh': 'bash'
+            ".php": "php",
+            ".cs": "csharp",
+            ".swift": "swift",
+            ".kt": "kotlin",
+            ".scala": "scala",
+            ".lua": "lua",
+            ".dart": "dart",
+            ".r": "r",
+            ".m": "objc",
+            ".mm": "objcpp",
+            ".sh": "bash",
+            ".bash": "bash",
+            ".zsh": "bash",
         }.get(ext)
 
-    def _extract_with_regex(self, file_path: Path, file_info: FileInfo, language: Optional[str]) -> None:
+    def _extract_with_regex(
+        self, file_path: Path, file_info: FileInfo, language: str | None
+    ) -> None:
         """Extract symbols using regex-based methods."""
-        if language == 'python':
+        if language == "python":
             self._extract_python_info(file_path, file_info)
-        elif language in {'typescript', 'javascript'}:
+        elif language in {"typescript", "javascript"}:
             self._extract_typescript_info(file_path, file_info)
-        elif language in {'c', 'cpp'}:
+        elif language in {"c", "cpp"}:
             self._extract_cpp_info(file_path, file_info)
-        elif language == 'java':
+        elif language == "java":
             self._extract_java_info(file_path, file_info)
-        elif language == 'kotlin':
+        elif language == "kotlin":
             self._extract_kotlin_info(file_path, file_info)
-        elif language == 'scala':
+        elif language == "scala":
             self._extract_scala_info(file_path, file_info)
-        elif language == 'go':
+        elif language == "go":
             self._extract_go_info(file_path, file_info)
-        elif language == 'rust':
+        elif language == "rust":
             self._extract_rust_info(file_path, file_info)
-        elif language == 'ruby':
+        elif language == "ruby":
             self._extract_ruby_info(file_path, file_info)
-        elif language == 'swift':
+        elif language == "swift":
             self._extract_swift_info(file_path, file_info)
-        elif language == 'dart':
+        elif language == "dart":
             self._extract_dart_info(file_path, file_info)
-        elif language == 'lua':
+        elif language == "lua":
             self._extract_lua_info(file_path, file_info)
-        elif language == 'php':
+        elif language == "php":
             self._extract_php_info(file_path, file_info)
         else:
             # For unsupported languages, try basic pattern matching
@@ -576,7 +696,7 @@ class RepoMap:
         try:
             import ast
 
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             tree = ast.parse(content)
@@ -586,10 +706,7 @@ class RepoMap:
 
             for node in ast.walk(tree):
                 # Extract function and class definitions
-                if isinstance(node, ast.FunctionDef):
-                    file_info.symbols.append(node.name)
-                    defined_in_file.add(node.name)
-                elif isinstance(node, ast.ClassDef):
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                     file_info.symbols.append(node.name)
                     defined_in_file.add(node.name)
                 # Extract imports
@@ -601,14 +718,23 @@ class RepoMap:
                         file_info.imports.append(node.module)
                         # Track imported names as symbols used
                         for alias in node.names:
-                            if alias.name != '*':
+                            if alias.name != "*":
                                 file_info.symbols_used.append(alias.name)
                 # Extract symbol references (Name nodes)
                 elif isinstance(node, ast.Name):
                     # Only track if it's not defined in this file and looks like a class/function
-                    if (node.id not in defined_in_file and
-                        node.id[0].isupper() or  # Likely class name
-                        node.id in {'print', 'len', 'str', 'int', 'list', 'dict', 'set', 'tuple'}):  # Common funcs
+                    if (
+                        node.id not in defined_in_file and node.id[0].isupper()
+                    ) or node.id in {  # Likely class name
+                        "print",
+                        "len",
+                        "str",
+                        "int",
+                        "list",
+                        "dict",
+                        "set",
+                        "tuple",
+                    }:  # Common funcs
                         if node.id not in file_info.symbols_used:
                             file_info.symbols_used.append(node.id)
 
@@ -618,21 +744,21 @@ class RepoMap:
     def _extract_typescript_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract TypeScript/JavaScript symbols and imports."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract function declarations
-            func_pattern = r'(?:export\s+)?(?:async\s+)?function\s+(\w+)'
+            func_pattern = r"(?:export\s+)?(?:async\s+)?function\s+(\w+)"
             file_info.symbols.extend(re.findall(func_pattern, content))
 
             # Extract class declarations
-            class_pattern = r'(?:export\s+)?class\s+(\w+)'
+            class_pattern = r"(?:export\s+)?class\s+(\w+)"
             file_info.symbols.extend(re.findall(class_pattern, content))
 
             # Extract const/let/var declarations
-            var_pattern = r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*='
+            var_pattern = r"(?:export\s+)?(?:const|let|var)\s+(\w+)\s*="
             file_info.symbols.extend(re.findall(var_pattern, content))
 
             # Extract imports
@@ -645,61 +771,81 @@ class RepoMap:
     def _extract_cpp_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract C/C++ symbols and includes with comprehensive pattern matching."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Remove comments to avoid false positives
             # Remove single-line comments
-            content_no_comments = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
+            content_no_comments = re.sub(r"//.*?$", "", content, flags=re.MULTILINE)
             # Remove multi-line comments
-            content_no_comments = re.sub(r'/\*.*?\*/', '', content_no_comments, flags=re.DOTALL)
+            content_no_comments = re.sub(r"/\*.*?\*/", "", content_no_comments, flags=re.DOTALL)
 
             # Extract class/struct definitions (including templates)
             # Matches: template<...> class Foo, class Bar : public Base, struct Baz {
-            class_pattern = r'(?:template\s*<[^>]*>\s*)?(?:class|struct)\s+(?:__attribute__\s*\([^)]*\)\s*)?([A-Z][A-Za-z0-9_]*)\s*(?:[:{<]|final|$)'
+            class_pattern = r"(?:template\s*<[^>]*>\s*)?(?:class|struct)\s+(?:__attribute__\s*\([^)]*\)\s*)?([A-Z][A-Za-z0-9_]*)\s*(?:[:{<]|final|$)"
             file_info.symbols.extend(re.findall(class_pattern, content_no_comments))
 
             # Extract function/method definitions (more comprehensive)
             # Handle various C++ function patterns - now more permissive
             func_patterns = [
                 # Regular functions with PascalCase/camelCase names: Type FunctionName(...)
-                r'\b(?:virtual\s+|static\s+|inline\s+|constexpr\s+|explicit\s+|extern\s+)*(?:void|bool|int|char|float|double|size_t|uint\w*|int\d+_t|auto|const\s+|[A-Z][A-Za-z0-9_]*(?:\s*[*&<])?)\s+([A-Z][A-Za-z0-9_]{2,})\s*\(',
+                r"\b(?:virtual\s+|static\s+|inline\s+|constexpr\s+|explicit\s+|extern\s+)*(?:void|bool|int|char|float|double|size_t|uint\w*|int\d+_t|auto|const\s+|[A-Z][A-Za-z0-9_]*(?:\s*[*&<])?)\s+([A-Z][A-Za-z0-9_]{2,})\s*\(",
                 # Methods with qualifiers: Type ClassName::MethodName(...)
-                r'\b[A-Za-z_]\w*::\s*([A-Z][A-Za-z0-9_]{2,})\s*\(',
+                r"\b[A-Za-z_]\w*::\s*([A-Z][A-Za-z0-9_]{2,})\s*\(",
                 # Methods in header files without return type specified
-                r'^\s*([A-Z][A-Za-z0-9_]{3,})\s*\([^)]*\)\s*(?:const|override|final)?\s*;',
+                r"^\s*([A-Z][A-Za-z0-9_]{3,})\s*\([^)]*\)\s*(?:const|override|final)?\s*;",
                 # Operators: operator+, operator==
-                r'\boperator\s*([+\-*/=<>!&|^~\[\]]+)\s*\(',
+                r"\boperator\s*([+\-*/=<>!&|^~\[\]]+)\s*\(",
                 # Destructors: ~ClassName()
-                r'~([A-Z][A-Za-z0-9_]*)\s*\(',
+                r"~([A-Z][A-Za-z0-9_]*)\s*\(",
             ]
 
             for pattern in func_patterns:
                 matches = re.findall(pattern, content_no_comments, flags=re.MULTILINE)
-                file_info.symbols.extend([m for m in matches if m not in {'if', 'while', 'for', 'switch', 'return', 'sizeof', 'typeof', 'decltype', 'static_cast', 'dynamic_cast', 'const_cast', 'reinterpret_cast'}])
+                file_info.symbols.extend(
+                    [
+                        m
+                        for m in matches
+                        if m
+                        not in {
+                            "if",
+                            "while",
+                            "for",
+                            "switch",
+                            "return",
+                            "sizeof",
+                            "typeof",
+                            "decltype",
+                            "static_cast",
+                            "dynamic_cast",
+                            "const_cast",
+                            "reinterpret_cast",
+                        }
+                    ]
+                )
 
             # Extract template parameters and type aliases
             # Matches: using AnyType = ..., template<typename T>
-            using_pattern = r'using\s+([A-Z][A-Za-z0-9_]*)\s*='
+            using_pattern = r"using\s+([A-Z][A-Za-z0-9_]*)\s*="
             file_info.symbols.extend(re.findall(using_pattern, content_no_comments))
 
             # Extract typedefs
-            typedef_pattern = r'typedef\s+(?:struct\s+)?[^;]+\s+([A-Z][A-Za-z0-9_]*)\s*;'
+            typedef_pattern = r"typedef\s+(?:struct\s+)?[^;]+\s+([A-Z][A-Za-z0-9_]*)\s*;"
             file_info.symbols.extend(re.findall(typedef_pattern, content_no_comments))
 
             # Extract enum definitions
-            enum_pattern = r'enum\s+(?:class\s+)?([A-Z][A-Za-z0-9_]*)\s*[:{]'
+            enum_pattern = r"enum\s+(?:class\s+)?([A-Z][A-Za-z0-9_]*)\s*[:{]"
             file_info.symbols.extend(re.findall(enum_pattern, content_no_comments))
 
             # Extract namespaces
-            namespace_pattern = r'namespace\s+([A-Za-z_]\w*)'
+            namespace_pattern = r"namespace\s+([A-Za-z_]\w*)"
             file_info.symbols.extend(re.findall(namespace_pattern, content_no_comments))
 
             # Extract macros/defines (important for C++)
             # Matches: #define MACRO_NAME, #define FunctionMacro(...)
-            define_pattern = r'#\s*define\s+([A-Z_][A-Z0-9_]*)'
+            define_pattern = r"#\s*define\s+([A-Z_][A-Z0-9_]*)"
             file_info.symbols.extend(re.findall(define_pattern, content))
 
             # Extract #include statements
@@ -711,11 +857,11 @@ class RepoMap:
             # More permissive pattern that captures function calls and type usage
             ref_patterns = [
                 # CamelCase identifiers (class names, type names, function names)
-                r'(?<!class )(?<!struct )(?<!enum )(?<!namespace )(?<!using )(?<!typedef )\b([A-Z][A-Za-z0-9_]{2,})\b',
+                r"(?<!class )(?<!struct )(?<!enum )(?<!namespace )(?<!using )(?<!typedef )\b([A-Z][A-Za-z0-9_]{2,})\b",
                 # Function calls with parentheses: SomeFunction(...)
-                r'\b([A-Z][a-z][A-Za-z0-9_]*)\s*\(',
+                r"\b([A-Z][a-z][A-Za-z0-9_]*)\s*\(",
                 # Scope resolution: SomeClass::SomeMethod
-                r'([A-Z][A-Za-z0-9_]+)::[A-Za-z_]',
+                r"([A-Z][A-Za-z0-9_]+)::[A-Za-z_]",
             ]
 
             # Add unique references
@@ -734,25 +880,25 @@ class RepoMap:
     def _extract_java_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Java symbols and imports."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract class/interface/enum definitions
-            class_pattern = r'(?:public\s+)?(?:abstract\s+)?(?:final\s+)?(?:class|interface|enum)\s+([A-Za-z_]\w*)'
+            class_pattern = r"(?:public\s+)?(?:abstract\s+)?(?:final\s+)?(?:class|interface|enum)\s+([A-Za-z_]\w*)"
             file_info.symbols.extend(re.findall(class_pattern, content))
 
             # Extract method definitions
-            method_pattern = r'(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?(?:synchronized\s+)?(?:[A-Za-z_]\w*(?:<[^>]+>)?(?:\[\])?)\s+([A-Za-z_]\w*)\s*\([^)]*\)'
+            method_pattern = r"(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?(?:synchronized\s+)?(?:[A-Za-z_]\w*(?:<[^>]+>)?(?:\[\])?)\s+([A-Za-z_]\w*)\s*\([^)]*\)"
             file_info.symbols.extend(re.findall(method_pattern, content))
 
             # Extract imports
-            import_pattern = r'import\s+(?:static\s+)?([A-Za-z_][\w.]*);'
+            import_pattern = r"import\s+(?:static\s+)?([A-Za-z_][\w.]*);"
             file_info.imports.extend(re.findall(import_pattern, content))
 
             # Extract package
-            package_pattern = r'package\s+([A-Za-z_][\w.]*);'
+            package_pattern = r"package\s+([A-Za-z_][\w.]*);"
             packages = re.findall(package_pattern, content)
             if packages:
                 file_info.imports.append(f"package:{packages[0]}")
@@ -763,22 +909,21 @@ class RepoMap:
     def _extract_go_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Go symbols and imports."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract function definitions
-            func_pattern = r'func\s+(?:\([^)]+\)\s+)?([A-Za-z_]\w*)\s*\([^)]*\)'
+            func_pattern = r"func\s+(?:\([^)]+\)\s+)?([A-Za-z_]\w*)\s*\([^)]*\)"
             file_info.symbols.extend(re.findall(func_pattern, content))
 
             # Extract type definitions
-            type_pattern = r'type\s+([A-Za-z_]\w*)\s+(?:struct|interface|func)'
+            type_pattern = r"type\s+([A-Za-z_]\w*)\s+(?:struct|interface|func)"
             file_info.symbols.extend(re.findall(type_pattern, content))
 
             # Extract imports
-            import_pattern = r'import\s+(?:\([^)]+\)|"([^"]+)")'
-            imports_multi = re.findall(r'import\s*\((.*?)\)', content, re.DOTALL)
+            imports_multi = re.findall(r"import\s*\((.*?)\)", content, re.DOTALL)
             for block in imports_multi:
                 imports = re.findall(r'"([^"]+)"', block)
                 file_info.imports.extend(imports)
@@ -787,7 +932,7 @@ class RepoMap:
             file_info.imports.extend(re.findall(r'import\s+"([^"]+)"', content))
 
             # Extract package
-            package_pattern = r'package\s+([A-Za-z_]\w*)'
+            package_pattern = r"package\s+([A-Za-z_]\w*)"
             packages = re.findall(package_pattern, content)
             if packages:
                 file_info.imports.append(f"package:{packages[0]}")
@@ -798,29 +943,29 @@ class RepoMap:
     def _extract_rust_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Rust symbols and uses."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract function definitions
-            func_pattern = r'(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*(?:<[^>]+>)?\s*\('
+            func_pattern = r"(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*(?:<[^>]+>)?\s*\("
             file_info.symbols.extend(re.findall(func_pattern, content))
 
             # Extract struct/enum/trait definitions
-            type_pattern = r'(?:pub\s+)?(?:struct|enum|trait|type)\s+([A-Za-z_]\w*)'
+            type_pattern = r"(?:pub\s+)?(?:struct|enum|trait|type)\s+([A-Za-z_]\w*)"
             file_info.symbols.extend(re.findall(type_pattern, content))
 
             # Extract impl blocks
-            impl_pattern = r'impl(?:<[^>]+>)?\s+(?:.*?\s+for\s+)?([A-Za-z_]\w*)'
+            impl_pattern = r"impl(?:<[^>]+>)?\s+(?:.*?\s+for\s+)?([A-Za-z_]\w*)"
             file_info.symbols.extend(re.findall(impl_pattern, content))
 
             # Extract use statements
-            use_pattern = r'use\s+([A-Za-z_][\w:]*)'
+            use_pattern = r"use\s+([A-Za-z_][\w:]*)"
             file_info.imports.extend(re.findall(use_pattern, content))
 
             # Extract mod declarations
-            mod_pattern = r'(?:pub\s+)?mod\s+([A-Za-z_]\w*)'
+            mod_pattern = r"(?:pub\s+)?mod\s+([A-Za-z_]\w*)"
             file_info.symbols.extend(re.findall(mod_pattern, content))
 
         except Exception:
@@ -829,21 +974,21 @@ class RepoMap:
     def _extract_ruby_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Ruby symbols and requires."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract class definitions
-            class_pattern = r'class\s+([A-Z][A-Za-z0-9_]*)'
+            class_pattern = r"class\s+([A-Z][A-Za-z0-9_]*)"
             file_info.symbols.extend(re.findall(class_pattern, content))
 
             # Extract module definitions
-            module_pattern = r'module\s+([A-Z][A-Za-z0-9_]*)'
+            module_pattern = r"module\s+([A-Z][A-Za-z0-9_]*)"
             file_info.symbols.extend(re.findall(module_pattern, content))
 
             # Extract method definitions
-            method_pattern = r'def\s+([a-z_][a-z0-9_]*[?!]?)'
+            method_pattern = r"def\s+([a-z_][a-z0-9_]*[?!]?)"
             file_info.symbols.extend(re.findall(method_pattern, content))
 
             # Extract require statements
@@ -856,29 +1001,31 @@ class RepoMap:
     def _extract_kotlin_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Kotlin symbols and imports."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract class/interface/object/data class definitions
-            class_pattern = r'(?:data\s+|sealed\s+|abstract\s+|open\s+)?(?:class|interface|object)\s+([A-Z][A-Za-z0-9_]*)'
+            class_pattern = r"(?:data\s+|sealed\s+|abstract\s+|open\s+)?(?:class|interface|object)\s+([A-Z][A-Za-z0-9_]*)"
             file_info.symbols.extend(re.findall(class_pattern, content))
 
             # Extract function definitions
-            func_pattern = r'(?:suspend\s+|inline\s+|infix\s+)?fun\s+(?:<[^>]+>\s+)?([a-z][A-Za-z0-9_]*)\s*\('
+            func_pattern = (
+                r"(?:suspend\s+|inline\s+|infix\s+)?fun\s+(?:<[^>]+>\s+)?([a-z][A-Za-z0-9_]*)\s*\("
+            )
             file_info.symbols.extend(re.findall(func_pattern, content))
 
             # Extract val/var declarations (top-level properties)
-            prop_pattern = r'(?:const\s+)?(?:val|var)\s+([a-z][A-Za-z0-9_]*)\s*[:=]'
+            prop_pattern = r"(?:const\s+)?(?:val|var)\s+([a-z][A-Za-z0-9_]*)\s*[:=]"
             file_info.symbols.extend(re.findall(prop_pattern, content))
 
             # Extract imports
-            import_pattern = r'import\s+([A-Za-z_][\w.]*)'
+            import_pattern = r"import\s+([A-Za-z_][\w.]*)"
             file_info.imports.extend(re.findall(import_pattern, content))
 
             # Extract package
-            package_pattern = r'package\s+([A-Za-z_][\w.]*)'
+            package_pattern = r"package\s+([A-Za-z_][\w.]*)"
             packages = re.findall(package_pattern, content)
             if packages:
                 file_info.imports.append(f"package:{packages[0]}")
@@ -889,29 +1036,31 @@ class RepoMap:
     def _extract_scala_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Scala symbols and imports."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract class/trait/object definitions
-            class_pattern = r'(?:case\s+|sealed\s+|abstract\s+)?(?:class|trait|object)\s+([A-Z][A-Za-z0-9_]*)'
+            class_pattern = (
+                r"(?:case\s+|sealed\s+|abstract\s+)?(?:class|trait|object)\s+([A-Z][A-Za-z0-9_]*)"
+            )
             file_info.symbols.extend(re.findall(class_pattern, content))
 
             # Extract def (method/function) definitions
-            func_pattern = r'def\s+([a-z][A-Za-z0-9_]*)\s*(?:\[|\()'
+            func_pattern = r"def\s+([a-z][A-Za-z0-9_]*)\s*(?:\[|\()"
             file_info.symbols.extend(re.findall(func_pattern, content))
 
             # Extract val/var declarations
-            val_pattern = r'(?:val|var)\s+([a-z][A-Za-z0-9_]*)\s*[:=]'
+            val_pattern = r"(?:val|var)\s+([a-z][A-Za-z0-9_]*)\s*[:=]"
             file_info.symbols.extend(re.findall(val_pattern, content))
 
             # Extract imports
-            import_pattern = r'import\s+([A-Za-z_][\w.]*)'
+            import_pattern = r"import\s+([A-Za-z_][\w.]*)"
             file_info.imports.extend(re.findall(import_pattern, content))
 
             # Extract package
-            package_pattern = r'package\s+([A-Za-z_][\w.]*)'
+            package_pattern = r"package\s+([A-Za-z_][\w.]*)"
             packages = re.findall(package_pattern, content)
             if packages:
                 file_info.imports.append(f"package:{packages[0]}")
@@ -922,25 +1071,25 @@ class RepoMap:
     def _extract_swift_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Swift symbols and imports."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract class/struct/enum/protocol definitions
-            class_pattern = r'(?:public\s+|private\s+|internal\s+|fileprivate\s+)?(?:class|struct|enum|protocol|actor)\s+([A-Z][A-Za-z0-9_]*)'
+            class_pattern = r"(?:public\s+|private\s+|internal\s+|fileprivate\s+)?(?:class|struct|enum|protocol|actor)\s+([A-Z][A-Za-z0-9_]*)"
             file_info.symbols.extend(re.findall(class_pattern, content))
 
             # Extract function definitions
-            func_pattern = r'(?:public\s+|private\s+|internal\s+)?func\s+([a-z][A-Za-z0-9_]*)\s*(?:<[^>]+>)?\s*\('
+            func_pattern = r"(?:public\s+|private\s+|internal\s+)?func\s+([a-z][A-Za-z0-9_]*)\s*(?:<[^>]+>)?\s*\("
             file_info.symbols.extend(re.findall(func_pattern, content))
 
             # Extract var/let declarations
-            var_pattern = r'(?:public\s+|private\s+)?(?:var|let)\s+([a-z][A-Za-z0-9_]*)\s*[:=]'
+            var_pattern = r"(?:public\s+|private\s+)?(?:var|let)\s+([a-z][A-Za-z0-9_]*)\s*[:=]"
             file_info.symbols.extend(re.findall(var_pattern, content))
 
             # Extract imports
-            import_pattern = r'import\s+(?:class\s+|struct\s+|enum\s+|protocol\s+)?([A-Za-z_]\w*)'
+            import_pattern = r"import\s+(?:class\s+|struct\s+|enum\s+|protocol\s+)?([A-Za-z_]\w*)"
             file_info.imports.extend(re.findall(import_pattern, content))
 
         except Exception:
@@ -949,17 +1098,19 @@ class RepoMap:
     def _extract_dart_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Dart symbols and imports."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract class/abstract class/mixin definitions
-            class_pattern = r'(?:abstract\s+)?(?:class|mixin|enum)\s+([A-Z][A-Za-z0-9_]*)'
+            class_pattern = r"(?:abstract\s+)?(?:class|mixin|enum)\s+([A-Z][A-Za-z0-9_]*)"
             file_info.symbols.extend(re.findall(class_pattern, content))
 
             # Extract function definitions (top-level and methods)
-            func_pattern = r'(?:Future\s*<[^>]+>|[A-Za-z_]\w*(?:<[^>]+>)?)\s+([a-z][A-Za-z0-9_]*)\s*\('
+            func_pattern = (
+                r"(?:Future\s*<[^>]+>|[A-Za-z_]\w*(?:<[^>]+>)?)\s+([a-z][A-Za-z0-9_]*)\s*\("
+            )
             file_info.symbols.extend(re.findall(func_pattern, content))
 
             # Extract imports
@@ -976,7 +1127,7 @@ class RepoMap:
     def _extract_lua_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract Lua symbols and requires."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
@@ -984,15 +1135,15 @@ class RepoMap:
             # Extract function definitions
             # Matches: function name(...), function module.name(...), local function name(...)
             func_patterns = [
-                r'function\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(',
-                r'local\s+function\s+([A-Za-z_]\w*)\s*\(',
-                r'([A-Za-z_]\w*)\s*=\s*function\s*\('
+                r"function\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(",
+                r"local\s+function\s+([A-Za-z_]\w*)\s*\(",
+                r"([A-Za-z_]\w*)\s*=\s*function\s*\(",
             ]
             for pattern in func_patterns:
                 file_info.symbols.extend(re.findall(pattern, content))
 
             # Extract table/module definitions
-            table_pattern = r'(?:local\s+)?([A-Za-z_]\w*)\s*=\s*\{'
+            table_pattern = r"(?:local\s+)?([A-Za-z_]\w*)\s*=\s*\{"
             file_info.symbols.extend(re.findall(table_pattern, content))
 
             # Extract require statements
@@ -1005,27 +1156,29 @@ class RepoMap:
     def _extract_php_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract PHP symbols and includes."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with file_path.open(encoding="utf-8") as f:
                 content = f.read()
 
             import re
 
             # Extract class/interface/trait definitions
-            class_pattern = r'(?:abstract\s+|final\s+)?(?:class|interface|trait)\s+([A-Z][A-Za-z0-9_]*)'
+            class_pattern = (
+                r"(?:abstract\s+|final\s+)?(?:class|interface|trait)\s+([A-Z][A-Za-z0-9_]*)"
+            )
             file_info.symbols.extend(re.findall(class_pattern, content))
 
             # Extract function definitions
-            func_pattern = r'function\s+([a-z_][A-Za-z0-9_]*)\s*\('
+            func_pattern = r"function\s+([a-z_][A-Za-z0-9_]*)\s*\("
             file_info.symbols.extend(re.findall(func_pattern, content))
 
             # Extract namespace
-            namespace_pattern = r'namespace\s+([A-Za-z_][\w\\]*)'
+            namespace_pattern = r"namespace\s+([A-Za-z_][\w\\]*)"
             namespaces = re.findall(namespace_pattern, content)
             if namespaces:
                 file_info.symbols.extend(namespaces)
 
             # Extract use statements (imports)
-            use_pattern = r'use\s+([A-Za-z_][\w\\]*)'
+            use_pattern = r"use\s+([A-Za-z_][\w\\]*)"
             file_info.imports.extend(re.findall(use_pattern, content))
 
             # Extract require/include statements
@@ -1038,15 +1191,15 @@ class RepoMap:
     def _extract_generic_info(self, file_path: Path, file_info: FileInfo) -> None:
         """Extract basic symbols using generic patterns for unsupported languages."""
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            with file_path.open(encoding="utf-8", errors="ignore") as f:
                 content = f.read()
 
             import re
 
             # Try to find class-like definitions
             class_patterns = [
-                r'(?:class|struct|interface|trait|type)\s+([A-Z][A-Za-z0-9_]*)',
-                r'(?:public\s+)?class\s+([A-Z][A-Za-z0-9_]*)',
+                r"(?:class|struct|interface|trait|type)\s+([A-Z][A-Za-z0-9_]*)",
+                r"(?:public\s+)?class\s+([A-Z][A-Za-z0-9_]*)",
             ]
 
             for pattern in class_patterns:
@@ -1054,13 +1207,15 @@ class RepoMap:
 
             # Try to find function-like definitions
             func_patterns = [
-                r'(?:func|function|def|fn)\s+([a-zA-Z_]\w*)',
-                r'(?:public|private|protected)?\s+\w+\s+([a-zA-Z_]\w*)\s*\([^)]*\)',
+                r"(?:func|function|def|fn)\s+([a-zA-Z_]\w*)",
+                r"(?:public|private|protected)?\s+\w+\s+([a-zA-Z_]\w*)\s*\([^)]*\)",
             ]
 
             for pattern in func_patterns:
                 matches = re.findall(pattern, content)
-                file_info.symbols.extend([m for m in matches if m not in {'if', 'while', 'for', 'switch'}])
+                file_info.symbols.extend(
+                    [m for m in matches if m not in {"if", "while", "for", "switch"}]
+                )
 
             # Try to find import-like statements
             import_patterns = [
@@ -1075,27 +1230,26 @@ class RepoMap:
             pass
 
     def _normalize_mentions(
-        self,
-        mentioned_files: Set[str]
-    ) -> Tuple[Set[str], Set[str], Set[str], Tuple[str, ...]]:
+        self, mentioned_files: set[str]
+    ) -> tuple[set[str], set[str], set[str], tuple[str, ...]]:
         """Normalize mentioned file strings for fast lookup."""
         if not mentioned_files:
-            return set(), set(), set(), tuple()
+            return set(), set(), set(), ()
 
         mention_list = list(mentioned_files)
         original_count = len(mention_list)
         if original_count > self.MAX_FASTPATH_MENTIONS:
-            mention_list = sorted(mention_list)[:self.MAX_FASTPATH_MENTIONS]
+            mention_list = sorted(mention_list)[: self.MAX_FASTPATH_MENTIONS]
             self.logger.debug(
                 "Trimming mentioned_files from %d to %d entries for ranking safety",
                 original_count,
-                len(mention_list)
+                len(mention_list),
             )
 
         trimmed_set = set(mention_list)
-        mentioned_names: Set[str] = set()
-        mentioned_stems: Set[str] = set()
-        directory_mentions: List[str] = []
+        mentioned_names: set[str] = set()
+        mentioned_stems: set[str] = set()
+        directory_mentions: list[str] = []
 
         for raw in mention_list:
             stripped = raw.strip()
@@ -1110,26 +1264,26 @@ class RepoMap:
                 if len(stem) > 3:
                     mentioned_stems.add(stem)
             else:
-                candidate = stripped.split('/')[-1]
-                if '.' in candidate:
+                candidate = stripped.split("/")[-1]
+                if "." in candidate:
                     mentioned_names.add(candidate)
                     stem = Path(candidate).stem
                     if len(stem) > 3:
                         mentioned_stems.add(stem)
 
-            if ('/' in stripped or '\\' in stripped) and len(stripped) > 6:
+            if ("/" in stripped or "\\" in stripped) and len(stripped) > 6:
                 directory_mentions.append(stripped)
 
         if len(directory_mentions) > self.MAX_DIRECTORY_MATCHES:
-            directory_mentions = directory_mentions[:self.MAX_DIRECTORY_MATCHES]
+            directory_mentions = directory_mentions[: self.MAX_DIRECTORY_MATCHES]
 
         return trimmed_set, mentioned_names, mentioned_stems, tuple(directory_mentions)
 
     def _symbol_match_score(
         self,
         file_info: FileInfo,
-        mentioned_symbols: Set[str],
-        long_symbol_prefixes: Tuple[str, ...]
+        mentioned_symbols: set[str],
+        long_symbol_prefixes: tuple[str, ...],
     ) -> float:
         """Compute symbol-based score contributions for a file."""
         if not mentioned_symbols:
@@ -1162,14 +1316,14 @@ class RepoMap:
 
     def _quick_rank_by_symbols(
         self,
-        mentioned_files: Set[str],
-        mentioned_symbols: Set[str],
+        mentioned_files: set[str],
+        mentioned_symbols: set[str],
         max_files: int,
-        mentioned_names: Optional[Set[str]] = None,
-        mentioned_stems: Optional[Set[str]] = None,
-        directory_mentions: Optional[Tuple[str, ...]] = None,
-        long_symbol_prefixes: Optional[Tuple[str, ...]] = None
-    ) -> List[Tuple[str, float]]:
+        mentioned_names: set[str] | None = None,
+        mentioned_stems: set[str] | None = None,
+        directory_mentions: tuple[str, ...] | None = None,
+        long_symbol_prefixes: tuple[str, ...] | None = None,
+    ) -> list[tuple[str, float]]:
         """Quick ranking based on direct symbol/file matches (no PageRank).
 
         This is significantly faster than full PageRank-based ranking and works
@@ -1183,9 +1337,9 @@ class RepoMap:
         if mentioned_stems is None:
             mentioned_stems = set()
         if directory_mentions is None:
-            directory_mentions = tuple()
+            directory_mentions = ()
         if long_symbol_prefixes is None:
-            long_symbol_prefixes = tuple()
+            long_symbol_prefixes = ()
 
         rankings = {}
         mentioned_symbols = set(mentioned_symbols)
@@ -1238,7 +1392,9 @@ class RepoMap:
 
         # Validate files exist before returning (filter out stale cache entries)
         validated_files = []
-        for file_path, score in sorted_files[:max_files * 2]:  # Check extra files in case some are missing
+        for file_path, score in sorted_files[
+            : max_files * 2
+        ]:  # Check extra files in case some are missing
             full_path = self.root_path / file_path
             if full_path.exists():
                 validated_files.append((file_path, score))
@@ -1251,11 +1407,8 @@ class RepoMap:
         return validated_files
 
     def get_ranked_files(
-        self,
-        mentioned_files: Set[str],
-        mentioned_symbols: Set[str],
-        max_files: int = 20
-    ) -> List[Tuple[str, float]]:
+        self, mentioned_files: set[str], mentioned_symbols: set[str], max_files: int = 20
+    ) -> list[tuple[str, float]]:
         """Get ranked list of relevant files using PageRank and symbol matching.
 
         Performance: Uses lazy PageRank computation. If there are strong direct
@@ -1267,7 +1420,9 @@ class RepoMap:
         """
 
         mentioned_symbols = set(mentioned_symbols)
-        mentioned_files, mentioned_names, mentioned_stems, directory_mentions = self._normalize_mentions(mentioned_files)
+        mentioned_files, mentioned_names, mentioned_stems, directory_mentions = (
+            self._normalize_mentions(mentioned_files)
+        )
         long_symbol_prefixes = tuple(sym for sym in mentioned_symbols if len(sym) >= 8)
 
         # OPTIMIZATION: Try fast-path ranking first (no PageRank needed)
@@ -1279,7 +1434,7 @@ class RepoMap:
                 mentioned_names,
                 mentioned_stems,
                 directory_mentions,
-                long_symbol_prefixes
+                long_symbol_prefixes,
             )
 
             # Use fast-path ONLY if we have strong evidence of relevance:
@@ -1302,9 +1457,7 @@ class RepoMap:
                 # However, we should check: did we get a symbol or file match?
                 has_symbol_match = bool(mentioned_symbols)
                 top_file_info = self.context.files.get(top_file)
-                top_file_name = (
-                    top_file_info.file_name if top_file_info else Path(top_file).name
-                )
+                top_file_name = top_file_info.file_name if top_file_info else Path(top_file).name
                 has_exact_file_match = (
                     top_file in mentioned_files or top_file_name in mentioned_names
                 )
@@ -1396,7 +1549,9 @@ class RepoMap:
 
         # Validate files exist before returning (filter out stale cache entries)
         validated_files = []
-        for file_path, score in sorted_files[:max_files * 2]:  # Check extra files in case some are missing
+        for file_path, score in sorted_files[
+            : max_files * 2
+        ]:  # Check extra files in case some are missing
             full_path = self.root_path / file_path
             if full_path.exists():
                 validated_files.append((file_path, score))
@@ -1408,7 +1563,7 @@ class RepoMap:
 
         return validated_files
 
-    def get_file_summary(self, file_path: str) -> Optional[str]:
+    def get_file_summary(self, file_path: str) -> str | None:
         """Get a summary of a file."""
         file_info = self.context.files.get(file_path)
         if not file_info:
@@ -1433,11 +1588,11 @@ class RepoMap:
 
         return "\n".join(summary_parts)
 
-    def find_symbol(self, symbol: str) -> List[str]:
+    def find_symbol(self, symbol: str) -> list[str]:
         """Find files containing a symbol."""
         return list(self.context.symbol_index.get(symbol, set()))
 
-    def get_dependencies(self, file_path: str) -> Set[str]:
+    def get_dependencies(self, file_path: str) -> set[str]:
         """Get files that a given file depends on."""
         file_info = self.context.files.get(file_path)
         if not file_info:
@@ -1462,10 +1617,7 @@ class RepoMap:
             return True
 
         # All digits
-        if symbol.isdigit():
-            return True
-
-        return False
+        return bool(symbol.isdigit())
 
     def _get_file_priority_multiplier(self, file_path: str) -> float:
         """Get a generic priority multiplier based on common repository conventions."""
@@ -1473,15 +1625,15 @@ class RepoMap:
         parts_lower = [part.lower() for part in path_obj.parts]
 
         # Build token sets so we can match broad categories regardless of separators.
-        path_tokens: Set[str] = set()
+        path_tokens: set[str] = set()
         for part in parts_lower:
-            normalized = part.replace('-', '_')
+            normalized = part.replace("-", "_")
             path_tokens.add(normalized)
-            path_tokens.update(token for token in normalized.split('_') if token)
+            path_tokens.update(token for token in normalized.split("_") if token)
 
         filename_lower = path_obj.name.lower()
-        normalized_name = filename_lower.replace('-', '_').replace('.', '_')
-        name_tokens = {token for token in normalized_name.split('_') if token}
+        normalized_name = filename_lower.replace("-", "_").replace(".", "_")
+        name_tokens = {token for token in normalized_name.split("_") if token}
         suffixes = [suffix.lower() for suffix in path_obj.suffixes]
 
         # Demote common low-signal categories first.
@@ -1527,7 +1679,7 @@ class RepoMap:
         G.add_nodes_from(self.context.files.keys())
 
         # Collect edges in a dict for batch insertion (optimization)
-        edge_data: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        edge_data: dict[tuple[str, str], dict[str, Any]] = {}
 
         # Build edges based on symbol usage
         for file_path, file_info in self.context.files.items():
@@ -1555,7 +1707,7 @@ class RepoMap:
                             weight_multiplier *= 10.0  # Major boost for good names
 
                         # Reduce weight for private symbols
-                        if symbol.startswith('_'):
+                        if symbol.startswith("_"):
                             weight_multiplier *= 0.1
 
                         # Apply length heuristic (longer names are usually more specific)
@@ -1567,19 +1719,13 @@ class RepoMap:
                         # OPTIMIZATION: Accumulate edges in dict instead of adding to graph
                         edge_key = (file_path, definer)
                         if edge_key in edge_data:
-                            edge_data[edge_key]['weight'] += final_weight
-                            edge_data[edge_key]['symbols'].append(symbol)
+                            edge_data[edge_key]["weight"] += final_weight
+                            edge_data[edge_key]["symbols"].append(symbol)
                         else:
-                            edge_data[edge_key] = {
-                                'weight': final_weight,
-                                'symbols': [symbol]
-                            }
+                            edge_data[edge_key] = {"weight": final_weight, "symbols": [symbol]}
 
         # OPTIMIZATION: Batch add all edges at once (single NetworkX operation)
-        G.add_edges_from(
-            (source, target, data)
-            for (source, target), data in edge_data.items()
-        )
+        G.add_edges_from((source, target, data) for (source, target), data in edge_data.items())
 
         self.context.dependency_graph = G
         return G
@@ -1602,13 +1748,13 @@ class RepoMap:
         else:
             has_upper = any(c.isupper() for c in symbol)
             has_lower = any(c.islower() for c in symbol)
-            has_underscore = '_' in symbol
+            has_underscore = "_" in symbol
 
             # Match common naming patterns
             result = (
-                (has_upper and not has_lower and has_underscore) or  # CONSTANT_CASE
-                (has_lower and not has_upper and has_underscore) or  # snake_case
-                (has_upper and has_lower and not has_underscore)     # camelCase/PascalCase
+                (has_upper and not has_lower and has_underscore)  # CONSTANT_CASE
+                or (has_lower and not has_upper and has_underscore)  # snake_case
+                or (has_upper and has_lower and not has_underscore)  # camelCase/PascalCase
             )
 
         # Cache and return
@@ -1617,11 +1763,11 @@ class RepoMap:
 
     def compute_pagerank(
         self,
-        personalization: Optional[Dict[str, float]] = None,
+        personalization: dict[str, float] | None = None,
         *,
         cache_results: bool = True,
         use_edge_distribution: bool = True,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Compute PageRank scores for all files.
 
         When ``cache_results`` is True (default), the computed scores are stored on the
@@ -1643,18 +1789,11 @@ class RepoMap:
         try:
             # Compute PageRank
             pagerank_scores = nx.pagerank(
-                G,
-                alpha=0.85,
-                personalization=personalization,
-                weight='weight'
+                G, alpha=0.85, personalization=personalization, weight="weight"
             )
         except nx.PowerIterationFailedConvergence:
             # Fallback to unweighted if convergence fails
-            pagerank_scores = nx.pagerank(
-                G,
-                alpha=0.85,
-                personalization=personalization
-            )
+            pagerank_scores = nx.pagerank(G, alpha=0.85, personalization=personalization)
 
         # Apply edge distribution if enabled (Aider's approach)
         if use_edge_distribution:
@@ -1666,7 +1805,9 @@ class RepoMap:
 
         return pagerank_scores
 
-    def _distribute_pagerank_to_edges(self, G: nx.DiGraph, node_ranks: Dict[str, float]) -> Dict[str, float]:
+    def _distribute_pagerank_to_edges(
+        self, G: nx.DiGraph, node_ranks: dict[str, float]
+    ) -> dict[str, float]:
         """Distribute node PageRank scores across edges based on weights.
 
         This is Aider's approach: instead of just using node scores, we distribute
@@ -1686,11 +1827,11 @@ class RepoMap:
                 continue
 
             # Calculate total weight of outgoing edges
-            total_weight = sum(data.get('weight', 1.0) for _, _, data in out_edges)
+            total_weight = sum(data.get("weight", 1.0) for _, _, data in out_edges)
 
             # Distribute rank proportionally across edges
             for source, target, data in out_edges:
-                edge_weight = data.get('weight', 1.0)
+                edge_weight = data.get("weight", 1.0)
                 edge_rank = node_rank * (edge_weight / total_weight)
 
                 # Add distributed rank to target
@@ -1715,11 +1856,11 @@ class RepoMap:
 
     def get_ranked_files_pagerank(
         self,
-        mentioned_files: Set[str],
-        mentioned_symbols: Set[str],
-        conversation_files: Optional[Set[str]] = None,
-        max_files: int = 20
-    ) -> List[Tuple[str, float, Dict[str, Any]]]:
+        mentioned_files: set[str],
+        mentioned_symbols: set[str],
+        conversation_files: set[str] | None = None,
+        max_files: int = 20,
+    ) -> list[tuple[str, float, dict[str, Any]]]:
         """Get files ranked by PageRank with context boosting.
 
         Returns: List of (file_path, score, metadata)
@@ -1763,18 +1904,18 @@ class RepoMap:
             # Boost for matching symbols
             matching_symbols = set(file_info.symbols) & mentioned_symbols
             if matching_symbols:
-                score *= (1.0 + len(matching_symbols))
+                score *= 1.0 + len(matching_symbols)
 
             # Boost for files referencing mentioned symbols
             referenced_mentioned = set(file_info.symbols_used) & mentioned_symbols
             if referenced_mentioned:
-                score *= (1.0 + 0.5 * len(referenced_mentioned))
+                score *= 1.0 + 0.5 * len(referenced_mentioned)
 
             # Boost long meaningful identifiers in symbols
             long_symbols = sum(
                 1
                 for symbol in file_info.symbols
-                if len(symbol) >= 8 and ('_' in symbol or symbol[0].isupper())
+                if len(symbol) >= 8 and ("_" in symbol or symbol[0].isupper())
             )
             if long_symbols:
                 score *= 1.0 + 0.1 * min(long_symbols, 5)
@@ -1794,18 +1935,18 @@ class RepoMap:
         for file_path, score in sorted_files[:max_files]:
             file_info = self.context.files[file_path]
             metadata = {
-                'base_pagerank': self.context.pagerank_scores.get(file_path, 0.0),
-                'adjusted_score': score,
-                'symbols': file_info.symbols[:5],  # Top 5 symbols
-                'size': file_info.size,
-                'language': file_info.language
+                "base_pagerank": self.context.pagerank_scores.get(file_path, 0.0),
+                "adjusted_score": score,
+                "symbols": file_info.symbols[:5],  # Top 5 symbols
+                "size": file_info.size,
+                "language": file_info.language,
             }
 
             # Add graph info if available
             if self.context.dependency_graph and file_path in self.context.dependency_graph:
                 G = self.context.dependency_graph
-                metadata['incoming_edges'] = G.in_degree(file_path)
-                metadata['outgoing_edges'] = G.out_degree(file_path)
+                metadata["incoming_edges"] = G.in_degree(file_path)
+                metadata["outgoing_edges"] = G.out_degree(file_path)
 
             results.append((file_path, score, metadata))
 

@@ -1,11 +1,15 @@
 """Conversation summarization helpers used by the session context pruner."""
+
 from __future__ import annotations
 
 import logging
-from typing import Protocol, Sequence
+from typing import TYPE_CHECKING, Protocol
 
 from ai_dev_agent.core.utils.context_budget import summarize_text
 from ai_dev_agent.providers.llm.base import LLMClient, LLMError, Message
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 LOGGER = logging.getLogger(__name__)
 

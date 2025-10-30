@@ -5,17 +5,16 @@ This module provides utility functions to simplify common testing tasks.
 
 import json
 import os
-import subprocess
-import tempfile
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
-from unittest.mock import patch, MagicMock
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import wraps
+from pathlib import Path
+from typing import Any, Optional, Union
+from unittest.mock import MagicMock
 
 
-def run_with_timeout(func, timeout: float = 5.0, *args, **kwargs) -> Tuple[bool, Any]:
+def run_with_timeout(func, timeout: float = 5.0, *args, **kwargs) -> tuple[bool, Any]:
     """Run a function with timeout.
 
     Args:
@@ -72,8 +71,7 @@ def assert_files_equal(file1: Path, file2: Path, ignore_whitespace: bool = False
     assert content1 == content2, f"Files {file1} and {file2} have different content"
 
 
-def create_test_project(root_dir: Path,
-                       structure: Dict[str, Union[str, Dict]]) -> None:
+def create_test_project(root_dir: Path, structure: dict[str, Union[str, dict]]) -> None:
     """Create a test project with given structure.
 
     Args:
@@ -103,7 +101,8 @@ def create_test_project(root_dir: Path,
             path.write_text(content)
 
 
-def capture_logs(logger_name: str = None) -> List[Dict]:
+@contextmanager
+def capture_logs(logger_name: Optional[str] = None) -> list[dict]:
     """Capture log messages during test.
 
     Args:
@@ -120,19 +119,18 @@ def capture_logs(logger_name: str = None) -> List[Dict]:
             self.records = []
 
         def emit(self, record):
-            self.records.append({
-                "level": record.levelname,
-                "message": record.getMessage(),
-                "logger": record.name,
-                "timestamp": record.created
-            })
+            self.records.append(
+                {
+                    "level": record.levelname,
+                    "message": record.getMessage(),
+                    "logger": record.name,
+                    "timestamp": record.created,
+                }
+            )
 
     handler = LogCapture()
 
-    if logger_name:
-        logger = logging.getLogger(logger_name)
-    else:
-        logger = logging.getLogger()
+    logger = logging.getLogger(logger_name) if logger_name else logging.getLogger()
 
     logger.addHandler(handler)
     try:
@@ -167,9 +165,7 @@ def temporary_env(**env_vars):
                 os.environ[key] = value
 
 
-def wait_for_condition(condition_func,
-                      timeout: float = 5.0,
-                      interval: float = 0.1) -> bool:
+def wait_for_condition(condition_func, timeout: float = 5.0, interval: float = 0.1) -> bool:
     """Wait for a condition to become true.
 
     Args:
@@ -188,7 +184,7 @@ def wait_for_condition(condition_func,
     return False
 
 
-def mock_subprocess_run(commands: Dict[str, Dict]) -> MagicMock:
+def mock_subprocess_run(commands: dict[str, dict]) -> MagicMock:
     """Create mock for subprocess.run with predefined responses.
 
     Args:
@@ -203,6 +199,7 @@ def mock_subprocess_run(commands: Dict[str, Dict]) -> MagicMock:
             "pytest": {"stdout": "All tests passed", "returncode": 0}
         })
     """
+
     def side_effect(cmd, **kwargs):
         cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
 
@@ -228,6 +225,7 @@ def mock_subprocess_run(commands: Dict[str, Dict]) -> MagicMock:
 @dataclass
 class TestMetrics:
     """Container for test execution metrics."""
+
     test_name: str
     execution_time: float
     memory_usage: float
@@ -245,9 +243,10 @@ def measure_test_performance(func) -> TestMetrics:
     Returns:
         TestMetrics object with measurements
     """
-    import tracemalloc
     import time
+    import tracemalloc
 
+    @wraps(func)
     def wrapper(*args, **kwargs):
         # Start measurements
         tracemalloc.start()
@@ -273,7 +272,7 @@ def measure_test_performance(func) -> TestMetrics:
         finally:
             # Stop measurements
             end_time = time.perf_counter()
-            current, peak = tracemalloc.get_traced_memory()
+            _current, peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
 
             # Create metrics
@@ -282,20 +281,19 @@ def measure_test_performance(func) -> TestMetrics:
                 execution_time=end_time - start_time,
                 memory_usage=peak / 1024 / 1024,  # Convert to MB
                 assertions=assertion_count[0],
-                passed=passed
+                passed=passed,
             )
 
             # Store metrics for retrieval
-            if not hasattr(func, "_test_metrics"):
-                func._test_metrics = []
-            func._test_metrics.append(metrics)
+            wrapper._test_metrics.append(metrics)
 
         return result
 
+    wrapper._test_metrics = []
     return wrapper
 
 
-def generate_test_data(data_type: str, count: int = 10, **kwargs) -> List[Any]:
+def generate_test_data(data_type: str, count: int = 10, **kwargs) -> list[Any]:
     """Generate test data of various types.
 
     Args:
@@ -312,8 +310,7 @@ def generate_test_data(data_type: str, count: int = 10, **kwargs) -> List[Any]:
 
     if data_type == "strings":
         length = kwargs.get("length", 10)
-        return [''.join(random.choices(string.ascii_letters, k=length))
-                for _ in range(count)]
+        return ["".join(random.choices(string.ascii_letters, k=length)) for _ in range(count)]
 
     elif data_type == "numbers":
         min_val = kwargs.get("min", 0)
@@ -340,9 +337,9 @@ def generate_test_data(data_type: str, count: int = 10, **kwargs) -> List[Any]:
         raise ValueError(f"Unknown data type: {data_type}")
 
 
-def compare_json_structures(json1: Union[str, Dict],
-                           json2: Union[str, Dict],
-                           ignore_keys: List[str] = None) -> bool:
+def compare_json_structures(
+    json1: Union[str, dict], json2: Union[str, dict], ignore_keys: Optional[list[str]] = None
+) -> bool:
     """Compare two JSON structures ignoring specific keys.
 
     Args:
@@ -371,9 +368,9 @@ def compare_json_structures(json1: Union[str, Dict],
     return clean_dict(json1) == clean_dict(json2)
 
 
-def create_mock_response(status_code: int = 200,
-                        content: Any = None,
-                        headers: Dict = None) -> MagicMock:
+def create_mock_response(
+    status_code: int = 200, content: Any = None, headers: Optional[dict] = None
+) -> MagicMock:
     """Create a mock HTTP response.
 
     Args:
@@ -394,7 +391,7 @@ def create_mock_response(status_code: int = 200,
     return response
 
 
-def validate_schema(data: Dict, schema: Dict) -> Tuple[bool, List[str]]:
+def validate_schema(data: dict, schema: dict) -> tuple[bool, list[str]]:
     """Validate data against a simple schema.
 
     Args:
@@ -430,11 +427,7 @@ def validate_schema(data: Dict, schema: Dict) -> Tuple[bool, List[str]]:
         if field_type == "object" and isinstance(value, dict):
             properties = field_schema.get("properties", {})
             for key, prop_schema in properties.items():
-                validate_field(
-                    value.get(key),
-                    prop_schema,
-                    f"{path}.{key}" if path else key
-                )
+                validate_field(value.get(key), prop_schema, f"{path}.{key}" if path else key)
 
     # Validate top-level properties
     for key, field_schema in schema.items():

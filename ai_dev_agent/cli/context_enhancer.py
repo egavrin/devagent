@@ -1,18 +1,19 @@
 """Automatic context enhancement using RepoMap and Memory Bank for all queries."""
 
+import logging
 import re
 from pathlib import Path
-from typing import Set, List, Optional, Tuple, Dict, Any
-import logging
-
-logger = logging.getLogger(__name__)
+from typing import Any, Optional
 
 from ai_dev_agent.core.repo_map import RepoMapManager
 from ai_dev_agent.core.utils.config import Settings
 
+logger = logging.getLogger(__name__)
+
 # Import memory system if available
 try:
-    from ai_dev_agent.memory import MemoryStore, MemoryDistiller
+    from ai_dev_agent.memory import MemoryDistiller, MemoryStore
+
     MEMORY_SYSTEM_AVAILABLE = True
 except ImportError:
     MEMORY_SYSTEM_AVAILABLE = False
@@ -20,7 +21,8 @@ except ImportError:
 
 # Import playbook system if available
 try:
-    from ai_dev_agent.playbook import PlaybookManager, PlaybookCurator, InstructionCategory
+    from ai_dev_agent.playbook import InstructionCategory, PlaybookCurator, PlaybookManager
+
     PLAYBOOK_SYSTEM_AVAILABLE = True
 except ImportError:
     PLAYBOOK_SYSTEM_AVAILABLE = False
@@ -29,11 +31,12 @@ except ImportError:
 # Import dynamic instructions if available
 try:
     from ai_dev_agent.dynamic_instructions import (
-        DynamicInstructionManager,
         ABTestManager,
+        DynamicInstructionManager,
+        UpdateSource,
         UpdateType,
-        UpdateSource
     )
+
     DYNAMIC_INSTRUCTIONS_AVAILABLE = True
 except ImportError:
     DYNAMIC_INSTRUCTIONS_AVAILABLE = False
@@ -54,13 +57,16 @@ class ContextEnhancer:
 
         # Initialize memory store if available and enabled
         self._memory_store = None
-        if MEMORY_SYSTEM_AVAILABLE and getattr(settings, 'enable_memory_bank', True):
+        if MEMORY_SYSTEM_AVAILABLE and getattr(settings, "enable_memory_bank", True):
             try:
                 # Use project-scoped storage: <workspace>/.devagent/memory/
                 memory_path = self.workspace / ".devagent" / "memory" / "reasoning_bank.json"
                 self._memory_store = MemoryStore(store_path=memory_path)
-                logger.debug("Memory bank initialized with %d memories from %s",
-                           len(self._memory_store._memories), memory_path)
+                logger.debug(
+                    "Memory bank initialized with %d memories from %s",
+                    len(self._memory_store._memories),
+                    memory_path,
+                )
             except Exception as e:
                 logger.warning(f"Failed to initialize memory store: {e}")
                 self._memory_store = None
@@ -68,14 +74,17 @@ class ContextEnhancer:
         # Initialize playbook manager if available and enabled
         self._playbook_manager = None
         self._playbook_curator = None
-        if PLAYBOOK_SYSTEM_AVAILABLE and getattr(settings, 'enable_playbook', True):
+        if PLAYBOOK_SYSTEM_AVAILABLE and getattr(settings, "enable_playbook", True):
             try:
                 # Use project-scoped storage: <workspace>/.devagent/playbook/
                 playbook_path = self.workspace / ".devagent" / "playbook" / "instructions.json"
                 self._playbook_manager = PlaybookManager(playbook_path=playbook_path)
                 self._playbook_curator = PlaybookCurator(self._playbook_manager)
-                logger.debug("Playbook initialized with %d instructions from %s",
-                           len(self._playbook_manager.get_all_instructions()), playbook_path)
+                logger.debug(
+                    "Playbook initialized with %d instructions from %s",
+                    len(self._playbook_manager.get_all_instructions()),
+                    playbook_path,
+                )
             except Exception as e:
                 logger.warning(f"Failed to initialize playbook: {e}")
                 self._playbook_manager = None
@@ -84,21 +93,29 @@ class ContextEnhancer:
         # Initialize dynamic instruction manager if available and enabled
         self._dynamic_instruction_manager = None
         self._ab_test_manager = None
-        if DYNAMIC_INSTRUCTIONS_AVAILABLE and getattr(settings, 'enable_dynamic_instructions', True):
+        if DYNAMIC_INSTRUCTIONS_AVAILABLE and getattr(
+            settings, "enable_dynamic_instructions", True
+        ):
             try:
                 # Use project-scoped storage: <workspace>/.devagent/dynamic_instructions/
-                dynamic_history_path = self.workspace / ".devagent" / "dynamic_instructions" / "update_history.json"
-                dynamic_snapshots_path = self.workspace / ".devagent" / "dynamic_instructions" / "snapshots.json"
+                dynamic_history_path = (
+                    self.workspace / ".devagent" / "dynamic_instructions" / "update_history.json"
+                )
+                dynamic_snapshots_path = (
+                    self.workspace / ".devagent" / "dynamic_instructions" / "snapshots.json"
+                )
                 self._dynamic_instruction_manager = DynamicInstructionManager(
                     history_path=dynamic_history_path,
                     snapshots_path=dynamic_snapshots_path,
-                    confidence_threshold=getattr(settings, 'instruction_update_confidence', 0.8),
-                    auto_rollback_on_error=getattr(settings, 'instruction_rollback_on_error', True),
-                    max_history=getattr(settings, 'instruction_max_history', 100),
-                    analysis_interval=getattr(settings, 'instruction_analysis_interval', 15),
-                    auto_apply_threshold=getattr(settings, 'instruction_auto_apply_threshold', 0.8),
-                    proposal_min_queries=getattr(settings, 'instruction_proposal_min_queries', 10),
-                    max_auto_apply_per_cycle=getattr(settings, 'instruction_max_auto_apply_per_cycle', 3)
+                    confidence_threshold=getattr(settings, "instruction_update_confidence", 0.8),
+                    auto_rollback_on_error=getattr(settings, "instruction_rollback_on_error", True),
+                    max_history=getattr(settings, "instruction_max_history", 100),
+                    analysis_interval=getattr(settings, "instruction_analysis_interval", 15),
+                    auto_apply_threshold=getattr(settings, "instruction_auto_apply_threshold", 0.8),
+                    proposal_min_queries=getattr(settings, "instruction_proposal_min_queries", 10),
+                    max_auto_apply_per_cycle=getattr(
+                        settings, "instruction_max_auto_apply_per_cycle", 3
+                    ),
                 )
                 self._ab_test_manager = ABTestManager(auto_conclude=True)
                 logger.debug("Dynamic instructions initialized (project-scoped)")
@@ -124,7 +141,7 @@ class ContextEnhancer:
                 self._initialized = True
         return self._repo_map
 
-    def _get_important_files(self, all_files: List[str], max_files: int) -> List[Tuple[str, float]]:
+    def _get_important_files(self, all_files: list[str], max_files: int) -> list[tuple[str, float]]:
         """Get important files using Aider-style prioritization.
 
         Returns files with scores based on their importance in typical codebases.
@@ -132,54 +149,100 @@ class ContextEnhancer:
         # Comprehensive list of important file patterns (inspired by Aider)
         important_patterns = {
             # Documentation (highest priority)
-            'README.md': 20.0, 'readme.md': 20.0, 'README.rst': 20.0, 'README.txt': 20.0,
-            'README': 18.0, 'CONTRIBUTING.md': 15.0, 'CHANGELOG.md': 12.0, 'CHANGES.md': 12.0,
-            'AUTHORS.md': 10.0, 'LICENSE': 15.0, 'LICENSE.md': 15.0, 'LICENSE.txt': 15.0,
-
+            "README.md": 20.0,
+            "readme.md": 20.0,
+            "README.rst": 20.0,
+            "README.txt": 20.0,
+            "README": 18.0,
+            "CONTRIBUTING.md": 15.0,
+            "CHANGELOG.md": 12.0,
+            "CHANGES.md": 12.0,
+            "AUTHORS.md": 10.0,
+            "LICENSE": 15.0,
+            "LICENSE.md": 15.0,
+            "LICENSE.txt": 15.0,
             # Python configuration
-            'pyproject.toml': 18.0, 'setup.py': 18.0, 'setup.cfg': 16.0,
-            'requirements.txt': 15.0, 'requirements.in': 14.0,
-            'Pipfile': 14.0, 'poetry.lock': 12.0,
-            'tox.ini': 10.0, 'pytest.ini': 10.0, '.coveragerc': 8.0,
-
+            "pyproject.toml": 18.0,
+            "setup.py": 18.0,
+            "setup.cfg": 16.0,
+            "requirements.txt": 15.0,
+            "requirements.in": 14.0,
+            "Pipfile": 14.0,
+            "poetry.lock": 12.0,
+            "tox.ini": 10.0,
+            "pytest.ini": 10.0,
+            ".coveragerc": 8.0,
             # JavaScript/TypeScript configuration
-            'package.json': 18.0, 'tsconfig.json': 16.0, 'webpack.config.js': 14.0,
-            'babel.config.js': 12.0, 'jest.config.js': 10.0, '.eslintrc.js': 8.0,
-            'vite.config.js': 12.0, 'next.config.js': 12.0, 'nuxt.config.js': 12.0,
-
+            "package.json": 18.0,
+            "tsconfig.json": 16.0,
+            "webpack.config.js": 14.0,
+            "babel.config.js": 12.0,
+            "jest.config.js": 10.0,
+            ".eslintrc.js": 8.0,
+            "vite.config.js": 12.0,
+            "next.config.js": 12.0,
+            "nuxt.config.js": 12.0,
             # Build files
-            'Makefile': 16.0, 'makefile': 16.0, 'CMakeLists.txt': 16.0,
-            'build.gradle': 14.0, 'pom.xml': 14.0, 'Cargo.toml': 14.0,
-            'go.mod': 14.0, 'go.sum': 12.0,
-
+            "Makefile": 16.0,
+            "makefile": 16.0,
+            "CMakeLists.txt": 16.0,
+            "build.gradle": 14.0,
+            "pom.xml": 14.0,
+            "Cargo.toml": 14.0,
+            "go.mod": 14.0,
+            "go.sum": 12.0,
             # Docker/Containers
-            'Dockerfile': 16.0, 'docker-compose.yml': 14.0, 'docker-compose.yaml': 14.0,
-            '.dockerignore': 8.0, 'kubernetes.yml': 12.0,
-
+            "Dockerfile": 16.0,
+            "docker-compose.yml": 14.0,
+            "docker-compose.yaml": 14.0,
+            ".dockerignore": 8.0,
+            "kubernetes.yml": 12.0,
             # CI/CD
-            '.github/workflows/ci.yml': 12.0, '.github/workflows/main.yml': 12.0,
-            '.gitlab-ci.yml': 12.0, '.travis.yml': 10.0, 'azure-pipelines.yml': 10.0,
-            'Jenkinsfile': 10.0, '.circleci/config.yml': 10.0,
-
+            ".github/workflows/ci.yml": 12.0,
+            ".github/workflows/main.yml": 12.0,
+            ".gitlab-ci.yml": 12.0,
+            ".travis.yml": 10.0,
+            "azure-pipelines.yml": 10.0,
+            "Jenkinsfile": 10.0,
+            ".circleci/config.yml": 10.0,
             # Entry points (lower than config but still important)
-            'main.py': 10.0, 'app.py': 10.0, 'server.py': 10.0, 'index.py': 9.0,
-            'index.js': 10.0, 'index.ts': 10.0, 'main.js': 10.0, 'main.ts': 10.0,
-            'app.js': 9.0, 'app.ts': 9.0, 'server.js': 9.0, 'server.ts': 9.0,
-            'cli.py': 8.0, '__main__.py': 8.0, '__init__.py': 6.0,
-
+            "main.py": 10.0,
+            "app.py": 10.0,
+            "server.py": 10.0,
+            "index.py": 9.0,
+            "index.js": 10.0,
+            "index.ts": 10.0,
+            "main.js": 10.0,
+            "main.ts": 10.0,
+            "app.js": 9.0,
+            "app.ts": 9.0,
+            "server.js": 9.0,
+            "server.ts": 9.0,
+            "cli.py": 8.0,
+            "__main__.py": 8.0,
+            "__init__.py": 6.0,
             # Configuration files
-            '.env.example': 8.0, 'config.py': 8.0, 'settings.py': 8.0,
-            'config.json': 7.0, 'config.yaml': 7.0, 'config.yml': 7.0,
-            '.editorconfig': 5.0, '.gitignore': 5.0, '.gitattributes': 5.0,
+            ".env.example": 8.0,
+            "config.py": 8.0,
+            "settings.py": 8.0,
+            "config.json": 7.0,
+            "config.yaml": 7.0,
+            "config.yml": 7.0,
+            ".editorconfig": 5.0,
+            ".gitignore": 5.0,
+            ".gitattributes": 5.0,
         }
 
         # Also check for patterns in paths (not just exact names)
         path_patterns = {
-            'src/index': 9.0, 'src/main': 9.0, 'src/app': 8.0,
-            'lib/index': 9.0, 'lib/main': 9.0,
-            'cmd/main': 9.0,  # Go entry points
-            'bin/': 7.0,  # Binary/script directories
-            'scripts/': 6.0,
+            "src/index": 9.0,
+            "src/main": 9.0,
+            "src/app": 8.0,
+            "lib/index": 9.0,
+            "lib/main": 9.0,
+            "cmd/main": 9.0,  # Go entry points
+            "bin/": 7.0,  # Binary/script directories
+            "scripts/": 6.0,
         }
 
         important_files = []
@@ -215,9 +278,20 @@ class ContextEnhancer:
                     continue
                 # Skip test files, generated files, vendored code
                 lower_path = file_path.lower()
-                if any(skip in lower_path for skip in
-                       ['test', 'spec', 'vendor', 'node_modules', '.min.',
-                        'dist/', 'build/', '__pycache__', '.egg-info']):
+                if any(
+                    skip in lower_path
+                    for skip in [
+                        "test",
+                        "spec",
+                        "vendor",
+                        "node_modules",
+                        ".min.",
+                        "dist/",
+                        "build/",
+                        "__pycache__",
+                        ".egg-info",
+                    ]
+                ):
                     continue
                 # Add with lower score
                 important_files.append((file_path, 3.0))
@@ -229,29 +303,105 @@ class ContextEnhancer:
         important_files.sort(key=lambda x: x[1], reverse=True)
         return important_files[:max_files]
 
-    def extract_symbols_and_files(self, text: str) -> Tuple[Set[str], Set[str]]:
+    def extract_symbols_and_files(self, text: str) -> tuple[set[str], set[str]]:
         """Extract symbols and file mentions from text."""
-        symbols: Set[str] = set()
-        files_in_order: List[str] = []
-        files_seen: Set[str] = set()
+        symbols: set[str] = set()
+        files_in_order: list[str] = []
+        files_seen: set[str] = set()
         directory_mentions = 0
 
         # Common English words to exclude
-        stop_words = {'what', 'where', 'when', 'how', 'why', 'who', 'which', 'the',
-                      'find', 'files', 'related', 'implement', 'implements', 'for',
-                      'all', 'about', 'with', 'from', 'that', 'this', 'does', 'have',
-                      'many', 'lines', 'line', 'file', 'any', 'type', 'types',
-                      'check', 'case', 'cases', 'could', 'please', 'tell', 'there',
-                      'some', 'more', 'will', 'emit', 'emitted', 'union', 'generics',
-                      'without', 'such', 'fragile', 'constructs', 'variants', 'cover',
-                      'covers', 'these', 'those', 'like'}
+        stop_words = {
+            "what",
+            "where",
+            "when",
+            "how",
+            "why",
+            "who",
+            "which",
+            "the",
+            "find",
+            "files",
+            "related",
+            "implement",
+            "implements",
+            "for",
+            "all",
+            "about",
+            "with",
+            "from",
+            "that",
+            "this",
+            "does",
+            "have",
+            "many",
+            "lines",
+            "line",
+            "file",
+            "any",
+            "type",
+            "types",
+            "check",
+            "case",
+            "cases",
+            "could",
+            "please",
+            "tell",
+            "there",
+            "some",
+            "more",
+            "will",
+            "emit",
+            "emitted",
+            "union",
+            "generics",
+            "without",
+            "such",
+            "fragile",
+            "constructs",
+            "variants",
+            "cover",
+            "covers",
+            "these",
+            "those",
+            "like",
+        }
 
         generic_symbols = {
-            'any', 'type', 'types', 'check', 'checking', 'case', 'cases',
-            'generic', 'generics', 'union', 'optional', 'undefined', 'please',
-            'could', 'would', 'should', 'tell', 'these', 'those', 'this', 'that',
-            'where', 'when', 'what', 'with', 'emit', 'emitted', 'emitting',
-            'cover', 'covers', 'fragile', 'construct', 'constructs', 'variants'
+            "any",
+            "type",
+            "types",
+            "check",
+            "checking",
+            "case",
+            "cases",
+            "generic",
+            "generics",
+            "union",
+            "optional",
+            "undefined",
+            "please",
+            "could",
+            "would",
+            "should",
+            "tell",
+            "these",
+            "those",
+            "this",
+            "that",
+            "where",
+            "when",
+            "what",
+            "with",
+            "emit",
+            "emitted",
+            "emitting",
+            "cover",
+            "covers",
+            "fragile",
+            "construct",
+            "constructs",
+            "variants",
         }
 
         def _should_keep_symbol(token: str) -> bool:
@@ -262,43 +412,69 @@ class ContextEnhancer:
                 return False
             if lowered.isnumeric():
                 return False
-            if len(lowered) <= 2 and lowered not in {'c', 'go', 'js', 'ts', 'py'}:
-                return False
-            return True
+            return not (len(lowered) <= 2 and lowered not in {"c", "go", "js", "ts", "py"})
 
         # Common file extensions
-        FILE_EXTENSIONS = {
-            'py', 'js', 'ts', 'tsx', 'jsx', 'cpp', 'cc', 'cxx', 'c', 'h', 'hpp',
-            'java', 'go', 'rs', 'rb', 'php', 'cs', 'swift', 'kt', 'scala', 'ets',
-            'yaml', 'yml', 'json', 'xml', 'md', 'txt', 'sh', 'bash'
+        file_extensions = {
+            "py",
+            "js",
+            "ts",
+            "tsx",
+            "jsx",
+            "cpp",
+            "cc",
+            "cxx",
+            "c",
+            "h",
+            "hpp",
+            "java",
+            "go",
+            "rs",
+            "rb",
+            "php",
+            "cs",
+            "swift",
+            "kt",
+            "scala",
+            "ets",
+            "yaml",
+            "yml",
+            "json",
+            "xml",
+            "md",
+            "txt",
+            "sh",
+            "bash",
         }
 
         # Extract file paths (existing patterns)
         # Matches: path/to/file.ext, ./file.ext, ../path/file.ext
-        potential_files = re.findall(r'[\w./\-]+\.\w+', text)
+        potential_files = re.findall(r"[\w./\-]+\.\w+", text)
         for pf in potential_files:
-            if '.' in pf and not pf.startswith('http'):
-                if pf not in files_seen:
-                    files_seen.add(pf)
-                    files_in_order.append(pf)
+            if "." in pf and not pf.startswith("http") and pf not in files_seen:
+                files_seen.add(pf)
+                files_in_order.append(pf)
 
         # NEW: Extract bare filenames (e.g., "commands.py", "helpers.h")
         # This catches filenames mentioned without paths
-        words = re.findall(r'\b[\w\-]+\b', text)
+        words = re.findall(r"\b[\w\-]+\b", text)
         for word in words:
-            if '.' in word:
-                parts = word.split('.')
-                if len(parts) == 2 and parts[1].lower() in FILE_EXTENSIONS:
-                    if word not in files_seen:
-                        files_seen.add(word)
-                        files_in_order.append(word)
+            if "." in word:
+                parts = word.split(".")
+                if (
+                    len(parts) == 2
+                    and parts[1].lower() in file_extensions
+                    and word not in files_seen
+                ):
+                    files_seen.add(word)
+                    files_in_order.append(word)
 
         # NEW: Match against actual repo files (most powerful)
         if self._initialized and self.repo_map.context.files:
             text_lower = text.lower()
 
             # Iterate with items() to get FileInfo for potential caching
-            for file_path, file_info in self.repo_map.context.files.items():
+            for file_path, _file_info in self.repo_map.context.files.items():
                 # Create Path object once and reuse (aider's approach)
                 path_obj = Path(file_path)
                 file_name = path_obj.name.lower()
@@ -314,61 +490,72 @@ class ContextEnhancer:
 
                 # Check if stem (without extension) is mentioned
                 stem = path_obj.stem.lower()  # Reuse path_obj
-                if len(stem) > 3 and stem in text_lower:
-                    # Only if stem appears as a word boundary
-                    if re.search(r'\b' + re.escape(stem) + r'\b', text_lower):
-                        if file_path not in files_seen:
-                            files_seen.add(file_path)
-                            files_in_order.append(file_path)
-                        if self.settings.repomap_debug_stdout:
-                            logger.debug(f"Matched repo file: {file_path} (from stem: {stem})")
+                if (
+                    len(stem) > 3
+                    and stem in text_lower
+                    and re.search(r"\b" + re.escape(stem) + r"\b", text_lower)
+                ) and file_path not in files_seen:
+                    files_seen.add(file_path)
+                    files_in_order.append(file_path)
+                    if self.settings.repomap_debug_stdout:
+                        logger.debug(f"Matched repo file: {file_path} (from stem: {stem})")
 
                 # NEW: Check if directory name is mentioned (e.g., "bytecode_optimizer")
                 # This helps with queries like "files in bytecode_optimizer"
                 parts = path_obj.parts  # Reuse path_obj
                 for part in parts:
                     part_lower = part.lower()
-                    if len(part_lower) > 6 and part_lower in text_lower:
-                        if re.search(r'\b' + re.escape(part_lower) + r'\b', text_lower):
-                            # Add this as a "directory mention" - will boost all files in that dir
-                            if part not in files_seen and directory_mentions < self.DIRECTORY_MENTION_LIMIT:
-                                files_seen.add(part)
-                                files_in_order.append(part)
-                                directory_mentions += 1
+                    if (
+                        len(part_lower) > 6
+                        and part_lower in text_lower
+                        and re.search(r"\b" + re.escape(part_lower) + r"\b", text_lower)
+                    ):
+                        # Add this as a "directory mention" - will boost all files in that dir
+                        if (
+                            part not in files_seen
+                            and directory_mentions < self.DIRECTORY_MENTION_LIMIT
+                        ):
+                            files_seen.add(part)
+                            files_in_order.append(part)
+                            directory_mentions += 1
                             if self.settings.repomap_debug_stdout:
-                                logger.debug(f"Matched directory: {part} (matches files in {file_path})")
+                                logger.debug(
+                                    f"Matched directory: {part} (matches files in {file_path})"
+                                )
                             break
 
         # Extract CamelCase and snake_case identifiers
         # Pattern-based extraction filters out English prose automatically
         # CamelCase (at least 2 capital letters or mixed case)
-        camel_matches = re.findall(r'\b[A-Z][a-z]*[A-Z][A-Za-z]*\b', text)
+        camel_matches = re.findall(r"\b[A-Z][a-z]*[A-Z][A-Za-z]*\b", text)
         symbols.update(match for match in camel_matches if _should_keep_symbol(match))
 
         # PascalCase (Capital followed by lowercase)
-        pascal_matches = re.findall(r'\b[A-Z][a-z]+(?:[A-Z][a-z]+)*\b', text)
+        pascal_matches = re.findall(r"\b[A-Z][a-z]+(?:[A-Z][a-z]+)*\b", text)
         # Filter out common English words
         symbols.update(w for w in pascal_matches if _should_keep_symbol(w))
 
         # snake_case
         symbols.update(
-            token for token in re.findall(r'\b[a-z]+(?:_[a-z]+)+\b', text)
+            token
+            for token in re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", text)
             if _should_keep_symbol(token)
         )
         # CONSTANT_CASE
         symbols.update(
-            token for token in re.findall(r'\b[A-Z]+(?:_[A-Z]+)+\b', text)
+            token
+            for token in re.findall(r"\b[A-Z]+(?:_[A-Z]+)+\b", text)
             if _should_keep_symbol(token)
         )
 
         # Single uppercase words that are likely class names (but not stop words)
-        single_caps = re.findall(r'\b[A-Z][a-z]{2,}\b', text)
+        single_caps = re.findall(r"\b[A-Z][a-z]{2,}\b", text)
         symbols.update(w for w in single_caps if _should_keep_symbol(w))
 
-        prioritized_files: List[str]
+        prioritized_files: list[str]
         if self._initialized and self.repo_map.context.files:
-            repo_files: List[str] = []
-            extra_entries: List[str] = []
+            repo_files: list[str] = []
+            extra_entries: list[str] = []
             repo_index = self.repo_map.context.files
             for entry in files_in_order:
                 if entry in repo_index:
@@ -380,7 +567,7 @@ class ContextEnhancer:
             prioritized_files = files_in_order
 
         if len(prioritized_files) > self.FILE_MENTION_LIMIT:
-            prioritized_files = prioritized_files[:self.FILE_MENTION_LIMIT]
+            prioritized_files = prioritized_files[: self.FILE_MENTION_LIMIT]
 
         return symbols, set(prioritized_files)
 
@@ -399,26 +586,20 @@ class ContextEnhancer:
 
             repo_files = self.repo_map.context.files
             repo_file_names = {
-                info.file_name.lower()
-                for info in repo_files.values()
-                if info.file_name
+                info.file_name.lower() for info in repo_files.values() if info.file_name
             }
             repo_file_stems = {
-                info.file_stem.lower()
-                for info in repo_files.values()
-                if info.file_stem
+                info.file_stem.lower() for info in repo_files.values() if info.file_stem
             }
 
             # Get relevant files from RepoMap
             relevant_files = self.repo_map.get_ranked_files(
-                mentioned_files=mentioned_files,
-                mentioned_symbols=symbols,
-                max_files=max_files
+                mentioned_files=mentioned_files, mentioned_symbols=symbols, max_files=max_files
             )
 
-            unmatched_mentions: List[str] = []
+            unmatched_mentions: list[str] = []
             for candidate in mentioned_files:
-                candidate_lower = candidate.lower()
+                candidate.lower()
                 if candidate in repo_files:
                     continue
                 name_lower = Path(candidate).name.lower()
@@ -428,8 +609,7 @@ class ContextEnhancer:
                 unmatched_mentions.append(candidate)
 
             missing_symbols = [
-                sym for sym in symbols
-                if sym not in self.repo_map.context.symbol_index
+                sym for sym in symbols if sym not in self.repo_map.context.symbol_index
             ]
 
             if not relevant_files:
@@ -451,7 +631,7 @@ class ContextEnhancer:
             # Build context string
             context_lines = [
                 "\n[Automatic Context from RepoMap]",
-                f"Found {len(relevant_files)} relevant files (ranked by importance):"
+                f"Found {len(relevant_files)} relevant files (ranked by importance):",
             ]
 
             # Debug output
@@ -514,7 +694,9 @@ class ContextEnhancer:
             logger.warning(f"Failed to enhance query with RepoMap context: {e}")
             return query
 
-    def get_context_for_files(self, files: List[str], symbols: Set[str] = None) -> List[str]:
+    def get_context_for_files(
+        self, files: list[str], symbols: Optional[set[str]] = None
+    ) -> list[str]:
         """Get additional context files for the given files (like Aider's approach)."""
         try:
             # Use the files as "chat files" for personalization
@@ -522,9 +704,7 @@ class ContextEnhancer:
 
             # Get ranked related files
             related = self.repo_map.get_ranked_files(
-                mentioned_files=mentioned_files,
-                mentioned_symbols=symbols or set(),
-                max_files=10
+                mentioned_files=mentioned_files, mentioned_symbols=symbols or set(), max_files=10
             )
 
             # Return just the file paths
@@ -534,9 +714,13 @@ class ContextEnhancer:
             logger.warning(f"Failed to get context files: {e}")
             return []
 
-    def get_repomap_messages(self, query: str, max_files: int = 15,
-                            additional_files: Optional[Set[str]] = None,
-                            additional_symbols: Optional[Set[str]] = None) -> Tuple[str, Optional[List[dict]]]:
+    def get_repomap_messages(
+        self,
+        query: str,
+        max_files: int = 15,
+        additional_files: Optional[set[str]] = None,
+        additional_symbols: Optional[set[str]] = None,
+    ) -> tuple[str, Optional[list[dict]]]:
         """Get RepoMap context as conversation messages (Aider's approach).
 
         Args:
@@ -568,11 +752,15 @@ class ContextEnhancer:
             effective_max_files = max_files  # May be expanded for exploratory queries
 
             # Tier 1: Standard approach with mentioned files/symbols
-            relevant_files = self.repo_map.get_ranked_files(
-                mentioned_files=mentioned_files,
-                mentioned_symbols=symbols,
-                max_files=effective_max_files
-            ) if (symbols or mentioned_files) else []
+            relevant_files = (
+                self.repo_map.get_ranked_files(
+                    mentioned_files=mentioned_files,
+                    mentioned_symbols=symbols,
+                    max_files=effective_max_files,
+                )
+                if (symbols or mentioned_files)
+                else []
+            )
 
             # Tier 2: If no results, try with important files boosted
             if not relevant_files and (symbols or mentioned_files):
@@ -581,7 +769,9 @@ class ContextEnhancer:
                 effective_max_files = min(max_files * 2, 30)  # 2x expansion, cap at 30
 
                 if self.settings.repomap_debug_stdout:
-                    logger.debug(f"Tier 1 failed, trying Tier 2 with important files boost (max_files={effective_max_files})")
+                    logger.debug(
+                        f"Tier 1 failed, trying Tier 2 with important files boost (max_files={effective_max_files})"
+                    )
 
                 # Get important files to boost their priority
                 all_files_list = list(self.repo_map.context.files.keys())
@@ -593,8 +783,8 @@ class ContextEnhancer:
 
                 relevant_files = self.repo_map.get_ranked_files(
                     mentioned_files=boosted_files,  # Include important files
-                    mentioned_symbols=symbols,       # Still use symbols for weighting
-                    max_files=effective_max_files
+                    mentioned_symbols=symbols,  # Still use symbols for weighting
+                    max_files=effective_max_files,
                 )
 
             # Tier 3: Only for TRULY exploratory queries where we have additional context
@@ -604,17 +794,19 @@ class ContextEnhancer:
                 # Aider-style: 8x expansion for exploratory queries (no direct matches)
                 effective_max_files = min(max_files * 8, 120)  # 8x expansion like Aider, cap at 120
                 if self.settings.repomap_debug_stdout:
-                    logger.debug(f"Tier 2 failed, trying Tier 3 with pure PageRank (max_files={effective_max_files})")
+                    logger.debug(
+                        f"Tier 2 failed, trying Tier 3 with pure PageRank (max_files={effective_max_files})"
+                    )
                 # Get top files by pure PageRank (no personalization)
                 all_files = list(self.repo_map.context.files.keys())
                 if all_files:
                     # Get PageRank scores for all files
-                    from ai_dev_agent.core.repo_map import RepoMap
+
                     # Create a minimal RepoMap call with no hints
                     relevant_files = self.repo_map.get_ranked_files(
                         mentioned_files=set(),  # No file hints
-                        mentioned_symbols=set(), # No symbol hints
-                        max_files=effective_max_files  # Use expanded budget
+                        mentioned_symbols=set(),  # No symbol hints
+                        max_files=effective_max_files,  # Use expanded budget
                     )
 
                     # If still nothing (shouldn't happen), fall back to important files
@@ -632,18 +824,15 @@ class ContextEnhancer:
                 # Exploratory context with many files
                 context_lines = [
                     "Here is an overview of the repository structure (showing key files):",
-                    ""
+                    "",
                 ]
             else:
-                context_lines = [
-                    "Here are the relevant files in the git repository:",
-                    ""
-                ]
+                context_lines = ["Here are the relevant files in the git repository:", ""]
 
             # Group by score ranges and display based on tier
             if fallback_tier == 3:
                 # For exploratory queries, show all files (no filtering)
-                for file_path, score in relevant_files:
+                for file_path, _score in relevant_files:
                     entry = f"  • {file_path}"
                     context_lines.append(entry)
             else:
@@ -653,8 +842,7 @@ class ContextEnhancer:
                 low_relevance = []
 
                 for file_path, score in relevant_files:
-                    file_info = self.repo_map.context.files.get(file_path)
-                    lang = file_info.language if file_info else "unknown"
+                    self.repo_map.context.files.get(file_path)
 
                     # Show full relative path
                     entry = f"  • {file_path}"
@@ -668,20 +856,24 @@ class ContextEnhancer:
 
                 # Show high relevance files prominently
                 if high_relevance:
-                    for entry, score in high_relevance:
+                    for entry, _score in high_relevance:
                         context_lines.append(f"{entry}")
 
                 # Add medium relevance if there's space
                 if medium_relevance and len(high_relevance) < 10:
                     context_lines.append("")
-                    for entry, score in medium_relevance[:10]:
+                    for entry, _score in medium_relevance[:10]:
                         context_lines.append(f"{entry}")
 
                 # In Tier 2, also include some low relevance files
-                if fallback_tier == 2 and low_relevance and len(high_relevance) + len(medium_relevance) < 20:
+                if (
+                    fallback_tier == 2
+                    and low_relevance
+                    and len(high_relevance) + len(medium_relevance) < 20
+                ):
                     context_lines.append("")
                     remaining = 20 - len(high_relevance) - len(medium_relevance)
-                    for entry, score in low_relevance[:remaining]:
+                    for entry, _score in low_relevance[:remaining]:
                         context_lines.append(f"{entry}")
 
             repomap_content = "\n".join(context_lines)
@@ -696,7 +888,7 @@ class ContextEnhancer:
             if self.settings.repomap_debug_stdout:
                 logger.debug("RepoMap message preview:")
                 preview = repomap_content[:300] if len(repomap_content) > 300 else repomap_content
-                for line in preview.split('\n'):
+                for line in preview.split("\n"):
                     logger.debug(f"  {line}")
 
             # Return as conversation messages (Aider's approach)
@@ -709,19 +901,15 @@ class ContextEnhancer:
                     "or I can search for relevant code based on your query."
                 )
             elif len(high_relevance) <= 3:
-                assistant_msg = f"I can see the relevant files. I'll read them directly to answer your question."
+                assistant_msg = (
+                    "I can see the relevant files. I'll read them directly to answer your question."
+                )
             else:
                 assistant_msg = f"I can see {len(high_relevance)} relevant files. I'll focus on the most relevant ones."
 
             repomap_messages = [
-                {
-                    "role": "user",
-                    "content": repomap_content
-                },
-                {
-                    "role": "assistant",
-                    "content": assistant_msg
-                }
+                {"role": "user", "content": repomap_content},
+                {"role": "assistant", "content": assistant_msg},
             ]
 
             return query, repomap_messages
@@ -732,14 +920,9 @@ class ContextEnhancer:
                 logger.debug(f"Failed to get RepoMap messages: {e}")
             return query, None
 
-
     def get_memory_context(
-        self,
-        query: str,
-        task_type: Optional[str] = None,
-        limit: int = 5,
-        threshold: float = 0.3
-    ) -> Tuple[List[Dict[str, Any]], Optional[List[str]]]:
+        self, query: str, task_type: Optional[str] = None, limit: int = 5, threshold: float = 0.3
+    ) -> tuple[list[dict[str, Any]], Optional[list[str]]]:
         """Retrieve relevant memories for the query.
 
         Args:
@@ -757,10 +940,7 @@ class ContextEnhancer:
         try:
             # Search for relevant memories
             similar_memories = self._memory_store.search_similar(
-                query=query,
-                task_type=task_type,
-                limit=limit,
-                threshold=threshold
+                query=query, task_type=task_type, limit=limit, threshold=threshold
             )
 
             if not similar_memories:
@@ -798,16 +978,15 @@ class ContextEnhancer:
                 memory_content_parts.extend(memory_text)
 
             # Create memory message
-            memory_messages.append({
-                "role": "system",
-                "content": "\n".join(memory_content_parts)
-            })
+            memory_messages.append({"role": "system", "content": "\n".join(memory_content_parts)})
 
             # Add a brief acknowledgment
-            memory_messages.append({
-                "role": "assistant",
-                "content": f"I've retrieved {len(similar_memories)} relevant memories from past experiences that may help with this task."
-            })
+            memory_messages.append(
+                {
+                    "role": "assistant",
+                    "content": f"I've retrieved {len(similar_memories)} relevant memories from past experiences that may help with this task.",
+                }
+            )
 
             if self.settings.repomap_debug_stdout:
                 logger.debug(f"Retrieved {len(similar_memories)} memories for query")
@@ -819,10 +998,7 @@ class ContextEnhancer:
             return [], None
 
     def track_memory_effectiveness(
-        self,
-        memory_ids: List[str],
-        success: bool,
-        feedback: Optional[str] = None
+        self, memory_ids: list[str], success: bool, feedback: Optional[str] = None
     ) -> None:
         """Track the effectiveness of used memories.
 
@@ -840,9 +1016,7 @@ class ContextEnhancer:
 
             for memory_id in memory_ids:
                 self._memory_store.update_effectiveness(
-                    memory_id=memory_id,
-                    score_delta=score_delta,
-                    usage_feedback=feedback
+                    memory_id=memory_id, score_delta=score_delta, usage_feedback=feedback
                 )
 
             if self.settings.repomap_debug_stdout:
@@ -852,10 +1026,7 @@ class ContextEnhancer:
             logger.warning(f"Failed to track memory effectiveness: {e}")
 
     def distill_and_store_memory(
-        self,
-        session_id: str,
-        messages: List[Any],
-        metadata: Optional[Dict[str, Any]] = None
+        self, session_id: str, messages: list[Any], metadata: Optional[dict[str, Any]] = None
     ) -> Optional[str]:
         """Distill and store a memory from a completed session.
 
@@ -876,9 +1047,7 @@ class ContextEnhancer:
 
             # Distill memory from session
             memory = distiller.distill_from_session(
-                session_id=session_id,
-                messages=messages,
-                metadata=metadata
+                session_id=session_id, messages=messages, metadata=metadata
             )
 
             # Store the memory
@@ -900,9 +1069,7 @@ class ContextEnhancer:
             return None
 
     def get_playbook_context(
-        self,
-        task_type: Optional[str] = None,
-        max_instructions: int = 10
+        self, task_type: Optional[str] = None, max_instructions: int = 10
     ) -> Optional[str]:
         """Get relevant playbook instructions for the current task.
 
@@ -938,8 +1105,7 @@ class ContextEnhancer:
 
             # Get formatted instructions
             context = self._playbook_manager.format_for_context(
-                categories=categories,
-                max_instructions=max_instructions
+                categories=categories, max_instructions=max_instructions
             )
 
             return context
@@ -948,11 +1114,7 @@ class ContextEnhancer:
             logger.warning(f"Failed to get playbook context: {e}")
             return None
 
-    def track_playbook_effectiveness(
-        self,
-        instruction_ids: List[str],
-        success: bool
-    ) -> None:
+    def track_playbook_effectiveness(self, instruction_ids: list[str], success: bool) -> None:
         """Track effectiveness of used playbook instructions.
 
         Args:
@@ -964,17 +1126,14 @@ class ContextEnhancer:
 
         try:
             for instruction_id in instruction_ids:
-                self._playbook_manager.track_usage(
-                    instruction_id=instruction_id,
-                    success=success
-                )
+                self._playbook_manager.track_usage(instruction_id=instruction_id, success=success)
 
             logger.debug(f"Tracked {len(instruction_ids)} instruction usages")
 
         except Exception as e:
             logger.warning(f"Failed to track playbook effectiveness: {e}")
 
-    def optimize_playbook(self, dry_run: bool = True) -> Optional[Dict[str, Any]]:
+    def optimize_playbook(self, dry_run: bool = True) -> Optional[dict[str, Any]]:
         """Run playbook optimization to remove duplicates and improve quality.
 
         Args:
@@ -1010,11 +1169,7 @@ class ContextEnhancer:
         except Exception as e:
             logger.warning(f"Failed to start instruction session: {e}")
 
-    def end_instruction_session(
-        self,
-        session_id: str,
-        success: bool = True
-    ) -> Optional[List[Any]]:
+    def end_instruction_session(self, session_id: str, success: bool = True) -> Optional[list[Any]]:
         """End instruction tracking session.
 
         Args:
@@ -1029,8 +1184,7 @@ class ContextEnhancer:
 
         try:
             updates = self._dynamic_instruction_manager.end_session(
-                session_id=session_id,
-                success=success
+                session_id=session_id, success=success
             )
             logger.info(f"Ended instruction session {session_id}: {len(updates)} updates")
             return updates
@@ -1046,7 +1200,7 @@ class ContextEnhancer:
         reasoning: str,
         new_content: Optional[str] = None,
         new_priority: Optional[int] = None,
-        task_context: Optional[str] = None
+        task_context: Optional[str] = None,
     ) -> Optional[Any]:
         """Propose a dynamic instruction update.
 
@@ -1074,7 +1228,7 @@ class ContextEnhancer:
                 reasoning=reasoning,
                 new_content=new_content,
                 new_priority=new_priority,
-                task_context=task_context
+                task_context=task_context,
             )
 
             # Auto-apply if confidence is high enough
@@ -1094,7 +1248,7 @@ class ContextEnhancer:
         content_a: str,
         content_b: str,
         description: str = "",
-        target_sample_size: int = 100
+        target_sample_size: int = 100,
     ) -> Optional[Any]:
         """Create an A/B test for instruction variants.
 
@@ -1119,7 +1273,7 @@ class ContextEnhancer:
                 content_a=content_a,
                 content_b=content_b,
                 description=description,
-                target_sample_size=target_sample_size
+                target_sample_size=target_sample_size,
             )
 
             # Auto-start the test
@@ -1133,11 +1287,7 @@ class ContextEnhancer:
             return None
 
     def record_ab_test_result(
-        self,
-        instruction_id: str,
-        variant_id: str,
-        success: bool,
-        time_ms: float = 0.0
+        self, instruction_id: str, variant_id: str, success: bool, time_ms: float = 0.0
     ) -> None:
         """Record a result for an A/B test variant.
 
@@ -1155,7 +1305,7 @@ class ContextEnhancer:
                 instruction_id=instruction_id,
                 variant_id=variant_id,
                 success=success,
-                time_ms=time_ms
+                time_ms=time_ms,
             )
         except Exception as e:
             logger.warning(f"Failed to record A/B test result: {e}")
@@ -1168,10 +1318,10 @@ class ContextEnhancer:
         self,
         session_id: str,
         success: bool,
-        tools_used: List[str],
+        tools_used: list[str],
         task_type: str = "general",
         error_type: Optional[str] = None,
-        duration_seconds: Optional[float] = None
+        duration_seconds: Optional[float] = None,
     ) -> None:
         """Record a query outcome for pattern tracking and automatic proposals.
 
@@ -1193,7 +1343,7 @@ class ContextEnhancer:
                 tools_used=tools_used,
                 task_type=task_type,
                 error_type=error_type,
-                duration_seconds=duration_seconds
+                duration_seconds=duration_seconds,
             )
 
             # Check if analysis should be triggered
@@ -1211,8 +1361,7 @@ class ContextEnhancer:
 
         try:
             result = self._dynamic_instruction_manager.analyze_and_propose_instructions(
-                playbook_manager=self._playbook_manager,
-                settings=self.settings
+                playbook_manager=self._playbook_manager, settings=self.settings
             )
 
             if result["auto_applied"] > 0:
@@ -1221,14 +1370,12 @@ class ContextEnhancer:
                 )
 
             if result["pending_review"] > 0:
-                logger.info(
-                    f"💭 {result['pending_review']} instruction proposals pending review"
-                )
+                logger.info(f"💭 {result['pending_review']} instruction proposals pending review")
 
         except Exception as e:
             logger.error(f"Failed to analyze patterns and propose instructions: {e}")
 
-    def get_pattern_statistics(self) -> Optional[Dict[str, Any]]:
+    def get_pattern_statistics(self) -> Optional[dict[str, Any]]:
         """Get statistics about recorded query patterns.
 
         Returns:
@@ -1243,7 +1390,7 @@ class ContextEnhancer:
             logger.warning(f"Failed to get pattern statistics: {e}")
             return None
 
-    def get_dynamic_instruction_statistics(self) -> Optional[Dict[str, Any]]:
+    def get_dynamic_instruction_statistics(self) -> Optional[dict[str, Any]]:
         """Get statistics about dynamic instruction updates.
 
         Returns:
@@ -1266,7 +1413,9 @@ class ContextEnhancer:
 _context_enhancer = None
 
 
-def get_context_enhancer(workspace: Optional[Path] = None, settings: Optional[Settings] = None) -> ContextEnhancer:
+def get_context_enhancer(
+    workspace: Optional[Path] = None, settings: Optional[Settings] = None
+) -> ContextEnhancer:
     """Get or create the global context enhancer."""
     global _context_enhancer
     if _context_enhancer is None:
@@ -1274,7 +1423,7 @@ def get_context_enhancer(workspace: Optional[Path] = None, settings: Optional[Se
     return _context_enhancer
 
 
-def enhance_query(query: str, workspace: Optional[Path] = None) -> Tuple[str, Optional[List[dict]]]:
+def enhance_query(query: str, workspace: Optional[Path] = None) -> tuple[str, Optional[list[dict]]]:
     """Convenience function to enhance a query with RepoMap context.
 
     Returns:

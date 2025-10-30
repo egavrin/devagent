@@ -1,19 +1,23 @@
 """Helpers for constructing consistent system prompts across DevAgent surfaces."""
+
 from __future__ import annotations
 
 import os
 import platform
 import subprocess
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set
+from typing import TYPE_CHECKING
 
-from ai_dev_agent.core.utils.config import DEFAULT_MAX_ITERATIONS, Settings
 from ai_dev_agent.core.utils.context_budget import summarize_text
 from ai_dev_agent.providers.llm.base import Message
-from ai_dev_agent.tools import READ, WRITE, FIND, GREP, SYMBOLS, RUN
+from ai_dev_agent.tool_names import FIND, GREP, READ, RUN, SYMBOLS, WRITE
 
-_LANGUAGE_HINTS: Dict[str, str] = {
+if TYPE_CHECKING:
+    from ai_dev_agent.core.utils.config import Settings
+
+_LANGUAGE_HINTS: dict[str, str] = {
     "python": "\n- Use symbols for Python code structure\n- Check requirements.txt/setup.py for dependencies\n- Use import analysis for module relationships",
     "javascript": "\n- Consider package.json for dependencies\n- Use symbols for JS/TS structure\n- Check for .eslintrc for code standards",
     "typescript": "\n- Check tsconfig.json for compilation settings\n- Use symbols for TypeScript analysis\n- Consider type definitions in .d.ts files",
@@ -31,7 +35,7 @@ _LANGUAGE_HINTS: Dict[str, str] = {
     "dart": "\n- Check pubspec.yaml for dependencies\n- Consider Flutter structure if applicable\n- Use dart analyze for code issues",
 }
 
-_PROVIDER_PREAMBLES: Dict[str, str] = {
+_PROVIDER_PREAMBLES: dict[str, str] = {
     "anthropic": "Anthropic models favour concise tool arguments and defer to user confirmations when tooling is denied.",
     "deepseek": "DeepSeek models can emit multi-step tool calls; keep responses grounded in repository evidence and summarise final answers clearly.",
     "openai": "OpenAI GPT models support JSON function calls; prefer structured outputs when sharing lists or diagnostics.",
@@ -54,24 +58,27 @@ _GLOBAL_INSTRUCTION_CANDIDATES: Sequence[Path] = (
 
 def build_system_messages(
     *,
-    iteration_cap: Optional[int] = None,
-    repository_language: Optional[str] = None,
+    iteration_cap: int | None = None,
+    repository_language: str | None = None,
     include_react_guidance: bool = True,
-    extra_messages: Optional[List[str]] = None,
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
-    workspace_root: Optional[Path] = None,
-    settings: Optional[Settings] = None,
-    instruction_paths: Optional[Sequence[str]] = None,
-) -> List[Message]:
+    extra_messages: list[str] | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    workspace_root: Path | None = None,
+    settings: Settings | None = None,
+    instruction_paths: Sequence[str] | None = None,
+) -> list[Message]:
     """Produce baseline system messages reused across DevAgent entry points."""
 
     root = _resolve_workspace_root(workspace_root, settings)
 
-    guidance_sections: List[str] = []
-    context_sections: List[str] = []
+    guidance_sections: list[str] = []
+    context_sections: list[str] = []
 
-    provider_preamble = _provider_preamble(provider or (getattr(settings, "provider", None) or ""), model or getattr(settings, "model", None))
+    provider_preamble = _provider_preamble(
+        provider or (getattr(settings, "provider", None) or ""),
+        model or getattr(settings, "model", None),
+    )
     if provider_preamble:
         guidance_sections.append(provider_preamble)
 
@@ -89,11 +96,13 @@ def build_system_messages(
         context_sections.append("Additional instructions:\n" + "\n\n".join(instruction_blocks))
 
     if extra_messages:
-        context_sections.append("\n".join(entry.strip() for entry in extra_messages if entry).strip())
+        context_sections.append(
+            "\n".join(entry.strip() for entry in extra_messages if entry).strip()
+        )
 
     primary_text = "\n\n".join(section.strip() for section in guidance_sections if section).strip()
 
-    messages: List[Message] = []
+    messages: list[Message] = []
     if primary_text:
         messages.append(Message(role="system", content=primary_text))
 
@@ -109,7 +118,7 @@ def build_system_messages(
     return messages
 
 
-def _resolve_workspace_root(workspace_root: Optional[Path], settings: Optional[Settings]) -> Path:
+def _resolve_workspace_root(workspace_root: Path | None, settings: Settings | None) -> Path:
     candidate = workspace_root or getattr(settings, "workspace_root", None) or Path.cwd()
     try:
         return candidate.resolve()
@@ -117,7 +126,7 @@ def _resolve_workspace_root(workspace_root: Optional[Path], settings: Optional[S
         return Path.cwd()
 
 
-def _provider_preamble(provider: str, model: Optional[str]) -> str:
+def _provider_preamble(provider: str, model: str | None) -> str:
     key = provider.lower().strip()
     if not key:
         return ""
@@ -159,10 +168,10 @@ def _provider_preamble(provider: str, model: Optional[str]) -> str:
 
 
 def _react_guidance(
-    iteration_cap: Optional[int],
-    repository_language: Optional[str],
+    iteration_cap: int | None,
+    repository_language: str | None,
     *,
-    settings: Optional[Settings] = None,
+    settings: Settings | None = None,
 ) -> str:
     core = (
         "You are a helpful assistant for the devagent CLI tool, specialised in efficient software development tasks.\n\n"
@@ -281,10 +290,10 @@ def _react_guidance(
         "- Don't read files you've already read\n"
         "- Don't run tests without knowing the test command\n"
         "- Don't assume build tools or frameworks are available\n"
-"\nSecurity:\n"
-"- Never commit API keys, passwords, or secrets\n"
-"- Don't log sensitive information\n"
-)
+        "\nSecurity:\n"
+        "- Never commit API keys, passwords, or secrets\n"
+        "- Don't log sensitive information\n"
+    )
 
     tool_guidance = (
         "\nUNIVERSAL TOOL STRATEGIES:\n"
@@ -398,7 +407,7 @@ def _environment_snapshot(root: Path) -> str:
     return "\n".join(lines)
 
 
-def _git_context(root: Path) -> List[str]:
+def _git_context(root: Path) -> list[str]:
     args = ["git", "rev-parse", "--is-inside-work-tree"]
     try:
         probe = subprocess.run(args, cwd=root, capture_output=True, text=True, check=False)
@@ -408,7 +417,7 @@ def _git_context(root: Path) -> List[str]:
     if probe.returncode != 0 or probe.stdout.strip().lower() != "true":
         return ["Git: not a repository"]
 
-    context: List[str] = []
+    context: list[str] = []
     branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], root)
     if branch:
         context.append(f"Git branch: {branch}")
@@ -430,9 +439,11 @@ def _git_context(root: Path) -> List[str]:
     return context
 
 
-def _run_git(arguments: Sequence[str], root: Path) -> Optional[str]:
+def _run_git(arguments: Sequence[str], root: Path) -> str | None:
     try:
-        result = subprocess.run(["git", *arguments], cwd=root, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            ["git", *arguments], cwd=root, capture_output=True, text=True, check=False
+        )
     except (OSError, ValueError):
         return None
     if result.returncode != 0:
@@ -442,13 +453,13 @@ def _run_git(arguments: Sequence[str], root: Path) -> Optional[str]:
 
 def _instruction_overlays(
     root: Path,
-    instruction_paths: Optional[Sequence[str]],
-    settings: Optional[Settings],
+    instruction_paths: Sequence[str] | None,
+    settings: Settings | None,
     *,
     max_chars: int = 4_000,
-) -> List[str]:
-    candidates: List[str] = []
-    seen: Set[Path] = set()
+) -> list[str]:
+    candidates: list[str] = []
+    seen: set[Path] = set()
 
     for pattern in _DEFAULT_INSTRUCTION_GLOBS:
         candidates.extend(_expand_instruction_glob(root, pattern))
@@ -478,7 +489,7 @@ def _instruction_overlays(
     if instruction_paths:
         candidates.extend(list(instruction_paths))
 
-    blocks: List[str] = []
+    blocks: list[str] = []
     for candidate in candidates:
         path = Path(candidate)
         if not path.is_absolute():
@@ -500,7 +511,7 @@ def _instruction_overlays(
     return blocks
 
 
-def _expand_instruction_glob(root: Path, pattern: str) -> List[str]:
+def _expand_instruction_glob(root: Path, pattern: str) -> list[str]:
     if "*" not in pattern:
         return [pattern]
     try:

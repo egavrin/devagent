@@ -1,31 +1,29 @@
 """Natural-language intent routing leveraging LLM tool calling."""
+
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from ai_dev_agent.agents import AgentRegistry, AgentSpec
 from ai_dev_agent.cli.utils import build_system_context
-from ai_dev_agent.core.utils.config import Settings
+
 # Tool metadata is registered directly under canonical names
 from ai_dev_agent.providers.llm.base import LLMClient, LLMError, Message, ToolCall, ToolCallResult
-from ai_dev_agent.tools import (
-    registry as tool_registry,
-    READ,
-    WRITE,
-    RUN,
-    FIND,
-    GREP,
-    SYMBOLS,
-)
 from ai_dev_agent.session import SessionManager, build_system_messages
+from ai_dev_agent.tools import FIND, GREP, READ, RUN, SYMBOLS, WRITE
+from ai_dev_agent.tools import registry as tool_registry
 
-DEFAULT_TOOLS: List[Dict[str, Any]] = []
+if TYPE_CHECKING:
+    from ai_dev_agent.core.utils.config import Settings
 
-_SYSTEM_CONTEXT_DEFAULTS: Dict[str, Any] = {
+DEFAULT_TOOLS: list[dict[str, Any]] = []
+
+_SYSTEM_CONTEXT_DEFAULTS: dict[str, Any] = {
     "os": "unknown",
     "os_friendly": "Unknown OS",
     "os_version": "unknown",
@@ -45,13 +43,14 @@ _SYSTEM_CONTEXT_DEFAULTS: Dict[str, Any] = {
     "platform_examples": "",
 }
 
+
 @dataclass
 class IntentDecision:
     """Result returned by the intent router."""
 
-    tool: Optional[str]
-    arguments: Dict[str, Any]
-    rationale: Optional[str] = None
+    tool: str | None
+    arguments: dict[str, Any]
+    rationale: str | None = None
 
 
 class IntentRoutingError(RuntimeError):
@@ -63,30 +62,32 @@ class IntentRouter:
 
     def __init__(
         self,
-        client: Optional[LLMClient],
+        client: LLMClient | None,
         settings: Settings,
         agent_type: str = "manager",
-        tools: Optional[List[Dict[str, Any]]] = None,
-        project_profile: Optional[Dict[str, Any]] = None,
-        tool_success_history: Optional[Dict[str, Any]] = None,
+        tools: list[dict[str, Any]] | None = None,
+        project_profile: dict[str, Any] | None = None,
+        tool_success_history: dict[str, Any] | None = None,
     ) -> None:
         self.client = client
         self.settings = settings
         self.agent_spec = AgentRegistry.get(agent_type)
         try:
             system_context = build_system_context()
-        except Exception:  # noqa: BLE001
+        except Exception:
             system_context = {}
         self._system_context = self._normalise_system_context(system_context)
-        self.tools = list(tools) if tools is not None else self._build_tool_list(settings, self.agent_spec)
+        self.tools = (
+            list(tools) if tools is not None else self._build_tool_list(settings, self.agent_spec)
+        )
         self.project_profile = project_profile or {}
         self.tool_success_history = tool_success_history or {}
         self._session_manager = SessionManager.get_instance()
         self._session_id = f"router-{uuid4()}"
 
-    def _build_tool_list(self, settings: Settings, agent_spec: AgentSpec) -> List[Dict[str, Any]]:
+    def _build_tool_list(self, settings: Settings, agent_spec: AgentSpec) -> list[dict[str, Any]]:
         """Combine core tools with selected registry tools, avoiding duplicates."""
-        combined: List[Dict[str, Any]] = []
+        combined: list[dict[str, Any]] = []
         used_names: set[str] = set()
         for entry in DEFAULT_TOOLS:
             fn = entry.get("function", {})
@@ -98,7 +99,7 @@ class IntentRouter:
         combined.extend(self._build_registry_tools(settings, agent_spec, used_names))
         return combined
 
-    def _normalise_system_context(self, context: Any) -> Dict[str, Any]:
+    def _normalise_system_context(self, context: Any) -> dict[str, Any]:
         """Ensure the system context is a dict with expected fields."""
         normalized = dict(_SYSTEM_CONTEXT_DEFAULTS)
 
@@ -117,21 +118,42 @@ class IntentRouter:
         if not isinstance(command_mappings, dict):
             normalized["command_mappings"] = {}
 
-        for key in ("os", "os_friendly", "os_version", "shell", "shell_type", "architecture", "python_version"):
+        for key in (
+            "os",
+            "os_friendly",
+            "os_version",
+            "shell",
+            "shell_type",
+            "architecture",
+            "python_version",
+        ):
             normalized[key] = str(normalized.get(key) or _SYSTEM_CONTEXT_DEFAULTS.get(key, ""))
 
         normalized["cwd"] = str(normalized.get("cwd") or ".")
         normalized["home_dir"] = str(normalized.get("home_dir") or "")
-        normalized["command_separator"] = str(normalized.get("command_separator") or _SYSTEM_CONTEXT_DEFAULTS["command_separator"])
-        normalized["path_separator"] = str(normalized.get("path_separator") or _SYSTEM_CONTEXT_DEFAULTS["path_separator"])
-        normalized["null_device"] = str(normalized.get("null_device") or _SYSTEM_CONTEXT_DEFAULTS["null_device"])
-        normalized["temp_dir"] = str(normalized.get("temp_dir") or _SYSTEM_CONTEXT_DEFAULTS["temp_dir"])
-        normalized["platform_examples"] = str(normalized.get("platform_examples") or _SYSTEM_CONTEXT_DEFAULTS.get("platform_examples", ""))
+        normalized["command_separator"] = str(
+            normalized.get("command_separator") or _SYSTEM_CONTEXT_DEFAULTS["command_separator"]
+        )
+        normalized["path_separator"] = str(
+            normalized.get("path_separator") or _SYSTEM_CONTEXT_DEFAULTS["path_separator"]
+        )
+        normalized["null_device"] = str(
+            normalized.get("null_device") or _SYSTEM_CONTEXT_DEFAULTS["null_device"]
+        )
+        normalized["temp_dir"] = str(
+            normalized.get("temp_dir") or _SYSTEM_CONTEXT_DEFAULTS["temp_dir"]
+        )
+        normalized["platform_examples"] = str(
+            normalized.get("platform_examples")
+            or _SYSTEM_CONTEXT_DEFAULTS.get("platform_examples", "")
+        )
         normalized["is_unix"] = bool(normalized.get("is_unix"))
 
         return normalized
 
-    def _build_registry_tools(self, settings: Settings, agent_spec: AgentSpec, used_names: set[str]) -> List[Dict[str, Any]]:
+    def _build_registry_tools(
+        self, settings: Settings, agent_spec: AgentSpec, used_names: set[str]
+    ) -> list[dict[str, Any]]:
         """Translate registry specs into LLM tool definitions filtered by agent's allowed tools."""
         # Full safelist of all available tools
         all_tools = [FIND, GREP, SYMBOLS, READ, RUN, WRITE]
@@ -139,7 +161,7 @@ class IntentRouter:
         # Filter to only include tools allowed for this agent
         safelist = [name for name in all_tools if name in agent_spec.tools]
 
-        tools: List[Dict[str, Any]] = []
+        tools: list[dict[str, Any]] = []
         for name in safelist:
             try:
                 spec = tool_registry.get(name)
@@ -160,8 +182,9 @@ class IntentRouter:
             if name == RUN:
                 description = self._augment_run_description(description)
             if name == WRITE and not getattr(settings, "auto_approve_code", False):
-                description = (description or "Apply a unified diff") + \
-                              " (auto_approve_code is recommended for automated edits)"
+                description = (
+                    description or "Apply a unified diff"
+                ) + " (auto_approve_code is recommended for automated edits)"
 
             tools.append(
                 {
@@ -219,17 +242,21 @@ class IntentRouter:
         if isinstance(conversation_payload, Sequence):
             conversation = list(conversation_payload)
         else:
-            conversation = list(system_messages) + [Message(role="user", content=text)]
+            conversation = [*list(system_messages), Message(role="user", content=text)]
 
         try:
             invocation = self._invoke_model(conversation, prefer_generate)
         except LLMError as exc:
-            self._session_manager.add_system_message(self._session_id, f"Intent routing error: {exc}")
+            self._session_manager.add_system_message(
+                self._session_id, f"Intent routing error: {exc}"
+            )
             raise IntentRoutingError(f"Intent routing failed: {exc}") from exc
         except IntentRoutingError:
             raise
-        except Exception as exc:  # noqa: BLE001
-            self._session_manager.add_system_message(self._session_id, f"Unexpected intent routing failure: {exc}")
+        except Exception as exc:
+            self._session_manager.add_system_message(
+                self._session_id, f"Unexpected intent routing failure: {exc}"
+            )
             raise IntentRoutingError(f"Unexpected routing error: {exc}") from exc
 
         result = self._coerce_tool_call_result(invocation)
@@ -271,8 +298,8 @@ class IntentRouter:
 
         if isinstance(data, tuple) and len(data) == 2:
             message, entries = data
-            calls: List[ToolCall] = []
-            raw_tool_calls: List[Dict[str, Any]] = []
+            calls: list[ToolCall] = []
+            raw_tool_calls: list[dict[str, Any]] = []
             for entry in entries or []:
                 if isinstance(entry, ToolCallResult):
                     calls.extend(entry.calls)
@@ -297,7 +324,9 @@ class IntentRouter:
                     )
                     raw_tool_calls.append(
                         {
-                            "id": entry.get("call_id") or entry.get("id") or f"tool-{len(raw_tool_calls)}",
+                            "id": entry.get("call_id")
+                            or entry.get("id")
+                            or f"tool-{len(raw_tool_calls)}",
                             "type": "function",
                             "function": {
                                 "name": name or "",
@@ -313,10 +342,10 @@ class IntentRouter:
 
         raise IntentRoutingError("Received unsupported response from intent model.")
 
-    def _build_raw_tool_calls(self, calls: Sequence[ToolCall]) -> Optional[List[Dict[str, Any]]]:
+    def _build_raw_tool_calls(self, calls: Sequence[ToolCall]) -> list[dict[str, Any]] | None:
         if not calls:
             return None
-        payload: List[Dict[str, Any]] = []
+        payload: list[dict[str, Any]] = []
         for index, call in enumerate(calls):
             name = getattr(call, "name", "") or ""
             arguments = getattr(call, "arguments", {}) or {}
@@ -343,7 +372,7 @@ class IntentRouter:
             )
         return payload
 
-    def _parse_arguments(self, result: ToolCallResult, call: ToolCall) -> Dict[str, Any]:
+    def _parse_arguments(self, result: ToolCallResult, call: ToolCall) -> dict[str, Any]:
         candidates = [
             getattr(call, "arguments", None),
             getattr(result, "arguments", None),
@@ -356,7 +385,7 @@ class IntentRouter:
         return {}
 
     @staticmethod
-    def _ensure_dict(value: Any) -> Optional[Dict[str, Any]]:
+    def _ensure_dict(value: Any) -> dict[str, Any] | None:
         if isinstance(value, dict):
             return dict(value)
         if isinstance(value, str):
@@ -369,7 +398,7 @@ class IntentRouter:
         return None
 
     @staticmethod
-    def _normalize_rationale(content: Optional[str]) -> Optional[str]:
+    def _normalize_rationale(content: str | None) -> str | None:
         if not content:
             return None
         text = content.strip()
@@ -382,8 +411,12 @@ class IntentRouter:
     def _system_prompt(self) -> str:
         workspace = str(self.settings.workspace_root or ".")
         ctx = self._system_context
-        available_tools = ", ".join(ctx["available_tools"]) if ctx["available_tools"] else "none detected"
-        command_mappings = ", ".join(f"{key}={value}" for key, value in ctx["command_mappings"].items())
+        available_tools = (
+            ", ".join(ctx["available_tools"]) if ctx["available_tools"] else "none detected"
+        )
+        command_mappings = ", ".join(
+            f"{key}={value}" for key, value in ctx["command_mappings"].items()
+        )
 
         lines = [
             "You route developer requests for the DevAgent CLI.",
@@ -419,14 +452,14 @@ class IntentRouter:
         ]
         return "\n".join(lines)
 
-    def _project_context_lines(self, workspace: str) -> List[str]:
+    def _project_context_lines(self, workspace: str) -> list[str]:
         """Build prompt lines with repository-specific context for better routing."""
 
         project = self.project_profile or {}
         if not project:
             return ["- Repository context not supplied; confirm assumptions when necessary."]
 
-        lines: List[str] = []
+        lines: list[str] = []
         language = project.get("language") or project.get("dominant_language")
         if language:
             lines.append(f"- Dominant language: {language}")
@@ -453,7 +486,9 @@ class IntentRouter:
         summary = project.get("project_summary")
         if summary:
             flattened = " ".join(summary.split())
-            lines.append(f"- Structure summary: {flattened[:200]}{'…' if len(flattened) > 200 else ''}")
+            lines.append(
+                f"- Structure summary: {flattened[:200]}{'…' if len(flattened) > 200 else ''}"
+            )
 
         workspace_hint = project.get("workspace_root")
         if workspace_hint and workspace_hint != workspace:
@@ -461,11 +496,11 @@ class IntentRouter:
 
         return lines or ["- Repository context not supplied; confirm assumptions when necessary."]
 
-    def _tool_performance_lines(self) -> List[str]:
+    def _tool_performance_lines(self) -> list[str]:
         """Surface historical tool performance to steer selection."""
 
         history = self.tool_success_history or {}
-        metrics: List[tuple[float, float, float, str]] = []
+        metrics: list[tuple[float, float, float, str]] = []
 
         for name, raw in history.items():
             if not isinstance(raw, dict):
@@ -478,7 +513,9 @@ class IntentRouter:
             if count <= 0:
                 continue
             success_rate = success / count
-            avg_duration = float(raw.get("avg_duration", raw.get("total_duration", 0.0) / count if count else 0.0))
+            avg_duration = float(
+                raw.get("avg_duration", raw.get("total_duration", 0.0) / count if count else 0.0)
+            )
             metrics.append((count, success_rate, avg_duration, name))
 
         if not metrics:
@@ -488,14 +525,16 @@ class IntentRouter:
         lines = []
         for count, success_rate, avg_duration, name in metrics[:4]:
             duration_text = f", avg {avg_duration:.1f}s" if avg_duration else ""
-            lines.append(f"- {name}: {success_rate:.0%} success over {int(count)} runs{duration_text}")
+            lines.append(
+                f"- {name}: {success_rate:.0%} success over {int(count)} runs{duration_text}"
+            )
 
         if len(metrics) > 4:
             lines.append("- Additional tools tracked; use stored metrics when selecting fallbacks.")
 
         return lines
 
-    def _augment_run_schema(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+    def _augment_run_schema(self, schema: dict[str, Any]) -> dict[str, Any]:
         ctx = self._system_context
         updated = dict(schema)
         updated["description"] = (
@@ -518,7 +557,9 @@ class IntentRouter:
     def _augment_run_description(self, description: str) -> str:
         ctx = self._system_context
         base = description or "Execute a shell command."
-        available_tools = ", ".join(ctx["available_tools"]) if ctx["available_tools"] else "none detected"
+        available_tools = (
+            ", ".join(ctx["available_tools"]) if ctx["available_tools"] else "none detected"
+        )
         return (
             f"{base} Platform: {ctx['os_friendly']} {ctx['os_version']} ({ctx['os']}). "
             f"Shell: {ctx['shell']} ({ctx['shell_type']} syntax). Available tools: {available_tools}. "
@@ -528,4 +569,4 @@ class IntentRouter:
     # No keyword-based fallback routing
 
 
-__all__ = ["IntentDecision", "IntentRouter", "IntentRoutingError", "DEFAULT_TOOLS"]
+__all__ = ["DEFAULT_TOOLS", "IntentDecision", "IntentRouter", "IntentRoutingError"]

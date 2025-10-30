@@ -1,22 +1,16 @@
 """Planning module for generating work breakdown structures."""
+
 from __future__ import annotations
 
 import json
 import re
 import time
 from dataclasses import InitVar, dataclass, field
-from typing import List, Optional
 from pathlib import Path
 from uuid import uuid4
 
-from ai_dev_agent.providers.llm import (
-    LLMClient,
-    LLMConnectionError,
-    LLMError,
-    LLMTimeoutError,
-    Message,
-)
 from ai_dev_agent.core.utils.logger import get_logger
+from ai_dev_agent.providers.llm import LLMClient, LLMConnectionError, LLMError, LLMTimeoutError
 from ai_dev_agent.session import SessionManager, build_system_messages
 
 LOGGER = get_logger(__name__)
@@ -73,23 +67,23 @@ JSON_PATTERN = re.compile(r"```json\s*(?P<json>{.*?})\s*```", re.DOTALL)
 class PlanningContext:
     """Supplemental signals used to enrich planner prompts."""
 
-    project_structure: Optional[str] = None
-    repository_metrics: Optional[str] = None
-    dominant_language: Optional[str] = None
-    dependency_landscape: Optional[str] = None
-    code_conventions: Optional[str] = None
-    quality_metrics: Optional[str] = None
-    historical_success: Optional[str] = None
-    recent_failures: Optional[str] = None
-    risk_register: Optional[str] = None
-    related_components: Optional[str] = None
+    project_structure: str | None = None
+    repository_metrics: str | None = None
+    dominant_language: str | None = None
+    dependency_landscape: str | None = None
+    code_conventions: str | None = None
+    quality_metrics: str | None = None
+    historical_success: str | None = None
+    recent_failures: str | None = None
+    risk_register: str | None = None
+    related_components: str | None = None
 
     def as_prompt_block(self) -> str:
         """Render a compact multi-section context block for the planner prompt."""
 
-        sections: List[str] = []
+        sections: list[str] = []
 
-        def _add(label: str, value: Optional[str]) -> None:
+        def _add(label: str, value: str | None) -> None:
             normalized = (value or "Not available").strip()
             sections.append(f"{label}:\n{normalized}")
 
@@ -116,15 +110,15 @@ class PlanTask:
     title: str = "Untitled"
     description: str = ""
     status: str = "pending"
-    dependencies: List[int] = field(default_factory=list)
+    dependencies: list[int] = field(default_factory=list)
     category: str = "implementation"
     effort: int | None = None
     reach: int | None = None
     impact: int | None = None
     confidence: float | None = None
     risk_mitigation: str | None = None
-    deliverables: List[str] = field(default_factory=list)
-    commands: List[str] = field(default_factory=list)
+    deliverables: list[str] = field(default_factory=list)
+    commands: list[str] = field(default_factory=list)
     identifier: InitVar[str | None] = None
 
     _identifier: str = field(init=False)
@@ -141,7 +135,7 @@ class PlanTask:
         self._identifier = candidate
         self.identifier = candidate
 
-        normalized_deps: List[int] = []
+        normalized_deps: list[int] = []
         for dep in self.dependencies:
             try:
                 normalized_deps.append(int(dep))
@@ -176,17 +170,18 @@ class PlanTask:
                 data[key] = value
         return data
 
+
 @dataclass
 class PlanResult:
     goal: str
     summary: str
-    tasks: List[PlanTask]
+    tasks: list[PlanTask]
     raw_response: str
     fallback_reason: str | None = None
-    project_structure: Optional[str] = None
-    context_snapshot: Optional[str] = None
-    complexity: Optional[str] = None
-    success_criteria: List[str] = field(default_factory=list)
+    project_structure: str | None = None
+    context_snapshot: str | None = None
+    complexity: str | None = None
+    success_criteria: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         data = {
@@ -218,10 +213,10 @@ class Planner:
     def generate(
         self,
         goal: str,
-        project_structure: Optional[str] = None,
-        context: Optional[PlanningContext] = None,
+        project_structure: str | None = None,
+        context: PlanningContext | None = None,
         *,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
     ) -> PlanResult:
         LOGGER.debug("Requesting plan from LLM for goal: %s", goal)
         plan_context = context or PlanningContext()
@@ -302,7 +297,10 @@ class Planner:
             payload = self._extract_json(response_text)
         except json.JSONDecodeError as exc:
             raise LLMError(f"Planner response was not valid JSON: {exc}") from exc
-        tasks = [self._task_from_dict(entry, idx) for idx, entry in enumerate(payload.get("tasks", []), 1)]
+        tasks = [
+            self._task_from_dict(entry, idx)
+            for idx, entry in enumerate(payload.get("tasks", []), 1)
+        ]
         summary = payload.get("summary", goal)
         complexity = payload.get("complexity")
         criteria_raw = payload.get("success_criteria") or []
@@ -363,34 +361,33 @@ class Planner:
             risk_mitigation=data.get("risk_mitigation"),
         )
 
-    def _create_generic_fallback(self, goal: str) -> List[PlanTask]:
+    def _create_generic_fallback(self, goal: str) -> list[PlanTask]:
         """Create a simple fallback plan when the LLM is unavailable."""
         return [
             PlanTask(
                 step_number=1,
                 title="Understand Requirements",
                 description=f"Analyze and understand the requirements for: {goal}. "
-                           "Identify what needs to be accomplished and gather necessary context.",
+                "Identify what needs to be accomplished and gather necessary context.",
             ),
             PlanTask(
                 step_number=2,
                 title="Execute Task",
                 description="Implement the requested functionality based on the requirements. "
-                           "This may involve code changes, analysis, or other operations.",
+                "This may involve code changes, analysis, or other operations.",
                 dependencies=[1],
             ),
             PlanTask(
                 step_number=3,
                 title="Verify Results",
                 description="Test and validate that the implementation meets the requirements. "
-                           "Ensure the solution works correctly and document any findings.",
+                "Ensure the solution works correctly and document any findings.",
                 dependencies=[2],
             ),
         ]
 
 
-
-def _normalize_int_list(value: object) -> List[int]:
+def _normalize_int_list(value: object) -> list[int]:
     """Convert a value to a list of integers for dependencies."""
     if value is None:
         return []
@@ -418,4 +415,4 @@ def _normalize_int_list(value: object) -> List[int]:
         return []
 
 
-__all__ = ["Planner", "PlanResult", "PlanTask"]
+__all__ = ["PlanResult", "PlanTask", "Planner"]

@@ -1,13 +1,11 @@
 """Simple tests for tool_invoker module to improve coverage."""
 
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
-import pytest
+from unittest.mock import MagicMock
 
-from ai_dev_agent.engine.react.tool_invoker import RegistryToolInvoker
-from ai_dev_agent.engine.react.types import ActionRequest, Observation
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.engine.metrics import MetricsCollector
+from ai_dev_agent.engine.react.tool_invoker import RegistryToolInvoker
+from ai_dev_agent.engine.react.types import ActionRequest, Observation
 
 
 class TestRegistryToolInvokerSimple:
@@ -16,10 +14,7 @@ class TestRegistryToolInvokerSimple:
     def test_init_minimal(self, tmp_path):
         """Test minimal initialization."""
         settings = Settings()
-        tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings
-        )
+        tool_invoker = RegistryToolInvoker(workspace=tmp_path, settings=settings)
 
         assert tool_invoker.workspace == tmp_path
         assert tool_invoker.settings == settings
@@ -30,9 +25,7 @@ class TestRegistryToolInvokerSimple:
         collector = MetricsCollector(repo_root=tmp_path)
 
         tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings,
-            collector=collector
+            workspace=tmp_path, settings=settings, collector=collector
         )
 
         assert tool_invoker.collector == collector
@@ -40,17 +33,11 @@ class TestRegistryToolInvokerSimple:
     def test_call_with_simple_action(self, tmp_path):
         """Test calling the tool invoker with a simple action."""
         settings = Settings()
-        tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings
-        )
+        tool_invoker = RegistryToolInvoker(workspace=tmp_path, settings=settings)
 
         # Create a simple action that should fail (no tool registered)
         action = ActionRequest(
-            tool="nonexistent",
-            parameters={},
-            step_id="test_step",
-            thought="Testing"
+            tool="nonexistent", parameters={}, step_id="test_step", thought="Testing"
         )
 
         result = tool_invoker(action)
@@ -62,10 +49,7 @@ class TestRegistryToolInvokerSimple:
     def test_invoke_batch_empty(self, tmp_path):
         """Test invoke_batch with empty list."""
         settings = Settings()
-        tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings
-        )
+        tool_invoker = RegistryToolInvoker(workspace=tmp_path, settings=settings)
 
         result = tool_invoker.invoke_batch([])
 
@@ -76,16 +60,9 @@ class TestRegistryToolInvokerSimple:
         from ai_dev_agent.engine.react.types import ToolCall
 
         settings = Settings()
-        tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings
-        )
+        tool_invoker = RegistryToolInvoker(workspace=tmp_path, settings=settings)
 
-        tool_call = ToolCall(
-            tool="test_function",
-            args={},
-            call_id="test_id"
-        )
+        tool_call = ToolCall(tool="test_function", args={}, call_id="test_id")
 
         result = tool_invoker.invoke_batch([tool_call])
 
@@ -97,9 +74,7 @@ class TestRegistryToolInvokerSimple:
         code_editor = MagicMock()
 
         tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings,
-            code_editor=code_editor
+            workspace=tmp_path, settings=settings, code_editor=code_editor
         )
 
         assert tool_invoker.code_editor == code_editor
@@ -110,9 +85,7 @@ class TestRegistryToolInvokerSimple:
         test_runner = MagicMock()
 
         tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings,
-            test_runner=test_runner
+            workspace=tmp_path, settings=settings, test_runner=test_runner
         )
 
         assert tool_invoker.test_runner == test_runner
@@ -122,11 +95,7 @@ class TestRegistryToolInvokerSimple:
         settings = Settings()
         sandbox = MagicMock()
 
-        tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings,
-            sandbox=sandbox
-        )
+        tool_invoker = RegistryToolInvoker(workspace=tmp_path, settings=settings, sandbox=sandbox)
 
         assert tool_invoker.sandbox == sandbox
 
@@ -139,7 +108,7 @@ class TestRegistryToolInvokerSimple:
             workspace=tmp_path,
             settings=settings,
             shell_session_manager=shell_manager,
-            shell_session_id="test_session"
+            shell_session_id="test_session",
         )
 
         assert tool_invoker.shell_session_manager == shell_manager
@@ -153,9 +122,7 @@ class TestRegistryToolInvokerSimple:
         devagent_cfg = DevAgentConfig()
 
         tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings,
-            devagent_cfg=devagent_cfg
+            workspace=tmp_path, settings=settings, devagent_cfg=devagent_cfg
         )
 
         assert tool_invoker.devagent_cfg == devagent_cfg
@@ -163,10 +130,7 @@ class TestRegistryToolInvokerSimple:
     def test_multiple_calls(self, tmp_path):
         """Test multiple calls to the tool invoker."""
         settings = Settings()
-        tool_invoker = RegistryToolInvoker(
-            workspace=tmp_path,
-            settings=settings
-        )
+        tool_invoker = RegistryToolInvoker(workspace=tmp_path, settings=settings)
 
         # Create multiple actions
         actions = [
@@ -174,7 +138,7 @@ class TestRegistryToolInvokerSimple:
                 tool=f"tool_{i}",
                 parameters={"param": i},
                 step_id=f"step_{i}",
-                thought=f"Thought {i}"
+                thought=f"Thought {i}",
             )
             for i in range(3)
         ]

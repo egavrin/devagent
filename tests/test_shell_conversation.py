@@ -1,15 +1,16 @@
 """Tests for shell conversation history management in the interactive query flow."""
+
 from __future__ import annotations
 
+from collections.abc import Iterable
 from types import SimpleNamespace
-from typing import Iterable, List, Optional
 
 import click
 
+from ai_dev_agent.cli.handlers import registry_handlers
 from ai_dev_agent.cli.react.executor import _execute_react_assistant
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.providers.llm.base import Message, ToolCall, ToolCallResult
-from ai_dev_agent.cli.handlers import registry_handlers
 from ai_dev_agent.session import SessionManager
 
 
@@ -17,17 +18,17 @@ class FakeClient:
     """Minimal LLM client stub that records messages passed to invoke_tools."""
 
     def __init__(self, responses: Iterable[ToolCallResult]) -> None:
-        self._responses: List[ToolCallResult] = list(responses)
-        self.last_messages: List[Message] | None = None
-        self.invocations: List[List[Message]] = []
+        self._responses: list[ToolCallResult] = list(responses)
+        self.last_messages: list[Message] | None = None
+        self.invocations: list[list[Message]] = []
 
     def invoke_tools(
         self,
         messages: Iterable[Message],
         *,
-        tools: List[dict] | None = None,
+        tools: list[dict] | None = None,
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         tool_choice: str | dict | None = "auto",
         extra_headers: dict | None = None,
         parallel_tool_calls: bool = True,
@@ -44,7 +45,7 @@ class FakeClient:
         messages: Iterable[Message],
         *,
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         extra_headers: dict | None = None,
     ) -> str:
         """Complete method for forced synthesis."""
@@ -99,7 +100,9 @@ def test_shell_conversation_history_persists_between_queries(capsys) -> None:
     )
     ctx = _make_context(settings)
 
-    _execute_react_assistant(ctx, client, settings, "How many files are in this project?", use_planning=False)
+    _execute_react_assistant(
+        ctx, client, settings, "How many files are in this project?", use_planning=False
+    )
 
     history = ctx.obj.get("_shell_conversation_history")
     assert history is not None

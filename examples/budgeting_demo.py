@@ -9,18 +9,16 @@ This example demonstrates:
 5. Reflection for error recovery
 """
 
-import os
 import sys
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ai_dev_agent.cli.react.budget_control import AdaptiveBudgetManager, PHASE_PROMPTS
+from ai_dev_agent.cli.react.budget_control import PHASE_PROMPTS, AdaptiveBudgetManager
+from ai_dev_agent.core.utils.context_budget import ContextBudgetConfig, estimate_tokens
 from ai_dev_agent.core.utils.cost_tracker import CostTracker, TokenUsage
 from ai_dev_agent.core.utils.retry_handler import create_retry_handler
-from ai_dev_agent.core.utils.context_budget import ContextBudgetConfig, estimate_tokens
-from ai_dev_agent.core.utils.summarizer import create_summarizer
 from ai_dev_agent.providers.llm.base import Message
 
 
@@ -71,7 +69,7 @@ def demo_adaptive_budgeting():
     print("\n📊 Starting iterations with adaptive phases:\n")
 
     # Run iterations
-    for i in range(10):
+    for _i in range(10):
         context = budget_manager.next_iteration()
         if context is None:
             break
@@ -79,7 +77,9 @@ def demo_adaptive_budgeting():
         # Show phase info
         print(f"Iteration {context.number}/{context.total}:")
         print(f"  Phase: {context.phase.upper()}")
-        print(f"  Progress: [{'█' * int(context.percent_complete / 5)}{'░' * (20 - int(context.percent_complete / 5))}] {context.percent_complete:.0f}%")
+        print(
+            f"  Progress: [{'█' * int(context.percent_complete / 5)}{'░' * (20 - int(context.percent_complete / 5))}] {context.percent_complete:.0f}%"
+        )
 
         # Get phase-specific prompt
         if context.phase in PHASE_PROMPTS:
@@ -135,8 +135,10 @@ def demo_retry_mechanism():
 
     retry_handler = create_retry_handler(smart=True, max_retries=3)
 
-    def flaky_function(attempt=[0]):
+    def flaky_function(attempt=None):
         """Function that fails first 2 times."""
+        if attempt is None:
+            attempt = [0]
         attempt[0] += 1
         if attempt[0] < 3:
             raise ConnectionError(f"Connection failed (attempt {attempt[0]})")
@@ -147,10 +149,7 @@ def demo_retry_mechanism():
 
     try:
         print("\nAttempting flaky operation...")
-        result = retry_handler.execute_with_retry(
-            flaky_function,
-            on_retry=on_retry
-        )
+        result = retry_handler.execute_with_retry(flaky_function, on_retry=on_retry)
         print(f"✓ Result: {result}")
         print(f"  Stats: {retry_handler.get_retry_stats()}")
     except Exception as e:
@@ -173,9 +172,7 @@ def demo_two_tier_pruning():
     for i in range(20):
         messages.append(
             Message(
-                role="tool",
-                content=f"Tool output {i}: " + "x" * 2000,
-                tool_call_id=f"call_{i}"
+                role="tool", content=f"Tool output {i}: " + "x" * 2000, tool_call_id=f"call_{i}"
             )
         )
 
@@ -194,7 +191,7 @@ def demo_two_tier_pruning():
 
     pruned = prune_messages(messages, config)
 
-    print(f"\nAfter pruning:")
+    print("\nAfter pruning:")
     print(f"  Messages: {len(pruned)}")
     print(f"  Tokens: ~{estimate_tokens(pruned):,}")
 
@@ -225,7 +222,9 @@ def demo_cost_forecasting():
         )
 
     print(f"\nCurrent cost: ${cost_tracker.total_cost_usd:.4f}")
-    print(f"Tokens used: {cost_tracker.total_prompt_tokens:,} in, {cost_tracker.total_completion_tokens:,} out")
+    print(
+        f"Tokens used: {cost_tracker.total_prompt_tokens:,} in, {cost_tracker.total_completion_tokens:,} out"
+    )
 
     # Forecast remaining cost
     remaining_iterations = 7

@@ -1,10 +1,12 @@
 """Tests for IntentRouter error handling and edge cases."""
+
 from __future__ import annotations
 
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
+
 import pytest
 
-from ai_dev_agent.cli.router import IntentRouter, IntentRoutingError, IntentDecision
+from ai_dev_agent.cli.router import IntentDecision, IntentRouter, IntentRoutingError
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.providers.llm.base import LLMError, Message
 
@@ -38,7 +40,7 @@ class TestIntentRouterErrorHandling:
         with pytest.raises(IntentRoutingError, match="No LLM client available"):
             router.route("test prompt")
 
-    @patch('ai_dev_agent.cli.router.SessionManager')
+    @patch("ai_dev_agent.cli.router.SessionManager")
     def test_llm_error_wrapped_as_routing_error(self, mock_session_manager_class):
         """Test that LLMError is wrapped as IntentRoutingError."""
         settings = Settings()
@@ -61,7 +63,7 @@ class TestIntentRouterErrorHandling:
         # Should have logged the error to session
         assert mock_session_manager.add_system_message.called
 
-    @patch('ai_dev_agent.cli.router.SessionManager')
+    @patch("ai_dev_agent.cli.router.SessionManager")
     def test_unexpected_exception_wrapped(self, mock_session_manager_class):
         """Test that unexpected exceptions are wrapped as IntentRoutingError."""
         settings = Settings()
@@ -87,20 +89,20 @@ class TestIntentRouterErrorHandling:
 class TestIntentRouterEdgeCases:
     """Test IntentRouter edge case scenarios."""
 
-    @patch('ai_dev_agent.cli.router.SessionManager')
+    @patch("ai_dev_agent.cli.router.SessionManager")
     def test_no_tool_calls_with_prefer_generate(self, mock_session_manager_class):
         """Test behavior when model returns no tool calls with prefer_generate=True."""
         settings = Settings()
         mock_client = Mock()
 
         # Need to properly mock the response structure
-        from ai_dev_agent.providers.llm.base import ToolCallResult, ToolCall as LLMToolCall
+        from ai_dev_agent.providers.llm.base import ToolCallResult
 
         # Mock response with no tool calls
         mock_response = ToolCallResult(
             message_content="I need more information",
             calls=[],  # No tool calls
-            raw_tool_calls=None
+            raw_tool_calls=None,
         )
         mock_client.generate.return_value = mock_response
 
@@ -117,7 +119,7 @@ class TestIntentRouterEdgeCases:
         with pytest.raises(IntentRoutingError):
             router.route_prompt("test prompt")
 
-    @patch('ai_dev_agent.cli.router.SessionManager')
+    @patch("ai_dev_agent.cli.router.SessionManager")
     def test_no_tool_calls_with_prefer_invoke(self, mock_session_manager_class):
         """Test behavior when model returns no tool calls with prefer_generate=False."""
         settings = Settings()
@@ -128,9 +130,7 @@ class TestIntentRouterEdgeCases:
 
         # Mock response with no tool calls but has message
         mock_response = ToolCallResult(
-            message_content="Here's my response",
-            calls=[],
-            raw_tool_calls=None
+            message_content="Here's my response", calls=[], raw_tool_calls=None
         )
         mock_client.invoke_tools.return_value = mock_response
 
@@ -149,7 +149,7 @@ class TestIntentRouterEdgeCases:
         assert result.tool is None
         assert result.arguments == {"text": "Here's my response"}
 
-    @patch('ai_dev_agent.cli.router.SessionManager')
+    @patch("ai_dev_agent.cli.router.SessionManager")
     def test_empty_message_no_tool_calls(self, mock_session_manager_class):
         """Test behavior when model returns empty message and no tool calls."""
         settings = Settings()
@@ -159,11 +159,7 @@ class TestIntentRouterEdgeCases:
         from ai_dev_agent.providers.llm.base import ToolCallResult
 
         # Mock response with empty message and no tool calls
-        mock_response = ToolCallResult(
-            message_content="",
-            calls=[],
-            raw_tool_calls=None
-        )
+        mock_response = ToolCallResult(message_content="", calls=[], raw_tool_calls=None)
         mock_client.invoke_tools.return_value = mock_response
 
         # Mock session manager
@@ -187,11 +183,7 @@ class TestIntentRouterNormalization:
         settings = Settings()
         mock_client = Mock()
 
-        context = {
-            "os": "Linux",
-            "shell": "/bin/bash",
-            "available_tools": ["git", "npm"]
-        }
+        context = {"os": "Linux", "shell": "/bin/bash", "available_tools": ["git", "npm"]}
 
         router = IntentRouter(client=mock_client, settings=settings)
         normalized = router._normalise_system_context(context)
@@ -285,7 +277,7 @@ class TestIntentRouterInitialization:
 
         assert router.tool_success_history == history
 
-    @patch('ai_dev_agent.cli.router.build_system_context')
+    @patch("ai_dev_agent.cli.router.build_system_context")
     def test_init_handles_build_context_exception(self, mock_build_context):
         """Test router handles exception from build_system_context."""
         settings = Settings()
@@ -306,9 +298,7 @@ class TestIntentDecision:
     def test_intent_decision_creation(self):
         """Test creating IntentDecision."""
         decision = IntentDecision(
-            tool="read",
-            arguments={"path": "test.py"},
-            rationale="Need to read the file"
+            tool="read", arguments={"path": "test.py"}, rationale="Need to read the file"
         )
 
         assert decision.tool == "read"
@@ -317,20 +307,14 @@ class TestIntentDecision:
 
     def test_intent_decision_optional_rationale(self):
         """Test IntentDecision with no rationale."""
-        decision = IntentDecision(
-            tool="write",
-            arguments={"content": "test"}
-        )
+        decision = IntentDecision(tool="write", arguments={"content": "test"})
 
         assert decision.tool == "write"
         assert decision.rationale is None
 
     def test_intent_decision_no_tool(self):
         """Test IntentDecision with no tool (text response)."""
-        decision = IntentDecision(
-            tool=None,
-            arguments={"text": "I cannot help with that"}
-        )
+        decision = IntentDecision(tool=None, arguments={"text": "I cannot help with that"})
 
         assert decision.tool is None
         assert "text" in decision.arguments

@@ -1,10 +1,10 @@
 """Diff-based risk metrics."""
+
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List
 
 from ai_dev_agent.core.utils.logger import get_logger
 
@@ -18,10 +18,12 @@ class DiffMetrics:
     total_lines: int
     file_count: int
     concentration: float
-    files: List[str]
+    files: list[str]
 
 
-def compute_diff_metrics(repo_root: Path, *, compare_ref: str | None = None, include_untracked: bool = False) -> DiffMetrics:
+def compute_diff_metrics(
+    repo_root: Path, *, compare_ref: str | None = None, include_untracked: bool = False
+) -> DiffMetrics:
     """Compute simple diff metrics for the working tree.
 
     Parameters
@@ -44,7 +46,7 @@ def compute_diff_metrics(repo_root: Path, *, compare_ref: str | None = None, inc
     names = _run_git(name_only_cmd, repo_root)
 
     total_lines = 0
-    files: List[str] = []
+    files: list[str] = []
 
     for line in numstat.splitlines():
         parts = line.split("\t")
@@ -76,21 +78,25 @@ def compute_diff_metrics(repo_root: Path, *, compare_ref: str | None = None, inc
         file_count = len(set(files))
         concentration = float(total_lines) / file_count if file_count else 0.0
 
-    return DiffMetrics(total_lines=total_lines, file_count=file_count, concentration=concentration, files=sorted(set(files)))
+    return DiffMetrics(
+        total_lines=total_lines,
+        file_count=file_count,
+        concentration=concentration,
+        files=sorted(set(files)),
+    )
 
 
-def _collect_untracked(repo_root: Path) -> List[str]:
+def _collect_untracked(repo_root: Path) -> list[str]:
     output = _run_git(["git", "ls-files", "--other", "--exclude-standard"], repo_root)
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-def _run_git(command: List[str], repo_root: Path) -> str:
+def _run_git(command: list[str], repo_root: Path) -> str:
     try:
         process = subprocess.run(
             command,
             cwd=str(repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             check=False,
         )

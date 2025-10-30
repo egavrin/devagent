@@ -4,20 +4,32 @@ This module tests the testing utilities to ensure they work correctly.
 """
 
 import json
-import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-from ai_dev_agent.testing.coverage_gate import CoverageGate, CoverageResult, check_coverage, enforce_coverage
-from ai_dev_agent.testing.coverage_report import CoverageReporter, CoverageTrend, generate_report
-from ai_dev_agent.testing.mocks import (
-    MockLLM, MockFileSystem, MockGitRepo, MockHTTPClient,
-    MockDatabase, MockCache, create_mock_agent, create_mock_tool
-)
+from unittest.mock import Mock, patch
+
+import pytest
+
+from ai_dev_agent.testing.coverage_gate import CoverageGate, CoverageResult, check_coverage
+from ai_dev_agent.testing.coverage_report import CoverageReporter, CoverageTrend
 from ai_dev_agent.testing.helpers import (
-    run_with_timeout, assert_files_equal, create_test_project,
-    wait_for_condition, generate_test_data, compare_json_structures,
-    create_mock_response, validate_schema, temporary_env
+    compare_json_structures,
+    create_mock_response,
+    create_test_project,
+    generate_test_data,
+    run_with_timeout,
+    temporary_env,
+    validate_schema,
+    wait_for_condition,
+)
+from ai_dev_agent.testing.mocks import (
+    MockCache,
+    MockDatabase,
+    MockFileSystem,
+    MockGitRepo,
+    MockLLM,
+    create_mock_agent,
+    create_mock_tool,
 )
 
 
@@ -38,14 +50,14 @@ class TestCoverageGate:
             threshold=90.0,
             uncovered_files=["file1.py"],
             report="Test report",
-            details={"file1.py": 85.5}
+            details={"file1.py": 85.5},
         )
         assert result.total_coverage == 85.5
         assert not result.passed
         assert result.threshold == 90.0
         assert len(result.uncovered_files) == 1
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_run_coverage_success(self, mock_run):
         """Test running coverage successfully."""
         # Mock subprocess call
@@ -55,14 +67,18 @@ class TestCoverageGate:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             coverage_json = tmpdir_path / "coverage.json"
-            coverage_json.write_text(json.dumps({
-                "totals": {
-                    "percent_covered": 95.0,
-                    "num_statements": 1000,
-                    "covered_lines": 950
-                },
-                "files": {}
-            }))
+            coverage_json.write_text(
+                json.dumps(
+                    {
+                        "totals": {
+                            "percent_covered": 95.0,
+                            "num_statements": 1000,
+                            "covered_lines": 950,
+                        },
+                        "files": {},
+                    }
+                )
+            )
 
             gate = CoverageGate(threshold=90.0)
             gate.project_root = tmpdir_path
@@ -74,7 +90,7 @@ class TestCoverageGate:
 
     def test_check_coverage_function(self):
         """Test quick check_coverage function."""
-        with patch('ai_dev_agent.testing.coverage_gate.CoverageGate') as mock_gate_class:
+        with patch("ai_dev_agent.testing.coverage_gate.CoverageGate") as mock_gate_class:
             mock_gate = Mock()
             mock_result = CoverageResult(
                 total_coverage=95.0,
@@ -82,7 +98,7 @@ class TestCoverageGate:
                 threshold=90.0,
                 uncovered_files=[],
                 report="",
-                details={}
+                details={},
             )
             mock_gate.run_coverage.return_value = mock_result
             mock_gate_class.return_value = mock_gate
@@ -90,24 +106,17 @@ class TestCoverageGate:
             result = check_coverage(threshold=90.0)
             assert result is True
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_get_incremental_coverage(self, mock_run):
         """Test incremental coverage calculation."""
-        mock_run.return_value = Mock(
-            stdout="src/new_file.py",
-            returncode=0
-        )
+        mock_run.return_value = Mock(stdout="src/new_file.py", returncode=0)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             coverage_json = tmpdir_path / "coverage.json"
-            coverage_json.write_text(json.dumps({
-                "files": {
-                    "src/new_file.py": {
-                        "summary": {"percent_covered": 85.0}
-                    }
-                }
-            }))
+            coverage_json.write_text(
+                json.dumps({"files": {"src/new_file.py": {"summary": {"percent_covered": 85.0}}}})
+            )
 
             gate = CoverageGate()
             gate.project_root = tmpdir_path
@@ -133,7 +142,7 @@ class TestCoverageReporter:
             branch_coverage=90.0,
             files_covered=50,
             total_files=55,
-            commit_hash="abc123"
+            commit_hash="abc123",
         )
         assert trend.total_coverage == 95.0
         assert trend.commit_hash == "abc123"
@@ -152,19 +161,20 @@ class TestCoverageReporter:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             coverage_json = tmpdir_path / "coverage.json"
-            coverage_json.write_text(json.dumps({
-                "totals": {
-                    "percent_covered": 92.5,
-                    "percent_covered_display": "92.5",
-                    "num_statements": 1000,
-                    "covered_lines": 925,
-                    "missing_lines": 75
-                },
-                "files": {
-                    "file1.py": {},
-                    "file2.py": {}
-                }
-            }))
+            coverage_json.write_text(
+                json.dumps(
+                    {
+                        "totals": {
+                            "percent_covered": 92.5,
+                            "percent_covered_display": "92.5",
+                            "num_statements": 1000,
+                            "covered_lines": 925,
+                            "missing_lines": 75,
+                        },
+                        "files": {"file1.py": {}, "file2.py": {}},
+                    }
+                )
+            )
 
             reporter = CoverageReporter(project_root=tmpdir_path)
             summary = reporter.get_coverage_summary()
@@ -177,14 +187,26 @@ class TestCoverageReporter:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             coverage_json = tmpdir_path / "coverage.json"
-            coverage_json.write_text(json.dumps({
-                "files": {
-                    "excellent.py": {"summary": {"percent_covered": 98.0, "num_statements": 100}},
-                    "good.py": {"summary": {"percent_covered": 85.0, "num_statements": 100}},
-                    "fair.py": {"summary": {"percent_covered": 70.0, "num_statements": 100}},
-                    "poor.py": {"summary": {"percent_covered": 45.0, "num_statements": 100}}
-                }
-            }))
+            coverage_json.write_text(
+                json.dumps(
+                    {
+                        "files": {
+                            "excellent.py": {
+                                "summary": {"percent_covered": 98.0, "num_statements": 100}
+                            },
+                            "good.py": {
+                                "summary": {"percent_covered": 85.0, "num_statements": 100}
+                            },
+                            "fair.py": {
+                                "summary": {"percent_covered": 70.0, "num_statements": 100}
+                            },
+                            "poor.py": {
+                                "summary": {"percent_covered": 45.0, "num_statements": 100}
+                            },
+                        }
+                    }
+                )
+            )
 
             reporter = CoverageReporter(project_root=tmpdir_path)
             categorized = reporter.get_file_coverage(threshold=95.0)
@@ -202,10 +224,14 @@ class TestCoverageReporter:
             devagent_dir.mkdir()
 
             coverage_json = tmpdir_path / "coverage.json"
-            coverage_json.write_text(json.dumps({
-                "totals": {"percent_covered": 95.0, "percent_covered_display": "95.0"},
-                "files": {}
-            }))
+            coverage_json.write_text(
+                json.dumps(
+                    {
+                        "totals": {"percent_covered": 95.0, "percent_covered_display": "95.0"},
+                        "files": {},
+                    }
+                )
+            )
 
             reporter = CoverageReporter(project_root=tmpdir_path)
             reporter.save_coverage_trend()
@@ -228,15 +254,19 @@ class TestCoverageReporter:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             coverage_json = tmpdir_path / "coverage.json"
-            coverage_json.write_text(json.dumps({
-                "totals": {
-                    "percent_covered": 96.0,
-                    "num_statements": 1000,
-                    "covered_lines": 960,
-                    "missing_lines": 40
-                },
-                "files": {}
-            }))
+            coverage_json.write_text(
+                json.dumps(
+                    {
+                        "totals": {
+                            "percent_covered": 96.0,
+                            "num_statements": 1000,
+                            "covered_lines": 960,
+                            "missing_lines": 40,
+                        },
+                        "files": {},
+                    }
+                )
+            )
 
             reporter = CoverageReporter(project_root=tmpdir_path)
             markdown = reporter.generate_markdown_report()
@@ -250,10 +280,7 @@ class TestCoverageReporter:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             coverage_json = tmpdir_path / "coverage.json"
-            coverage_json.write_text(json.dumps({
-                "totals": {"percent_covered": 97.0},
-                "files": {}
-            }))
+            coverage_json.write_text(json.dumps({"totals": {"percent_covered": 97.0}, "files": {}}))
 
             reporter = CoverageReporter(project_root=tmpdir_path)
             badge = reporter.generate_badge_data()
@@ -537,6 +564,7 @@ class TestHelperFunctions:
 
     def test_run_with_timeout_success(self):
         """Test running function with timeout."""
+
         def fast_function():
             return "success"
 
@@ -553,7 +581,7 @@ class TestHelperFunctions:
             time.sleep(2)
             return "done"
 
-        completed, result = run_with_timeout(slow_function, timeout=0.5)
+        completed, _result = run_with_timeout(slow_function, timeout=0.5)
 
         assert completed is False
 
@@ -563,11 +591,8 @@ class TestHelperFunctions:
             tmpdir_path = Path(tmpdir)
 
             structure = {
-                "src": {
-                    "main.py": "def hello(): pass",
-                    "__init__.py": ""
-                },
-                "README.md": "# Test Project"
+                "src": {"main.py": "def hello(): pass", "__init__.py": ""},
+                "README.md": "# Test Project",
             }
 
             create_test_project(tmpdir_path, structure)
@@ -589,6 +614,7 @@ class TestHelperFunctions:
 
     def test_wait_for_condition_timeout(self):
         """Test condition timeout."""
+
         def never_true():
             return False
 
@@ -638,7 +664,7 @@ class TestHelperFunctions:
         data = {"name": "Alice", "age": 30}
         schema = {
             "name": {"type": "string", "required": True},
-            "age": {"type": "number", "required": True}
+            "age": {"type": "number", "required": True},
         }
 
         is_valid, errors = validate_schema(data, schema)
@@ -651,7 +677,7 @@ class TestHelperFunctions:
         data = {"name": 123}  # name should be string
         schema = {
             "name": {"type": "string", "required": True},
-            "age": {"type": "number", "required": True}
+            "age": {"type": "number", "required": True},
         }
 
         is_valid, errors = validate_schema(data, schema)

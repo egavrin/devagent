@@ -1,8 +1,9 @@
 """Agent registry for managing specialized agent types and their configurations."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar
 
 
 @dataclass
@@ -10,17 +11,17 @@ class AgentSpec:
     """Specification for an agent type defining its capabilities and behavior."""
 
     name: str
-    tools: List[str]
+    tools: list[str]
     max_iterations: int
-    system_prompt_suffix: Optional[str] = None
-    description: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    system_prompt_suffix: str | None = None
+    description: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class AgentRegistry:
     """Central registry for agent types and their configurations."""
 
-    _agents: Dict[str, AgentSpec] = {}
+    _agents: ClassVar[dict[str, AgentSpec]] = {}
 
     @classmethod
     def register(cls, spec: AgentSpec) -> None:
@@ -35,7 +36,7 @@ class AgentRegistry:
         return cls._agents[name]
 
     @classmethod
-    def list_agents(cls) -> List[str]:
+    def list_agents(cls) -> list[str]:
         """List all registered agent names."""
         return list(cls._agents.keys())
 

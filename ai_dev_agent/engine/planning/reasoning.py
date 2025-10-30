@@ -1,9 +1,9 @@
 """Reasoning helpers for multi-step task execution."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional
 
 ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -18,11 +18,11 @@ class ToolUse:
     """Describe a tool invocation that supports a reasoning step."""
 
     name: str
-    command: Optional[str] = None
-    description: Optional[str] = None
+    command: str | None = None
+    description: str | None = None
 
-    def to_dict(self) -> Dict[str, str]:
-        payload: Dict[str, str] = {"name": self.name}
+    def to_dict(self) -> dict[str, str]:
+        payload: dict[str, str] = {"name": self.name}
         if self.command:
             payload["command"] = self.command
         if self.description:
@@ -38,27 +38,27 @@ class ReasoningStep:
     title: str
     detail: str
     status: str = "pending"
-    result: Optional[str] = None
+    result: str | None = None
     started_at: str = field(default_factory=_now_ts)
-    completed_at: Optional[str] = None
-    tool: Optional[ToolUse] = None
+    completed_at: str | None = None
+    tool: ToolUse | None = None
 
     def mark_in_progress(self) -> None:
         self.status = "in_progress"
         self.started_at = self.started_at or _now_ts()
 
-    def complete(self, result: Optional[str] = None) -> None:
+    def complete(self, result: str | None = None) -> None:
         self.status = "completed"
         self.result = result
         self.completed_at = _now_ts()
 
-    def fail(self, result: Optional[str] = None) -> None:
+    def fail(self, result: str | None = None) -> None:
         self.status = "failed"
         self.result = result
         self.completed_at = _now_ts()
 
-    def to_dict(self) -> Dict[str, Optional[str]]:
-        payload: Dict[str, Optional[str]] = {
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
             "id": self.identifier,
             "title": self.title,
             "detail": self.detail,
@@ -80,7 +80,7 @@ class PlanAdjustment:
     detail: str
     created_at: str = field(default_factory=_now_ts)
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         return {
             "summary": self.summary,
             "detail": self.detail,
@@ -93,16 +93,16 @@ class TaskReasoning:
     """Aggregate reasoning steps and plan adjustments for a task."""
 
     task_id: str
-    goal: Optional[str] = None
-    task_title: Optional[str] = None
-    steps: List[ReasoningStep] = field(default_factory=list)
-    adjustments: List[PlanAdjustment] = field(default_factory=list)
+    goal: str | None = None
+    task_title: str | None = None
+    steps: list[ReasoningStep] = field(default_factory=list)
+    adjustments: list[PlanAdjustment] = field(default_factory=list)
 
     def start_step(
         self,
         title: str,
         detail: str,
-        tool: Optional[ToolUse] = None,
+        tool: ToolUse | None = None,
     ) -> ReasoningStep:
         identifier = f"S{len(self.steps) + 1}"
         step = ReasoningStep(
@@ -120,7 +120,7 @@ class TaskReasoning:
         self.adjustments.append(adjustment)
         return adjustment
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "task_id": self.task_id,
             "goal": self.goal,
@@ -129,14 +129,20 @@ class TaskReasoning:
             "adjustments": [adj.to_dict() for adj in self.adjustments],
         }
 
-    def apply_to_task(self, task: Dict[str, object]) -> None:
+    def apply_to_task(self, task: dict[str, object]) -> None:
         task["reasoning_log"] = [step.to_dict() for step in self.steps]
         if self.adjustments:
             task["plan_adjustments"] = [adj.to_dict() for adj in self.adjustments]
 
-    def merge_into_plan(self, plan: Dict[str, object]) -> None:
+    def merge_into_plan(self, plan: dict[str, object]) -> None:
         if self.adjustments:
-            adjustments = plan.setdefault("adjustments", [])
+            adjustments_obj = plan.setdefault("adjustments", [])
+            # Ensure adjustments is a list (type narrowing)
+            if not isinstance(adjustments_obj, list):
+                adjustments_obj = []
+                plan["adjustments"] = adjustments_obj
+            adjustments = adjustments_obj
+
             seen = {
                 (entry.get("summary"), entry.get("detail"))
                 for entry in adjustments
@@ -151,8 +157,8 @@ class TaskReasoning:
 
 
 __all__ = [
-    "TaskReasoning",
-    "ReasoningStep",
-    "ToolUse",
     "PlanAdjustment",
+    "ReasoningStep",
+    "TaskReasoning",
+    "ToolUse",
 ]

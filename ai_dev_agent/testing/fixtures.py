@@ -4,12 +4,12 @@ This module provides reusable fixtures for testing various components
 of the DevAgent system.
 """
 
-import json
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Dict, List, Optional, Generator
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture
@@ -47,18 +47,16 @@ def mock_llm_client():
     mock.complete.return_value = {
         "content": "This is a mock LLM response",
         "usage": {"prompt_tokens": 10, "completion_tokens": 20},
-        "model": "mock-model"
+        "model": "mock-model",
     }
-    mock.stream_complete.return_value = iter([
-        {"delta": "This "},
-        {"delta": "is "},
-        {"delta": "streaming"}
-    ])
+    mock.stream_complete.return_value = iter(
+        [{"delta": "This "}, {"delta": "is "}, {"delta": "streaming"}]
+    )
     return mock
 
 
 @pytest.fixture
-def sample_repo_map() -> Dict:
+def sample_repo_map() -> dict:
     """Provide a sample repository map for testing.
 
     Returns:
@@ -72,8 +70,8 @@ def sample_repo_map() -> Dict:
                 "size": 1024,
                 "symbols": [
                     {"name": "hello", "type": "function", "line": 1},
-                    {"name": "Calculator", "type": "class", "line": 10}
-                ]
+                    {"name": "Calculator", "type": "class", "line": 10},
+                ],
             },
             {
                 "path": "src/utils.py",
@@ -81,8 +79,8 @@ def sample_repo_map() -> Dict:
                 "size": 512,
                 "symbols": [
                     {"name": "format_date", "type": "function", "line": 3},
-                    {"name": "parse_config", "type": "function", "line": 15}
-                ]
+                    {"name": "parse_config", "type": "function", "line": 15},
+                ],
             },
             {
                 "path": "tests/test_main.py",
@@ -90,15 +88,11 @@ def sample_repo_map() -> Dict:
                 "size": 2048,
                 "symbols": [
                     {"name": "test_hello", "type": "function", "line": 5},
-                    {"name": "TestCalculator", "type": "class", "line": 12}
-                ]
-            }
+                    {"name": "TestCalculator", "type": "class", "line": 12},
+                ],
+            },
         ],
-        "summary": {
-            "total_files": 3,
-            "total_symbols": 6,
-            "languages": {"python": 3}
-        }
+        "summary": {"total_files": 3, "total_symbols": 6, "languages": {"python": 3}},
     }
 
 
@@ -127,7 +121,7 @@ def mock_git_repo(temp_workspace):
 
 
 @pytest.fixture
-def sample_work_plan() -> Dict:
+def sample_work_plan() -> dict:
     """Provide a sample work plan for testing.
 
     Returns:
@@ -143,30 +137,30 @@ def sample_work_plan() -> Dict:
                 "description": "Create user model",
                 "priority": "high",
                 "status": "pending",
-                "dependencies": []
+                "dependencies": [],
             },
             {
                 "id": "task-2",
                 "description": "Implement login endpoint",
                 "priority": "high",
                 "status": "pending",
-                "dependencies": ["task-1"]
+                "dependencies": ["task-1"],
             },
             {
                 "id": "task-3",
                 "description": "Add authentication middleware",
                 "priority": "medium",
                 "status": "pending",
-                "dependencies": ["task-2"]
-            }
+                "dependencies": ["task-2"],
+            },
         ],
         "created_at": "2025-01-15T10:00:00Z",
-        "status": "active"
+        "status": "active",
     }
 
 
 @pytest.fixture
-def mock_session_state() -> Dict:
+def mock_session_state() -> dict:
     """Provide mock session state for testing.
 
     Returns:
@@ -178,20 +172,13 @@ def mock_session_state() -> Dict:
         "context": {
             "working_directory": "/test/project",
             "active_files": ["src/main.py", "tests/test_main.py"],
-            "recent_commands": ["pytest", "git status"]
+            "recent_commands": ["pytest", "git status"],
         },
         "memory": {
-            "facts": [
-                "Project uses Python 3.11",
-                "Testing framework is pytest"
-            ],
-            "instructions": []
+            "facts": ["Project uses Python 3.11", "Testing framework is pytest"],
+            "instructions": [],
         },
-        "metrics": {
-            "queries_processed": 5,
-            "files_modified": 2,
-            "tests_run": 10
-        }
+        "metrics": {"queries_processed": 5, "files_modified": 2, "tests_run": 10},
     }
 
 
@@ -206,7 +193,7 @@ def mock_agent_registry():
     registry.list_agents.return_value = [
         {"name": "DesignAgent", "type": "design", "status": "ready"},
         {"name": "TestAgent", "type": "test", "status": "ready"},
-        {"name": "ImplementationAgent", "type": "implementation", "status": "ready"}
+        {"name": "ImplementationAgent", "type": "implementation", "status": "ready"},
     ]
     registry.get_agent.return_value = MagicMock(
         execute=MagicMock(return_value={"status": "success", "result": "Task completed"})
@@ -279,6 +266,7 @@ def mock_file_system(temp_workspace):
     Returns:
         Dictionary with mock file operations.
     """
+
     def read_file(path: str) -> str:
         file_path = temp_workspace / path
         if file_path.exists():
@@ -290,16 +278,12 @@ def mock_file_system(temp_workspace):
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(content)
 
-    def list_files(pattern: str = "**/*") -> List[str]:
-        return [str(p.relative_to(temp_workspace))
-                for p in temp_workspace.glob(pattern) if p.is_file()]
+    def list_files(pattern: str = "**/*") -> list[str]:
+        return [
+            str(p.relative_to(temp_workspace)) for p in temp_workspace.glob(pattern) if p.is_file()
+        ]
 
-    return {
-        "read": read_file,
-        "write": write_file,
-        "list": list_files,
-        "workspace": temp_workspace
-    }
+    return {"read": read_file, "write": write_file, "list": list_files, "workspace": temp_workspace}
 
 
 @pytest.fixture
@@ -310,26 +294,10 @@ def mock_config():
         Dictionary with test configuration.
     """
     return {
-        "llm": {
-            "model": "gpt-4",
-            "temperature": 0.7,
-            "max_tokens": 2000
-        },
-        "testing": {
-            "coverage_threshold": 95.0,
-            "parallel": True,
-            "timeout": 60
-        },
-        "paths": {
-            "workspace": "/test/workspace",
-            "cache": "/test/.cache",
-            "logs": "/test/logs"
-        },
-        "features": {
-            "auto_test": True,
-            "memory_system": True,
-            "multi_agent": True
-        }
+        "llm": {"model": "gpt-4", "temperature": 0.7, "max_tokens": 2000},
+        "testing": {"coverage_threshold": 95.0, "parallel": True, "timeout": 60},
+        "paths": {"workspace": "/test/workspace", "cache": "/test/.cache", "logs": "/test/logs"},
+        "features": {"auto_test": True, "memory_system": True, "multi_agent": True},
     }
 
 
@@ -347,7 +315,7 @@ def project_size(request):
     sizes = {
         "small": {"files": 10, "lines": 1000, "tests": 20},
         "medium": {"files": 100, "lines": 10000, "tests": 200},
-        "large": {"files": 1000, "lines": 100000, "tests": 2000}
+        "large": {"files": 1000, "lines": 100000, "tests": 2000},
     }
     return sizes[request.param]
 

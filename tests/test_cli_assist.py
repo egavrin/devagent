@@ -5,7 +5,7 @@ import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, List, Tuple
+from typing import Callable
 
 import pytest
 from click.testing import CliRunner
@@ -13,13 +13,12 @@ from click.testing import CliRunner
 import ai_dev_agent.cli as cli_module
 from ai_dev_agent.cli import cli
 from ai_dev_agent.cli.router import IntentDecision
-from ai_dev_agent.providers.llm.base import ToolCall, ToolCallResult
 from ai_dev_agent.core.utils.config import Settings
-from ai_dev_agent.tools import FIND, WRITE, RUN
-
+from ai_dev_agent.providers.llm.base import ToolCall, ToolCallResult
+from ai_dev_agent.tools import FIND, RUN, WRITE
 
 Predicate = Callable[[str], bool]
-Rule = Tuple[Predicate, IntentDecision]
+Rule = tuple[Predicate, IntentDecision]
 
 
 @dataclass
@@ -58,7 +57,7 @@ def assist_harness(tmp_path: Path, monkeypatch) -> AssistHarness:
     examples = repo_root / "examples"
     examples.mkdir()
     (examples / "python_app.py").write_text(
-        "def greet(name):\n    return f\"Hello, {name}!\"\n",
+        'def greet(name):\n    return f"Hello, {name}!"\n',
         encoding="utf-8",
     )
     (examples / "javascript_app.js").write_text(
@@ -66,7 +65,7 @@ def assist_harness(tmp_path: Path, monkeypatch) -> AssistHarness:
         encoding="utf-8",
     )
     (examples / "go_app.go").write_text(
-        "package main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"Hello from Go sample\")\n}\n",
+        'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello from Go sample")\n}\n',
         encoding="utf-8",
     )
     (repo_root / "README.md").write_text("Sample workspace for assist tests.\n", encoding="utf-8")
@@ -108,7 +107,9 @@ def assist_harness(tmp_path: Path, monkeypatch) -> AssistHarness:
     monkeypatch.chdir(repo_root)
 
     runner = CliRunner()
-    return AssistHarness(repo_root=repo_root, runner=runner, _rules=router_rules, _client_ref=client_ref)
+    return AssistHarness(
+        repo_root=repo_root, runner=runner, _rules=router_rules, _client_ref=client_ref
+    )
 
 
 def test_assist_find_returns_expected_matches(assist_harness: AssistHarness) -> None:
@@ -129,8 +130,9 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
     before = assist_harness.read_text("examples/python_app.py")
     assert "Return a greeting" not in before
 
-    diff_text = textwrap.dedent(
-        '''
+    diff_text = (
+        textwrap.dedent(
+            '''
         diff --git a/examples/python_app.py b/examples/python_app.py
         index 1111111..2222222 100644
         --- a/examples/python_app.py
@@ -142,7 +144,9 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
         +    """Return a greeting for the given name."""
         +    return f"Hello, {name}!"
         '''
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
     assist_harness.configure_router(
         (
@@ -161,8 +165,9 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
 
 
 def test_assist_can_create_and_run_script(assist_harness: AssistHarness) -> None:
-    diff_text = textwrap.dedent(
-        """
+    diff_text = (
+        textwrap.dedent(
+            """
         diff --git a/scripts/hello.sh b/scripts/hello.sh
         new file mode 100755
         index 0000000..1111111
@@ -172,7 +177,9 @@ def test_assist_can_create_and_run_script(assist_harness: AssistHarness) -> None
         +#!/usr/bin/env bash
         +echo "Hello from assist script"
         """
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
     assist_harness.configure_router(
         (
@@ -223,7 +230,7 @@ def test_assist_direct_response_answers_question(assist_harness: AssistHarness) 
 def test_assist_react_flow_executes_tool_sequence(assist_harness: AssistHarness) -> None:
     class ScriptedToolClient:
         def __init__(self) -> None:
-            self.invocations: List[List[str | None]] = []
+            self.invocations: list[list[str | None]] = []
 
         def invoke_tools(self, messages, tools, temperature=0.1, **_kwargs):
             transcript = [getattr(m, "content", None) for m in messages]
@@ -242,7 +249,7 @@ def test_assist_react_flow_executes_tool_sequence(assist_harness: AssistHarness)
                         }
                     ],
                 )
-            return ToolCallResult(calls=[], message_content="ReAct located the greet helper." )
+            return ToolCallResult(calls=[], message_content="ReAct located the greet helper.")
 
         def configure_timeout(self, *_args, **_kwargs) -> None:
             self._timeout = _kwargs.get("timeout")

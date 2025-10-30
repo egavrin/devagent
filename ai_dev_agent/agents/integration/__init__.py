@@ -1,4 +1,5 @@
 """Integration layer for connecting agents with other systems."""
-from .planning_integration import PlanningIntegration, TaskAgentMapper, AutomatedWorkflow
 
-__all__ = ["PlanningIntegration", "TaskAgentMapper", "AutomatedWorkflow"]
+from .planning_integration import AutomatedWorkflow, PlanningIntegration, TaskAgentMapper
+
+__all__ = ["AutomatedWorkflow", "PlanningIntegration", "TaskAgentMapper"]

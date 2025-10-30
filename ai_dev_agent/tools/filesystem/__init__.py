@@ -1,13 +1,18 @@
 """Filesystem tool implementations."""
+
 from __future__ import annotations
 
 import hashlib
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Dict
 
-from ..registry import ToolSpec, ToolContext, registry
 from ..names import READ, WRITE
+from ..registry import ToolContext, ToolSpec, registry
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas" / "tools"
 
@@ -21,17 +26,14 @@ def _resolve_path(repo_root: Path, relative: str) -> Path:
 
 def _fs_read(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
     repo_root = context.repo_root
-    files: list[Dict[str, str]] = []
+    files: list[dict[str, str]] = []
     byte_range = payload.get("byte_range")
     context_lines = payload.get("context_lines")
 
     paths_param = payload.get("paths")
     if paths_param is None:
         single_path = payload.get("path")
-        if isinstance(single_path, str) and single_path.strip():
-            paths_param = [single_path]
-        else:
-            paths_param = []
+        paths_param = [single_path] if isinstance(single_path, str) and single_path.strip() else []
     elif isinstance(paths_param, (str, bytes)):
         # Allow degenerate inputs that pass validation but provide a single string
         if isinstance(paths_param, bytes):
@@ -57,14 +59,16 @@ def _fs_read(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, A
             if context_lines >= len(lines):
                 text = original_text
             else:
-                text = "\n".join(lines[: context_lines])
+                text = "\n".join(lines[:context_lines])
 
         digest = hashlib.sha256(original_text.encode("utf-8", errors="ignore")).hexdigest()
-        files.append({
-            "path": rel,
-            "content": text,
-            "sha256": digest,
-        })
+        files.append(
+            {
+                "path": rel,
+                "content": text,
+                "sha256": digest,
+            }
+        )
 
     return {"files": files}
 
@@ -93,7 +97,9 @@ def _parse_diff_stats(diff: str) -> tuple[int, int, list[str], list[str]]:
     return total_lines, len(files), sorted(files), sorted(new_files)
 
 
-def _run_git_apply(repo_root: Path, diff: str, check_only: bool) -> subprocess.CompletedProcess[str]:
+def _run_git_apply(
+    repo_root: Path, diff: str, check_only: bool
+) -> subprocess.CompletedProcess[str]:
     args = ["git", "apply"]
     if check_only:
         args.append("--check")

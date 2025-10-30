@@ -1,14 +1,14 @@
 """Tests for the enhanced agent registry module."""
+
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch, mock_open
-import tempfile
-import pytest
-from dataclasses import dataclass
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from ai_dev_agent.agents.base import AgentCapability, BaseAgent
 from ai_dev_agent.agents.enhanced_registry import EnhancedAgentRegistry
-from ai_dev_agent.agents.registry import AgentSpec, AgentRegistry
-from ai_dev_agent.agents.base import BaseAgent, AgentCapability
+from ai_dev_agent.agents.registry import AgentSpec
 
 
 class TestEnhancedAgentRegistry:
@@ -39,7 +39,7 @@ class TestEnhancedAgentRegistry:
             tools=["grep", "read", "write"],
             max_iterations=10,
             description="Test spec",
-            system_prompt_suffix="Test suffix"
+            system_prompt_suffix="Test suffix",
         )
 
     def test_singleton_pattern(self):
@@ -55,15 +55,19 @@ class TestEnhancedAgentRegistry:
         assert isinstance(registry._agent_classes, dict)
         assert "BaseAgent" in registry._agent_classes
 
-    @patch('ai_dev_agent.agents.enhanced_registry.AgentRegistry')
+    @patch("ai_dev_agent.agents.enhanced_registry.AgentRegistry")
     def test_import_default_agents(self, mock_agent_registry):
         """Test importing default agents from original registry."""
-        mock_manager = AgentSpec(name="manager", tools=["read", "write"], max_iterations=10, description="Manager")
-        mock_reviewer = AgentSpec(name="reviewer", tools=["read"], max_iterations=5, description="Reviewer")
+        mock_manager = AgentSpec(
+            name="manager", tools=["read", "write"], max_iterations=10, description="Manager"
+        )
+        mock_reviewer = AgentSpec(
+            name="reviewer", tools=["read"], max_iterations=5, description="Reviewer"
+        )
 
         mock_agent_registry.get.side_effect = lambda name: {
             "manager": mock_manager,
-            "reviewer": mock_reviewer
+            "reviewer": mock_reviewer,
         }[name]
 
         registry = EnhancedAgentRegistry()
@@ -71,7 +75,7 @@ class TestEnhancedAgentRegistry:
         assert "manager" in registry._specs
         assert "reviewer" in registry._specs
 
-    @patch('ai_dev_agent.agents.enhanced_registry.AgentRegistry')
+    @patch("ai_dev_agent.agents.enhanced_registry.AgentRegistry")
     def test_import_default_agents_missing(self, mock_agent_registry):
         """Test graceful handling when default agents are missing."""
         mock_agent_registry.get.side_effect = KeyError("Not found")
@@ -96,6 +100,7 @@ class TestEnhancedAgentRegistry:
 
     def test_register_agent_class(self, registry):
         """Test registering an agent class."""
+
         class CustomAgent(BaseAgent):
             pass
 
@@ -146,7 +151,7 @@ class TestEnhancedAgentRegistry:
         with pytest.raises(KeyError, match="Unknown agent spec: nonexistent"):
             registry.get_spec("nonexistent")
 
-    @patch.object(EnhancedAgentRegistry, '_create_agent_from_spec')
+    @patch.object(EnhancedAgentRegistry, "_create_agent_from_spec")
     def test_create_agent_from_spec(self, mock_create, registry, mock_spec):
         """Test creating an agent from a spec."""
         registry.register_spec(mock_spec)
@@ -160,6 +165,7 @@ class TestEnhancedAgentRegistry:
 
     def test_create_agent_from_class(self, registry):
         """Test creating an agent from a registered class."""
+
         class CustomAgent(BaseAgent):
             def __init__(self, **kwargs):
                 super().__init__(name="custom", **kwargs)
@@ -207,7 +213,8 @@ class TestEnhancedAgentRegistry:
         """Test discovering agents in a directory using AgentDiscovery."""
         # Create a mock agent file
         agent_file = tmp_path / "custom_agent.py"
-        agent_file.write_text("""
+        agent_file.write_text(
+            """
 from ai_dev_agent.agents.base import BaseAgent
 
 class CustomAgent(BaseAgent):
@@ -215,10 +222,12 @@ class CustomAgent(BaseAgent):
 
     def __init__(self):
         super().__init__(name='custom', description='Custom agent')
-""")
+"""
+        )
 
         # Use AgentDiscovery class
         from ai_dev_agent.agents.enhanced_registry import AgentDiscovery
+
         discovery = AgentDiscovery()
         discovered = discovery.discover_in_directory(str(tmp_path))
 
@@ -244,12 +253,12 @@ class CustomAgent(BaseAgent):
                     "name": "test",
                     "tools": ["read", "write"],
                     "max_iterations": 10,
-                    "description": "Test spec"
+                    "description": "Test spec",
                 }
             }
         }
         file_path = tmp_path / "registry.json"
-        with open(file_path, 'w') as f:
+        with Path(file_path).open("w") as f:
             json.dump(spec_data, f)
 
         registry.load_from_file(str(file_path))

@@ -1,11 +1,13 @@
 """Simple symbol finding tool using universal ctags."""
+
 import os
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Optional
 
-from .registry import ToolSpec, ToolContext, registry
+from .registry import ToolContext, ToolSpec, registry
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schemas" / "tools"
 
@@ -20,8 +22,8 @@ def symbols(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, An
         return {"success": True, "symbols": []}
 
     # Convert path to absolute if relative
-    if not os.path.isabs(path):
-        path = os.path.join(context.repo_root, path)
+    if not Path(path).is_absolute():
+        path = str(Path(context.repo_root) / path)
 
     # Check if ctags is available
     ctags_cmd = "ctags"
@@ -33,27 +35,27 @@ def symbols(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, An
         try:
             subprocess.run([ctags_cmd, "--version"], capture_output=True, timeout=1)
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return {"success": False, "error": "ctags not found. Install universal-ctags.", "symbols": []}
+            return {
+                "success": False,
+                "error": "ctags not found. Install universal-ctags.",
+                "symbols": [],
+            }
 
     # Generate or update tags file
-    tags_file = os.path.join(context.repo_root, ".tags")
+    tags_file = str(Path(context.repo_root) / ".tags")
 
     # Check if we need to regenerate tags (if file is older than 5 minutes)
     should_regenerate = True
-    if os.path.exists(tags_file):
-        age_seconds = time.time() - os.path.getmtime(tags_file)
+    tags_path = Path(tags_file)
+    if tags_path.exists():
+        age_seconds = time.time() - tags_path.stat().st_mtime
         should_regenerate = age_seconds > 300  # 5 minutes
 
     if should_regenerate:
         try:
             # Generate tags for the specified path
             cmd = [ctags_cmd, "-R", "-f", tags_file, "--languages=all", path]
-            subprocess.run(
-                cmd,
-                capture_output=True,
-                cwd=str(context.repo_root),
-                timeout=30
-            )
+            subprocess.run(cmd, capture_output=True, cwd=str(context.repo_root), timeout=30)
         except subprocess.TimeoutExpired:
             return {"success": False, "error": "ctags generation timeout", "symbols": []}
         except Exception as e:
@@ -61,14 +63,14 @@ def symbols(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, An
 
     # Read and search the tags file
     symbols_list = []
-    if os.path.exists(tags_file):
+    if tags_path.exists():
         try:
-            with open(tags_file, 'r', encoding='utf-8', errors='ignore') as f:
+            with tags_path.open(encoding="utf-8", errors="ignore") as f:
                 for line in f:
-                    if line.startswith('!'):  # Skip comments
+                    if line.startswith("!"):  # Skip comments
                         continue
 
-                    parts = line.strip().split('\t')
+                    parts = line.strip().split("\t")
                     if len(parts) >= 3:
                         symbol_name = parts[0]
                         file_path = parts[1]
@@ -96,13 +98,15 @@ def symbols(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, An
                                     except ValueError:
                                         line_no = None
 
-                            symbols_list.append({
-                                "name": symbol_name,
-                                "file": file_path,
-                                "pattern": pattern,
-                                "kind": kind,
-                                "line": line_no,
-                            })
+                            symbols_list.append(
+                                {
+                                    "name": symbol_name,
+                                    "file": file_path,
+                                    "pattern": pattern,
+                                    "kind": kind,
+                                    "line": line_no,
+                                }
+                            )
 
                             if len(symbols_list) >= limit:
                                 break

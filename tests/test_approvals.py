@@ -1,10 +1,8 @@
 """Tests for the approval manager module."""
 
 import tempfile
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch, mock_open
-import pytest
+from unittest.mock import MagicMock, patch
 
 from ai_dev_agent.core.approval.approvals import ApprovalManager
 from ai_dev_agent.core.approval.policy import ApprovalPolicy
@@ -16,7 +14,7 @@ class TestApprovalManager:
     def setup_method(self):
         """Set up test fixtures."""
         self.policy = ApprovalPolicy()
-        self.temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.log')
+        self.temp_file = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".log")
         self.temp_file.close()
         self.audit_path = Path(self.temp_file.name)
         self.manager = ApprovalManager(self.policy, self.audit_path)
@@ -39,7 +37,7 @@ class TestApprovalManager:
         assert self.manager.policy == self.policy
         assert self.manager.audit_file == self.audit_path
 
-    @patch('ai_dev_agent.core.approval.approvals.click.confirm')
+    @patch("ai_dev_agent.core.approval.approvals.click.confirm")
     def test_require_with_user_prompt(self, mock_confirm):
         """Test requiring approval with user prompt."""
         mock_confirm.return_value = True
@@ -50,13 +48,13 @@ class TestApprovalManager:
         mock_confirm.assert_called_once_with("Approve test_action?", default=False)
 
         # Check audit log was written
-        with open(self.audit_path, 'r') as f:
+        with Path(self.audit_path).open() as f:
             content = f.read()
             assert "test_action" in content
             assert "True" in content
             assert "prompt" in content
 
-    @patch('ai_dev_agent.core.approval.approvals.click.confirm')
+    @patch("ai_dev_agent.core.approval.approvals.click.confirm")
     def test_require_with_custom_prompt(self, mock_confirm):
         """Test requiring approval with custom prompt."""
         mock_confirm.return_value = False
@@ -66,7 +64,7 @@ class TestApprovalManager:
         assert result is False
         mock_confirm.assert_called_once_with("Allow this action?", default=False)
 
-    @patch('ai_dev_agent.core.approval.approvals.click.confirm')
+    @patch("ai_dev_agent.core.approval.approvals.click.confirm")
     def test_require_with_default_true(self, mock_confirm):
         """Test requiring approval with default=True."""
         mock_confirm.return_value = True
@@ -80,14 +78,14 @@ class TestApprovalManager:
         """Test requiring approval with emergency override enabled."""
         self.policy.emergency_override = True
 
-        with patch('ai_dev_agent.core.approval.approvals.click.confirm') as mock_confirm:
+        with patch("ai_dev_agent.core.approval.approvals.click.confirm") as mock_confirm:
             result = self.manager.require("test_action")
 
         assert result is True
         mock_confirm.assert_not_called()  # Should not prompt user
 
         # Check audit log
-        with open(self.audit_path, 'r') as f:
+        with Path(self.audit_path).open() as f:
             content = f.read()
             assert "emergency_override" in content
 
@@ -95,14 +93,14 @@ class TestApprovalManager:
         """Test auto-approval for plan action."""
         self.policy.auto_approve_plan = True
 
-        with patch('ai_dev_agent.core.approval.approvals.click.confirm') as mock_confirm:
+        with patch("ai_dev_agent.core.approval.approvals.click.confirm") as mock_confirm:
             result = self.manager.require("plan")
 
         assert result is True
         mock_confirm.assert_not_called()
 
         # Check audit log
-        with open(self.audit_path, 'r') as f:
+        with Path(self.audit_path).open() as f:
             content = f.read()
             assert "plan" in content
             assert "auto" in content
@@ -111,7 +109,7 @@ class TestApprovalManager:
         """Test auto-approval for code action."""
         self.policy.auto_approve_code = True
 
-        with patch('ai_dev_agent.core.approval.approvals.click.confirm') as mock_confirm:
+        with patch("ai_dev_agent.core.approval.approvals.click.confirm") as mock_confirm:
             result = self.manager.require("code")
 
         assert result is True
@@ -121,7 +119,7 @@ class TestApprovalManager:
         """Test auto-approval for shell action."""
         self.policy.auto_approve_shell = True
 
-        with patch('ai_dev_agent.core.approval.approvals.click.confirm') as mock_confirm:
+        with patch("ai_dev_agent.core.approval.approvals.click.confirm") as mock_confirm:
             result = self.manager.require("shell")
 
         assert result is True
@@ -131,7 +129,7 @@ class TestApprovalManager:
         """Test auto-approval for adr action."""
         self.policy.auto_approve_adr = True
 
-        with patch('ai_dev_agent.core.approval.approvals.click.confirm') as mock_confirm:
+        with patch("ai_dev_agent.core.approval.approvals.click.confirm") as mock_confirm:
             result = self.manager.require("adr")
 
         assert result is True
@@ -180,7 +178,7 @@ class TestApprovalManager:
         # Should not raise error
         manager._log("test", True, "test_reason")
 
-    @patch('ai_dev_agent.core.approval.approvals.datetime')
+    @patch("ai_dev_agent.core.approval.approvals.datetime")
     def test_log_with_audit_file(self, mock_datetime):
         """Test _log method with audit file."""
         mock_now = MagicMock()
@@ -189,7 +187,7 @@ class TestApprovalManager:
 
         self.manager._log("test_purpose", True, "test_reason")
 
-        with open(self.audit_path, 'r') as f:
+        with Path(self.audit_path).open() as f:
             content = f.read()
             assert "2024-01-01T12:00:00\ttest_purpose\tTrue\ttest_reason\n" in content
 
@@ -218,29 +216,30 @@ class TestApprovalManager:
         """Test that _log handles write errors gracefully."""
         # Create a read-only directory
         import os
+
         temp_dir = tempfile.mkdtemp()
         audit_file = Path(temp_dir) / "audit.log"
 
         manager = ApprovalManager(self.policy, audit_file)
 
         # Make directory read-only
-        os.chmod(temp_dir, 0o444)
+        Path(temp_dir).chmod(0o444)
 
         try:
             # Should not raise, just log warning
-            with patch('ai_dev_agent.core.approval.approvals.LOGGER') as mock_logger:
+            with patch("ai_dev_agent.core.approval.approvals.LOGGER") as mock_logger:
                 manager._log("test", True, "reason")
                 mock_logger.warning.assert_called()
         finally:
             # Restore permissions and cleanup
-            os.chmod(temp_dir, 0o755)
+            Path(temp_dir).chmod(0o755)
             try:
                 audit_file.unlink()
             except:
                 pass
-            os.rmdir(temp_dir)
+            Path(temp_dir).rmdir()
 
-    @patch('ai_dev_agent.core.approval.approvals.click.confirm')
+    @patch("ai_dev_agent.core.approval.approvals.click.confirm")
     def test_full_workflow_with_prompting(self, mock_confirm):
         """Test full workflow with user prompting."""
         mock_confirm.return_value = True
@@ -260,7 +259,7 @@ class TestApprovalManager:
         assert mock_confirm.call_count == 1
 
         # Check audit log has both entries
-        with open(self.audit_path, 'r') as f:
+        with Path(self.audit_path).open() as f:
             lines = f.readlines()
             assert len(lines) == 2
             assert "custom_action" in lines[0]
@@ -268,7 +267,7 @@ class TestApprovalManager:
             assert "code" in lines[1]
             assert "auto" in lines[1]
 
-    @patch('ai_dev_agent.core.approval.approvals.LOGGER')
+    @patch("ai_dev_agent.core.approval.approvals.LOGGER")
     def test_logging_messages(self, mock_logger):
         """Test that appropriate log messages are generated."""
         # Test emergency override logging
@@ -285,18 +284,14 @@ class TestApprovalManager:
 
         # Test auto-approval logging
         self.manager.require("plan")
-        mock_logger.info.assert_any_call(
-            "%s automatically approved by policy.", "Plan"
-        )
+        mock_logger.info.assert_any_call("%s automatically approved by policy.", "Plan")
 
         # Reset
         mock_logger.reset_mock()
         self.policy.auto_approve_plan = False
 
         # Test prompt decision logging
-        with patch('ai_dev_agent.core.approval.approvals.click.confirm') as mock_confirm:
+        with patch("ai_dev_agent.core.approval.approvals.click.confirm") as mock_confirm:
             mock_confirm.return_value = False
             self.manager.require("action")
-            mock_logger.info.assert_called_with(
-                "Approval for %s: %s", "action", False
-            )
+            mock_logger.info.assert_called_with("Approval for %s: %s", "action", False)

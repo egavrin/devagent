@@ -1,24 +1,26 @@
 """Command line interface for the development agent."""
+
 from __future__ import annotations
 
 import json
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 import click
 
 from ai_dev_agent.agents import AgentRegistry
-from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.core.utils.logger import configure_logging, get_logger
 from ai_dev_agent.tools.execution.shell_session import ShellSessionError, ShellSessionManager
-from ai_dev_agent.session import SessionManager
-
-logger = get_logger(__name__)
 
 from .react.executor import _execute_react_assistant
 from .review import run_review
-from .utils import _build_context, get_llm_client, _record_invocation
+from .utils import _build_context, _record_invocation, get_llm_client
+
+if TYPE_CHECKING:
+    from ai_dev_agent.core.utils.config import Settings
+
+logger = get_logger(__name__)
 
 LOGGER = get_logger(__name__)
 
@@ -26,9 +28,9 @@ LOGGER = get_logger(__name__)
 class NaturalLanguageGroup(click.Group):
     """Group that falls back to NL intent routing when no command matches."""
 
-    def resolve_command(self, ctx: click.Context, args: List[str]):  # type: ignore[override]
-        planning_flag: Optional[bool] = None
-        filtered_args: List[str] = []
+    def resolve_command(self, ctx: click.Context, args: list[str]):  # type: ignore[override]
+        planning_flag: bool | None = None
+        filtered_args: list[str] = []
         i = 0
 
         while i < len(args):
@@ -67,15 +69,29 @@ class NaturalLanguageGroup(click.Group):
 
 
 @click.group(cls=NaturalLanguageGroup, invoke_without_command=True)
-@click.option("--config", "config_path", type=click.Path(path_type=Path), help="Path to config file.")
+@click.option(
+    "--config", "config_path", type=click.Path(path_type=Path), help="Path to config file."
+)
 @click.option("-v", "--verbose", count=True, help="Verbosity: -v (info), -vv (debug), -vvv (trace)")
 @click.option("-q", "--quiet", is_flag=True, help="Minimal output")
 @click.option("--json", "json_output", is_flag=True, help="Output in JSON format")
 @click.option("--plan", is_flag=True, help="Use planning mode for all queries")
-@click.option("--repomap-debug", is_flag=True, envvar="DEVAGENT_REPOMAP_DEBUG", help="Enable RepoMap debug logging")
+@click.option(
+    "--repomap-debug",
+    is_flag=True,
+    envvar="DEVAGENT_REPOMAP_DEBUG",
+    help="Enable RepoMap debug logging",
+)
 @click.pass_context
-def cli(ctx: click.Context, config_path: Path | None, verbose: int, quiet: bool, json_output: bool,
-        plan: bool, repomap_debug: bool) -> None:
+def cli(
+    ctx: click.Context,
+    config_path: Path | None,
+    verbose: int,
+    quiet: bool,
+    json_output: bool,
+    plan: bool,
+    repomap_debug: bool,
+) -> None:
     """AI-assisted development agent CLI."""
     from ai_dev_agent.cli import load_settings as _load_settings
 
@@ -84,13 +100,9 @@ def cli(ctx: click.Context, config_path: Path | None, verbose: int, quiet: bool,
     # Handle verbosity levels
     if quiet:
         settings.log_level = "WARNING"
-    elif verbose == 0:
+    elif verbose == 0 or verbose == 1:
         settings.log_level = "INFO"
-    elif verbose == 1:
-        settings.log_level = "INFO"
-    elif verbose == 2:
-        settings.log_level = "DEBUG"
-    elif verbose >= 3:
+    elif verbose == 2 or verbose >= 3:
         settings.log_level = "DEBUG"
 
     if repomap_debug:
@@ -121,7 +133,7 @@ def cli(ctx: click.Context, config_path: Path | None, verbose: int, quiet: bool,
 @click.pass_context
 def query(
     ctx: click.Context,
-    prompt: Tuple[str, ...],
+    prompt: tuple[str, ...],
     force_plan: bool,
     direct: bool,
     agent: str,
@@ -141,8 +153,9 @@ def query(
     repomap_messages = None
     try:
         from ai_dev_agent.cli.context_enhancer import enhance_query
+
         workspace = Path.cwd()
-        original_query, repomap_messages = enhance_query(pending, workspace)
+        _original_query, repomap_messages = enhance_query(pending, workspace)
         if repomap_messages:
             ctx.obj["_repomap_messages"] = repomap_messages
             logger.debug("RepoMap context prepared")
@@ -171,34 +184,41 @@ def query(
         )
 
     try:
-        cli_pkg = import_module('ai_dev_agent.cli')
-        llm_factory = getattr(cli_pkg, 'get_llm_client', get_llm_client)
+        cli_pkg = import_module("ai_dev_agent.cli")
+        llm_factory = getattr(cli_pkg, "get_llm_client", get_llm_client)
     except ModuleNotFoundError:
         llm_factory = get_llm_client
     try:
         client = llm_factory(ctx)
     except click.ClickException as exc:
-        raise click.ClickException(f'Failed to create LLM client: {exc}') from exc
+        raise click.ClickException(f"Failed to create LLM client: {exc}") from exc
     _execute_react_assistant(
-        ctx, client, settings, pending,
+        ctx,
+        client,
+        settings,
+        pending,
         use_planning=use_planning,
         system_extension=None,
         format_schema=None,
-        agent_type=agent
+        agent_type=agent,
     )
 
 
 @cli.command()
 @click.argument("file_path", required=True)
-@click.option("--rule", type=click.Path(exists=True), help="Path to coding rule file (for patch/rule-based review)")
+@click.option(
+    "--rule",
+    type=click.Path(exists=True),
+    help="Path to coding rule file (for patch/rule-based review)",
+)
 @click.option("--report", "-r", help="Output path for review report")
 @click.option("--json", "json_flag", is_flag=True, help="Output in JSON format")
 @click.pass_context
 def review(
     ctx: click.Context,
     file_path: str,
-    rule: Optional[str],
-    report: Optional[str],
+    rule: str | None,
+    report: str | None,
     json_flag: bool,
 ) -> None:
     """Review code for quality, security, and best practices.
@@ -249,8 +269,8 @@ def review(
                 click.echo("No violations reported.")
     else:
         # General code quality review
-        from ai_dev_agent.agents.specialized import ReviewAgent
         from ai_dev_agent.agents.base import AgentContext
+        from ai_dev_agent.agents.specialized import ReviewAgent
 
         agent = ReviewAgent()
         agent_context = AgentContext(session_id=f"review-{Path(file_path).stem}")
@@ -267,13 +287,17 @@ def review(
             score = result.metadata.get("quality_score", 0.0)
 
             if json_output:
-                click.echo(json.dumps({
-                    "success": True,
-                    "issues": issues,
-                    "score": score,
-                    "output": result.output,
-                    "metadata": result.metadata
-                }))
+                click.echo(
+                    json.dumps(
+                        {
+                            "success": True,
+                            "issues": issues,
+                            "score": score,
+                            "output": result.output,
+                            "metadata": result.metadata,
+                        }
+                    )
+                )
             else:
                 if issues == 0:
                     click.echo(click.style("✓ No issues found", fg="green"))
@@ -292,8 +316,6 @@ def review(
             else:
                 click.echo(click.style(f"✗ Review failed: {result.error}", fg="red"))
             raise click.Abort()
-
-
 
 
 @cli.command()
@@ -334,7 +356,9 @@ def chat(ctx: click.Context) -> None:
     try:
         while True:
             try:
-                user_input = click.prompt("DevAgent> ", prompt_suffix="", show_default=False).strip()
+                user_input = click.prompt(
+                    "DevAgent> ", prompt_suffix="", show_default=False
+                ).strip()
             except (KeyboardInterrupt, EOFError):
                 click.echo("\nGoodbye!")
                 break
@@ -380,15 +404,15 @@ def chat(ctx: click.Context) -> None:
 @click.option("--context", "-c", help="Additional context")
 @click.option("--output", "-o", help="Output path for design document")
 @click.pass_context
-def create_design(ctx: click.Context, feature: str, output: Optional[str], context: Optional[str]):
+def create_design(ctx: click.Context, feature: str, output: str | None, context: str | None):
     """Create a technical design for a feature.
 
     Example:
         devagent create-design "User Authentication System"
         devagent create-design "REST API" --context "CRUD for blog posts"
     """
-    from ai_dev_agent.agents.specialized import DesignAgent
     from ai_dev_agent.agents.base import AgentContext
+    from ai_dev_agent.agents.specialized import DesignAgent
 
     agent = DesignAgent()
     agent_context = AgentContext(session_id=f"design-{feature}")
@@ -405,11 +429,9 @@ def create_design(ctx: click.Context, feature: str, output: Optional[str], conte
 
     if result.success:
         if json_output:
-            click.echo(json.dumps({
-                "success": True,
-                "output": result.output,
-                "metadata": result.metadata
-            }))
+            click.echo(
+                json.dumps({"success": True, "output": result.output, "metadata": result.metadata})
+            )
         else:
             click.echo(click.style("✓ Design completed", fg="green"))
             click.echo(f"\n{result.output}")
@@ -437,8 +459,8 @@ def generate_tests(ctx: click.Context, feature: str, coverage: int, type: str):
         devagent generate-tests "authentication module"
         devagent generate-tests "payment processing" --coverage 95 --type integration
     """
-    from ai_dev_agent.agents.specialized import TestingAgent
     from ai_dev_agent.agents.base import AgentContext
+    from ai_dev_agent.agents.specialized import TestingAgent
 
     agent = TestingAgent()
     agent_context = AgentContext(session_id=f"test-{feature}")
@@ -453,18 +475,16 @@ def generate_tests(ctx: click.Context, feature: str, coverage: int, type: str):
 
     if result.success:
         if json_output:
-            click.echo(json.dumps({
-                "success": True,
-                "output": result.output,
-                "metadata": result.metadata
-            }))
+            click.echo(
+                json.dumps({"success": True, "output": result.output, "metadata": result.metadata})
+            )
         else:
             click.echo(click.style("✓ Tests generated", fg="green"))
             click.echo(f"\n{result.output}")
 
             if "test_files_created" in result.metadata:
                 files = result.metadata["test_files_created"]
-                click.echo(f"\nFiles created:")
+                click.echo("\nFiles created:")
                 for f in files:
                     click.echo(f"  - {f}")
     else:
@@ -479,15 +499,15 @@ def generate_tests(ctx: click.Context, feature: str, coverage: int, type: str):
 @click.argument("design_file", required=True)
 @click.option("--test-file", "-t", help="Path to test file")
 @click.pass_context
-def write_code(ctx: click.Context, design_file: str, test_file: Optional[str]):
+def write_code(ctx: click.Context, design_file: str, test_file: str | None):
     """Implement code from a design file.
 
     Example:
         devagent write-code design.md
         devagent write-code design/auth.md --test-file tests/test_auth.py
     """
-    from ai_dev_agent.agents.specialized import ImplementationAgent
     from ai_dev_agent.agents.base import AgentContext
+    from ai_dev_agent.agents.specialized import ImplementationAgent
 
     agent = ImplementationAgent()
     agent_context = AgentContext(session_id=f"implement-{Path(design_file).stem}")
@@ -504,11 +524,9 @@ def write_code(ctx: click.Context, design_file: str, test_file: Optional[str]):
 
     if result.success:
         if json_output:
-            click.echo(json.dumps({
-                "success": True,
-                "output": result.output,
-                "metadata": result.metadata
-            }))
+            click.echo(
+                json.dumps({"success": True, "output": result.output, "metadata": result.metadata})
+            )
         else:
             click.echo(click.style("✓ Implementation completed", fg="green"))
             click.echo(f"\n{result.output}")
@@ -521,6 +539,7 @@ def write_code(ctx: click.Context, design_file: str, test_file: Optional[str]):
         else:
             click.echo(click.style(f"✗ Failed: {result.error}", fg="red"))
         raise click.Abort()
+
 
 def main() -> None:
     cli(prog_name="devagent")
