@@ -691,10 +691,9 @@ def run_review(
     original_max_tool_output_chars = getattr(settings, "max_tool_output_chars", None)
     original_max_context_tokens = getattr(settings, "max_context_tokens", None)
     original_response_headroom = getattr(settings, "response_headroom_tokens", None)
-    original_enable_dynamic_instructions = getattr(settings, "enable_dynamic_instructions", True)
+    # Dynamic instructions feature has been removed
 
     try:
-        settings.enable_dynamic_instructions = False
         review_workspace: Path | None = None
         common_parts: list[Path] = []
         for p1, p2 in zip(patch_path.parents, rule_path.parents):
@@ -1090,8 +1089,7 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
             settings.max_context_tokens = original_max_context_tokens
         if original_response_headroom is not None:
             settings.response_headroom_tokens = original_response_headroom
-        if original_enable_dynamic_instructions is not None:
-            settings.enable_dynamic_instructions = original_enable_dynamic_instructions
+        # Dynamic instructions feature has been removed - no restoration needed
 
 
 __all__ = [
