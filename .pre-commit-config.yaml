@@ -48,3 +48,14 @@ repos:
         args: ["-r", "-ll"]
         exclude: ^tests/
         stages: [manual]
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest (quick run)
+        entry: pytest
+        language: system
+        pass_filenames: false
+        args:
+          - --maxfail=1
+          - --disable-warnings
