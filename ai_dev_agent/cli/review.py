@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from importlib import import_module
+import fnmatch
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 from uuid import uuid4
@@ -20,8 +21,40 @@ from .utils import _record_invocation, get_llm_client
 
 LOGGER = get_logger(__name__)
 
-# Cache for parsed patches: key=(path, mtime) -> parsed_data
-_PATCH_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
+# Cache for parsed patches: key=(path, mtime, size) -> parsed_data
+_PATCH_CACHE: Dict[Tuple[str, float, Optional[int]], Dict[str, Any]] = {}
+
+
+def _normalize_applies_to_pattern(raw: str) -> Optional[str]:
+    """Convert a glob-style rule pattern into a regex string."""
+    if not raw:
+        return None
+
+    # Split on commas or whitespace to support simple multi-pattern lists
+    tokens = [token.strip() for token in re.split(r"[,\s]+", raw) if token.strip()]
+    if not tokens:
+        return None
+
+    regex_parts: List[str] = []
+    for token in tokens:
+        if token.lower().startswith("regex:"):
+            custom = token[6:].strip()
+            if custom:
+                regex_parts.append(custom)
+            continue
+
+        translated = fnmatch.translate(token)
+        if translated.endswith("\\Z"):
+            translated = translated[:-2] + "$"
+        regex_parts.append(translated)
+
+    if not regex_parts:
+        return None
+
+    if len(regex_parts) == 1:
+        return regex_parts[0]
+
+    return "|".join(f"(?:{part})" for part in regex_parts)
 
 
 def extract_applies_to_pattern(rule_content: str) -> Optional[str]:
@@ -51,6 +84,10 @@ def extract_applies_to_pattern(rule_content: str) -> Optional[str]:
             # Remove quotes if present
             extracted = extracted.strip('"\'`')
             if extracted:
+                normalized = _normalize_applies_to_pattern(extracted)
+                if normalized:
+                    LOGGER.debug("Extracted 'Applies To' pattern (normalized): %s -> %s", extracted, normalized)
+                    return normalized
                 LOGGER.debug("Extracted 'Applies To' pattern: %s", extracted)
                 return extracted
 
@@ -67,7 +104,7 @@ def parse_patch_file(patch_path: Path) -> Dict[str, Any]:
     # Check cache
     try:
         stat = patch_path.stat()
-        cache_key = (str(patch_path), stat.st_mtime)
+        cache_key = (str(patch_path), stat.st_mtime, getattr(stat, "st_size", None))
 
         if cache_key in _PATCH_CACHE:
             LOGGER.debug("Using cached parse result for %s", patch_path.name)
@@ -81,12 +118,12 @@ def parse_patch_file(patch_path: Path) -> Dict[str, Any]:
     except Exception as exc:  # pragma: no cover - defensive guard
         raise click.ClickException(f"Failed to read patch file '{patch_path}': {exc}") from exc
 
-    parser = PatchParser(content, include_context=False)
+    parser = PatchParser(content, include_context=True)
     parsed = parser.parse()
 
     # Store in cache
     try:
-        cache_key = (str(patch_path), stat.st_mtime)
+        cache_key = (str(patch_path), stat.st_mtime, getattr(stat, "st_size", None))
         _PATCH_CACHE[cache_key] = parsed
 
         # Limit cache size to prevent unbounded growth
@@ -167,21 +204,70 @@ def format_patch_dataset(parsed_patch: Mapping[str, Any], filter_pattern: Option
         lines.append(f"  Change type: {change_type}")
         lines.append(f"  Language: {language}")
 
-        added: List[Tuple[int, str]] = []
-        for hunk in file_entry.get("hunks", []) or []:
-            for line in hunk.get("added_lines", []) or []:
-                line_number = line.get("line_number")
-                content = line.get("content")
-                if isinstance(line_number, int) and isinstance(content, str):
-                    added.append((line_number, content))
+        hunks = file_entry.get("hunks", []) or []
+        total_added = sum(len(hunk.get("added_lines", []) or []) for hunk in hunks)
+        total_removed = sum(len(hunk.get("removed_lines", []) or []) for hunk in hunks)
 
-        lines.append(f"  Total added lines: {len(added)}")
-        lines.append("  ADDED LINES:")
-        if added:
-            for line_number, content in added:
-                lines.append(f"    {line_number:4d} | {content}")
-        else:
-            lines.append("    (none)")
+        lines.append(f"  Total added lines: {total_added}")
+        lines.append(f"  Total removed lines: {total_removed}")
+
+        if not hunks:
+            lines.append("  HUNK: (none)")
+            lines.append("    CONTEXT:")
+            lines.append("      (none)")
+            lines.append("    ADDED LINES:")
+            lines.append("      (none)")
+            lines.append("    REMOVED LINES:")
+            lines.append("      (none)")
+            lines.append("")
+            continue
+
+        for hunk in hunks:
+            header = hunk.get("header")
+            header_display = header.strip() if isinstance(header, str) else ""
+            lines.append(f"  HUNK: {header_display or '(no header)'}")
+
+            context_block = hunk.get("context_lines", []) or []
+            lines.append("    CONTEXT:")
+            if context_block:
+                for ctx_entry in context_block:
+                    line_number = ctx_entry.get("line_number")
+                    content = ctx_entry.get("content", "")
+                    if isinstance(line_number, int):
+                        lines.append(f"      {line_number:4d} | {content}")
+                    else:
+                        lines.append(f"      | {content}")
+            else:
+                lines.append("      (none)")
+
+            added_lines = hunk.get("added_lines", []) or []
+            lines.append("    ADDED LINES:")
+            if added_lines:
+                for entry in added_lines:
+                    line_number = entry.get("line_number")
+                    content = entry.get("content", "")
+                    if isinstance(line_number, int):
+                        lines.append(f"      {line_number:4d} + {content}")
+                    else:
+                        lines.append(f"      + {content}")
+            else:
+                lines.append("      (none)")
+
+            removed_lines = hunk.get("removed_lines", []) or []
+            lines.append("    REMOVED LINES:")
+            if removed_lines:
+                for entry in removed_lines:
+                    line_number = entry.get("line_number")
+                    content = entry.get("content", "")
+                    if isinstance(line_number, int):
+                        lines.append(f"      {line_number:4d} - {content}")
+                    else:
+                        lines.append(f"      - {content}")
+            else:
+                lines.append("      (none)")
+
+            lines.append("")  # Blank line between hunks
+
         lines.append("")  # Blank line between files
 
     return "\n".join(lines).rstrip()
@@ -377,45 +463,51 @@ def run_review(
     except Exception as exc:
         raise click.ClickException(f"Failed to read rule file '{rule_file}': {exc}") from exc
 
-    common_parts = []
-    for p1, p2 in zip(patch_path.parents, rule_path.parents):
-        if p1 == p2:
-            common_parts.append(p1)
-            break
+    original_workspace_root = getattr(settings, "workspace_root", None)
+    original_max_tool_output_chars = getattr(settings, "max_tool_output_chars", None)
+    original_max_context_tokens = getattr(settings, "max_context_tokens", None)
+    original_response_headroom = getattr(settings, "response_headroom_tokens", None)
 
-    if common_parts:
-        review_workspace = common_parts[0]
-        settings.workspace_root = review_workspace
-        patch_rel = patch_path.relative_to(review_workspace)
-    else:
-        patch_rel = patch_path
+    try:
+        common_parts = []
+        for p1, p2 in zip(patch_path.parents, rule_path.parents):
+            if p1 == p2:
+                common_parts.append(p1)
+                break
 
-    # Extract "Applies To" pattern from rule to filter patch dataset
-    filter_pattern = extract_applies_to_pattern(rule_content)
+        if common_parts:
+            review_workspace = common_parts[0]
+            settings.workspace_root = review_workspace
+            patch_rel = patch_path.relative_to(review_workspace)
+        else:
+            patch_rel = patch_path
 
-    parsed_patch = parse_patch_file(patch_path)
-    all_files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
-    max_files_per_chunk = getattr(settings, "review_max_files_per_chunk", 10)
-    if max_files_per_chunk <= 0:
-        max_files_per_chunk = len(all_files) or 1
+        # Extract "Applies To" pattern from rule to filter patch dataset
+        filter_pattern = extract_applies_to_pattern(rule_content)
 
-    chunks = _chunk_patch_files(all_files, max_files_per_chunk)
-    total_chunks = max(1, len(chunks))
-    use_chunking = len(chunks) > 1
+        parsed_patch = parse_patch_file(patch_path)
+        all_files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
+        max_files_per_chunk = getattr(settings, "review_max_files_per_chunk", 10)
+        if max_files_per_chunk <= 0:
+            max_files_per_chunk = len(all_files) or 1
 
-    def build_fallback_summary(
-        file_count: int,
-        existing_summary: Optional[Mapping[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        summary: Dict[str, Any] = dict(existing_summary or {})
-        summary["total_violations"] = 0
-        summary["files_reviewed"] = file_count
-        rule_name_value = summary.get("rule_name")
-        if not isinstance(rule_name_value, str) or not rule_name_value.strip():
-            summary["rule_name"] = rule_path.stem
-        return summary
+        chunks = _chunk_patch_files(all_files, max_files_per_chunk)
+        total_chunks = max(1, len(chunks))
+        use_chunking = len(chunks) > 1
 
-    system_extension_with_rule = f"""# Coding Rule: {rule_path.name}
+        def build_fallback_summary(
+            file_count: int,
+            existing_summary: Optional[Mapping[str, Any]] = None,
+        ) -> Dict[str, Any]:
+            summary: Dict[str, Any] = dict(existing_summary or {})
+            summary["total_violations"] = 0
+            summary["files_reviewed"] = file_count
+            rule_name_value = summary.get("rule_name")
+            if not isinstance(rule_name_value, str) or not rule_name_value.strip():
+                summary["rule_name"] = rule_path.stem
+            return summary
+
+        system_extension_with_rule = f"""# Coding Rule: {rule_path.name}
 
 {rule_content}
 
@@ -424,171 +516,180 @@ def run_review(
 The above rule has been pre-loaded for your review. Do NOT use the read tool to access it.
 Follow the workflow in the user prompt to analyze the patch against this rule."""
 
-    _record_invocation(ctx, overrides={"patch": patch_file, "rule": rule_file, "mode": "review"})
+        _record_invocation(ctx, overrides={"patch": patch_file, "rule": rule_file, "mode": "review"})
 
-    if json_output:
-        ctx.obj["silent_mode"] = True
+        if json_output:
+            ctx.obj["silent_mode"] = True
 
-    # Configure aggressive context management for review sessions
-    # Reviews can accumulate large context through multiple iterations,
-    # especially with large patches and verbose rules
-    settings.max_tool_output_chars = 1_000_000
-    settings.max_context_tokens = 100_000  # Conservative limit to prevent overflow
-    settings.response_headroom_tokens = 10_000  # Leave room for response generation
-
-    try:
-        cli_pkg = import_module('ai_dev_agent.cli')
-        llm_factory = getattr(cli_pkg, 'get_llm_client', get_llm_client)
-    except ModuleNotFoundError:
-        llm_factory = get_llm_client
-
-    try:
-        client = llm_factory(ctx)
-    except click.ClickException as exc:
-        raise click.ClickException(f'Failed to create LLM client: {exc}') from exc
-
-    original_session_id = ctx.obj.get("_session_id")
-
-    def reset_session(previous: Optional[str]) -> None:
-        if previous:
-            ctx.obj["_session_id"] = previous
-        else:
-            ctx.obj.pop("_session_id", None)
-
-    def execute_dataset(
-        dataset_text: str,
-        chunk_files: List[Mapping[str, Any]],
-        *,
-        chunk_index: Optional[int] = None,
-        total_expected_chunks: Optional[int] = None,
-    ) -> Tuple[Dict[str, Any], Set[str]]:
-        if not chunk_files:
-            summary = build_fallback_summary(0)
-            return {"violations": [], "summary": summary}, set()
-
-        subset_patch = {"files": chunk_files}
-        added_lines, parsed_files = collect_patch_review_data(subset_patch)
-
-        chunk_header = ""
-        if chunk_index is not None and total_expected_chunks and total_expected_chunks > 1:
-            chunk_header = f"(Chunk {chunk_index + 1} of {total_expected_chunks})\n\n"
-
-        prompt = _build_review_prompt(patch_rel, f"{chunk_header}{dataset_text}")
-
-        previous_session = ctx.obj.get("_session_id")
-        ctx.obj["_session_id"] = f"review-{uuid4()}"
+        # Configure aggressive context management for review sessions
+        # Reviews can accumulate large context through multiple iterations,
+        # especially with large patches and verbose rules
+        settings.max_tool_output_chars = 1_000_000
+        settings.max_context_tokens = 100_000  # Conservative limit to prevent overflow
+        settings.response_headroom_tokens = 10_000  # Leave room for response generation
 
         try:
+            cli_pkg = import_module('ai_dev_agent.cli')
+            llm_factory = getattr(cli_pkg, 'get_llm_client', get_llm_client)
+        except ModuleNotFoundError:
+            llm_factory = get_llm_client
+
+        try:
+            client = llm_factory(ctx)
+        except click.ClickException as exc:
+            raise click.ClickException(f'Failed to create LLM client: {exc}') from exc
+
+        original_session_id = ctx.obj.get("_session_id")
+
+        def reset_session(previous: Optional[str]) -> None:
+            if previous:
+                ctx.obj["_session_id"] = previous
+            else:
+                ctx.obj.pop("_session_id", None)
+
+        def execute_dataset(
+            dataset_text: str,
+            chunk_files: List[Mapping[str, Any]],
+            *,
+            chunk_index: Optional[int] = None,
+            total_expected_chunks: Optional[int] = None,
+        ) -> Tuple[Dict[str, Any], Set[str]]:
+            if not chunk_files:
+                summary = build_fallback_summary(0)
+                return {"violations": [], "summary": summary}, set()
+
+            subset_patch = {"files": chunk_files}
+            added_lines, parsed_files = collect_patch_review_data(subset_patch)
+
+            chunk_header = ""
+            if chunk_index is not None and total_expected_chunks and total_expected_chunks > 1:
+                chunk_header = f"(Chunk {chunk_index + 1} of {total_expected_chunks})\n\n"
+
+            prompt = _build_review_prompt(patch_rel, f"{chunk_header}{dataset_text}")
+
+            previous_session = ctx.obj.get("_session_id")
+            ctx.obj["_session_id"] = f"review-{uuid4()}"
+
             try:
-                execution_payload = _execute_react_assistant(
-                    ctx,
-                    client,
-                    settings,
-                    prompt,
-                    use_planning=False,
-                    system_extension=system_extension_with_rule,
-                    format_schema=VIOLATION_SCHEMA,
-                    agent_type="reviewer",
-                    suppress_final_output=True,
+                try:
+                    execution_payload = _execute_react_assistant(
+                        ctx,
+                        client,
+                        settings,
+                        prompt,
+                        use_planning=False,
+                        system_extension=system_extension_with_rule,
+                        format_schema=VIOLATION_SCHEMA,
+                        agent_type="reviewer",
+                        suppress_final_output=True,
+                    )
+                except click.ClickException as exc:
+                    message_text = str(exc)
+                    if "Assistant response did not contain valid JSON matching the required schema" in message_text:
+                        LOGGER.debug("LLM output missing required JSON; returning fallback summary: %s", exc)
+                        summary = build_fallback_summary(len(parsed_files))
+                        return {"violations": [], "summary": summary}, parsed_files
+                    raise
+            finally:
+                reset_session(previous_session)
+
+            if not isinstance(execution_payload, dict):
+                raise click.ClickException("Review execution did not return diagnostics for validation.")
+
+            run_result = execution_payload.get("result")
+            if run_result is None:
+                raise click.ClickException("Review execution missing run metadata; cannot validate results.")
+
+            final_json = execution_payload.get("final_json")
+            if final_json is None:
+                raise click.ClickException("Reviewer did not produce JSON output.")
+
+            try:
+                validated = validate_review_response(
+                    final_json,
+                    added_lines=added_lines,
+                    parsed_files=parsed_files,
                 )
             except click.ClickException as exc:
-                message_text = str(exc)
-                if "Assistant response did not contain valid JSON matching the required schema" in message_text:
-                    LOGGER.debug("LLM output missing required JSON; returning fallback summary: %s", exc)
-                    summary = build_fallback_summary(len(parsed_files))
-                    return {"violations": [], "summary": summary}, parsed_files
-                raise
-        finally:
-            reset_session(previous_session)
+                existing_summary: Dict[str, Any] = {}
+                if isinstance(final_json, Mapping):
+                    summary_value = final_json.get("summary")
+                    if isinstance(summary_value, Mapping):
+                        existing_summary = {str(k): v for k, v in summary_value.items()}
 
-        if not isinstance(execution_payload, dict):
-            raise click.ClickException("Review execution did not return diagnostics for validation.")
+                validated = {
+                    "violations": [],
+                    "summary": build_fallback_summary(len(parsed_files), existing_summary),
+                }
+                LOGGER.debug("Reviewer output discarded due to validation failure: %s", exc)
 
-        run_result = execution_payload.get("result")
-        if run_result is None:
-            raise click.ClickException("Review execution missing run metadata; cannot validate results.")
+            return validated, parsed_files
 
-        final_json = execution_payload.get("final_json")
-        if final_json is None:
-            raise click.ClickException("Reviewer did not produce JSON output.")
+        datasets: List[Tuple[str, List[Mapping[str, Any]], Optional[int]]] = []
 
-        try:
-            validated = validate_review_response(
-                final_json,
-                added_lines=added_lines,
-                parsed_files=parsed_files,
-            )
-        except click.ClickException as exc:
-            existing_summary: Dict[str, Any] = {}
-            if isinstance(final_json, Mapping):
-                summary_value = final_json.get("summary")
-                if isinstance(summary_value, Mapping):
-                    existing_summary = {str(k): v for k, v in summary_value.items()}
-
-            validated = {
-                "violations": [],
-                "summary": build_fallback_summary(len(parsed_files), existing_summary),
-            }
-            LOGGER.debug("Reviewer output discarded due to validation failure: %s", exc)
-
-        return validated, parsed_files
-
-    datasets: List[Tuple[str, List[Mapping[str, Any]], Optional[int]]] = []
-
-    if use_chunking:
-        for idx in range(total_chunks):
+        if use_chunking:
+            for idx in range(total_chunks):
+                dataset_text, chunk_subset = format_patch_dataset_chunked(
+                    parsed_patch,
+                    chunk_index=idx,
+                    max_files=max_files_per_chunk,
+                    filter_pattern=filter_pattern,
+                )
+                if not chunk_subset:
+                    continue
+                datasets.append((dataset_text, chunk_subset, idx))
+        else:
             dataset_text, chunk_subset = format_patch_dataset_chunked(
                 parsed_patch,
-                chunk_index=idx,
-                max_files=max_files_per_chunk,
+                chunk_index=0,
+                max_files=len(all_files) or 1,
                 filter_pattern=filter_pattern,
             )
-            if not chunk_subset:
-                continue
-            datasets.append((dataset_text, chunk_subset, idx))
-    else:
-        dataset_text, chunk_subset = format_patch_dataset_chunked(
-            parsed_patch,
-            chunk_index=0,
-            max_files=len(all_files) or 1,
-            filter_pattern=filter_pattern,
-        )
-        if chunk_subset:
-            datasets.append((dataset_text, chunk_subset, None))
+            if chunk_subset:
+                datasets.append((dataset_text, chunk_subset, None))
 
-    if not datasets:
+        if not datasets:
+            reset_session(original_session_id)
+            summary = build_fallback_summary(0)
+            return {"violations": [], "summary": summary}
+
+        aggregated_violations: List[Dict[str, Any]] = []
+        files_reviewed: Set[str] = set()
+        last_summary: Optional[Dict[str, Any]] = None
+
+        for dataset_text, chunk_subset, chunk_index in datasets:
+            validated, parsed_files = execute_dataset(
+                dataset_text,
+                chunk_subset,
+                chunk_index=chunk_index,
+                total_expected_chunks=total_chunks if use_chunking else None,
+            )
+            aggregated_violations.extend(validated["violations"])
+            files_reviewed.update(parsed_files)
+            last_summary = validated["summary"]
+
+        final_summary: Dict[str, Any] = dict(last_summary or {})
+        final_summary["total_violations"] = len(aggregated_violations)
+        final_summary["files_reviewed"] = len(files_reviewed)
+        rule_name_value = final_summary.get("rule_name")
+        if not isinstance(rule_name_value, str) or not rule_name_value.strip():
+            final_summary["rule_name"] = rule_path.stem
+
         reset_session(original_session_id)
-        summary = build_fallback_summary(0)
-        return {"violations": [], "summary": summary}
 
-    aggregated_violations: List[Dict[str, Any]] = []
-    files_reviewed: Set[str] = set()
-    last_summary: Optional[Dict[str, Any]] = None
-
-    for dataset_text, chunk_subset, chunk_index in datasets:
-        validated, parsed_files = execute_dataset(
-            dataset_text,
-            chunk_subset,
-            chunk_index=chunk_index,
-            total_expected_chunks=total_chunks if use_chunking else None,
-        )
-        aggregated_violations.extend(validated["violations"])
-        files_reviewed.update(parsed_files)
-        last_summary = validated["summary"]
-
-    final_summary: Dict[str, Any] = dict(last_summary or {})
-    final_summary["total_violations"] = len(aggregated_violations)
-    final_summary["files_reviewed"] = len(files_reviewed)
-    rule_name_value = final_summary.get("rule_name")
-    if not isinstance(rule_name_value, str) or not rule_name_value.strip():
-        final_summary["rule_name"] = rule_path.stem
-
-    reset_session(original_session_id)
-
-    return {
-        "violations": aggregated_violations,
-        "summary": final_summary,
-    }
+        return {
+            "violations": aggregated_violations,
+            "summary": final_summary,
+        }
+    finally:
+        if original_workspace_root is not None:
+            settings.workspace_root = original_workspace_root
+        if original_max_tool_output_chars is not None:
+            settings.max_tool_output_chars = original_max_tool_output_chars
+        if original_max_context_tokens is not None:
+            settings.max_context_tokens = original_max_context_tokens
+        if original_response_headroom is not None:
+            settings.response_headroom_tokens = original_response_headroom
 
 
 __all__ = [

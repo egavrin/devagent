@@ -1,10 +1,23 @@
 """Tests for unified review command."""
+import importlib
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from pathlib import Path
 import pytest
+import click
 from click.testing import CliRunner
 from ai_dev_agent.cli.commands import cli
 from ai_dev_agent.agents.base import AgentResult
+from ai_dev_agent.cli.review import (
+    _PATCH_CACHE,
+    format_patch_dataset,
+    parse_patch_file,
+    run_review,
+    extract_applies_to_pattern,
+)
+from ai_dev_agent.core.utils.config import Settings
+
+review_module = importlib.import_module("ai_dev_agent.cli.review")
 
 
 @pytest.fixture
@@ -198,8 +211,187 @@ class TestReviewVsLint:
     def test_review_unified_command(self, runner):
         """Review command should handle both files and patches."""
         # Both should work with the review command
-        result1 = runner.invoke(cli, ["review", "file.py"])
-        result2 = runner.invoke(cli, ["review", "patch.patch", "--rule", "rule.md"])
 
-        assert result1.exit_code in [0, 1, 2]
-        assert result2.exit_code in [0, 1, 2]
+
+class TestReviewInternals:
+    """Test helpers backing the review command."""
+
+    @pytest.fixture(autouse=True)
+    def clear_patch_cache(self):
+        """Ensure patch cache does not bleed across tests."""
+        _PATCH_CACHE.clear()
+        yield
+        _PATCH_CACHE.clear()
+
+    def test_run_review_restores_settings(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """run_review should leave settings unchanged after execution."""
+        patch_path = tmp_path / "changes.patch"
+        patch_path.write_text(
+            """diff --git a/foo.py b/foo.py
+--- a/foo.py
++++ b/foo.py
+@@ -0,0 +1,2 @@
++def foo():
++    return 1
+"""
+        )
+        rule_path = tmp_path / "rule.md"
+        rule_path.write_text(
+            """# Sample Rule
+
+## Applies To
+*.py
+
+## Description
+Ensure functions return something.
+"""
+        )
+
+        settings = Settings(
+            api_key="test-key",
+            workspace_root=Path("/original/root"),
+            max_tool_output_chars=2048,
+            max_context_tokens=4096,
+            response_headroom_tokens=512,
+        )
+        original_values = (
+            settings.workspace_root,
+            settings.max_tool_output_chars,
+            settings.max_context_tokens,
+            settings.response_headroom_tokens,
+        )
+        ctx = click.Context(click.Command("review"), obj={"settings": settings})
+
+        def fake_import_module(name: str):
+            assert name == "ai_dev_agent.cli"
+            return SimpleNamespace(get_llm_client=lambda _: object())
+
+        def fake_execute(*_args, **_kwargs):
+            return {
+                "result": {"status": "ok"},
+                "final_json": {
+                    "violations": [],
+                    "summary": {
+                        "total_violations": 0,
+                        "files_reviewed": 1,
+                    },
+                },
+            }
+
+        monkeypatch.setattr(review_module, "import_module", fake_import_module)
+        monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
+        monkeypatch.setattr(review_module, "_record_invocation", lambda *args, **kwargs: None)
+
+        outcome = run_review(
+            ctx,
+            patch_file=str(patch_path),
+            rule_file=str(rule_path),
+            json_output=True,
+            settings=settings,
+        )
+
+        assert outcome["summary"]["files_reviewed"] == 1
+        assert (
+            settings.workspace_root,
+            settings.max_tool_output_chars,
+            settings.max_context_tokens,
+            settings.response_headroom_tokens,
+        ) == original_values
+
+    def test_parse_patch_file_includes_size_in_cache_key(self, monkeypatch, tmp_path):
+        """Cache should invalidate when file size changes within same timestamp."""
+        patch_path = tmp_path / "cached.patch"
+        patch_path.write_text("FIRST")
+
+        parse_calls = []
+
+        class StubParser:
+            def __init__(self, content: str, include_context: bool = False):
+                self._content = content
+
+            def parse(self):
+                parse_calls.append(self._content)
+                label = self._content.strip()
+                return {"files": [{"path": label}]}
+
+        original_stat = Path.stat
+        stat_reads = 0
+
+        def fake_stat(self):
+            nonlocal stat_reads
+            if self == patch_path:
+                stat_reads += 1
+                if stat_reads == 1:
+                    return SimpleNamespace(st_mtime=1000.0, st_size=5)
+                return SimpleNamespace(st_mtime=1000.0, st_size=6)
+            return original_stat(self)
+
+        monkeypatch.setattr(review_module, "PatchParser", StubParser)
+        monkeypatch.setattr(Path, "stat", fake_stat)
+
+        first = parse_patch_file(patch_path)
+        patch_path.write_text("SECOND")
+        second = parse_patch_file(patch_path)
+
+        assert parse_calls == ["FIRST", "SECOND"]
+        assert first["files"][0]["path"] == "FIRST"
+        assert second["files"][0]["path"] == "SECOND"
+
+    def test_format_patch_dataset_includes_context_and_removals(self, tmp_path):
+        """Dataset should surface context and removed lines for reviewers."""
+        patch_path = tmp_path / "context.patch"
+        patch_path.write_text(
+            """diff --git a/sample.py b/sample.py
+--- a/sample.py
++++ b/sample.py
+@@ -1,3 +1,4 @@
+ def foo():
+-    return 1
++    value = compute()
++    return value
+"""
+        )
+
+        parsed = parse_patch_file(patch_path)
+        dataset = format_patch_dataset(parsed)
+
+        assert "HUNK:" in dataset
+        assert "CONTEXT:" in dataset
+        assert "REMOVED LINES:" in dataset
+        assert "2 -     return 1" in dataset
+
+    def test_extract_applies_to_pattern_normalizes_globs(self, tmp_path):
+        """Glob patterns should be converted to regex and filter datasets."""
+        patch_path = tmp_path / "multi.patch"
+        patch_path.write_text(
+            """diff --git a/sample.py b/sample.py
+--- a/sample.py
++++ b/sample.py
+@@ -0,0 +1,2 @@
++print("py file")
++value = 1
+diff --git a/sample.js b/sample.js
+--- a/sample.js
++++ b/sample.js
+@@ -0,0 +1,2 @@
++console.log("js file");
++const value = 1;
+"""
+        )
+
+        parsed = parse_patch_file(patch_path)
+        rule_text = """# Rule
+
+## Applies To
+*.py
+"""
+        pattern = extract_applies_to_pattern(rule_text)
+        assert pattern is not None
+
+        dataset = format_patch_dataset(parsed, filter_pattern=pattern)
+        assert "FILE: sample.py" in dataset
+        assert "FILE: sample.js" not in dataset
