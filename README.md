@@ -182,13 +182,14 @@ pytest
 pytest -m ""
 ```
 
-See [Development Process](docs/DEVELOPMENT_PROCESS.md) for testing guidance.
+See [Development Guide](docs/DEVELOPMENT.md) for testing guidance.
 
 ## Documentation
 
-- **[AGENTS.md](AGENTS.md)** - AI agent guide and development process
-- **[Development Process](docs/DEVELOPMENT_PROCESS.md)** - Testing and workflow guidance
-- **[Work Planning Design](docs/design/work_planning_design.md)** - Work planning system documentation
-- **[docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)** - Development process and safe implementation plan
+- **[User Guide](docs/USER_GUIDE.md)** - Complete usage instructions and examples
+- **[Development Guide](docs/DEVELOPMENT.md)** - Architecture, testing, and contribution guidelines
+- **[API Reference](docs/API_REFERENCE.md)** - Technical documentation for all components
+- **[Changelog](docs/CHANGELOG.md)** - Version history and current status
+- **[AGENTS.md](AGENTS.md)** - AI agent instructions and automation guide
 
 That's it. This PoC demonstrates how LLMs can assist development workflows while keeping humans in control.

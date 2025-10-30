@@ -106,6 +106,7 @@ class SourceContextProvider:
     ) -> None:
         self._pad_lines = pad_lines
         self._max_lines_per_item = max_lines_per_item
+        self._content_cache: Dict[Path, Tuple[float, Optional[int], Tuple[str, ...]]] = {}
 
     def build_items(
         self,
@@ -120,12 +121,9 @@ class SourceContextProvider:
         if not abs_path.is_file():
             return []
 
-        try:
-            content = abs_path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+        lines = self._get_file_lines(abs_path)
+        if lines is None:
             return []
-
-        lines = content.splitlines()
         if not lines:
             return []
 
@@ -161,6 +159,26 @@ class SourceContextProvider:
             )
 
         return items
+
+    def _get_file_lines(self, abs_path: Path) -> Optional[Tuple[str, ...]]:
+        try:
+            stat_info = abs_path.stat()
+        except OSError:
+            return None
+
+        cached = self._content_cache.get(abs_path)
+        file_size = getattr(stat_info, "st_size", None)
+        if cached and cached[0] == stat_info.st_mtime and cached[1] == file_size:
+            return cached[2]
+
+        try:
+            content = abs_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return None
+
+        lines = tuple(content.splitlines())
+        self._content_cache[abs_path] = (stat_info.st_mtime, file_size, lines)
+        return lines
 
     def _collect_ranges(self, hunks: Iterable[Mapping[str, Any]]) -> List[Tuple[int, int]]:
         ranges: List[Tuple[int, int]] = []

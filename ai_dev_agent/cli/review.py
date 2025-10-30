@@ -402,6 +402,30 @@ def _chunk_patch_files(
     return chunked
 
 
+def _compute_dynamic_line_limit(
+    configured_limit: int,
+    rule_text: str,
+    files: Sequence[Mapping[str, Any]],
+) -> int:
+    """Derive a chunk line limit based on rule size and patch impact."""
+    DEFAULT_LINES_LIMIT = 320
+    base_limit = configured_limit if configured_limit > 0 else DEFAULT_LINES_LIMIT
+
+    total_line_impact = sum(_estimate_entry_lines(entry) for entry in files)
+    rule_token_estimate = max(len(rule_text) // 4, 0)
+
+    if rule_token_estimate > 9_000 or total_line_impact > 800:
+        base_limit = min(base_limit, 80)
+    elif rule_token_estimate > 6_000 or total_line_impact > 600:
+        base_limit = min(base_limit, 120)
+    elif rule_token_estimate > 4_000 or total_line_impact > 400:
+        base_limit = min(base_limit, 160)
+
+    if configured_limit <= 0 and base_limit == DEFAULT_LINES_LIMIT:
+        return 0
+    return base_limit
+
+
 def validate_review_response(
     response: Dict[str, Any],
     *,
@@ -424,53 +448,98 @@ def validate_review_response(
     if not isinstance(summary, Mapping):
         raise click.ClickException("Reviewer output has invalid 'summary' payload.")
 
-    invalid_entries: List[str] = []
+    valid_violations: List[Dict[str, Any]] = []
+    discarded_entries: List[str] = []
+
+    severity_aliases = {
+        "critical": "error",
+        "high": "error",
+        "major": "error",
+        "medium": "warning",
+        "moderate": "warning",
+        "minor": "info",
+        "low": "info",
+    }
+    allowed_severities = {"error", "warning", "info"}
+    change_type_aliases = {
+        "addition": "added",
+        "add": "added",
+        "added": "added",
+        "modification": "added",
+        "update": "added",
+        "deletion": "removed",
+        "delete": "removed",
+        "deleted": "removed",
+        "removed": "removed",
+        "removal": "removed",
+    }
+
     for entry in violations:
         if not isinstance(entry, Mapping):
-            invalid_entries.append("non-object violation entry")
+            discarded_entries.append("non-object violation entry")
             continue
-        file_path = entry.get("file")
-        line_number = entry.get("line")
-        snippet = entry.get("code_snippet")
-        change_type = entry.get("change_type", "added")
+
+        sanitized: Dict[str, Any] = dict(entry)
+        file_path = sanitized.get("file")
+        line_number = sanitized.get("line")
+        snippet = sanitized.get("code_snippet")
+        change_type_value = str(sanitized.get("change_type", "added")).strip().lower()
+        change_type = change_type_aliases.get(change_type_value, "added")
+        sanitized["change_type"] = change_type
+
+        severity_value = sanitized.get("severity")
+        normalized_severity = "warning"
+        if isinstance(severity_value, str):
+            candidate = severity_value.strip().lower()
+            candidate = severity_aliases.get(candidate, candidate)
+            if candidate in allowed_severities:
+                normalized_severity = candidate
+        sanitized["severity"] = normalized_severity
 
         if not isinstance(file_path, str) or not isinstance(line_number, int):
-            invalid_entries.append(str(entry))
+            discarded_entries.append(str(entry))
             continue
 
         if change_type == "removed":
             removed_for_file = (removed_lines or {}).get(file_path)
             if removed_for_file is None:
-                invalid_entries.append(f"{file_path}:{line_number} (removed line not in patch)")
+                discarded_entries.append(f"{file_path}:{line_number} (removed line not in patch)")
                 continue
             actual_line = removed_for_file.get(line_number)
             if actual_line is None:
-                invalid_entries.append(f"{file_path}:{line_number} (line not removed)")
+                discarded_entries.append(f"{file_path}:{line_number} (line not removed)")
                 continue
             if isinstance(snippet, str) and snippet.strip() != actual_line.strip():
-                invalid_entries.append(f"{file_path}:{line_number} (content mismatch)")
+                discarded_entries.append(f"{file_path}:{line_number} (content mismatch)")
+            else:
+                sanitized.setdefault("severity", "warning")
+                valid_violations.append(sanitized)
             continue
 
         added_for_file = added_lines.get(file_path)
         if added_for_file is None:
-            invalid_entries.append(f"{file_path}:{line_number} (file not in patch)")
+            discarded_entries.append(f"{file_path}:{line_number} (file not in patch)")
             continue
 
         actual_line = added_for_file.get(line_number)
         if actual_line is None:
-            invalid_entries.append(f"{file_path}:{line_number} (line not added)")
+            discarded_entries.append(f"{file_path}:{line_number} (line not added)")
             continue
 
         if isinstance(snippet, str) and snippet.strip() != actual_line.strip():
-            invalid_entries.append(f"{file_path}:{line_number} (content mismatch)")
+            discarded_entries.append(f"{file_path}:{line_number} (content mismatch)")
+            continue
 
-    if invalid_entries:
-        preview = ", ".join(invalid_entries[:5])
-        if len(invalid_entries) > 5:
+        valid_violations.append(sanitized)
+
+    if discarded_entries:
+        preview = ", ".join(discarded_entries[:5])
+        if len(discarded_entries) > 5:
             preview += ", ..."
-        raise click.ClickException(
-            "Reviewer output referenced lines not present in the patch: "
-            f"{preview}"
+        LOGGER.warning(
+            "Discarded %s invalid violation(s) from reviewer output: %s",
+            len(discarded_entries),
+            preview,
         )
 
     total_violations = summary.get("total_violations")
@@ -478,7 +547,7 @@ def validate_review_response(
         LOGGER.debug(
             "Adjusting total_violations from %s to %s based on validated entries",
             total_violations,
-            len(violations),
+            len(valid_violations),
         )
 
     files_reviewed = summary.get("files_reviewed")
@@ -490,15 +559,17 @@ def validate_review_response(
         )
 
     normalized_summary = dict(summary)
-    normalized_summary["total_violations"] = len(violations)
+    normalized_summary["total_violations"] = len(valid_violations)
     normalized_summary["files_reviewed"] = len(parsed_files)
+    if discarded_entries:
+        normalized_summary["discarded_violations"] = len(discarded_entries)
 
     rule_name = normalized_summary.get("rule_name")
     if not isinstance(rule_name, str) or not rule_name.strip():
         normalized_summary["rule_name"] = normalized_summary.get("rule_name") or ""
 
     return {
-        "violations": list(violations),
+        "violations": valid_violations,
         "summary": normalized_summary,
     }
 
@@ -565,16 +636,35 @@ def run_review(
     original_response_headroom = getattr(settings, "response_headroom_tokens", None)
 
     try:
-        common_parts = []
+        review_workspace: Optional[Path] = None
+        common_parts: List[Path] = []
         for p1, p2 in zip(patch_path.parents, rule_path.parents):
             if p1 == p2:
                 common_parts.append(p1)
                 break
 
         if common_parts:
-            review_workspace = common_parts[0]
+            candidate = common_parts[0]
+            candidate_anchor = Path(candidate.anchor)
+            candidate_is_root = candidate == candidate_anchor
+            candidate_within_original = False
+            if original_workspace_root is not None:
+                try:
+                    candidate.relative_to(original_workspace_root)
+                    candidate_within_original = True
+                except ValueError:
+                    candidate_within_original = False
+            if (original_workspace_root is None or candidate_within_original) and not candidate_is_root:
+                review_workspace = candidate
+
+        if review_workspace is not None:
             settings.workspace_root = review_workspace
             patch_rel = patch_path.relative_to(review_workspace)
+        elif original_workspace_root is not None:
+            try:
+                patch_rel = patch_path.relative_to(original_workspace_root)
+            except ValueError:
+                patch_rel = patch_path
         else:
             patch_rel = patch_path
 
@@ -584,17 +674,26 @@ def run_review(
         parsed_patch = parse_patch_file(patch_path)
         original_files: Sequence[Mapping[str, Any]] = parsed_patch.get("files", []) or []
 
+        max_lines_setting = getattr(settings, "review_max_lines_per_chunk", 320)
+        dynamic_line_limit = _compute_dynamic_line_limit(
+            max_lines_setting,
+            rule_content,
+            original_files,
+        )
+
         expanded_files = _split_large_file_entries(
             original_files,
             max_hunks_per_group=getattr(settings, "review_max_hunks_per_chunk", 8),
-            max_lines_per_group=getattr(settings, "review_max_lines_per_chunk", 320),
+            max_lines_per_group=dynamic_line_limit if dynamic_line_limit > 0 else max_lines_setting,
         )
 
-        max_files_per_chunk = getattr(settings, "review_max_files_per_chunk", 10)
-        if max_files_per_chunk <= 0:
+        max_files_per_chunk_setting = getattr(settings, "review_max_files_per_chunk", 10)
+        if max_files_per_chunk_setting <= 0:
             max_files_per_chunk = len(expanded_files) or 1
+        else:
+            max_files_per_chunk = max_files_per_chunk_setting
 
-        max_lines_per_chunk = getattr(settings, "review_max_lines_per_chunk", 320)
+        max_lines_per_chunk = dynamic_line_limit
 
         chunks = _chunk_patch_files(
             expanded_files,
@@ -657,6 +756,8 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
             raise click.ClickException(f'Failed to create LLM client: {exc}') from exc
 
         original_session_id = ctx.obj.get("_session_id")
+        review_session_id = f"review-{uuid4()}"
+        ctx.obj["_session_id"] = review_session_id
 
         def reset_session(previous: Optional[str]) -> None:
             if previous:
@@ -693,31 +794,27 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
                 context_section=context_section or None,
             )
 
-            previous_session = ctx.obj.get("_session_id")
-            ctx.obj["_session_id"] = f"review-{uuid4()}"
+            ctx.obj["_session_id"] = review_session_id
 
             try:
-                try:
-                    execution_payload = _execute_react_assistant(
-                        ctx,
-                        client,
-                        settings,
-                        prompt,
-                        use_planning=False,
-                        system_extension=system_extension_with_rule,
-                        format_schema=VIOLATION_SCHEMA,
-                        agent_type="reviewer",
-                        suppress_final_output=True,
-                    )
-                except click.ClickException as exc:
-                    message_text = str(exc)
-                    if "Assistant response did not contain valid JSON matching the required schema" in message_text:
-                        LOGGER.debug("LLM output missing required JSON; returning fallback summary: %s", exc)
-                        summary = build_fallback_summary(len(parsed_files))
-                        return {"violations": [], "summary": summary}, parsed_files
-                    raise
-            finally:
-                reset_session(previous_session)
+                execution_payload = _execute_react_assistant(
+                    ctx,
+                    client,
+                    settings,
+                    prompt,
+                    use_planning=False,
+                    system_extension=system_extension_with_rule,
+                    format_schema=VIOLATION_SCHEMA,
+                    agent_type="reviewer",
+                    suppress_final_output=True,
+                )
+            except click.ClickException as exc:
+                message_text = str(exc)
+                if "Assistant response did not contain valid JSON matching the required schema" in message_text:
+                    LOGGER.debug("LLM output missing required JSON; returning fallback summary: %s", exc)
+                    summary = build_fallback_summary(len(parsed_files))
+                    return {"violations": [], "summary": summary}, parsed_files
+                raise
 
             if not isinstance(execution_payload, dict):
                 raise click.ClickException("Review execution did not return diagnostics for validation.")

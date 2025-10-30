@@ -34,7 +34,11 @@ def test_validate_review_response_normalizes_summary_counts() -> None:
 
     assert normalized["summary"]["total_violations"] == 1
     assert normalized["summary"]["files_reviewed"] == len(parsed_files)
-    assert normalized["violations"] == response["violations"]
+    violation = normalized["violations"][0]
+    assert violation["file"] == "src/new_file.ts"
+    assert violation["line"] == 10
+    assert violation["change_type"] == "added"
+    assert violation["severity"] == "warning"
 
 
 def test_validate_review_response_rejects_unknown_paths() -> None:
@@ -52,13 +56,16 @@ def test_validate_review_response_rejects_unknown_paths() -> None:
 
     added_lines = {"src/new_file.ts": {10: "export const Foo = 1;"}}
     parsed_files = {"src/new_file.ts"}
+    normalized = validate_review_response(
+        response,
+        added_lines=added_lines,
+        parsed_files=parsed_files,
+    )
 
-    with pytest.raises(click.ClickException):
-        validate_review_response(
-            response,
-            added_lines=added_lines,
-            parsed_files=parsed_files,
-        )
+    assert normalized["violations"] == []
+    summary = normalized["summary"]
+    assert summary["total_violations"] == 0
+    assert summary.get("discarded_violations") == 1
 
 
 def test_validate_review_response_rejects_wrong_line_numbers() -> None:
@@ -77,12 +84,16 @@ def test_validate_review_response_rejects_wrong_line_numbers() -> None:
     added_lines = {"src/new_file.ts": {10: "export const Foo = 1;"}}
     parsed_files = {"src/new_file.ts"}
 
-    with pytest.raises(click.ClickException):
-        validate_review_response(
+    normalized = validate_review_response(
         response,
         added_lines=added_lines,
         parsed_files=parsed_files,
     )
+
+    assert normalized["violations"] == []
+    summary = normalized["summary"]
+    assert summary["total_violations"] == 0
+    assert summary.get("discarded_violations") == 1
 
 def test_validate_review_response_allows_removed_line_reference() -> None:
     response = {
@@ -110,7 +121,9 @@ def test_validate_review_response_allows_removed_line_reference() -> None:
     )
 
     assert normalized["summary"]["total_violations"] == 1
-    assert normalized["violations"][0]["change_type"] == "removed"
+    violation = normalized["violations"][0]
+    assert violation["change_type"] == "removed"
+    assert violation["severity"] == "warning"
 
 
 def test_validate_review_response_allows_matching_violation() -> None:
@@ -135,7 +148,10 @@ def test_validate_review_response_allows_matching_violation() -> None:
         parsed_files=parsed_files,
     )
 
-    assert normalized["violations"] == response["violations"]
+    violation = normalized["violations"][0]
+    assert violation["file"] == "src/new_file.ts"
+    assert violation["change_type"] == "added"
+    assert violation["severity"] == "warning"
     summary = normalized["summary"]
     assert summary["total_violations"] == 1
     assert summary["files_reviewed"] == 1

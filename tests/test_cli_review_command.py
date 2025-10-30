@@ -3,7 +3,7 @@ import importlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import pytest
 import click
 from click.testing import CliRunner
@@ -144,6 +144,7 @@ All Python files must have proper comments.
             }
 
         monkeypatch.setattr(review_module, "run_review", fake_run_review)
+        monkeypatch.setattr("ai_dev_agent.cli.commands.run_review", fake_run_review)
 
         result = runner.invoke(cli, [
             "review", sample_patch,
@@ -153,6 +154,30 @@ All Python files must have proper comments.
         assert result.exit_code == 0
         assert "Files reviewed" in result.output
         assert "{\n" not in result.output  # no raw JSON block
+
+    def test_review_patch_reports_discarded_count(self, runner, sample_patch, sample_rule, monkeypatch):
+        """CLI should surface discarded violations information."""
+        def fake_run_review(*_args, **_kwargs):
+            return {
+                "summary": {
+                    "files_reviewed": 1,
+                    "total_violations": 0,
+                    "discarded_violations": 2,
+                    "rule_name": "TestRule",
+                },
+                "violations": [],
+            }
+
+        monkeypatch.setattr(review_module, "run_review", fake_run_review)
+        monkeypatch.setattr("ai_dev_agent.cli.commands.run_review", fake_run_review)
+
+        result = runner.invoke(cli, [
+            "review", sample_patch,
+            "--rule", sample_rule
+        ])
+
+        assert result.exit_code == 0
+        assert "Discarded violations: 2" in result.output
 
     def test_review_patch_with_rule_and_json(self, runner, sample_patch, sample_rule):
         """review patch should output JSON with --json flag."""
@@ -497,6 +522,313 @@ Ensure functions return something.
         combined_prompt = "\n".join(captured_prompts)
         assert "Context:" in combined_prompt
         assert "def target()" in combined_prompt
+
+    def test_run_review_preserves_workspace_for_disparate_paths(self, monkeypatch, tmp_path):
+        """Review should not reset workspace_root to an unrelated shared parent."""
+        patch_path = tmp_path / "patches" / "changes.patch"
+        patch_path.parent.mkdir(parents=True, exist_ok=True)
+        patch_path.write_text(
+            """diff --git a/foo.py b/foo.py
+--- a/foo.py
++++ b/foo.py
+@@ -0,0 +1,1 @@
++print("hi")
+""",
+        )
+
+        rule_path = tmp_path / "rules" / "rule.md"
+        rule_path.parent.mkdir(parents=True, exist_ok=True)
+        rule_path.write_text("# Rule\n", encoding="utf-8")
+
+        settings = Settings(
+            api_key="test-key",
+            workspace_root=Path.cwd(),
+            max_tool_output_chars=4096,
+            max_context_tokens=4096,
+            response_headroom_tokens=512,
+        )
+
+        ctx = click.Context(click.Command("review"), obj={"settings": settings})
+
+        def fake_import_module(name: str):
+            return SimpleNamespace(get_llm_client=lambda _: object())
+
+        captured_roots = []
+
+        def fake_build_items(self, workspace_root, file_entry):  # pragma: no cover - instrumentation
+            captured_roots.append(workspace_root)
+            return []
+
+        def fake_execute(*_args, **_kwargs):
+            return {
+                "result": {"status": "ok"},
+                "final_json": {
+                    "violations": [],
+                    "summary": {"files_reviewed": 1},
+                },
+            }
+
+        monkeypatch.setattr(review_module, "import_module", fake_import_module)
+        monkeypatch.setattr(
+            review_module.SourceContextProvider,
+            "build_items",
+            fake_build_items,
+        )
+        monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
+        monkeypatch.setattr(review_module, "_record_invocation", lambda *args, **kwargs: None)
+
+        run_review(
+            ctx,
+            patch_file=str(patch_path),
+            rule_file=str(rule_path),
+            json_output=True,
+            settings=settings,
+        )
+
+        assert captured_roots
+        assert all(root == settings.workspace_root for root in captured_roots)
+
+    def test_source_context_reads_file_once_per_review(self, monkeypatch, tmp_path):
+        """Context provider should avoid rereading same file for chunked patches."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        source_path = workspace / "module.py"
+        source_path.write_text(
+            "\n".join(
+                [
+                    "def func():",
+                    "    value = 1",
+                    "",
+                    "def helper():",
+                    "    return 2",
+                    "",
+                    "def tail():",
+                    "    return 3",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        patch_path = tmp_path / "changes.patch"
+        patch_path.write_text(
+            """diff --git a/module.py b/module.py
+--- a/module.py
++++ b/module.py
+@@ -1,2 +1,2 @@
+-def func():
+-    value = 1
++def func():
++    value = compute()
+@@ -4,2 +4,2 @@
+-def helper():
+-    return 2
++def helper():
++    return helper_value()
+@@ -7,2 +7,2 @@
+-def tail():
+-    return 3
++def tail():
++    return compute_tail()
+""",
+            encoding="utf-8",
+        )
+
+        rule_path = workspace / "rule.md"
+        rule_path.write_text("# Rule\n", encoding="utf-8")
+
+        settings = Settings(
+            api_key="test-key",
+            workspace_root=workspace,
+            max_tool_output_chars=4096,
+            max_context_tokens=4096,
+            response_headroom_tokens=512,
+        )
+        setattr(settings, "review_max_hunks_per_chunk", 1)
+        setattr(settings, "review_max_files_per_chunk", 1)
+
+        ctx = click.Context(click.Command("review"), obj={"settings": settings})
+
+        def fake_import_module(name: str):
+            return SimpleNamespace(get_llm_client=lambda _: object())
+
+        call_counter = {"count": 0}
+        real_read_text = Path.read_text
+
+        def counting_read_text(self, *args, **kwargs):
+            if self == source_path:
+                call_counter["count"] += 1
+            return real_read_text(self, *args, **kwargs)
+
+        def fake_execute(_ctx, _client, _settings, _prompt, **_kwargs):
+            return {
+                "result": {"status": "ok"},
+                "final_json": {
+                    "violations": [],
+                    "summary": {"files_reviewed": 1},
+                },
+            }
+
+        monkeypatch.setattr(review_module, "import_module", fake_import_module)
+        monkeypatch.setattr(Path, "read_text", counting_read_text, raising=False)
+        monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
+        monkeypatch.setattr(review_module, "_record_invocation", lambda *args, **kwargs: None)
+
+        run_review(
+            ctx,
+            patch_file=str(patch_path),
+            rule_file=str(rule_path),
+            json_output=True,
+            settings=settings,
+        )
+
+        assert call_counter["count"] == 1
+
+    def test_review_uses_consistent_session_id(self, monkeypatch, tmp_path):
+        """All review chunks should share a dedicated session id."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        module_path = workspace / "module.py"
+        module_path.write_text(
+            "def func():\n    return 1\n\n\ndef helper():\n    return 2\n\n\ndef tail():\n    return 3\n",
+            encoding="utf-8",
+        )
+
+        patch_path = tmp_path / "chunked.patch"
+        patch_path.write_text(
+            """diff --git a/module.py b/module.py
+--- a/module.py
++++ b/module.py
+@@ -1,2 +1,2 @@
+-def func():
+-    return 1
++def func():
++    return compute()
+@@ -4,2 +4,2 @@
+-def helper():
+-    return 2
++def helper():
++    return helper_value()
+@@ -7,2 +7,2 @@
+-def tail():
+-    return 3
++def tail():
++    return compute_tail()
+""",
+            encoding="utf-8",
+        )
+
+        rule_path = workspace / "rule.md"
+        rule_path.write_text("# Rule\n", encoding="utf-8")
+
+        settings = Settings(
+            api_key="test-key",
+            workspace_root=workspace,
+            max_tool_output_chars=4096,
+            max_context_tokens=4096,
+            response_headroom_tokens=512,
+        )
+        setattr(settings, "review_max_hunks_per_chunk", 1)
+        setattr(settings, "review_max_files_per_chunk", 1)
+
+        ctx = click.Context(click.Command("review"), obj={"settings": settings})
+        ctx.obj["_session_id"] = "parent-session"
+
+        def fake_import_module(name: str):
+            return SimpleNamespace(get_llm_client=lambda _: object())
+
+        observed_sessions: List[Optional[str]] = []
+
+        def fake_execute(_ctx, _client, _settings, _prompt, **_kwargs):
+            observed_sessions.append(_ctx.obj.get("_session_id"))
+            return {
+                "result": {"status": "ok"},
+                "final_json": {
+                    "violations": [],
+                    "summary": {"files_reviewed": 1},
+                },
+            }
+
+        monkeypatch.setattr(review_module, "import_module", fake_import_module)
+        monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
+        monkeypatch.setattr(review_module, "_record_invocation", lambda *args, **kwargs: None)
+
+        run_review(
+            ctx,
+            patch_file=str(patch_path),
+            rule_file=str(rule_path),
+            json_output=True,
+            settings=settings,
+        )
+
+        assert len(observed_sessions) > 1
+        assert len(set(observed_sessions)) == 1
+        assert observed_sessions[0] != "parent-session"
+        assert ctx.obj["_session_id"] == "parent-session"
+
+    def test_review_adjusts_chunking_for_large_rules(self, monkeypatch, tmp_path):
+        """Large rules should trigger more aggressive chunking."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        module_path = workspace / "module.py"
+        module_lines = [f"line_{idx}" for idx in range(1, 122)]
+        module_path.write_text("\n".join(module_lines) + "\n", encoding="utf-8")
+
+        patch_lines = [
+            "diff --git a/module.py b/module.py",
+            "--- a/module.py",
+            "+++ b/module.py",
+        ]
+        for idx in range(1, 121):
+            patch_lines.append(f"@@ -{idx},1 +{idx},1 @@")
+            patch_lines.append(f"-line_{idx}")
+            patch_lines.append(f"+line_{idx}_updated")
+        patch_path = tmp_path / "bulk.patch"
+        patch_path.write_text("\n".join(patch_lines) + "\n", encoding="utf-8")
+
+        rule_path = workspace / "rule.md"
+        large_rule = "# Rule\n\n" + ("Very long guidance paragraph.\n" * 4000)
+        rule_path.write_text(large_rule, encoding="utf-8")
+
+        settings = Settings(
+            api_key="test-key",
+            workspace_root=workspace,
+            max_tool_output_chars=4096,
+            max_context_tokens=4096,
+            response_headroom_tokens=512,
+        )
+        setattr(settings, "review_max_hunks_per_chunk", 0)
+        setattr(settings, "review_max_lines_per_chunk", 0)
+
+        ctx = click.Context(click.Command("review"), obj={"settings": settings})
+
+        def fake_import_module(name: str):
+            return SimpleNamespace(get_llm_client=lambda _: object())
+
+        calls: List[str] = []
+
+        def fake_execute(_ctx, _client, _settings, prompt, **_kwargs):
+            calls.append(prompt)
+            return {
+                "result": {"status": "ok"},
+                "final_json": {
+                    "violations": [],
+                    "summary": {"files_reviewed": 1},
+                },
+            }
+
+        monkeypatch.setattr(review_module, "import_module", fake_import_module)
+        monkeypatch.setattr(review_module, "_execute_react_assistant", fake_execute)
+        monkeypatch.setattr(review_module, "_record_invocation", lambda *args, **kwargs: None)
+
+        run_review(
+            ctx,
+            patch_file=str(patch_path),
+            rule_file=str(rule_path),
+            json_output=True,
+            settings=settings,
+        )
+
+        assert len(calls) > 1
 
     def test_extract_applies_to_pattern_normalizes_globs(self, tmp_path):
         """Glob patterns should be converted to regex and filter datasets."""

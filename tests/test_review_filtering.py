@@ -115,8 +115,10 @@ def test_filter_rejects_out_of_scope(review_context):
 
     result = run_review_with_message(ctx, patch_file, rule_file, message)
 
-    assert result["violations"] == []
-    assert result["summary"]["total_violations"] == 0
+    assert len(result["violations"]) == 1
+    assert result["violations"][0]["file"] == "stdlib/foo.ets"
+    assert result["summary"]["total_violations"] == 1
+    assert result["summary"]["discarded_violations"] == 1
 
 
 def test_filter_allows_in_scope(review_context):
@@ -145,6 +147,66 @@ def test_filter_allows_in_scope(review_context):
     assert isinstance(result, dict)
     assert "violations" in result
     assert "summary" in result
+
+
+def test_review_keeps_valid_entries_when_some_invalid(review_context):
+    ctx, patch_file, rule_file = review_context
+
+    message = {
+        "violations": [
+            {
+                "file": "stdlib/foo.ets",
+                "line": 1,
+                "message": "Missing docs",
+                "code_snippet": "export function Foo() {}",
+            },
+            {
+                "file": "stdlib/foo.ets",
+                "line": 99,
+                "message": "Invalid location should be dropped",
+                "code_snippet": "export function Foo() {}",
+            },
+        ],
+        "summary": {
+            "total_violations": 2,
+            "files_reviewed": 1,
+            "rule_name": "Test Rule",
+        },
+    }
+
+    result = run_review_with_message(ctx, patch_file, rule_file, message)
+
+    assert len(result["violations"]) == 1
+    assert result["violations"][0]["line"] == 1
+    assert result["summary"]["total_violations"] == 1
+    assert result["summary"]["discarded_violations"] == 1
+
+
+def test_review_normalizes_violation_payloads(review_context):
+    ctx, patch_file, rule_file = review_context
+
+    message = {
+        "violations": [
+            {
+                "file": "stdlib/foo.ets",
+                "line": 1,
+                "message": "Please document exports",
+                "severity": "CRITICAL",
+                "change_type": "Addition",
+                "code_snippet": "export function Foo() {}",
+            }
+        ],
+        "summary": {
+            "total_violations": 1,
+            "files_reviewed": 1,
+            "rule_name": "Test Rule",
+        },
+    }
+
+    result = run_review_with_message(ctx, patch_file, rule_file, message)
+
+    assert result["violations"][0]["severity"] == "error"
+    assert result["violations"][0]["change_type"] == "added"
 
 
 def test_review_returns_fallback_when_json_parse_fails(review_context, monkeypatch):

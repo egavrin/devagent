@@ -232,6 +232,9 @@ def review(
             total_violations = summary.get("total_violations", 0)
             click.echo(f"Files reviewed: {files_reviewed}")
             click.echo(f"Violations: {total_violations}")
+            discarded = summary.get("discarded_violations", 0)
+            if discarded:
+                click.echo(f"Discarded violations: {discarded} (ignored due to invalid references)")
 
             violations = validated.get("violations") or []
             if violations:
