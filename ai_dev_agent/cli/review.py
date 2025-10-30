@@ -44,6 +44,10 @@ def _normalize_applies_to_pattern(raw: str) -> Optional[str]:
                 regex_parts.append(custom)
             continue
 
+        if any(ch in token for ch in ("(", ")", "[", "]", "{", "}", "|", "\\")):
+            regex_parts.append(token)
+            continue
+
         translated = fnmatch.translate(token)
         if translated.endswith("\\Z"):
             translated = translated[:-2] + "$"
