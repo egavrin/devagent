@@ -404,3 +404,117 @@ class TestCLIEndToEnd:
             output = json.loads(result.output)
             assert "success" in output
             assert output["success"]
+
+    def test_system_flag_inline_text(self, runner):
+        """Test --system flag with inline text is passed to executor."""
+        # Patch at the module level where it's called from
+        with patch(
+            "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant"
+        ) as mock_execute:
+            # Mock execute to return simple answer
+            mock_execute.return_value = {
+                "final_message": "4",
+                "final_answer": "4",
+                "final_json": None,
+                "result": MagicMock(status="success", stop_reason="Completed"),
+                "printed_final": True,
+            }
+
+            os.environ["DEVAGENT_API_KEY"] = "test-key"
+            try:
+                result = runner.invoke(cli, ["--system", "Answer with one number", "query", "2+2"])
+            finally:
+                os.environ.pop("DEVAGENT_API_KEY", None)
+
+            # Verify the command executed successfully
+            assert result.exit_code == 0
+
+            # Verify _execute_react_assistant was called
+            assert mock_execute.called
+
+            # Verify system_extension remains unset and global message stored in settings
+            call_args = mock_execute.call_args[0]
+            call_kwargs = mock_execute.call_args[1]
+            system_extension = call_kwargs.get("system_extension")
+            assert system_extension is None
+
+            settings = call_args[2]
+            assert settings.global_system_message == "Answer with one number"
+
+    def test_context_flag_inline_text(self, runner):
+        """Test --context flag with inline text is passed to executor."""
+        # Patch at the module level where it's called from
+        with patch(
+            "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant"
+        ) as mock_execute:
+            # Mock execute to return answer
+            mock_execute.return_value = {
+                "final_message": "The project uses JWT tokens for authentication.",
+                "final_answer": "The project uses JWT tokens for authentication.",
+                "final_json": None,
+                "result": MagicMock(status="success", stop_reason="Completed"),
+                "printed_final": True,
+            }
+
+            os.environ["DEVAGENT_API_KEY"] = "test-key"
+            try:
+                result = runner.invoke(
+                    cli,
+                    ["--context", "This project uses JWT for auth", "query", "how does auth work"],
+                )
+            finally:
+                os.environ.pop("DEVAGENT_API_KEY", None)
+
+            # Verify the command executed
+            assert result.exit_code == 0
+
+            # Verify _execute_react_assistant was called and context stored on settings
+            assert mock_execute.called
+            call_args = mock_execute.call_args[0]
+            call_kwargs = mock_execute.call_args[1]
+
+            settings = call_args[2]  # Third positional arg is settings
+            assert settings.global_context_message == "This project uses JWT for auth"
+            assert call_kwargs.get("system_extension") is None
+
+    def test_system_and_context_flags_together(self, runner):
+        """Test both --system and --context flags work together."""
+        # Patch at the module level where it's called from
+        with patch(
+            "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant"
+        ) as mock_execute:
+            # Mock execute to return answer
+            mock_execute.return_value = {
+                "final_message": "Optimized",
+                "final_answer": "Optimized",
+                "final_json": None,
+                "result": MagicMock(status="success", stop_reason="Completed"),
+                "printed_final": True,
+            }
+
+            os.environ["DEVAGENT_API_KEY"] = "test-key"
+            try:
+                result = runner.invoke(
+                    cli,
+                    [
+                        "--system",
+                        "Be concise",
+                        "--context",
+                        "High-traffic API",
+                        "query",
+                        "optimize cache",
+                    ],
+                )
+            finally:
+                os.environ.pop("DEVAGENT_API_KEY", None)
+
+            # Verify the command executed
+            assert result.exit_code == 0
+
+            # Verify both messages are stored on settings without mutating system_extension
+            call_args = mock_execute.call_args[0]
+            call_kwargs = mock_execute.call_args[1]
+            settings = call_args[2]
+            assert call_kwargs.get("system_extension") is None
+            assert settings.global_system_message == "Be concise"
+            assert settings.global_context_message == "High-traffic API"

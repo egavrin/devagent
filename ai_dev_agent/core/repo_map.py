@@ -527,6 +527,14 @@ class RepoMap:
 
         self.context.last_updated = current_time
         self._rebuild_indices()
+
+        # Invalidate derived caches so they are recomputed on demand
+        self.context.dependency_graph = None
+        self.context.pagerank_scores = {}
+        self.context.last_pagerank_update = 0.0
+        for file_info in self.context.files.values():
+            file_info.dependencies = set()
+
         self._save_cache()
 
         # Log statistics
@@ -1680,6 +1688,7 @@ class RepoMap:
 
         # Collect edges in a dict for batch insertion (optimization)
         edge_data: dict[tuple[str, str], dict[str, Any]] = {}
+        file_dependencies: defaultdict[str, set[str]] = defaultdict(set)
 
         # Build edges based on symbol usage
         for file_path, file_info in self.context.files.items():
@@ -1724,8 +1733,14 @@ class RepoMap:
                         else:
                             edge_data[edge_key] = {"weight": final_weight, "symbols": [symbol]}
 
+                        file_dependencies[file_path].add(definer)
+
         # OPTIMIZATION: Batch add all edges at once (single NetworkX operation)
         G.add_edges_from((source, target, data) for (source, target), data in edge_data.items())
+
+        # Update FileInfo dependencies for downstream consumers and cache persistence
+        for file_path, file_info in self.context.files.items():
+            file_info.dependencies = set(file_dependencies.get(file_path, set()))
 
         self.context.dependency_graph = G
         return G

@@ -19,7 +19,7 @@ from ai_dev_agent.tools.patch_analysis import PatchParser
 
 from .react.executor import _execute_react_assistant
 from .review_context import ContextOrchestrator, SourceContextProvider
-from .utils import _record_invocation, get_llm_client
+from .utils import _record_invocation, get_llm_client, resolve_prompt_input
 
 if TYPE_CHECKING:
     from ai_dev_agent.core.utils.config import Settings
@@ -1004,6 +1004,15 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
                 settings.workspace_root,
                 chunk_files,
             )
+
+            # Append global context message if provided
+            resolved_context = resolve_prompt_input(settings.global_context_message)
+            if resolved_context:
+                global_context_block = f"\n\n## Global Context\n\n{resolved_context}"
+                if context_section:
+                    context_section += global_context_block
+                else:
+                    context_section = global_context_block.lstrip()
 
             prompt = _build_review_prompt(
                 patch_rel,

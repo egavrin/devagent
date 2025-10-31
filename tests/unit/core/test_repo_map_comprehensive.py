@@ -177,6 +177,45 @@ def test_function():
         assert "TestClass" in file_info.symbols
         assert "test_function" in file_info.symbols
 
+    def test_dependency_sets_populated_after_graph_build(self, repo_map, tmp_path):
+        """Dependency graph should update FileInfo dependencies."""
+        (tmp_path / "service.py").write_text(
+            "class Service:\n    pass\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "consumer.py").write_text(
+            "def needs_service():\n    return Service()\n",
+            encoding="utf-8",
+        )
+
+        repo_map.scan_repository(force=True)
+
+        assert repo_map.context.files["consumer.py"].dependencies == set()
+
+        repo_map.build_dependency_graph()
+
+        assert "service.py" in repo_map.context.files["consumer.py"].dependencies
+
+    def test_scan_repository_invalidates_cached_graph_and_pagerank(self, repo_map, tmp_path):
+        """Rescans should invalidate cached dependency graph and PageRank scores."""
+        (tmp_path / "alpha.py").write_text("class Alpha:\n    pass\n", encoding="utf-8")
+
+        repo_map.scan_repository(force=True)
+        repo_map.build_dependency_graph()
+        repo_map.compute_pagerank()
+
+        assert repo_map.context.dependency_graph is not None
+        assert repo_map.context.pagerank_scores
+        assert repo_map.context.last_pagerank_update > 0
+
+        (tmp_path / "beta.py").write_text("print('beta')\n", encoding="utf-8")
+
+        repo_map.scan_repository(force=True)
+
+        assert repo_map.context.dependency_graph is None
+        assert repo_map.context.pagerank_scores == {}
+        assert repo_map.context.last_pagerank_update == 0.0
+
     def test_extract_python_info(self, repo_map, tmp_path):
         """Test extracting Python file information."""
         py_file = tmp_path / "module.py"

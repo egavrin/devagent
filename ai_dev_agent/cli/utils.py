@@ -41,6 +41,67 @@ if TYPE_CHECKING:
 LOGGER = get_logger(__name__)
 
 
+def resolve_prompt_input(value: str | None) -> str | None:
+    """Resolve prompt input that may be inline text or a file path.
+
+    The caller must provide either raw prompt text or the exact location of a file
+    containing the prompt. When a path is supplied but cannot be read, an exception
+    is raised instead of silently falling back to the path string.
+    """
+    if value is None:
+        return None
+
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+
+    # Inline text that already contains formatted content should be passed through.
+    if "\n" in value:
+        return value
+
+    expanded = Path(trimmed).expanduser()
+    candidate_paths: list[Path] = []
+    if expanded.is_absolute():
+        candidate_paths.append(expanded)
+    else:
+        candidate_paths.append((Path.cwd() / expanded).resolve())
+        candidate_paths.append(expanded)
+
+    for candidate in candidate_paths:
+        if candidate.exists():
+            if candidate.is_dir():
+                raise IsADirectoryError(f"Expected prompt file but found directory: {candidate}")
+            return candidate.read_text(encoding="utf-8")
+
+    looks_like_path = (
+        expanded.is_absolute()
+        or any(sep in trimmed for sep in (os.sep, "/", "\\"))
+        or expanded.suffix.lower()
+        in {
+            ".md",
+            ".markdown",
+            ".txt",
+            ".rst",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".prompt",
+            ".cfg",
+            ".ini",
+            ".toml",
+        }
+        or trimmed.startswith(".")
+        or trimmed.startswith("~")
+    )
+
+    if looks_like_path:
+        raise FileNotFoundError(
+            f"Prompt file '{trimmed}' does not exist. Provide a valid file path or inline text."
+        )
+
+    return value
+
+
 _OS_FRIENDLY_NAMES = {
     "Darwin": "macOS",
     "Linux": "Linux",

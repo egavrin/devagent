@@ -136,6 +136,16 @@ def _initialise_state(
     envvar="DEVAGENT_REPOMAP_DEBUG",
     help="Enable RepoMap debug logging",
 )
+@click.option(
+    "--system",
+    envvar="DEVAGENT_SYSTEM",
+    help="System message: inline text or file path (e.g., prompts/expert.md)",
+)
+@click.option(
+    "--context",
+    envvar="DEVAGENT_CONTEXT",
+    help="Context message: inline text or file path (e.g., docs/architecture.md)",
+)
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -145,6 +155,8 @@ def cli(
     json_output: bool,
     plan: bool,
     repomap_debug: bool,
+    system: Optional[str],
+    context: Optional[str],
 ) -> None:
     """DevAgent - AI-powered development assistant.
 
@@ -165,6 +177,12 @@ def cli(
         quiet=quiet,
         repomap_debug=repomap_debug,
     )
+
+    # Store global messages in settings if provided via CLI
+    if system:
+        settings.global_system_message = system
+    if context:
+        settings.global_context_message = context
 
     ctx.obj.update(
         {

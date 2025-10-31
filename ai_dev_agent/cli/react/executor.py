@@ -24,6 +24,7 @@ from ai_dev_agent.cli.utils import (
     _get_structure_hints_state,
     _merge_structure_hints_state,
     _update_files_discovered,
+    resolve_prompt_input,
 )
 from ai_dev_agent.core.failure_detector import FailurePatternDetector
 from ai_dev_agent.core.utils.budget_integration import BudgetIntegration, create_budget_integration
@@ -693,6 +694,14 @@ def _execute_react_assistant(
     )
     max_history_turns = max(1, getattr(settings, "keep_last_assistant_messages", 4))
 
+    # Resolve global messages (file or inline text)
+    resolved_system = resolve_prompt_input(settings.global_system_message)
+    resolved_context = resolve_prompt_input(settings.global_context_message)
+
+    # Store resolved values in ctx_obj for access by nested functions
+    ctx_obj["_resolved_global_system"] = resolved_system
+    ctx_obj["_resolved_global_context"] = resolved_context
+
     # Initialize dynamic context tracker for adaptive RepoMap
     dynamic_context = ctx_obj.get("_dynamic_context")
     if dynamic_context is None:
@@ -903,6 +912,13 @@ def _execute_react_assistant(
         logger.debug(f"Failed to retrieve memory context: {e}")
 
     session_manager.extend_history(session_id, [user_message])
+
+    # Inject global context message if provided
+    resolved_context = ctx_obj.get("_resolved_global_context")
+    if resolved_context:
+        context_msg = Message(role="user", content=f"# Additional Context\n\n{resolved_context}")
+        session_manager.extend_history(session_id, [context_msg])
+
     with session.lock:
         session.metadata["history_anchor"] = len(session.history)
 
@@ -985,6 +1001,11 @@ def _execute_react_assistant(
         # Append custom system extension if provided
         if system_extension:
             prompt += f"\n\n# Custom Instructions\n{system_extension}"
+
+        # Append global system message if provided
+        resolved_system = ctx_obj.get("_resolved_global_system")
+        if resolved_system:
+            prompt += f"\n\n# Global System Instructions\n{resolved_system}"
 
         # Add agent-specific system prompt suffix
         agent_spec = AgentRegistry.get(agent_type)

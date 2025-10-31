@@ -6,8 +6,9 @@ import platform
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
+from ai_dev_agent.core.utils.constants import DEFAULT_IGNORED_REPO_DIRS
 from ai_dev_agent.core.utils.repo_outline import generate_repo_outline
 
 logger = logging.getLogger(__name__)
@@ -187,11 +188,7 @@ class ContextBuilder:
                 context[f"has_{config_file.replace('.', '_')}"] = True
 
         # Count files
-        try:
-            python_files = list(self.workspace.glob("**/*.py"))
-            context["python_files_count"] = len(python_files)
-        except Exception:
-            context["python_files_count"] = 0
+        context["python_files_count"] = self._count_python_files()
 
         # Add project structure outline if requested
         if include_outline:
@@ -200,6 +197,119 @@ class ContextBuilder:
                 context["project_outline"] = outline
 
         return context
+
+    def _count_python_files(self) -> int:
+        """Count Python files while skipping ignored locations."""
+        if not self.workspace.exists():
+            return 0
+
+        base = self.workspace.resolve()
+        gitignore_dirs, gitignore_files = self._load_gitignore_entries()
+
+        count = 0
+        stack = [base]
+
+        while stack:
+            current = stack.pop()
+            try:
+                entries = list(current.iterdir())
+            except OSError:
+                continue
+
+            for entry in entries:
+                try:
+                    relative = entry.relative_to(base)
+                except ValueError:
+                    continue
+
+                if self._is_hidden_path(relative):
+                    continue
+
+                if self._is_in_default_ignored(relative):
+                    continue
+
+                if self._is_gitignored(relative, gitignore_dirs, gitignore_files):
+                    continue
+
+                if entry.is_dir():
+                    stack.append(entry)
+                    continue
+
+                if entry.is_file() and entry.suffix == ".py":
+                    count += 1
+
+        return count
+
+    def _load_gitignore_entries(self) -> Tuple[set[Path], set[Path]]:
+        """Load directory and file entries from .gitignore."""
+        ignored_dirs: set[Path] = set()
+        ignored_files: set[Path] = set()
+
+        gitignore = self.workspace / ".gitignore"
+        if not gitignore.is_file():
+            return ignored_dirs, ignored_files
+
+        try:
+            lines = gitignore.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return ignored_dirs, ignored_files
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("!"):
+                continue
+            if any(char in line for char in "*?["):
+                continue
+
+            if line.startswith("/"):
+                line = line[1:]
+
+            is_directory = line.endswith("/")
+            if is_directory:
+                line = line.rstrip("/")
+
+            if not line:
+                continue
+
+            path = Path(line)
+            path = Path(*[part for part in path.parts if part not in {".", ""}])
+            if not path.parts:
+                continue
+
+            if is_directory or (self.workspace / path).is_dir():
+                ignored_dirs.add(path)
+            else:
+                ignored_files.add(path)
+
+        return ignored_dirs, ignored_files
+
+    @staticmethod
+    def _is_hidden_path(relative: Path) -> bool:
+        return any(part.startswith(".") and part not in {".", ".."} for part in relative.parts)
+
+    def _is_in_default_ignored(self, relative: Path) -> bool:
+        return any(part in DEFAULT_IGNORED_REPO_DIRS for part in relative.parts if part)
+
+    @staticmethod
+    def _is_gitignored(relative: Path, ignored_dirs: set[Path], ignored_files: set[Path]) -> bool:
+        if relative in ignored_files:
+            return True
+
+        for directory in ignored_dirs:
+            if ContextBuilder._path_is_within(relative, directory):
+                return True
+
+        return False
+
+    @staticmethod
+    def _path_is_within(path: Path, ancestor: Path) -> bool:
+        ancestor_parts = ancestor.parts
+        path_parts = path.parts
+        if len(ancestor_parts) > len(path_parts):
+            return False
+        return path_parts[: len(ancestor_parts)] == ancestor_parts
 
     def get_project_structure_outline(
         self, max_entries: int = 160, max_depth: int = 3, directories_only: bool = False

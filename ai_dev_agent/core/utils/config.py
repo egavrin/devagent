@@ -152,6 +152,10 @@ class Settings:
     review_context_max_lines: int = 600  # Max lines per context item (quality improvement)
     review_context_max_total_lines: int = 1500  # Total context budget (quality improvement)
 
+    # Global message settings (--system and --context CLI options)
+    global_system_message: str | None = None  # System message (inline or file path)
+    global_context_message: str | None = None  # Context message (inline or file path)
+
     def ensure_state_dir(self) -> None:
         """Ensure the directory for the state file exists."""
         if not self.state_file.parent.exists():
@@ -246,6 +250,10 @@ def _load_from_env(prefix: str = "DEVAGENT_") -> dict[str, Any]:
                 env[field] = {}
         elif field in {"shell_session_cpu_time_limit", "shell_session_memory_limit_mb"}:
             env[field] = int(value)
+        elif field == "system":
+            env["global_system_message"] = value  # Map DEVAGENT_SYSTEM to global_system_message
+        elif field == "context":
+            env["global_context_message"] = value  # Map DEVAGENT_CONTEXT to global_context_message
         else:
             env[field] = value
     return env
