@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from ai_dev_agent.agents.base import AgentResult
-from ai_dev_agent.cli.commands import cli
+from ai_dev_agent.cli import cli
 
 
 @pytest.fixture
@@ -45,7 +45,9 @@ class TestCreateDesignCommand:
         assert result.exit_code == 0
         executor = specialized_cli_stub["agent_execute"]
         executor.assert_called_once()
-        assert executor.call_args.kwargs["prompt"] == "Design User Authentication"
+        prompt = executor.call_args.kwargs["prompt"]
+        assert "Design solution for User Authentication" in prompt
+        assert "## Repository Context" in prompt
 
     def test_create_design_with_context(self, runner, specialized_cli_stub):
         """create-design should accept --context flag."""
@@ -56,8 +58,8 @@ class TestCreateDesignCommand:
         executor = specialized_cli_stub["agent_execute"]
         executor.assert_called_once()
         prompt = executor.call_args.kwargs["prompt"]
-        assert "Design REST API" in prompt
-        assert "Context: CRUD operations for blog posts" in prompt
+        assert "Design solution for REST API" in prompt
+        assert "Additional Context" in prompt
 
     def test_create_design_with_output(self, runner, specialized_cli_stub, tmp_path):
         """create-design should accept --output flag."""
@@ -106,10 +108,9 @@ class TestGenerateTestsCommand:
         assert result.exit_code == 0
         executor = specialized_cli_stub["agent_execute"]
         executor.assert_called_once()
-        assert (
-            executor.call_args.kwargs["prompt"]
-            == "Create all tests for Authentication Module with 90% coverage"
-        )
+        prompt = executor.call_args.kwargs["prompt"]
+        assert "Generate tests for: Authentication Module" in prompt
+        assert "Target coverage: 90%" in prompt
 
     def test_generate_tests_with_coverage(self, runner, specialized_cli_stub):
         """generate-tests should accept --coverage flag."""
@@ -163,7 +164,9 @@ class TestWriteCodeCommand:
         assert result.exit_code in [0, 1, 2]
         executor = specialized_cli_stub["agent_execute"]
         executor.assert_called_once()
-        assert executor.call_args.kwargs["prompt"].startswith("Implement the design at design.md")
+        prompt = executor.call_args.kwargs["prompt"]
+        assert "Implement solution from design.md" in prompt
+        assert "## Repository Context" in prompt
 
     def test_write_code_with_test_file(self, runner, specialized_cli_stub):
         """write-code should accept --test-file flag."""

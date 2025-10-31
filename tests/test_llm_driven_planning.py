@@ -26,7 +26,9 @@ class TestQueryComplexityAssessment:
             )
         )
 
-        result = _assess_query_with_llm(client, "how many lines in commands.py")
+        result = _assess_query_with_llm(
+            client, "how many lines are in ai_dev_agent/cli/runtime/main.py"
+        )
 
         assert result["approach"] == "direct"
         assert result["estimated_tasks"] == 1
@@ -143,13 +145,15 @@ class TestEarlyTerminationDetection:
         completed = [
             {
                 "task_title": "Locate and count lines",
-                "result": {"final_message": "The commands.py file contains 716 lines"},
+                "result": {
+                    "final_message": "The ai_dev_agent/cli/runtime/main.py contains 716 lines"
+                },
             }
         ]
         remaining = [Task(title="Verify count", description="Double-check the count")]
 
         result = _check_if_query_satisfied(
-            client, "how many lines in commands.py", completed, remaining
+            client, "how many lines are in ai_dev_agent/cli/runtime/main.py", completed, remaining
         )
 
         assert result["is_satisfied"] is True

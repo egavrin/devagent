@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from click.testing import CliRunner
 
-from ai_dev_agent.cli.commands import cli
+from ai_dev_agent.cli import cli
 
 
 @pytest.fixture(autouse=True)
@@ -16,10 +16,12 @@ def stub_chat_dependencies(monkeypatch):
     manager = MagicMock(spec=("create_session", "close_all"))
     manager.create_session.return_value = "session-id"
     manager_factory = MagicMock(return_value=manager)
-    monkeypatch.setattr("ai_dev_agent.cli.commands.ShellSessionManager", manager_factory)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.commands.chat.ShellSessionManager", manager_factory
+    )
 
-    executor = MagicMock(name="_execute_react_assistant")
-    monkeypatch.setattr("ai_dev_agent.cli.commands._execute_react_assistant", executor)
+    executor = MagicMock(name="execute_query")
+    monkeypatch.setattr("ai_dev_agent.cli.runtime.commands.query.execute_query", executor)
 
     llm_client = MagicMock(name="llm_client")
 
@@ -27,7 +29,7 @@ def stub_chat_dependencies(monkeypatch):
         ctx.obj["llm_client"] = llm_client
         return llm_client
 
-    monkeypatch.setattr("ai_dev_agent.cli.commands.get_llm_client", fake_get_llm_client)
+    monkeypatch.setattr("ai_dev_agent.cli.utils.get_llm_client", fake_get_llm_client)
     yield {
         "manager": manager,
         "manager_factory": manager_factory,
@@ -69,7 +71,7 @@ class TestChatCommand:
         assert result.exit_code == 0
         executor = stub_chat_dependencies["executor"]
         executor.assert_called_once()
-        assert executor.call_args.args[3] == "help"
+        assert executor.call_args.args[2] == ("help",)
 
     def test_chat_with_quit_command(self, runner, stub_chat_dependencies):
         """User should be able to type 'quit' to exit."""
@@ -90,8 +92,8 @@ class TestChatCommand:
         assert result.exit_code == 0
         executor = stub_chat_dependencies["executor"]
         assert executor.call_count == 2
-        prompts = [call.args[3] for call in executor.call_args_list]
-        assert prompts == ["What is Python?", "Tell me more."]
+        prompts = [call.args[2] for call in executor.call_args_list]
+        assert prompts == [("What is Python?",), ("Tell me more.",)]
 
     def test_chat_with_empty_input(self, runner, stub_chat_dependencies):
         """Chat should handle empty input gracefully."""

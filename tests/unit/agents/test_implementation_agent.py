@@ -119,13 +119,15 @@ Use bcrypt for password hashing.
         agent = ImplementationAgent()
         context = AgentContext(session_id="test-verify")
 
-        # Mock test execution
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout="test_module.py::test_1 PASSED\ntest_module.py::test_2 PASSED\n5 PASSED in 1.2s",
-                stderr="",
-            )
+        # Mock test execution via tool registry
+        with patch(
+            "ai_dev_agent.agents.specialized.implementation_agent.registry.invoke"
+        ) as mock_invoke:
+            mock_invoke.return_value = {
+                "exit_code": 0,
+                "stdout_tail": "test_module.py::test_1 PASSED\ntest_module.py::test_2 PASSED\n5 PASSED in 1.2s",
+                "stderr_tail": "",
+            }
 
             result = agent.verify_tests_pass("tests/test_module.py", context)
 
@@ -287,8 +289,14 @@ def new_helper_function():
 
             with patch("os.makedirs"):
                 with patch("builtins.open", mock_open()):
-                    with patch("subprocess.run") as mock_run:
-                        mock_run.return_value = Mock(returncode=0, stdout="tests passed")
+                    with patch(
+                        "ai_dev_agent.agents.specialized.implementation_agent.registry.invoke"
+                    ) as mock_invoke:
+                        mock_invoke.return_value = {
+                            "exit_code": 0,
+                            "stdout_tail": "tests passed",
+                            "stderr_tail": "",
+                        }
 
                         result = agent.execute(prompt, context)
 
@@ -301,16 +309,22 @@ def new_helper_function():
         context = AgentContext(session_id="test-tdd")
 
         # Mock test execution showing tests exist and fail initially
-        with patch("subprocess.run") as mock_run:
+        with patch(
+            "ai_dev_agent.agents.specialized.implementation_agent.registry.invoke"
+        ) as mock_invoke:
             # First call: tests fail (expected in TDD)
             # Second call: tests pass after implementation
-            mock_run.side_effect = [
-                Mock(
-                    returncode=1, stdout="test_1 FAILED\ntest_2 FAILED\n5 FAILED", stderr=""
-                ),  # Before implementation
-                Mock(
-                    returncode=0, stdout="test_1 PASSED\ntest_2 PASSED\n5 PASSED", stderr=""
-                ),  # After implementation
+            mock_invoke.side_effect = [
+                {
+                    "exit_code": 1,
+                    "stdout_tail": "test_1 FAILED\ntest_2 FAILED\n5 FAILED",
+                    "stderr_tail": "",
+                },
+                {
+                    "exit_code": 0,
+                    "stdout_tail": "test_1 PASSED\ntest_2 PASSED\n5 PASSED",
+                    "stderr_tail": "",
+                },
             ]
 
             result = agent.implement_with_tdd(

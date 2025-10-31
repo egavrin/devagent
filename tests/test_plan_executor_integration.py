@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from ai_dev_agent.cli.commands import cli
+from ai_dev_agent.cli import cli
 
 # Mark all tests in this module as slow
 pytestmark = pytest.mark.slow
@@ -46,7 +46,9 @@ class TestPlanExecutorIntegration:
         """Test that devagent --plan triggers complexity assessment."""
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["--plan", "how many lines in commands.py"], catch_exceptions=False
+            cli,
+            ["--plan", "how many lines are in ai_dev_agent/cli/runtime/main.py"],
+            catch_exceptions=False,
         )
 
         # Verify assessment happened (may use direct execution or planning)
@@ -149,7 +151,9 @@ class TestPlanExecutorTaskManagement:
         """Test that plan executor respects task dependencies."""
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["--plan", "first find commands.py, then count its lines"], catch_exceptions=False
+            cli,
+            ["--plan", "first find ai_dev_agent/cli/runtime/main.py, then count its lines"],
+            catch_exceptions=False,
         )
 
         # Should execute without errors

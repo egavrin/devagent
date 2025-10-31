@@ -143,7 +143,7 @@ DevAgent can analyze query complexity and create structured work plans:
 
 ```bash
 # LLM assesses complexity and routes appropriately
-devagent --plan "how many lines in commands.py"
+devagent --plan "how many lines are in ai_dev_agent/cli/runtime/main.py"
 # Result: DIRECT execution (simple query, no planning overhead)
 
 devagent --plan "implement user authentication with tests"

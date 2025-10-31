@@ -467,7 +467,7 @@ Respond in JSON format:
 
 Examples:
 
-Query: "how many lines in commands.py"
+Query: "how many lines are in ai_dev_agent/cli/runtime/main.py"
 Response: {{"approach": "direct", "reasoning": "Single file operation, can count immediately", "estimated_tasks": 1, "can_answer_immediately": true}}
 
 Query: "find all TODO comments and count them"
@@ -586,7 +586,7 @@ Respond in JSON:
     "missing_aspects": ["list of what's still needed, if any"]
 }}
 
-Be practical: If the query is "how many lines in commands.py" and we found it contains 716 lines,
+Be practical: If the query is "how many lines are in ai_dev_agent/cli/runtime/main.py" and we found it contains 204 lines,
 we're done - no need to "verify" or "report" again. Similarly, if a task says "verify result" but
 the result has already been verified, that task is redundant."""
 

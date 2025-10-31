@@ -27,9 +27,9 @@ class TestCase:
 
 # Validation helpers
 def _validate_line_count(answer: str) -> bool:
-    """Validate that answer contains correct line count for commands.py."""
+    """Validate that answer contains correct line count for runtime/main.py."""
     numbers = re.findall(r"\b(\d+)\b", answer)
-    return any(270 <= int(n) <= 280 for n in numbers)
+    return any(200 <= int(n) <= 210 for n in numbers)
 
 
 def _validate_python_files_count(answer: str) -> bool:
@@ -81,10 +81,10 @@ def _validate_contains_any(keywords: list[str]):
 TEST_CASES = [
     # Basic tests
     TestCase(
-        name="line_count_commands_py",
-        query="how many lines in commands.py",
+        name="line_count_runtime_main",
+        query="how many lines are in ai_dev_agent/cli/runtime/main.py",
         validator=_validate_line_count,
-        description="Count lines in ai_dev_agent/cli/commands.py",
+        description="Count lines in ai_dev_agent/cli/runtime/main.py",
         timeout=60,
         max_iterations=10,
     ),
@@ -99,7 +99,7 @@ TEST_CASES = [
     TestCase(
         name="find_main_entry_point",
         query="what is the main entry point for the CLI",
-        validator=_validate_contains_keyword("commands.py"),
+        validator=_validate_contains_keyword("runtime/main.py"),
         description="Identify the CLI entry point",
         timeout=90,
         max_iterations=15,

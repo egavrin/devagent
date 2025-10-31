@@ -84,8 +84,7 @@ class TestExecuteWithPlanning:
             priority=Priority.MEDIUM,
             status=TaskStatus.PENDING,
         )
-        mock_plan = WorkPlan(tasks=[mock_task])
-        mock_plan.get_completion_percentage = MagicMock(return_value=100.0)
+        mock_plan = WorkPlan(name="Test Plan", goal="Demo goal", tasks=[mock_task])
         mock_create_plan.return_value = mock_plan
         # Mock storage to return the plan
         mock_storage.load_plan.return_value = mock_plan
@@ -96,9 +95,12 @@ class TestExecuteWithPlanning:
             "result": {"final_message": "Task done", "printed_final": True},
         }
 
-        with patch(
-            "ai_dev_agent.cli.react.plan_executor._synthesize_final_message"
-        ) as mock_synthesize:
+        with (
+            patch(
+                "ai_dev_agent.cli.react.plan_executor._synthesize_final_message"
+            ) as mock_synthesize,
+            patch.object(WorkPlan, "get_completion_percentage", return_value=100.0),
+        ):
             mock_synthesize.return_value = "All tasks completed"
 
             result = execute_with_planning(
@@ -226,10 +228,12 @@ class TestCreatePlanFromQuery:
         mock_storage = MagicMock()
         mock_agent.storage = mock_storage
         mock_plan = WorkPlan(
+            name="Auto Plan",
+            goal="Test query",
             tasks=[
                 Task(title="Step 1", description="First step", priority=Priority.HIGH),
                 Task(title="Step 2", description="Second step", priority=Priority.MEDIUM),
-            ]
+            ],
         )
         mock_agent.create_plan.return_value = mock_plan
 

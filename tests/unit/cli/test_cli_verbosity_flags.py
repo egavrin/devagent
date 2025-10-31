@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from ai_dev_agent.agents.base import AgentResult
-from ai_dev_agent.cli.commands import cli
+from ai_dev_agent.cli import cli
 
 
 @pytest.fixture

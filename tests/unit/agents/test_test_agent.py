@@ -3,7 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import mock_open, patch
 
 import pytest
 
@@ -183,9 +183,13 @@ class TestTestAgent:
         agent = TestingAgent()
         context = AgentContext(session_id="test-run")
 
-        # Mock test execution
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=0, stdout="10 passed in 2.5s", stderr="")
+        # Mock test execution via tool registry
+        with patch("ai_dev_agent.agents.specialized.testing_agent.registry.invoke") as mock_invoke:
+            mock_invoke.return_value = {
+                "exit_code": 0,
+                "stdout_tail": "10 passed in 2.5s",
+                "stderr_tail": "",
+            }
 
             result = agent.run_tests(test_path="tests/test_auth.py", context=context)
 

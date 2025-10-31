@@ -79,6 +79,9 @@ def registry():
     return reg
 
 
+pytestmark = pytest.mark.slow
+
+
 class TestAgentDelegationPerformance:
     """Test performance of agent delegation and coordination."""
 

@@ -10,7 +10,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from ai_dev_agent.cli.commands import cli
+from ai_dev_agent.cli import cli
 
 
 class TestCLIEndToEnd:
@@ -45,7 +45,7 @@ class TestCLIEndToEnd:
     @pytest.mark.skip(reason="Requires complex mocking of LLM client")
     @pytest.mark.skip(reason="Requires complex mocking of LLM client")
     @patch("ai_dev_agent.cli.react.executor._execute_react_assistant")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_query_command_basic(self, mock_client, mock_execute, runner, temp_workspace):
         """Test basic query command."""
         # Mock the LLM client and execution
@@ -72,7 +72,7 @@ class TestCLIEndToEnd:
     @pytest.mark.skip(reason="Requires complex mocking of LLM client")
     @pytest.mark.skip(reason="Requires complex mocking of LLM client")
     @patch("ai_dev_agent.cli.react.executor._execute_react_assistant")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_query_command_with_json_output(
         self, mock_client, mock_execute, runner, temp_workspace
     ):
@@ -100,7 +100,7 @@ class TestCLIEndToEnd:
         assert "status" in output
 
     @patch("ai_dev_agent.agents.specialized.review_agent.ReviewAgent.execute")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_review_command_file(self, mock_client, mock_execute, runner, temp_workspace):
         """Test review command with a file."""
         mock_client.return_value = MagicMock()
@@ -127,7 +127,7 @@ class TestCLIEndToEnd:
         mock_execute.assert_called_once()
 
     @pytest.mark.skip(reason="Review command requires LLM client")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_review_command_nonexistent_file(self, mock_client, runner, temp_workspace):
         """Test review command with nonexistent file."""
         mock_client.return_value = MagicMock()
@@ -145,7 +145,7 @@ class TestCLIEndToEnd:
         assert "not found" in result.output.lower() or "error" in result.output.lower()
 
     @patch("ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_create_design_command(self, mock_client, mock_execute, runner, temp_workspace):
         """Test create-design command."""
         mock_client.return_value = MagicMock()
@@ -169,7 +169,7 @@ class TestCLIEndToEnd:
         assert "authentication system" in call_args[0][0]
 
     @patch("ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_create_design_with_output_file(
         self, mock_client, mock_execute, runner, temp_workspace
     ):
@@ -193,7 +193,7 @@ class TestCLIEndToEnd:
         assert output_file.read_text() == design_content
 
     @patch("ai_dev_agent.agents.specialized.testing_agent.TestingAgent.execute")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_generate_tests_command(self, mock_client, mock_execute, runner, temp_workspace):
         """Test generate-tests command."""
         mock_client.return_value = MagicMock()
@@ -215,7 +215,7 @@ class TestCLIEndToEnd:
         mock_execute.assert_called_once()
 
     @patch("ai_dev_agent.agents.specialized.testing_agent.TestingAgent.execute")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_generate_tests_with_coverage_target(
         self, mock_client, mock_execute, runner, temp_workspace
     ):
@@ -238,7 +238,7 @@ class TestCLIEndToEnd:
         assert "95" in str(call_args[0][0])
 
     @patch("ai_dev_agent.agents.specialized.implementation_agent.ImplementationAgent.execute")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_write_code_command(self, mock_client, mock_execute, runner, temp_workspace):
         """Test write-code command."""
         mock_client.return_value = MagicMock()
@@ -263,7 +263,7 @@ class TestCLIEndToEnd:
 
     @pytest.mark.skip(reason="Requires complex mocking of LLM client")
     @patch("ai_dev_agent.cli.react.executor._execute_react_assistant")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_query_with_verbose(self, mock_client, mock_execute, runner, temp_workspace):
         """Test query command with verbose output."""
         mock_client.return_value = MagicMock()
@@ -283,7 +283,7 @@ class TestCLIEndToEnd:
 
     @pytest.mark.skip(reason="Requires complex mocking of LLM client")
     @patch("ai_dev_agent.cli.react.executor._execute_react_assistant")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_query_with_quiet(self, mock_client, mock_execute, runner, temp_workspace):
         """Test query command with quiet output."""
         mock_client.return_value = MagicMock()
@@ -318,7 +318,7 @@ class TestCLIEndToEnd:
             assert "Usage:" in result.output
 
     @pytest.mark.skip(reason="ChatSession import issues")
-    @patch("ai_dev_agent.cli.commands.ChatSession")
+    @patch("ai_dev_agent.cli.runtime.commands.chat.ShellSessionManager")
     def test_chat_command(self, mock_chat_session, runner, temp_workspace):
         """Test chat command starts a session."""
         mock_session = MagicMock()
@@ -349,7 +349,7 @@ class TestCLIEndToEnd:
 
     @pytest.mark.skip(reason="Requires complex mocking of LLM client")
     @patch("ai_dev_agent.cli.react.executor._execute_react_assistant")
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_natural_language_fallback(self, mock_client, mock_execute, runner, temp_workspace):
         """Test natural language query as direct command."""
         mock_client.return_value = MagicMock()
@@ -369,7 +369,7 @@ class TestCLIEndToEnd:
         assert result.exit_code == 0
         mock_execute.assert_called()
 
-    @patch("ai_dev_agent.cli.commands.get_llm_client")
+    @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_review_with_json_output(self, mock_client, runner, temp_workspace):
         """Test review command with JSON output format."""
         mock_client.return_value = MagicMock()

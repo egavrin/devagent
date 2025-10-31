@@ -41,16 +41,13 @@ class TestPromptLoader:
     def test_init_with_custom_dir(self, temp_prompts_dir):
         """Test initialization with custom directory."""
         loader = PromptLoader(prompts_dir=temp_prompts_dir)
-        assert loader.prompts_dir == temp_prompts_dir
+        assert loader.prompts_dir == temp_prompts_dir.resolve()
 
     def test_init_creates_missing_dir(self):
-        """Test that missing directory is created."""
+        """Explicit directories without prompts should raise immediately."""
         non_existent = Path("/tmp/test_prompts_" + str(id(self)))
-        loader = PromptLoader(prompts_dir=non_existent)
-        assert loader.prompts_dir.exists()
-        # Cleanup
-        if loader.prompts_dir.exists():
-            loader.prompts_dir.rmdir()
+        with pytest.raises(FileNotFoundError):
+            PromptLoader(prompts_dir=non_existent)
 
     def test_load_prompt(self, temp_prompts_dir):
         """Test loading a prompt file."""
@@ -144,7 +141,8 @@ class TestPromptLoader:
         assert content1 == content2
 
         # Check cache
-        assert str(temp_prompts_dir / "agents/test_agent.md") in loader._cache
+        cached_path = str((temp_prompts_dir / "agents/test_agent.md").resolve())
+        assert cached_path in loader._cache
 
     def test_clear_cache(self, temp_prompts_dir):
         """Test clearing the cache."""

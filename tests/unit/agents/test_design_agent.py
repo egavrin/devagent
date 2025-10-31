@@ -149,7 +149,7 @@ class TestDesignAgent:
 
         proposed_changes = {
             "new_modules": ["agents/orchestrator.py"],
-            "modified_modules": ["agents/registry.py", "cli/commands.py"],
+            "modified_modules": ["agents/registry.py", "cli/runtime/main.py"],
             "new_dependencies": ["asyncio", "threading"],
             "api_changes": [{"module": "registry", "change": "added create_agent method"}],
         }

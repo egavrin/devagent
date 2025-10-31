@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ai_dev_agent.prompts.loader import PromptLoader
 from ai_dev_agent.tools import READ, RUN
 
 _DEFAULT_THRESHOLD_EXPLORATION = 30.0
@@ -13,43 +14,14 @@ _DEFAULT_THRESHOLD_INVESTIGATION = 60.0
 _DEFAULT_THRESHOLD_CONSOLIDATION = 85.0
 
 
+_PROMPT_LOADER = PromptLoader()
 PHASE_PROMPTS: dict[str, str] = {
-    "exploration": (
-        "You are beginning your investigation.\n"
-        "Cast a wide net, explore the codebase structure, gather context, identify key components.\n\n"
-        "💡 PARALLEL TOOL EXECUTION: You can call multiple tools in a single response.\n"
-        "When operations are independent, use parallel execution for efficiency:\n"
-        "  • Reading multiple files: call read() multiple times\n"
-        "  • Searching different patterns: call grep() multiple times\n"
-        "  • Finding various file types: call find() multiple times\n"
-        "Example: To analyze 3 files, make 3 read() calls in one response."
-    ),
-    "investigation": (
-        "You are investigating specific areas.\n"
-        "Focus on the most promising leads, validate hypotheses, dive deeper.\n\n"
-        "💡 Use parallel tool calls when examining multiple independent sources.\n"
-        "Combine multiple read(), grep(), or find() calls in a single response."
-    ),
-    "consolidation": (
-        "You are consolidating discoveries.\n"
-        "Connect findings, validate conclusions, prepare to formulate your answer.\n\n"
-        "💡 For final validations, you can still use parallel tool calls to verify multiple items at once."
-    ),
-    "preparation": (
-        "⚠️ IMPORTANT: You are nearing completion.\n"
-        "Focus only on essential validations. Begin drafting your comprehensive answer.\n\n"
-        "💡 Last chance for parallel tool calls if you need to verify multiple items quickly."
-    ),
-    "final_warning": (
-        "⚡ CRITICAL: After this response, you must provide final synthesis.\n"
-        "Complete any essential work NOW. Your next response will be text-only."
-    ),
-    "synthesis": (
-        "📋 SYNTHESIS REQUIRED\n"
-        "Based on your investigation, provide your complete answer.\n"
-        "Include: findings, file locations, recommendations, unknowns.\n"
-        "This is your final response."
-    ),
+    "exploration": _PROMPT_LOADER.load_system_prompt("budget_phases/exploration"),
+    "investigation": _PROMPT_LOADER.load_system_prompt("budget_phases/investigation"),
+    "consolidation": _PROMPT_LOADER.load_system_prompt("budget_phases/consolidation"),
+    "preparation": _PROMPT_LOADER.load_system_prompt("budget_phases/preparation"),
+    "final_warning": _PROMPT_LOADER.load_system_prompt("budget_phases/final_warning"),
+    "synthesis": _PROMPT_LOADER.load_system_prompt("budget_phases/synthesis"),
 }
 
 

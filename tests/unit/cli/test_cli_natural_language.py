@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from ai_dev_agent.agents import AgentSpec
-from ai_dev_agent.cli.commands import cli
+from ai_dev_agent.cli import cli
 
 
 @pytest.fixture(autouse=True)
@@ -15,7 +15,11 @@ def stub_cli_dependencies(monkeypatch):
     monkeypatch.setenv("DEVAGENT_API_KEY", "test-key")
 
     executor = MagicMock(name="_execute_react_assistant", return_value={})
-    monkeypatch.setattr("ai_dev_agent.cli.commands._execute_react_assistant", executor)
+    monkeypatch.setattr("ai_dev_agent.cli.react.executor._execute_react_assistant", executor)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant",
+        executor,
+    )
 
     dummy_client = object()
 
@@ -23,7 +27,7 @@ def stub_cli_dependencies(monkeypatch):
         ctx.obj["llm_client"] = dummy_client
         return dummy_client
 
-    monkeypatch.setattr("ai_dev_agent.cli.commands.get_llm_client", fake_get_llm_client)
+    monkeypatch.setattr("ai_dev_agent.cli.utils.get_llm_client", fake_get_llm_client)
 
     class DummyRegistry:
         @staticmethod
@@ -40,7 +44,8 @@ def stub_cli_dependencies(monkeypatch):
         def list_agents():
             return ["manager"]
 
-    monkeypatch.setattr("ai_dev_agent.cli.commands.AgentRegistry", DummyRegistry)
+    monkeypatch.setattr("ai_dev_agent.cli.router.AgentRegistry", DummyRegistry)
+    monkeypatch.setattr("ai_dev_agent.cli.runtime.commands.query.AgentRegistry", DummyRegistry)
     yield {"executor": executor, "llm_client": dummy_client}
 
 

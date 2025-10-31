@@ -5,6 +5,7 @@ This module provides fixtures and configuration specific to integration testing.
 
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
@@ -202,7 +203,7 @@ def devagent_cli():
         Returns:
             Completed process result
         """
-        cmd = ["python", "-m", "ai_dev_agent.cli.main", *args]
+        cmd = [sys.executable, "-m", "ai_dev_agent.cli.main", *args]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=30)
         return result
 
@@ -219,6 +220,254 @@ def mock_llm_env(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-456")
     monkeypatch.setenv("DEVAGENT_TEST_MODE", "true")
     monkeypatch.setenv("DEVAGENT_MOCK_LLM", "true")
+
+
+@pytest.fixture
+def llm_client_real():
+    """Fixture for real LLM testing with API keys.
+
+    Checks for API keys in environment or .devagent.toml.
+    Skips tests if no API key is available.
+
+    Returns:
+        bool: True if LLM client is available for testing
+    """
+    # Check environment variables
+    api_key = os.environ.get("DEVAGENT_API_KEY") or os.environ.get("OPENAI_API_KEY")
+
+    if not api_key:
+        # Try to load from .devagent.toml
+        config_path = Path.cwd() / ".devagent.toml"
+        if config_path.exists():
+            try:
+                import tomllib
+            except ModuleNotFoundError:
+                import tomli as tomllib
+
+            try:
+                with open(config_path, "rb") as f:
+                    config = tomllib.load(f)
+                    api_key = config.get("api_key")
+            except Exception:
+                pass
+
+    if not api_key:
+        pytest.skip(
+            "No API key available for LLM testing (set DEVAGENT_API_KEY or configure .devagent.toml)"
+        )
+
+    return True
+
+
+@pytest.fixture
+def test_devagent_config(tmp_path):
+    """Create a temporary .devagent.toml config for testing.
+
+    Args:
+        tmp_path: pytest tmp_path fixture
+
+    Returns:
+        Path to the created config file
+    """
+    # Get API key from environment or existing config
+    api_key = os.environ.get("DEVAGENT_API_KEY")
+
+    if not api_key:
+        # Try to load from project .devagent.toml
+        project_config = Path.cwd() / ".devagent.toml"
+        if project_config.exists():
+            try:
+                import tomllib
+            except ModuleNotFoundError:
+                import tomli as tomllib
+
+            try:
+                with open(project_config, "rb") as f:
+                    config_data = tomllib.load(f)
+                    api_key = config_data.get("api_key")
+            except Exception:
+                pass
+
+    if not api_key:
+        api_key = "test-key-placeholder"
+
+    config_content = f"""
+provider = "deepseek"
+model = "deepseek-chat"
+api_key = "{api_key}"
+base_url = "https://api.deepseek.com/v1"
+max_completion_tokens = 4096
+auto_approve_code = true
+"""
+
+    config_path = tmp_path / ".devagent.toml"
+    config_path.write_text(config_content)
+
+    return config_path
+
+
+@pytest.fixture
+def run_devagent_cli():
+    """Enhanced fixture for running DevAgent CLI commands.
+
+    Returns:
+        Function to run CLI commands with config support
+    """
+
+    def run_command(
+        args: list, cwd: Optional[Path] = None, timeout: int = 60
+    ) -> subprocess.CompletedProcess:
+        """Run a DevAgent CLI command.
+
+        Args:
+            args: Command arguments
+            cwd: Working directory (defaults to current)
+            timeout: Command timeout in seconds
+
+        Returns:
+            Completed process result
+        """
+        cmd = ["devagent", *args]
+        if cwd is None:
+            cwd = Path.cwd()
+
+        # Ensure API key is available in environment
+        env = os.environ.copy()
+        if "DEVAGENT_API_KEY" not in env:
+            # Try to load from project .devagent.toml (use original cwd, not the test cwd)
+            # This ensures we find the project config even when running from tmp_path
+            original_cwd = Path(__file__).parent.parent.parent  # Go to project root
+            project_config = original_cwd / ".devagent.toml"
+            if project_config.exists():
+                try:
+                    import tomllib
+                except ModuleNotFoundError:
+                    import tomli as tomllib
+
+                try:
+                    with open(project_config, "rb") as f:
+                        config_data = tomllib.load(f)
+                        api_key = config_data.get("api_key")
+                        if api_key:
+                            env["DEVAGENT_API_KEY"] = api_key
+                except Exception:
+                    pass
+
+        result = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env
+        )
+        return result
+
+    return run_command
+
+
+@pytest.fixture
+def sample_patch():
+    """Create a sample patch for review testing.
+
+    Returns:
+        str: Sample patch content with style violations
+    """
+    return """diff --git a/src/example.py b/src/example.py
+index abc123..def456 100644
+--- a/src/example.py
++++ b/src/example.py
+@@ -1,5 +1,8 @@
+ def calculate(x, y):
+-    return x + y
++    # TODO: fix this
++    result=x+y  # Missing spaces around operator
++    return result
+
+ def process_data(data):
++    # FIXME: hardcoded value
++    threshold = 100
+     return [x for x in data if x > threshold]
+"""
+
+
+@pytest.fixture
+def coding_rule():
+    """Create a sample coding rule for review testing.
+
+    Returns:
+        str: Sample coding rule content
+    """
+    return """# Python Style Guide
+
+## Applies To
+*.py
+
+## Description
+Enforce Python code style best practices.
+
+## Rules
+
+1. **No TODO/FIXME comments**: Remove TODO and FIXME comments before commit
+2. **Proper spacing**: Use spaces around operators (PEP 8)
+3. **No hardcoded values**: Avoid magic numbers
+
+## Examples
+
+### Violation
+```python
+result=x+y  # Missing spaces
+# TODO: fix this
+threshold = 100  # Magic number
+```
+
+### Compliant
+```python
+result = x + y
+# Properly documented
+THRESHOLD_LIMIT = 100  # Named constant
+```
+"""
+
+
+def verify_line_count(file_path: Path) -> int:
+    """Verify line count in a file.
+
+    Args:
+        file_path: Path to file
+
+    Returns:
+        Number of lines in file
+    """
+    if not file_path.exists():
+        return 0
+
+    with open(file_path, "r") as f:
+        return len(f.readlines())
+
+
+def verify_file_list(directory: Path, pattern: str = "*") -> list[str]:
+    """Verify list of files in a directory.
+
+    Args:
+        directory: Path to directory
+        pattern: Glob pattern for matching files
+
+    Returns:
+        List of file names
+    """
+    if not directory.exists():
+        return []
+
+    return sorted([f.name for f in directory.glob(pattern) if f.is_file()])
+
+
+def verify_json_schema(data: dict, required_keys: list[str]) -> bool:
+    """Verify JSON data has required keys.
+
+    Args:
+        data: JSON data dictionary
+        required_keys: List of required keys
+
+    Returns:
+        True if all keys present
+    """
+    return all(key in data for key in required_keys)
 
 
 @pytest.mark.integration

@@ -6,13 +6,17 @@ existing ReAct workflow execution system, enabling real tool usage and LLM calls
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 
 from ai_dev_agent.agents import AgentRegistry
 from ai_dev_agent.agents.base import AgentContext, AgentResult, BaseAgent
-from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.approval.policy import ApprovalPolicy
+from ai_dev_agent.core.utils.state import InMemoryStateStore
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ai_dev_agent.core.utils.config import Settings
 
 
 class AgentExecutor:
@@ -43,25 +47,31 @@ class AgentExecutor:
             AgentResult with execution outcome
         """
         try:
-            # Import here to avoid circular dependencies
-            from uuid import uuid4
-
             from ai_dev_agent.cli.react.executor import _execute_react_assistant
             from ai_dev_agent.cli.utils import get_llm_client
 
-            # Get or create settings
-            settings = self._get_settings()
+            metadata: dict[str, Any] = {}
+            if hasattr(context, "metadata") and isinstance(context.metadata, dict):
+                metadata = context.metadata
 
-            # Get or create Click context
+            cli_state = metadata.get("cli_state")
+            settings = metadata.get("settings") or (
+                cli_state.settings if cli_state else self._get_settings()
+            )
+
+            metadata.setdefault("prompt_loader", getattr(cli_state, "prompt_loader", None))
+            metadata.setdefault("context_builder", getattr(cli_state, "context_builder", None))
+            metadata.setdefault("system_context", getattr(cli_state, "system_context", None))
+            metadata.setdefault("project_context", getattr(cli_state, "project_context", None))
+            metadata.setdefault("parent_ctx", metadata.get("parent_ctx"))
+
             if ctx is None:
-                ctx = self._create_click_context(settings)
+                ctx = self._create_click_context(settings, metadata)
             else:
-                # Even if ctx provided, ensure unique session for nested execution
-                if not isinstance(ctx.obj, dict):
-                    ctx.obj = {}
-                # Force unique session ID to avoid message flow conflicts
-                ctx.obj["_session_id"] = f"delegate-{uuid4()}"
-                ctx.obj["silent_mode"] = True
+                ctx = self._prepare_existing_context(ctx, settings, metadata)
+
+            # Ensure cli_state visible on context object
+            ctx.obj.setdefault("cli_state", cli_state)
 
             # Get or create LLM client
             if cli_client is None:
@@ -96,28 +106,84 @@ class AgentExecutor:
     def _get_settings(self) -> Settings:
         """Get or create Settings instance."""
         if self._settings_cache is None:
-            self._settings_cache = Settings()
+            from ai_dev_agent.core.utils.config import load_settings
+
+            self._settings_cache = load_settings()
         return self._settings_cache
 
-    def _create_click_context(self, settings: Settings) -> click.Context:
+    def _build_context_object(self, settings: Settings, metadata: dict[str, Any]) -> dict[str, Any]:
+        """Construct the context object shared with nested Click contexts."""
+        state_store = metadata.get("state_store")
+        parent_ctx = metadata.get("parent_ctx")
+
+        if state_store is None and parent_ctx is not None and isinstance(parent_ctx.obj, dict):
+            state_store = parent_ctx.obj.get("state")
+
+        if state_store is None:
+            state_store = InMemoryStateStore(getattr(settings, "state_file", None))
+
+        approval_policy = metadata.get("approval_policy")
+        if approval_policy is None:
+            approval_policy = ApprovalPolicy(
+                auto_approve_plan=getattr(settings, "auto_approve_plan", False),
+                auto_approve_code=getattr(settings, "auto_approve_code", False),
+                auto_approve_shell=getattr(settings, "auto_approve_shell", False),
+                auto_approve_adr=getattr(settings, "auto_approve_adr", False),
+                emergency_override=getattr(settings, "emergency_override", False),
+                audit_file=getattr(settings, "audit_approvals", None),
+            )
+
+        ctx_obj = {
+            "settings": settings,
+            "state": state_store,
+            "approval_policy": approval_policy,
+            "llm_client": metadata.get("llm_client"),
+            "prompt_loader": metadata.get("prompt_loader"),
+            "context_builder": metadata.get("context_builder"),
+            "system_context": metadata.get("system_context"),
+            "project_context": metadata.get("project_context"),
+            "cli_state": metadata.get("cli_state"),
+        }
+
+        if parent_ctx is not None and isinstance(parent_ctx.obj, dict):
+            parent_obj = parent_ctx.obj
+            ctx_obj.setdefault("llm_client", parent_obj.get("llm_client"))
+            ctx_obj.setdefault("prompt_loader", parent_obj.get("prompt_loader"))
+            ctx_obj.setdefault("context_builder", parent_obj.get("context_builder"))
+            ctx_obj.setdefault("system_context", parent_obj.get("system_context"))
+            ctx_obj.setdefault("project_context", parent_obj.get("project_context"))
+            ctx_obj.setdefault("cli_state", parent_obj.get("cli_state"))
+            if parent_obj.get("approval_policy") and metadata.get("approval_policy") is None:
+                ctx_obj["approval_policy"] = parent_obj["approval_policy"]
+            if parent_obj.get("state") and metadata.get("state_store") is None:
+                ctx_obj["state"] = parent_obj["state"]
+
+        return ctx_obj
+
+    def _create_click_context(self, settings: Settings, metadata: dict[str, Any]) -> click.Context:
         """Create a Click context for execution."""
         from uuid import uuid4
 
-        from ai_dev_agent.cli.utils import _build_context
-
-        # Create minimal context
-        ctx_obj = _build_context(settings)
-
-        # CRITICAL: Create unique session for nested execution
-        # This prevents message flow conflicts with parent session
+        ctx_obj = self._build_context_object(settings, metadata)
         ctx_obj["_session_id"] = f"delegate-{uuid4()}"
-
-        # Disable status messages for nested execution
         ctx_obj["silent_mode"] = True
 
-        # Create Click context
         ctx = click.Context(click.Command("agent-executor"), obj=ctx_obj)
+        return ctx
 
+    def _prepare_existing_context(
+        self, ctx: click.Context, settings: Settings, metadata: dict[str, Any]
+    ) -> click.Context:
+        """Hydrate an existing Click context with execution metadata."""
+        from uuid import uuid4
+
+        ctx_obj = self._build_context_object(settings, metadata)
+        if not isinstance(ctx.obj, dict):
+            ctx.obj = {}
+        for key, value in ctx_obj.items():
+            ctx.obj.setdefault(key, value)
+        ctx.obj.setdefault("_session_id", f"delegate-{uuid4()}")
+        ctx.obj["silent_mode"] = True
         return ctx
 
     def _build_agent_prompt(

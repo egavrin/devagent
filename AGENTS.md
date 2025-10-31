@@ -34,6 +34,10 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 - **Failing tests**: repair the regression before proceeding; guard compatibility explicitly.
 - **Coverage drop**: pause feature work, add tests (manual or AI-assisted), and restore ≥90 %.
 
+## Anti-Patterns To Avoid
+- **Maze-of-fallback logic**: When resolving files, configuration, or CLI entrypoints, avoid layered "best guess" heuristics. Resolve a single authoritative location (or require the caller to provide one) and fail fast if it is missing. Silent fallbacks mask packaging and deployment bugs.
+- **Heuristic prompt substitutions**: Do not invent inline prompt text when a file is absent—ship the markdown file in `prompts/system/` (and ensure it is included in package data) or stop with a `FileNotFoundError`.
+- **Implicit behavioural switches**: Configuration like settings, prompt paths, or tooling should be explicit. If logic needs to diverge, wire it through a well-documented parameter rather than hidden fallbacks.
 ## Operating Claude Code & Codex CLI
 - **Claude Code quick start**: instruct the agent to read `.devagent/ai_agent_instructions.md` and `docs/DEVELOPMENT.md`, then to execute the feature or bug task with reference checks and TDD. Example session opener:
   ```

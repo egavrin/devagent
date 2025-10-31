@@ -13,7 +13,7 @@ import pytest
 from click.testing import CliRunner
 
 from ai_dev_agent.agents.base import AgentResult
-from ai_dev_agent.cli.commands import cli
+from ai_dev_agent.cli import cli
 from ai_dev_agent.cli.review import (
     _PATCH_CACHE,
     extract_applies_to_pattern,
@@ -140,7 +140,7 @@ All Python files must have proper comments.
             }
 
         monkeypatch.setattr(review_module, "run_review", fake_run_review)
-        monkeypatch.setattr("ai_dev_agent.cli.commands.run_review", fake_run_review)
+        monkeypatch.setattr("ai_dev_agent.cli.review.run_review", fake_run_review)
 
         result = runner.invoke(cli, ["review", sample_patch, "--rule", sample_rule])
 
@@ -165,7 +165,7 @@ All Python files must have proper comments.
             }
 
         monkeypatch.setattr(review_module, "run_review", fake_run_review)
-        monkeypatch.setattr("ai_dev_agent.cli.commands.run_review", fake_run_review)
+        monkeypatch.setattr("ai_dev_agent.cli.review.run_review", fake_run_review)
 
         result = runner.invoke(cli, ["review", sample_patch, "--rule", sample_rule])
 

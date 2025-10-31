@@ -40,6 +40,7 @@ from ai_dev_agent.engine.react.types import (
     StepRecord,
     TaskSpec,
 )
+from ai_dev_agent.prompts.loader import PromptLoader
 from ai_dev_agent.providers.llm import LLMError
 from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session import SessionManager
@@ -51,28 +52,15 @@ from .action_provider import LLMActionProvider
 from .budget_control import PHASE_PROMPTS, AdaptiveBudgetManager, BudgetManager
 
 logger = logging.getLogger(__name__)
+_PROMPT_LOADER = PromptLoader()
+_JSON_ENFORCEMENT_TEMPLATE = _PROMPT_LOADER.load_system_prompt("json_enforcement")
 
 __all__ = ["_execute_react_assistant"]
 
 
 def _build_json_enforcement_instructions(format_schema: dict[str, Any]) -> str:
     """Build strict JSON-only instructions for forced synthesis paths."""
-    return (
-        "CRITICAL OUTPUT REQUIREMENT - READ CAREFULLY:\n"
-        "==============================================\n"
-        "You MUST output ONLY valid JSON. Nothing else.\n\n"
-        "DO NOT include:\n"
-        "- Any explanatory text before or after the JSON\n"
-        "- Markdown code fences (```json)\n"
-        "- Comments or reasoning\n"
-        "- Any natural language\n\n"
-        "START your response with '{'\n"
-        "END your response with '}'\n\n"
-        "If there are NO violations, respond with:\n"
-        '{"violations": [], "summary": {"total_violations": 0, "files_reviewed": N}}\n\n'
-        "Required JSON Schema:\n"
-        f"{json.dumps(format_schema, indent=2)}"
-    )
+    return _JSON_ENFORCEMENT_TEMPLATE.format(format_schema=json.dumps(format_schema, indent=2))
 
 
 def _sanitize_conversation_for_llm(messages: Sequence[Message]) -> list[Message]:

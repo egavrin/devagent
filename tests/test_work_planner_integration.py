@@ -157,8 +157,8 @@ def test_complete_work_planning_workflow():
                 print("\n✓ No more tasks available - plan complete!")
                 break
 
-            print(f"\nIteration {iteration}: Next task is '{next_task.title}'")
-            print(f"  Priority: {next_task.priority.value}")
+                print(f"\nIteration {iteration}: Next task is '{next_task.title}'")
+                print(f"  Priority: {next_task.priority}")
             print(f"  Effort: {next_task.effort_estimate}")
             print("  Dependencies met: ✓")
 

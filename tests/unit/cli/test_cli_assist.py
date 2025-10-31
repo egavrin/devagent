@@ -53,6 +53,7 @@ class AssistHarness:
 def assist_harness(tmp_path: Path, monkeypatch) -> AssistHarness:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
+    monkeypatch.setenv("DEVAGENT_API_KEY", "test-key")
 
     examples = repo_root / "examples"
     examples.mkdir()
@@ -81,13 +82,26 @@ def assist_harness(tmp_path: Path, monkeypatch) -> AssistHarness:
     settings.react_enable_planner = False
 
     monkeypatch.setattr(cli_module, "load_settings", lambda path=None: settings)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.main.load_settings",
+        lambda path=None: settings,
+    )
 
     class DummyClient:
         pass
 
     dummy_client = DummyClient()
     client_ref: dict[str, object] = {"client": dummy_client}
-    monkeypatch.setattr(cli_module, "get_llm_client", lambda ctx: client_ref["client"])
+
+    def fake_get_llm_client(ctx):
+        ctx.obj["llm_client"] = client_ref["client"]
+        return client_ref["client"]
+
+    monkeypatch.setattr(cli_module, "get_llm_client", fake_get_llm_client)
+    monkeypatch.setattr("ai_dev_agent.cli.utils.get_llm_client", fake_get_llm_client)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.commands.query.get_llm_client", fake_get_llm_client
+    )
 
     router_rules: list[Rule] = []
 

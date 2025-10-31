@@ -10,6 +10,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
+from ai_dev_agent.tools import ToolContext
+
 
 class AgentStatus(Enum):
     """Agent execution status."""
@@ -147,6 +149,7 @@ class BaseAgent:
         self.status = AgentStatus.IDLE
         self._registered_capabilities: dict[str, AgentCapability] = {}
         self._current_session: AgentSession | None = None
+        self._settings_cache: Any | None = None
 
         # Default execution methods (can be overridden)
         self._execute_sync: Callable | None = None
@@ -159,6 +162,55 @@ class BaseAgent:
     def has_capability(self, capability_name: str) -> bool:
         """Check if agent has a capability."""
         return capability_name in self._registered_capabilities
+
+    def _resolve_settings(self, context: AgentContext) -> Any:
+        """Resolve a Settings object for tool execution."""
+        metadata = context.metadata or {}
+        settings = metadata.get("settings")
+        if settings is None:
+            cli_state = metadata.get("cli_state")
+            if cli_state is not None:
+                settings = getattr(cli_state, "settings", None)
+        if settings is None:
+            if self._settings_cache is None:
+                from ai_dev_agent.core.utils.config import load_settings
+
+                self._settings_cache = load_settings()
+            settings = self._settings_cache
+        return settings
+
+    def _build_tool_context(
+        self, context: AgentContext, *, extra: dict[str, Any] | None = None
+    ) -> ToolContext:
+        """Construct a ToolContext for registry-backed tool execution."""
+        repo_root = Path(context.working_directory or Path.cwd()).resolve()
+        metadata = context.metadata or {}
+        settings = self._resolve_settings(context)
+        sandbox = metadata.get("sandbox")
+        devagent_config = metadata.get("devagent_config")
+        metrics = metadata.get("metrics_collector")
+
+        extra_payload: dict[str, Any] = {
+            "agent_session_id": context.session_id,
+        }
+        if extra:
+            extra_payload.update(extra)
+        if "shell_session_manager" in metadata:
+            extra_payload.setdefault("shell_session_manager", metadata["shell_session_manager"])
+        if "shell_session_id" in metadata:
+            extra_payload.setdefault("shell_session_id", metadata["shell_session_id"])
+
+        if not extra_payload:
+            extra_payload = {}
+
+        return ToolContext(
+            repo_root=repo_root,
+            settings=settings,
+            sandbox=sandbox,
+            devagent_config=devagent_config,
+            metrics_collector=metrics,
+            extra=extra_payload or None,
+        )
 
     def can_use_tool(self, tool_name: str) -> bool | str:
         """

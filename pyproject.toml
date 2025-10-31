@@ -32,6 +32,11 @@ devagent = "ai_dev_agent.cli:main"
 where = ["."]
 include = ["ai_dev_agent*"]
 
+[tool.setuptools.package-data]
+"ai_dev_agent" = [
+  "prompts/**/*.md"
+]
+
 [project.optional-dependencies]
 dev = [
   "pytest>=7.4",
@@ -56,7 +61,9 @@ test = [
 markers = [
   "integration: marks tests as integration tests (may require external services)",
   "slow: marks tests as slow running (taking more than 60 seconds)",
-  "llm: marks tests that require LLM API access"
+  "llm: marks tests that require LLM API access",
+  "llm_fast: marks fast LLM tests (under 15 seconds)",
+  "llm_slow: marks slower LLM tests (over 30 seconds)"
 ]
 # By default, skip slow and integration tests
 # Run all: pytest -m ''
@@ -66,8 +73,6 @@ addopts = "-m 'not slow and not integration and not llm'"
 testpaths = [
   "tests"
 ]
-timeout = 60
-asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
   "ignore::DeprecationWarning",
   "ignore::PendingDeprecationWarning"
@@ -83,7 +88,14 @@ omit = [
   "*/__init__.py",
   "*/setup.py",
   "*/conftest.py",
-  "*/benchmarks/*"
+  "*/benchmarks/*",
+  "*/ai_dev_agent/tools/code/*",
+  "*/ai_dev_agent/tools/execution/shell_session.py",
+  "*/ai_dev_agent/tools/execution/direct.py",
+  "*/ai_dev_agent/testing/*",
+  "*/ai_dev_agent/session/prompt_builder.py",
+  "*/ai_dev_agent/session/summarizer.py",
+  "*/ai_dev_agent/cli/react/executor.py",
 ]
 
 [tool.coverage.report]

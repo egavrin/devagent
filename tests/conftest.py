@@ -18,7 +18,7 @@ def cli_stub_runtime(monkeypatch):
         ctx.obj["llm_client"] = llm_client
         return llm_client
 
-    monkeypatch.setattr("ai_dev_agent.cli.commands.get_llm_client", fake_get_llm_client)
+    monkeypatch.setattr("ai_dev_agent.cli.utils.get_llm_client", fake_get_llm_client)
 
     executor = MagicMock(
         name="_execute_react_assistant",
@@ -31,7 +31,11 @@ def cli_stub_runtime(monkeypatch):
             "printed_final": False,
         },
     )
-    monkeypatch.setattr("ai_dev_agent.cli.commands._execute_react_assistant", executor)
+    monkeypatch.setattr("ai_dev_agent.cli.react.executor._execute_react_assistant", executor)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant",
+        executor,
+    )
 
     import importlib
 

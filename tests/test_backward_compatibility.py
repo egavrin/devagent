@@ -11,7 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 import ai_dev_agent.cli as cli_module
-import ai_dev_agent.cli.commands as cli_commands
+import ai_dev_agent.cli.review as cli_review
 from ai_dev_agent.cli import cli
 from ai_dev_agent.core.utils.config import Settings
 
@@ -33,35 +33,39 @@ def cli_test_env(
 
     # Ensure CLI loads the predictable settings and stub client.
     monkeypatch.setattr(cli_module, "load_settings", lambda path=None: settings)
-    monkeypatch.setattr(cli_module, "get_llm_client", lambda ctx: object())
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.main.load_settings",
+        lambda path=None: settings,
+    )
+    dummy_client = object()
+    monkeypatch.setattr(cli_module, "get_llm_client", lambda ctx: dummy_client)
+    monkeypatch.setattr("ai_dev_agent.cli.utils.get_llm_client", lambda ctx: dummy_client)
 
     recorded_calls: list[dict[str, Any]] = []
 
-    def fake_execute(
-        ctx: click.Context,
-        client: object,
-        active_settings: Settings,
-        prompt: str,
-        *,
-        use_planning: bool | None = None,
-        system_extension: str | None = None,
-        format_schema: dict[str, Any] | None = None,
-        agent_type: str = "manager",
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+    def fake_execute_query(ctx, state, prompt, force_plan, direct, agent):
+        pending = " ".join(prompt).strip()
+        if not pending:
+            pending = str(ctx.meta.get("_pending_nl_prompt", "")).strip()
+        default_plan = bool(ctx.obj.get("default_use_planning", False))
+        if force_plan:
+            use_planning = True
+        elif direct:
+            use_planning = False
+        else:
+            use_planning = default_plan
         recorded_calls.append(
             {
-                "prompt": prompt,
+                "prompt": pending,
                 "use_planning": use_planning,
-                "system_extension": system_extension,
-                "format_schema": format_schema,
-                "agent_type": agent_type,
+                "system_extension": None,
+                "format_schema": None,
+                "agent_type": agent,
             }
         )
         click.echo("ok")
-        return {"final_message": "ok", "final_json": None, "result": {"status": "success"}}
 
-    monkeypatch.setattr(cli_commands, "_execute_react_assistant", fake_execute)
+    monkeypatch.setattr("ai_dev_agent.cli.runtime.commands.query.execute_query", fake_execute_query)
 
     runner = CliRunner()
     return runner, recorded_calls, settings, repo_root
@@ -105,7 +109,7 @@ class TestBackwardCompatibility:
         rule_file.write_text("# Rule\n", encoding="utf-8")
 
         monkeypatch.setattr(
-            cli_commands,
+            cli_review,
             "run_review",
             lambda ctx, patch_file, rule_file, json_output, settings: {
                 "violations": [],

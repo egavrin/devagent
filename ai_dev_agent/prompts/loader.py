@@ -21,31 +21,36 @@ def _read_prompt_file(path: str) -> str:
 class PromptLoader:
     """Loads and manages markdown-based prompt templates."""
 
+    SENTINEL = Path("system") / "base_context.md"
+
     def __init__(self, prompts_dir: Optional[Path] = None):
-        """Initialize the prompt loader.
-
-        Args:
-            prompts_dir: Directory containing prompt files. Defaults to project prompts/.
-        """
-        if prompts_dir is None:
-            # Find project root (where .git is)
-            current = Path.cwd()
-            while current != current.parent:
-                if (current / ".git").exists():
-                    prompts_dir = current / "prompts"
-                    break
-                current = current.parent
-            else:
-                # Fallback to relative path
-                prompts_dir = Path(__file__).parent.parent.parent / "prompts"
-
-        self.prompts_dir = Path(prompts_dir)
-        if not self.prompts_dir.exists():
-            logger.warning(f"Prompts directory not found: {self.prompts_dir}")
-            self.prompts_dir.mkdir(parents=True, exist_ok=True)
-
+        """Initialise the prompt loader using well-defined prompt directories."""
+        self.prompts_dir = self._resolve_prompts_dir(prompts_dir)
         self._cache: Dict[str, str] = {}
-        logger.info(f"PromptLoader initialized with directory: {self.prompts_dir}")
+        logger.debug("PromptLoader initialised with directory: %s", self.prompts_dir)
+
+    @classmethod
+    def _resolve_prompts_dir(cls, explicit: Optional[Path]) -> Path:
+        """Resolve the directory that contains the markdown prompts."""
+        if explicit is not None:
+            candidate = Path(explicit).resolve()
+            if (candidate / cls.SENTINEL).exists():
+                return candidate
+            raise FileNotFoundError(
+                f"Prompt directory '{candidate}' does not contain {cls.SENTINEL}"
+            )
+
+        package_prompts = Path(__file__).resolve().parent
+        project_prompts = package_prompts.parent.parent / "prompts"
+
+        for candidate in (project_prompts.resolve(), package_prompts):
+            if (candidate / cls.SENTINEL).exists():
+                return candidate
+
+        raise FileNotFoundError(
+            "Unable to locate prompt definitions. "
+            f"Checked: {project_prompts.resolve()} and {package_prompts}"
+        )
 
     def load_prompt(self, prompt_path: str) -> str:
         """Load a prompt from a markdown file.

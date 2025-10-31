@@ -42,7 +42,9 @@ class WorkPlanningAgent:
             WorkPlan with generated tasks
         """
         # Create plan
+        plan_name = (context or {}).get("name") or goal or "Work Plan"
         plan = WorkPlan(
+            name=plan_name,
             goal=goal,
             context=context.get("description", "") if context else "",
         )

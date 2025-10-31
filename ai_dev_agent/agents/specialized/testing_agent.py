@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+
+from ai_dev_agent.tools import registry
 
 from ..base import AgentCapability, AgentContext, AgentResult, BaseAgent
 
@@ -414,30 +416,35 @@ class TestingAgent(BaseAgent):
             if framework == "pytest":
                 cmd = ["pytest", test_path, "-v"]
             else:
-                cmd = ["python", "-m", "unittest", test_path]
+                cmd = [sys.executable, "-m", "unittest", test_path]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            payload = {
+                "cmd": cmd[0],
+                "args": cmd[1:],
+                "timeout_sec": context.metadata.get("test_timeout_sec", 60),
+            }
+            tool_context = self._build_tool_context(context)
+            result = registry.invoke("run", payload, tool_context)
 
-            # Parse output
-            output = result.stdout + result.stderr
+            stdout_tail = result.get("stdout_tail") or ""
+            stderr_tail = result.get("stderr_tail") or ""
+            output = (stdout_tail + "\n" + stderr_tail).strip()
 
-            # Extract test counts
             tests_passed = len(re.findall(r"PASSED", output))
             tests_failed = len(re.findall(r"FAILED", output))
 
-            # Extract duration
             duration_match = re.search(r"in ([\d.]+)s", output)
             duration = float(duration_match.group(1)) if duration_match else 0.0
 
             return {
-                "success": result.returncode == 0,
+                "success": result.get("exit_code", 1) == 0,
                 "tests_passed": tests_passed,
                 "tests_failed": tests_failed,
                 "duration": duration,
                 "output": output,
             }
 
-        except Exception as e:
+        except Exception as e:  # pragma: no cover - defensive guard
             return {"success": False, "error": str(e)}
 
     def ensure_tests_fail_first(

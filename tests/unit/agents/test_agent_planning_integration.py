@@ -57,15 +57,15 @@ class TestTaskAgentMapper:
         mapper = TaskAgentMapper()
 
         # Design keyword
-        task1 = Task(description="Design the authentication system")
+        task1 = Task(title="Design", description="Design the authentication system")
         assert mapper.map_task_to_agent(task1) == "design"
 
         # Test keyword
-        task2 = Task(description="Generate unit tests")
+        task2 = Task(title="Testing", description="Generate unit tests")
         assert mapper.map_task_to_agent(task2) == "test"
 
         # Implement keyword
-        task3 = Task(description="Code the API endpoints")
+        task3 = Task(title="Implement", description="Code the API endpoints")
         assert mapper.map_task_to_agent(task3) == "implement"
 
 
@@ -84,6 +84,7 @@ class TestPlanningIntegration:
         integration = PlanningIntegration()
 
         plan = WorkPlan(
+            name="REST API Plan",
             goal="Build REST API",
             tasks=[
                 Task(title="Design API", tags=["design"]),
@@ -100,6 +101,7 @@ class TestPlanningIntegration:
         integration = PlanningIntegration()
 
         plan = WorkPlan(
+            name="Feature Plan",
             goal="Build feature",
             tasks=[
                 Task(id="1", title="Design", tags=["design"]),
@@ -121,7 +123,9 @@ class TestPlanningIntegration:
         context = AgentContext(session_id="test-exec")
 
         plan = WorkPlan(
-            goal="Simple task", tasks=[Task(id="1", title="Design something", tags=["design"])]
+            name="Simple Plan",
+            goal="Simple task",
+            tasks=[Task(id="1", title="Design something", tags=["design"])],
         )
 
         # Mock the orchestrator
@@ -138,7 +142,7 @@ class TestPlanningIntegration:
         integration = PlanningIntegration()
 
         task = Task(id="task-1", title="Test task", status=TaskStatus.PENDING)
-        plan = WorkPlan(tasks=[task])
+        plan = WorkPlan(name="Status Plan", goal="Track task", tasks=[task])
         integration.load_plan(plan)
 
         # Agent succeeds
@@ -151,8 +155,8 @@ class TestPlanningIntegration:
         """Test handling when agent fails a task."""
         integration = PlanningIntegration()
 
-        task = Task(id="task-1", status=TaskStatus.IN_PROGRESS)
-        plan = WorkPlan(tasks=[task])
+        task = Task(id="task-1", title="Failing task", status=TaskStatus.IN_PROGRESS)
+        plan = WorkPlan(name="Failure Plan", goal="Handle failure", tasks=[task])
         integration.load_plan(plan)
 
         # Agent fails
@@ -169,7 +173,9 @@ class TestPlanningIntegration:
         task2 = Task(id="2", title="Second", dependencies=["1"], status=TaskStatus.PENDING)
         task3 = Task(id="3", title="Third", dependencies=["2"], status=TaskStatus.PENDING)
 
-        plan = WorkPlan(tasks=[task1, task2, task3])
+        plan = WorkPlan(
+            name="Next Task Plan", goal="Determine next task", tasks=[task1, task2, task3]
+        )
         integration.load_plan(plan)
 
         next_task = integration.get_next_task()
@@ -181,11 +187,13 @@ class TestPlanningIntegration:
         integration = PlanningIntegration()
 
         plan = WorkPlan(
+            name="Progress Plan",
+            goal="Track progress",
             tasks=[
-                Task(status=TaskStatus.COMPLETED),
-                Task(status=TaskStatus.IN_PROGRESS),
-                Task(status=TaskStatus.PENDING),
-            ]
+                Task(title="done", status=TaskStatus.COMPLETED),
+                Task(title="doing", status=TaskStatus.IN_PROGRESS),
+                Task(title="todo", status=TaskStatus.PENDING),
+            ],
         )
         integration.load_plan(plan)
 
@@ -213,6 +221,7 @@ class TestAutomatedWorkflow:
         context = AgentContext(session_id="auto-test")
 
         plan = WorkPlan(
+            name="Auto Plan",
             goal="Auto execution test",
             tasks=[
                 Task(id="1", title="Task 1", tags=["design"]),
@@ -244,10 +253,12 @@ class TestAutomatedWorkflow:
         context = AgentContext(session_id="fail-test")
 
         plan = WorkPlan(
+            name="Failure Plan",
+            goal="Handle failure",
             tasks=[
                 Task(id="1", title="Will fail", tags=["design"]),
                 Task(id="2", title="Won't run", tags=["test"], dependencies=["1"]),
-            ]
+            ],
         )
 
         with patch(
@@ -266,10 +277,12 @@ class TestAutomatedWorkflow:
         context = AgentContext(session_id="continue-test")
 
         plan = WorkPlan(
+            name="Continue Plan",
+            goal="Continue despite failures",
             tasks=[
                 Task(id="1", title="Will fail", tags=["design"]),
                 Task(id="2", title="Independent task", tags=["review"]),  # No dependency on task 1
-            ]
+            ],
         )
 
         with (
@@ -299,7 +312,11 @@ class TestAutomatedWorkflow:
         def progress_callback(task_id, status, message):
             progress_updates.append((task_id, status, message))
 
-        plan = WorkPlan(tasks=[Task(id="1", title="Task", tags=["design"])])
+        plan = WorkPlan(
+            name="Callback Plan",
+            goal="Check progress",
+            tasks=[Task(id="1", title="Task", tags=["design"])],
+        )
 
         with patch("ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute") as mock:
             mock.return_value = AgentResult(success=True, output="Done")

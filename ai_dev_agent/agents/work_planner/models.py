@@ -1,18 +1,15 @@
-"""
-Work Planning Data Models
+"""Work Planning Agent Models"""
 
-Defines Task and WorkPlan models with metadata for intelligent planning.
-"""
-
-import uuid
-from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
+
+from pydantic import BaseModel, Field
 
 
 class TaskStatus(str, Enum):
-    """Task lifecycle states"""
+    """Task status enum"""
 
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
@@ -22,185 +19,138 @@ class TaskStatus(str, Enum):
 
 
 class Priority(str, Enum):
-    """Task priority levels"""
+    """Task priority enum"""
 
-    CRITICAL = "critical"  # Blocks everything else
-    HIGH = "high"  # Important, do soon
-    MEDIUM = "medium"  # Normal priority
-    LOW = "low"  # Nice to have
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
 
 
-@dataclass
-class Task:
-    """Individual work item with metadata"""
+class Task(BaseModel):
+    """Task model for work planning."""
 
-    # Identity
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    title: str = ""
-
-    # Content
-    description: str = ""  # Detailed explanation (Aider style)
-    acceptance_criteria: list[str] = field(default_factory=list)
-
-    # Metadata
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    title: str
+    description: str = ""
+    acceptance_criteria: List[str] = Field(default_factory=list)
     status: TaskStatus = TaskStatus.PENDING
     priority: Priority = Priority.MEDIUM
-    effort_estimate: str = "unknown"  # "15m", "1h", "2h", "1d", etc.
-
-    # Relationships
-    dependencies: list[str] = field(default_factory=list)  # Task IDs
-    parent_id: Optional[str] = None  # For subtasks
-    tags: list[str] = field(default_factory=list)
-
-    # Timestamps
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    effort_estimate: str = "unknown"
+    dependencies: List[str] = Field(default_factory=list)
+    parent_id: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    notes: List[str] = Field(default_factory=list)
+    files_involved: List[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
-    # Context
-    notes: list[str] = field(default_factory=list)
-    files_involved: list[str] = field(default_factory=list)
+    class Config:
+        """Pydantic config"""
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization"""
-        return {
-            "id": self.id,
-            "title": self.title,
-            "description": self.description,
-            "acceptance_criteria": self.acceptance_criteria,
-            "status": self.status.value,
-            "priority": self.priority.value,
-            "effort_estimate": self.effort_estimate,
-            "dependencies": self.dependencies,
-            "parent_id": self.parent_id,
-            "tags": self.tags,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "notes": self.notes,
-            "files_involved": self.files_involved,
-        }
+        use_enum_values = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert task to dictionary."""
+        return self.model_dump(mode="json")
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Task":
-        """Create from dictionary"""
-        task = cls(
-            id=data["id"],
-            title=data["title"],
-            description=data["description"],
-            acceptance_criteria=data.get("acceptance_criteria", []),
-            status=TaskStatus(data["status"]),
-            priority=Priority(data["priority"]),
-            effort_estimate=data.get("effort_estimate", "unknown"),
-            dependencies=data.get("dependencies", []),
-            parent_id=data.get("parent_id"),
-            tags=data.get("tags", []),
-            notes=data.get("notes", []),
-            files_involved=data.get("files_involved", []),
-        )
-        task.created_at = datetime.fromisoformat(data["created_at"])
-        task.updated_at = datetime.fromisoformat(data["updated_at"])
-        if data.get("started_at"):
-            task.started_at = datetime.fromisoformat(data["started_at"])
-        if data.get("completed_at"):
-            task.completed_at = datetime.fromisoformat(data["completed_at"])
-        return task
+    def from_dict(cls, data: Dict[str, Any]) -> "Task":
+        """Create task from dictionary."""
+        return cls(**data)
 
 
-@dataclass
-class WorkPlan:
-    """Collection of related tasks for a goal"""
+class WorkPlan(BaseModel):
+    """Work plan model containing multiple tasks."""
 
-    # Identity
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    name: str = ""
-
-    # Content
-    goal: str = ""  # High-level objective
-    context: str = ""  # Background, constraints, requirements
-    tasks: list[Task] = field(default_factory=list)
-
-    # Metadata
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    name: str
+    goal: str
+    context: str = ""
+    tasks: List[Task] = Field(default_factory=list)
     version: int = 1
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
-
-    # Status
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
     is_active: bool = True
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization"""
-        return {
-            "id": self.id,
-            "name": self.name,
-            "goal": self.goal,
-            "context": self.context,
-            "tasks": [task.to_dict() for task in self.tasks],
-            "version": self.version,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "is_active": self.is_active,
-        }
+    class Config:
+        """Pydantic config"""
+
+        use_enum_values = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert work plan to dictionary."""
+        return self.model_dump(mode="json")
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "WorkPlan":
-        """Create from dictionary"""
-        plan = cls(
-            id=data["id"],
-            name=data["name"],
-            goal=data["goal"],
-            context=data["context"],
-            tasks=[Task.from_dict(t) for t in data.get("tasks", [])],
-            version=data.get("version", 1),
-            is_active=data.get("is_active", True),
-        )
-        plan.created_at = datetime.fromisoformat(data["created_at"])
-        plan.updated_at = datetime.fromisoformat(data["updated_at"])
-        return plan
+    def from_dict(cls, data: Dict[str, Any]) -> "WorkPlan":
+        """Create work plan from dictionary."""
+        tasks_data = data.pop("tasks", [])
+        return cls(tasks=[Task.from_dict(task) for task in tasks_data], **data)
 
     def get_task(self, task_id: str) -> Optional[Task]:
-        """Find task by ID"""
+        """Find task by ID."""
         for task in self.tasks:
             if task.id == task_id:
                 return task
         return None
 
     def get_next_task(self) -> Optional[Task]:
-        """Get next task respecting dependencies and priorities"""
-        # Find tasks that are pending and have no incomplete dependencies
+        """Get the next available task based on priority and dependencies."""
         available_tasks = []
+
         for task in self.tasks:
-            if task.status != TaskStatus.PENDING:
+            # Skip tasks that are finished or unavailable
+            if task.status in {TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.BLOCKED}:
                 continue
 
-            # Check if all dependencies are completed
-            deps_met = all(
-                self.get_task(dep_id) and self.get_task(dep_id).status == TaskStatus.COMPLETED
-                for dep_id in task.dependencies
-            )
+            # Check if task has unmet dependencies
+            has_unmet_dependencies = False
+            for dep_id in task.dependencies:
+                dep_task = self.get_task(dep_id)
+                if dep_task is None or dep_task.status != TaskStatus.COMPLETED:
+                    has_unmet_dependencies = True
+                    break
 
-            if deps_met:
+            if not has_unmet_dependencies:
                 available_tasks.append(task)
 
         if not available_tasks:
             return None
 
-        # Sort by priority (critical > high > medium > low)
+        # Sort by priority (critical first, then high, medium, low)
         priority_order = {
             Priority.CRITICAL: 0,
             Priority.HIGH: 1,
             Priority.MEDIUM: 2,
             Priority.LOW: 3,
         }
-        available_tasks.sort(key=lambda t: priority_order[t.priority])
 
+        available_tasks.sort(key=lambda task: priority_order[task.priority])
         return available_tasks[0]
 
     def get_completion_percentage(self) -> float:
-        """Calculate completion percentage"""
+        """Calculate completion percentage of all tasks."""
         if not self.tasks:
             return 0.0
-        completed = sum(1 for t in self.tasks if t.status == TaskStatus.COMPLETED)
-        return (completed / len(self.tasks)) * 100
+
+        completed_count = sum(1 for task in self.tasks if task.status == TaskStatus.COMPLETED)
+        return (completed_count / len(self.tasks)) * 100.0
+
+    def update_task_status(self, task_id: str, status: TaskStatus) -> bool:
+        """Update task status and timestamps."""
+        task = self.get_task(task_id)
+        if not task:
+            return False
+
+        task.status = status
+        task.updated_at = datetime.now()
+
+        if status == TaskStatus.IN_PROGRESS and task.started_at is None:
+            task.started_at = datetime.now()
+        elif status == TaskStatus.COMPLETED and task.completed_at is None:
+            task.completed_at = datetime.now()
+
+        return True

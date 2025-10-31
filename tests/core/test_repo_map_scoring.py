@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
 
 import pytest
 
@@ -12,11 +13,11 @@ def _make_file_info(
     size: int = 200,
     modified_time: float = 1.0,
     language: str = "python",
-    symbols: list[str] | None = None,
-    imports: list[str] | None = None,
-    dependencies: set[str] | None = None,
-    references: dict[str, list[tuple[str, int]]] | None = None,
-    symbols_used: list[str] | None = None,
+    symbols: Optional[List[str]] = None,
+    imports: Optional[List[str]] = None,
+    dependencies: Optional[Set[str]] = None,
+    references: Optional[Dict[str, List[Tuple[str, int]]]] = None,
+    symbols_used: Optional[List[str]] = None,
 ) -> FileInfo:
     path_obj = Path(path)
     return FileInfo(

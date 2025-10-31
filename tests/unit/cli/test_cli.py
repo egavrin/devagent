@@ -1,10 +1,11 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
+import click
 from click.testing import CliRunner
 
 import ai_dev_agent.cli as cli_module
 from ai_dev_agent.cli import cli, infer_task_files
-from ai_dev_agent.cli.router import IntentDecision
 from ai_dev_agent.core.utils.config import Settings
 
 
@@ -76,32 +77,37 @@ def test_cli_rejects_deprecated_list_directory_tool(monkeypatch, tmp_path: Path)
     settings.state_file = repo_root / ".devagent" / "state.json"
     settings.ensure_state_dir()
     settings.api_key = "test"
+
     monkeypatch.setattr(cli_module, "load_settings", lambda path=None: settings)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.main.load_settings",
+        lambda path=None: settings,
+    )
 
     mock_client = object()
     monkeypatch.setattr(cli_module, "get_llm_client", lambda ctx: mock_client)
+    monkeypatch.setattr("ai_dev_agent.cli.utils.get_llm_client", lambda ctx: mock_client)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.commands.query.get_llm_client", lambda ctx: mock_client
+    )
 
-    class DummyRouter:
-        def __init__(self, client, settings_obj, **kwargs) -> None:
-            self.client = client
-            self.settings = settings_obj
-            self.extra = kwargs
-            self.session_id = "dummy-router"
+    executor = MagicMock(return_value={"result": None})
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.react.executor._execute_react_assistant",
+        executor,
+    )
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant",
+        executor,
+    )
 
-        def route(self, prompt: str) -> IntentDecision:
-            assert "дир" in prompt
-            return IntentDecision(
-                tool="list_directory", arguments={"path": "."}, rationale="List repo root"
-            )
-
-    monkeypatch.setattr(cli_module, "IntentRouter", DummyRouter)
     monkeypatch.chdir(repo_root)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["покажи", "содержимое", "директории"])
 
-    assert result.exit_code == 1
-    assert "Intent tool 'list_directory' is not supported yet." in result.output
+    assert result.exit_code == 0
+    executor.assert_called_once()
 
 
 def test_query_command_invokes_router(monkeypatch, tmp_path: Path) -> None:
@@ -113,23 +119,36 @@ def test_query_command_invokes_router(monkeypatch, tmp_path: Path) -> None:
     settings.state_file = repo_root / ".devagent" / "state.json"
     settings.ensure_state_dir()
     settings.api_key = "test"
+
     monkeypatch.setattr(cli_module, "load_settings", lambda path=None: settings)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.main.load_settings",
+        lambda path=None: settings,
+    )
 
-    captures = {}
+    dummy_client = object()
+    monkeypatch.setattr(cli_module, "get_llm_client", lambda ctx: dummy_client)
+    monkeypatch.setattr("ai_dev_agent.cli.utils.get_llm_client", lambda ctx: dummy_client)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.commands.query.get_llm_client", lambda ctx: dummy_client
+    )
 
-    class DummyRouter:
-        def __init__(self, client, settings_obj, **kwargs) -> None:
-            self.client = client
-            self.settings = settings_obj
-            self.extra = kwargs
-            self.session_id = "dummy-router"
+    invocations: dict[str, str] = {}
 
-        def route(self, prompt: str) -> IntentDecision:
-            captures.setdefault("prompt", prompt)
-            return IntentDecision(tool=None, arguments={"text": "ok"})
+    def fake_execute(ctx, client, settings_obj, prompt, **kwargs):
+        invocations["prompt"] = prompt
+        click.echo("ok")
+        return {"result": None}
 
-    monkeypatch.setattr(cli_module, "IntentRouter", DummyRouter)
-    monkeypatch.setattr(cli_module, "get_llm_client", lambda ctx: object())
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.react.executor._execute_react_assistant",
+        fake_execute,
+    )
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant",
+        fake_execute,
+    )
+
     monkeypatch.chdir(repo_root)
 
     runner = CliRunner()
@@ -137,4 +156,4 @@ def test_query_command_invokes_router(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "ok"
-    assert captures["prompt"] == "hello world"
+    assert invocations["prompt"] == "hello world"

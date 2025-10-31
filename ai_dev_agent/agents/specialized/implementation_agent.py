@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import re
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from ai_dev_agent.tools import registry
 
 from ..base import AgentCapability, AgentContext, AgentResult, BaseAgent
 
@@ -220,22 +220,29 @@ class ImplementationAgent(BaseAgent):
             Test verification results
         """
         try:
-            result = subprocess.run(
-                ["pytest", test_path, "-v"], capture_output=True, text=True, timeout=60
-            )
+            payload = {
+                "cmd": "pytest",
+                "args": [test_path, "-v"],
+                "timeout_sec": context.metadata.get("test_timeout_sec", 60),
+            }
+            tool_context = self._build_tool_context(context)
+            result = registry.invoke("run", payload, tool_context)
 
-            output = result.stdout + result.stderr
+            stdout_tail = result.get("stdout_tail") or ""
+            stderr_tail = result.get("stderr_tail") or ""
+            output = (stdout_tail + "\n" + stderr_tail).strip()
+
             tests_passed = len(re.findall(r"PASSED", output))
             tests_failed = len(re.findall(r"FAILED", output))
 
             return {
-                "success": result.returncode == 0,
+                "success": result.get("exit_code", 1) == 0,
                 "tests_passed": tests_passed,
                 "tests_failed": tests_failed,
                 "output": output,
             }
 
-        except Exception as e:
+        except Exception as e:  # pragma: no cover - defensive guard
             return {"success": False, "error": str(e)}
 
     def rollback_changes(

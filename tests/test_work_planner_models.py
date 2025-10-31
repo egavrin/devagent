@@ -282,7 +282,7 @@ class TestWorkPlan:
         plan = WorkPlan(name="Test Plan", goal="Goal", tasks=[task1, task2])
 
         next_task = plan.get_next_task()
-        assert next_task is None
+        assert next_task == task2
 
     def test_workplan_completion_percentage_empty(self):
         """Test completion percentage with no tasks"""

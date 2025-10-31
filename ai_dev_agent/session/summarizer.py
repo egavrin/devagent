@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Protocol
 
 from ai_dev_agent.core.utils.context_budget import summarize_text
+from ai_dev_agent.prompts.loader import PromptLoader
 from ai_dev_agent.providers.llm.base import LLMClient, LLMError, Message
 
 if TYPE_CHECKING:
@@ -44,22 +45,10 @@ class HeuristicConversationSummarizer:
         return summarize_text(formatted, max_chars)
 
 
-DEFAULT_SYSTEM_PROMPT = (
-    "You are an expert senior engineer helping to condense a conversation between "
-    "a developer and their coding assistant. Capture the key goals, approaches, "
-    "decisions, and remaining follow-ups so another engineer can quickly get back "
-    "up to speed. Be precise and avoid embellishment."
-)
+_PROMPT_LOADER = PromptLoader()
 
-DEFAULT_USER_TEMPLATE = (
-    "Summarize the following conversation. Focus on:\n"
-    "- Current objective or task\n"
-    "- Progress made and important commands\n"
-    "- Decisions, constraints, or notable discoveries\n"
-    "- Remaining follow-ups or open questions\n\n"
-    "Write 3-5 bullet points using concise sentences. Keep the response within {max_chars} "
-    "characters. Conversation:\n{conversation}"
-)
+DEFAULT_SYSTEM_PROMPT = _PROMPT_LOADER.load_system_prompt("conversation_summary_system")
+DEFAULT_USER_TEMPLATE = _PROMPT_LOADER.load_system_prompt("conversation_summary_user")
 
 
 class LLMConversationSummarizer:

@@ -112,8 +112,7 @@ def build_system_messages(
             messages.append(Message(role="system", content=text))
 
     if not messages:
-        fallback = "You are a helpful assistant for the devagent CLI tool. Prioritise accurate reasoning and safe tool usage."
-        messages.append(Message(role="system", content=fallback))
+        messages.append(Message(role="system", content=_SYSTEM_FALLBACK_MESSAGE))
 
     return messages
 

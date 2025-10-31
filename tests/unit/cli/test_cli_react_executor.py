@@ -212,7 +212,7 @@ def test_forced_synthesis_enforces_json_schema_instructions() -> None:
     instructions_message = client.captured_conversation[-1]
     assert instructions_message.role == "system"
     instructions_text = instructions_message.content
-    assert "CRITICAL OUTPUT REQUIREMENT" in instructions_text
+    assert "CRITICAL RULES" in instructions_text
     assert json.dumps(VIOLATION_SCHEMA, indent=2) in instructions_text
 
 

@@ -361,7 +361,7 @@ class ContextEnhancer:
                 files_seen.add(pf)
                 files_in_order.append(pf)
 
-        # NEW: Extract bare filenames (e.g., "commands.py", "helpers.h")
+        # NEW: Extract bare filenames (e.g., "main.py", "helpers.h")
         # This catches filenames mentioned without paths
         words = re.findall(r"\b[\w\-]+\b", text)
         for word in words:

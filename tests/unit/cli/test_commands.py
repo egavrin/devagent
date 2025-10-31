@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
-from ai_dev_agent.cli.commands import NaturalLanguageGroup, cli
+from ai_dev_agent.cli.runtime.main import NaturalLanguageGroup, cli
 
 
 def test_natural_language_group_basic():
@@ -18,7 +18,7 @@ def test_cli_help():
     runner = CliRunner()
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
-    assert "AI-assisted development agent CLI" in result.output
+    assert "DevAgent - AI-powered development assistant" in result.output
 
 
 def test_cli_verbose_flag():

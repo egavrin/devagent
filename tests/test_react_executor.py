@@ -24,7 +24,7 @@ class TestJsonEnforcement:
         schema = {"type": "object", "properties": {"result": {"type": "string"}}}
         instructions = _build_json_enforcement_instructions(schema)
 
-        assert "CRITICAL OUTPUT REQUIREMENT" in instructions
+        assert "CRITICAL RULES" in instructions
         assert "JSON" in instructions
         assert json.dumps(schema, indent=2) in instructions
 

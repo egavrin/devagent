@@ -101,7 +101,7 @@ def test_run_display_message_includes_stdout_preview(monkeypatch, tmp_path):
         assert tool_name == RUN
         return {
             "exit_code": 0,
-            "stdout_tail": "277 ai_dev_agent/cli/commands.py",
+            "stdout_tail": "63 ai_dev_agent/cli/__init__.py",
             "stderr_tail": "",
         }
 
@@ -111,19 +111,19 @@ def test_run_display_message_includes_stdout_preview(monkeypatch, tmp_path):
         step_id="S1",
         thought="Count lines",
         tool=RUN,
-        args={"cmd": "wc -l ai_dev_agent/cli/commands.py"},
+        args={"cmd": "wc -l ai_dev_agent/cli/__init__.py"},
     )
 
     observation = invoker(action)
 
     display = observation.display_message or ""
-    assert "277 ai_dev_agent/cli/commands.py" in display
+    assert "63 ai_dev_agent/cli/__init__.py" in display
     assert "(stdout:" in display
     assert (
         observation.formatted_output
-        and "277 ai_dev_agent/cli/commands.py" in observation.formatted_output
+        and "63 ai_dev_agent/cli/__init__.py" in observation.formatted_output
     )
     session = session_manager.get_session(session_id)
     with session.lock:
         tool_messages = [msg for msg in session.history if msg.role == "tool"]
-    assert any("277 ai_dev_agent/cli/commands.py" in (msg.content or "") for msg in tool_messages)
+    assert any("63 ai_dev_agent/cli/__init__.py" in (msg.content or "") for msg in tool_messages)

@@ -1,4 +1,4 @@
-.PHONY: help quality format lint type-check security test coverage clean install pre-commit
+.PHONY: help quality format lint type-check security test coverage clean install pre-commit test-e2e test-llm test-llm-fast test-review test-all
 
 help: ## Show this help message
 	@echo "Available targets:"
@@ -120,3 +120,28 @@ stats: ## Show code statistics
 	@find tests -name "test_*.py" | wc -l
 	@echo "\nTODO comments:"
 	@grep -r "TODO" ai_dev_agent --include="*.py" | wc -l || echo "0"
+
+# E2E/LLM Integration Tests (require API key)
+test-e2e: ## Run all end-to-end LLM tests (~5-10 min)
+	@echo "🚀 Running end-to-end LLM tests..."
+	@echo "⚠️  Requires API key in .devagent.toml or DEVAGENT_API_KEY env var"
+	pytest -m llm tests/integration/test_llm_e2e.py -v
+
+test-llm: test-e2e ## Alias for test-e2e
+
+test-llm-fast: ## Run only fast LLM tests (~2 min)
+	@echo "⚡ Running fast LLM tests..."
+	@echo "⚠️  Requires API key in .devagent.toml or DEVAGENT_API_KEY env var"
+	pytest -m llm_fast tests/integration/test_llm_e2e.py -v
+
+test-review: ## Run review command tests only
+	@echo "🔍 Running review command tests..."
+	pytest tests/integration/test_llm_e2e.py::TestReviewCommand -v -m llm
+
+test-all: ## Run ALL tests (unit + integration + llm)
+	@echo "🧪 Running ALL tests (unit + integration + slow + llm)..."
+	pytest -m '' -v
+
+test-unit: ## Run only unit tests (fast, for pre-commit)
+	@echo "⚡ Running unit tests only..."
+	pytest -x --disable-warnings

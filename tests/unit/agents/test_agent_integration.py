@@ -252,7 +252,7 @@ class TestPlanningIntegration:
         """Test loading a work plan."""
         integration = PlanningIntegration()
 
-        plan = WorkPlan(id="plan-1", goal="Build feature", tasks=[])
+        plan = WorkPlan(id="plan-1", name="Build feature plan", goal="Build feature", tasks=[])
 
         integration.current_plan = plan
 
@@ -409,7 +409,12 @@ class TestEndToEndWorkflow:
             ),
         ]
 
-        plan = WorkPlan(id="integration-plan", goal="Build complete system", tasks=tasks)
+        plan = WorkPlan(
+            id="integration-plan",
+            name="Integration Plan",
+            goal="Build complete system",
+            tasks=tasks,
+        )
 
         integration.current_plan = plan
 

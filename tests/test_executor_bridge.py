@@ -34,6 +34,7 @@ class TestAgentExecutor:
         context = MagicMock(spec=AgentContext)
         context.session_id = "test_session_123"
         context.agent_id = "test_agent"
+        context.metadata = {}
         return context
 
     def test_init(self, executor):
@@ -52,28 +53,22 @@ class TestAgentExecutor:
         settings2 = executor._get_settings()
         assert settings1 is settings2
 
-    @patch("ai_dev_agent.agents.specialized.executor_bridge.click.Context")
-    @patch("ai_dev_agent.cli.utils._build_context")
-    def test_create_click_context(self, mock_build_context, mock_click_ctx, executor):
-        """Test Click context creation."""
-        mock_settings = MagicMock(spec=Settings)
-        mock_ctx_obj = {"test": "context"}
-        mock_build_context.return_value = mock_ctx_obj
+    def test_create_click_context(self, executor):
+        """Test Click context creation using metadata."""
+        settings = Settings()
+        metadata = {
+            "system_context": {"os": "TestOS"},
+            "project_context": {"workspace": "repo"},
+        }
 
-        executor._create_click_context(mock_settings)
+        ctx = executor._create_click_context(settings, metadata)
 
-        # Verify context was built
-        mock_build_context.assert_called_once_with(mock_settings)
-
-        # Verify session ID was set
-        assert "_session_id" in mock_ctx_obj
-        assert mock_ctx_obj["_session_id"].startswith("delegate-")
-
-        # Verify silent mode was enabled
-        assert mock_ctx_obj["silent_mode"] is True
-
-        # Verify Click context was created
-        mock_click_ctx.assert_called_once()
+        assert isinstance(ctx, click.Context)
+        assert ctx.obj["settings"] is settings
+        assert ctx.obj["system_context"]["os"] == "TestOS"
+        assert ctx.obj["project_context"]["workspace"] == "repo"
+        assert ctx.obj["silent_mode"] is True
+        assert ctx.obj["_session_id"].startswith("delegate-")
 
     def test_build_agent_prompt_with_spec(self, executor, mock_agent):
         """Test building agent prompt with agent spec."""

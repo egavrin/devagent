@@ -245,7 +245,7 @@ class BenchmarkRunner:
             cmd = [
                 sys.executable,
                 "-m",
-                "ai_dev_agent.cli.commands",
+                "ai_dev_agent.cli",
                 "--config",
                 str(temp_config),
                 "query",

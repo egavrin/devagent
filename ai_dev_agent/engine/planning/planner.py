@@ -10,55 +10,15 @@ from pathlib import Path
 from uuid import uuid4
 
 from ai_dev_agent.core.utils.logger import get_logger
+from ai_dev_agent.prompts.loader import PromptLoader
 from ai_dev_agent.providers.llm import LLMClient, LLMConnectionError, LLMError, LLMTimeoutError
 from ai_dev_agent.session import SessionManager, build_system_messages
 
 LOGGER = get_logger(__name__)
 
-SYSTEM_PROMPT = """You are the planning strategist for DevAgent. Build executable engineering plans that
-balance speed with reliability.
-
-Key responsibilities:
-- Classify task complexity (simple, medium, complex) using the goal, repository metrics, and
-  dependency risk. Match the number of steps accordingly (simple: 2-5, medium: 6-10, complex: 8-15).
-- Leverage repository architecture, code conventions, and prior outcomes to suggest proven
-  implementation patterns.
-- Anticipate integration, testing, and rollout tasks. Include validation or rollback steps when risk
-  is non-trivial.
-- Think through the problem step-by-step, but only output the final JSON plan.
-- Respond with JSON only—no extra commentary, code blocks, or markdown fences."""
-
-
-USER_TEMPLATE = """Goal:
-{goal}
-
-Context Snapshot:
-{context_block}
-
-Planning Requirements:
-- Produce an end-to-end sequence that delivers the goal with measurable checkpoints.
-- Highlight any setup, validation, or follow-up tasks needed to ship safely.
-- Reference relevant repository patterns or modules when naming tasks.
-- Surface assumptions that must be validated before execution.
-- Flag tasks requiring coordination (e.g., migrations, cross-team approvals).
-
-Output strictly valid JSON matching:
-{{
-  "summary": "One-line summary",
-  "complexity": "simple|medium|complex",
-  "success_criteria": ["List concrete completion checks"],
-  "tasks": [
-    {{
-      "step_number": 1,
-      "title": "Short actionable title",
-      "description": "What to do (1-2 sentences)",
-      "dependencies": [],
-      "deliverables": [],
-      "risk_mitigation": "Optional notes"
-    }}
-  ]
-}}
-"""
+_PROMPT_LOADER = PromptLoader()
+SYSTEM_PROMPT = _PROMPT_LOADER.load_system_prompt("planner_system")
+USER_TEMPLATE = _PROMPT_LOADER.load_system_prompt("planner_user")
 
 JSON_PATTERN = re.compile(r"```json\s*(?P<json>{.*?})\s*```", re.DOTALL)
 
