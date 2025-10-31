@@ -143,12 +143,14 @@ class Settings:
 
     # Playbook and dynamic instructions settings removed - features deleted
     # Review settings
-    review_max_files_per_chunk: int = 10
-    review_max_hunks_per_chunk: int = 8
-    review_max_lines_per_chunk: int = 320
-    review_context_pad_lines: int = 20
-    review_context_max_lines: int = 160
-    review_context_max_total_lines: int = 320
+    review_max_files_per_chunk: int = 50  # Increased from 10 for fewer LLM calls
+    review_max_hunks_per_chunk: int = 50  # Increased from 8 to handle larger files
+    review_max_lines_per_chunk: int = 1500  # Increased from 320 to use model capacity
+    review_token_budget: int = 80_000  # Token budget for chunk sizing (increased to reduce splits)
+    review_chunk_overlap_lines: int = 100  # Lines to overlap between chunks (quality improvement)
+    review_context_pad_lines: int = 40  # Lines of context before/after hunks (quality improvement)
+    review_context_max_lines: int = 600  # Max lines per context item (quality improvement)
+    review_context_max_total_lines: int = 1500  # Total context budget (quality improvement)
 
     def ensure_state_dir(self) -> None:
         """Ensure the directory for the state file exists."""

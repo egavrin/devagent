@@ -373,8 +373,19 @@ def _chunk_patch_files(
     files: Sequence[Mapping[str, Any]],
     max_files_per_chunk: int = 10,
     max_lines_per_chunk: int = 0,
+    overlap_lines: int = 0,
 ) -> list[list[Mapping[str, Any]]]:
-    """Split patch files into manageable chunks."""
+    """Split patch files into manageable chunks with optional overlap.
+
+    Args:
+        files: Sequence of file entries to chunk
+        max_files_per_chunk: Maximum files per chunk
+        max_lines_per_chunk: Maximum lines per chunk
+        overlap_lines: Number of lines to overlap between chunks (for quality)
+
+    Returns:
+        List of file chunks, with overlap if specified
+    """
     if not files:
         return []
 
@@ -401,7 +412,58 @@ def _chunk_patch_files(
     if current_chunk:
         chunked.append(current_chunk)
 
+    # Apply overlap between chunks if requested and there are multiple chunks
+    if overlap_lines > 0 and len(chunked) > 1:
+        chunked = _apply_chunk_overlap(chunked, overlap_lines)
+
     return chunked
+
+
+def _apply_chunk_overlap(
+    chunks: list[list[Mapping[str, Any]]],
+    overlap_lines: int,
+) -> list[list[Mapping[str, Any]]]:
+    """Apply overlap between consecutive chunks for quality improvement.
+
+    Takes files from the end of chunk N and adds them to the beginning of chunk N+1,
+    ensuring violations near boundaries aren't missed.
+
+    Args:
+        chunks: List of file entry chunks
+        overlap_lines: Target lines to overlap between chunks
+
+    Returns:
+        Chunks with overlap applied
+    """
+    if len(chunks) <= 1 or overlap_lines <= 0:
+        return chunks
+
+    overlapped: list[list[Mapping[str, Any]]] = [chunks[0]]  # First chunk unchanged
+
+    for i in range(1, len(chunks)):
+        prev_chunk = chunks[i - 1]
+        current_chunk = list(chunks[i])  # Copy to avoid mutation
+
+        # Collect files from end of previous chunk until we have ~overlap_lines
+        overlap_files: list[Mapping[str, Any]] = []
+        accumulated_lines = 0
+
+        for file_entry in reversed(prev_chunk):
+            file_lines = _estimate_entry_lines(file_entry)
+            if accumulated_lines + file_lines > overlap_lines and overlap_files:
+                break  # Stop if we've accumulated enough
+            overlap_files.insert(0, file_entry)
+            accumulated_lines += file_lines
+
+        # Prepend overlap files to current chunk (avoiding duplicates)
+        current_paths = {f.get("path") for f in current_chunk if f.get("path")}
+        for overlap_file in overlap_files:
+            if overlap_file.get("path") not in current_paths:
+                current_chunk.insert(0, overlap_file)
+
+        overlapped.append(current_chunk)
+
+    return overlapped
 
 
 def _compute_dynamic_line_limit(
@@ -410,18 +472,23 @@ def _compute_dynamic_line_limit(
     files: Sequence[Mapping[str, Any]],
 ) -> int:
     """Derive a chunk line limit based on rule size and patch impact."""
-    DEFAULT_LINES_LIMIT = 320
+    DEFAULT_LINES_LIMIT = 1500  # Increased from 320 to use model capacity better
     base_limit = configured_limit if configured_limit > 0 else DEFAULT_LINES_LIMIT
 
     total_line_impact = sum(_estimate_entry_lines(entry) for entry in files)
     rule_token_estimate = max(len(rule_text) // 4, 0)
 
-    if rule_token_estimate > 9_000 or total_line_impact > 800:
-        base_limit = min(base_limit, 80)
-    elif rule_token_estimate > 6_000 or total_line_impact > 600:
-        base_limit = min(base_limit, 120)
-    elif rule_token_estimate > 4_000 or total_line_impact > 400:
-        base_limit = min(base_limit, 160)
+    # Combined token estimate (rule + patch, assuming ~2 tokens per line)
+    combined_tokens = rule_token_estimate + (total_line_impact * 2)
+
+    # Only shrink if approaching model's 200K context window
+    # Use 75% of context (150K tokens) as safe threshold
+    if combined_tokens > 150_000:
+        base_limit = min(base_limit, 400)
+    elif combined_tokens > 100_000:
+        base_limit = min(base_limit, 800)
+    elif combined_tokens > 75_000:
+        base_limit = min(base_limit, 1200)
 
     if configured_limit <= 0 and base_limit == DEFAULT_LINES_LIMIT:
         return 0
@@ -434,18 +501,22 @@ def _compute_dynamic_file_limit(
     files: Sequence[Mapping[str, Any]],
 ) -> int:
     """Derive a file-per-chunk limit considering rule size and patch footprint."""
-    DEFAULT_FILES_LIMIT = 10
+    DEFAULT_FILES_LIMIT = 50  # Increased from 10 to reduce number of chunks
     base_limit = configured_limit if configured_limit > 0 else DEFAULT_FILES_LIMIT
 
     total_line_impact = sum(_estimate_entry_lines(entry) for entry in files)
     rule_token_estimate = max(len(rule_text) // 4, 0)
 
-    if rule_token_estimate > 9_000 or total_line_impact > 800:
-        base_limit = min(base_limit, 2)
-    elif rule_token_estimate > 6_000 or total_line_impact > 600:
-        base_limit = min(base_limit, 4)
-    elif rule_token_estimate > 4_000 or total_line_impact > 400:
-        base_limit = min(base_limit, 6)
+    # Combined token estimate (rule + patch, assuming ~2 tokens per line)
+    combined_tokens = rule_token_estimate + (total_line_impact * 2)
+
+    # Only shrink for truly massive contexts approaching 200K token limit
+    if combined_tokens > 150_000:
+        base_limit = min(base_limit, 10)
+    elif combined_tokens > 100_000:
+        base_limit = min(base_limit, 20)
+    elif combined_tokens > 75_000:
+        base_limit = min(base_limit, 35)
 
     if configured_limit <= 0 and base_limit == DEFAULT_FILES_LIMIT:
         return len(files) or 1
@@ -639,28 +710,77 @@ def _build_review_prompt(
 ) -> str:
     context_block = ""
     if context_section:
-        context_block = f"\nAdditional Context:\n{context_section}\n"
-    return f"""Review the patch file {patch_rel} against the coding rule provided below.
+        context_block = f"\n## Additional Source Context\n\n{context_section}\n"
+    return f"""# Code Review Task: {patch_rel}
 
-Follow this workflow:
-1. Review the rule below to understand:
-   - Rule title and description
-   - "Applies To" pattern (file scope)
-   - Examples of violations and compliant code
+You are reviewing a patch file against a specific coding rule. Your task is to identify violations with precision and accuracy.
 
-2. Examine the pre-parsed Patch Dataset included at the end of this message.
-   - Each file shows only added lines with their final line numbers.
-   - Use this dataset as the single source of truth for code under review.
+## Critical Instructions
 
-3. For each added line in scope:
-   - Check if it violates the rule
-   - Record file path, line number, and violation description
+1. **USE ONLY THE PRE-PARSED PATCH DATASET BELOW** as your source of truth
+   - Do NOT attempt to read files using tools
+   - Do NOT guess at line numbers or content
+   - All line numbers and code snippets MUST come from the "ADDED LINES" sections
 
-4. Output the results in the required JSON format with all violations found.
+2. **EXACT MATCHING REQUIRED**
+   - The `file` field must exactly match the file path shown in the dataset
+   - The `line` field must exactly match a line number from "ADDED LINES"
+   - The `code_snippet` field must exactly match the content from that line (strip whitespace for comparison)
 
+3. **OUTPUT FORMAT**
+   - Return valid JSON conforming to the schema provided
+   - Each violation MUST reference an actual added line from the dataset
+   - If no violations found, return empty violations array
+
+## Review Workflow
+
+### Step 1: Understand the Rule
+- Read the rule's title, description, and scope
+- Study the "Detect" section to understand what constitutes a violation
+- Review examples of BAD and GOOD code patterns
+
+### Step 2: Analyze the Patch Dataset
+- The dataset shows files with their added/removed lines
+- Focus ONLY on "ADDED LINES" sections (marked with +)
+- Note the exact line numbers next to each added line
+
+### Step 3: Identify Violations
+For each added line:
+- Check if it matches the violation pattern described in the rule
+- Verify the file matches the rule's "Applies To" pattern
+- If it's a violation:
+  * Record the EXACT file path from the dataset
+  * Record the EXACT line number from the "ADDED LINES" section
+  * Copy the EXACT code snippet (you may strip leading/trailing whitespace)
+  * Write a clear, actionable message using the rule's template
+
+### Step 4: Validate Your Output
+Before submitting:
+- Verify each violation references an actual line from "ADDED LINES"
+- Confirm line numbers match exactly
+- Ensure file paths are correct
+- Check that code snippets match (ignoring whitespace)
+
+## Common Mistakes to Avoid
+
+❌ **DON'T** report violations for lines not in the patch
+❌ **DON'T** use line numbers from context or removed lines
+❌ **DON'T** guess or estimate line numbers
+❌ **DON'T** read files with tools - use only the dataset below
+❌ **DON'T** report the same violation multiple times
+
+✅ **DO** use exact line numbers from "ADDED LINES" sections
+✅ **DO** copy exact file paths from the dataset
+✅ **DO** match code snippets precisely
+✅ **DO** return empty violations if no issues found
 {context_block}
-Patch Dataset:
+## Patch Dataset (Your Single Source of Truth)
+
 {patch_dataset}
+
+---
+
+Now review the patch and output your findings in the required JSON format.
 """
 
 
@@ -738,7 +858,7 @@ def run_review(
             key=lambda entry: (str(entry.get("path", "")), entry.get("_chunk_index", 0)),
         )
 
-        max_lines_setting = getattr(settings, "review_max_lines_per_chunk", 320)
+        max_lines_setting = getattr(settings, "review_max_lines_per_chunk", 1500)
         dynamic_line_limit = _compute_dynamic_line_limit(
             max_lines_setting,
             rule_content,
@@ -747,7 +867,7 @@ def run_review(
 
         expanded_files = _split_large_file_entries(
             original_files,
-            max_hunks_per_group=getattr(settings, "review_max_hunks_per_chunk", 8),
+            max_hunks_per_group=getattr(settings, "review_max_hunks_per_chunk", 50),
             max_lines_per_group=dynamic_line_limit if dynamic_line_limit > 0 else max_lines_setting,
         )
         expanded_files = sorted(
@@ -755,7 +875,7 @@ def run_review(
             key=lambda entry: (str(entry.get("path", "")), entry.get("_chunk_index", 0)),
         )
 
-        max_files_per_chunk_setting = getattr(settings, "review_max_files_per_chunk", 10)
+        max_files_per_chunk_setting = getattr(settings, "review_max_files_per_chunk", 50)
         max_files_per_chunk = _compute_dynamic_file_limit(
             max_files_per_chunk_setting,
             rule_content,
@@ -763,22 +883,25 @@ def run_review(
         )
         max_lines_per_chunk = dynamic_line_limit
 
+        overlap_lines = getattr(settings, "review_chunk_overlap_lines", 100)
         chunks = _chunk_patch_files(
             expanded_files,
             max_files_per_chunk=max_files_per_chunk,
             max_lines_per_chunk=max_lines_per_chunk,
+            overlap_lines=overlap_lines,
         )
         max(1, len(chunks))
         use_chunking = len(chunks) > 1
 
+        # Build context orchestrator (will be used per-chunk to avoid budget exhaustion)
         context_orchestrator = ContextOrchestrator(
             [
                 SourceContextProvider(
-                    pad_lines=getattr(settings, "review_context_pad_lines", 20),
-                    max_lines_per_item=getattr(settings, "review_context_max_lines", 160),
+                    pad_lines=getattr(settings, "review_context_pad_lines", 40),
+                    max_lines_per_item=getattr(settings, "review_context_max_lines", 600),
                 )
             ],
-            max_total_lines=getattr(settings, "review_context_max_total_lines", 320),
+            max_total_lines=getattr(settings, "review_context_max_total_lines", 1500),
         )
 
         def build_fallback_summary(
@@ -876,6 +999,7 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
             if chunk_index is not None and total_expected_chunks and total_expected_chunks > 1:
                 chunk_header = f"(Chunk {chunk_index + 1} of {total_expected_chunks})\n\n"
 
+            # Build context per-chunk to ensure each chunk gets its own context budget
             context_section = context_orchestrator.build_section(
                 settings.workspace_root,
                 chunk_files,
@@ -983,7 +1107,7 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
                 filter_pattern = None
                 compiled_pattern = None
 
-        token_budget = getattr(settings, "review_token_budget", 12_000)
+        token_budget = getattr(settings, "review_token_budget", 80_000)
         chunks = _refine_chunks_for_token_budget(
             chunks,
             rule_text=rule_content,
@@ -1017,6 +1141,7 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
             return {"violations": [], "summary": summary}
 
         aggregated_violations: list[dict[str, Any]] = []
+        seen_violations: set[tuple[str, int]] = set()  # Track (file, line) to deduplicate overlaps
         files_reviewed: set[str] = set()
         last_summary: dict[str, Any] | None = None
         unverified_chunks: list[int] = []
@@ -1058,7 +1183,19 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
                     if isinstance(entry.get("path"), str)
                 }
 
-            aggregated_violations.extend(validated["violations"])
+            # Deduplicate violations from overlapped regions (file + line uniqueness)
+            for violation in validated["violations"]:
+                file_path = violation.get("file", "")
+                line_number = violation.get("line", 0)
+                message_text = violation.get("message", "")
+                severity_value = violation.get("severity", "")
+                change_type = violation.get("change_type", "")
+                violation_key = (file_path, line_number, severity_value, message_text, change_type)
+
+                if violation_key not in seen_violations:
+                    seen_violations.add(violation_key)
+                    aggregated_violations.append(violation)
+
             files_reviewed.update(parsed_files)
             last_summary = validated["summary"]
 

@@ -83,6 +83,16 @@ class _RecordingClient:
         )
 
 
+class _FailOnCompleteClient(_RecordingClient):
+    def __init__(self, response: str | None = None) -> None:
+        super().__init__(response=response)
+        self.complete_called = False
+
+    def complete(self, conversation: Sequence[Message], *, temperature: float = 0.1) -> str:
+        self.complete_called = True
+        raise AssertionError("complete should not be called during intermediate skip")
+
+
 class _MockSessionManager:
     def __init__(self) -> None:
         self._base_conversation = [
@@ -110,10 +120,17 @@ def test_sanitize_conversation_for_llm_removes_orphaned_tool_messages():
 
 
 class _ForcedStopActionProvider:
-    def __init__(self, session_manager: _MockSessionManager, client: _RecordingClient) -> None:
+    def __init__(
+        self,
+        session_manager: _MockSessionManager,
+        client: _RecordingClient,
+        *,
+        last_response_text: str | None = None,
+    ) -> None:
         self.session_manager = session_manager
         self.session_id = "session-1"
         self.client = client
+        self._last_response_text = last_response_text
 
     def update_phase(
         self, phase: str, *, is_final: bool = False
@@ -122,6 +139,9 @@ class _ForcedStopActionProvider:
 
     def __call__(self, task: TaskSpec, history: Sequence[Any]) -> ActionRequest:
         raise StopIteration("No tool calls - synthesis complete")
+
+    def last_response_text(self) -> str | None:
+        return self._last_response_text
 
 
 class _NoopToolInvoker:
@@ -214,6 +234,59 @@ def test_forced_synthesis_enforces_json_schema_instructions() -> None:
     instructions_text = instructions_message.content
     assert "CRITICAL RULES" in instructions_text
     assert json.dumps(VIOLATION_SCHEMA, indent=2) in instructions_text
+
+
+def test_skip_intermediate_synthesis_uses_existing_json_without_forced_call() -> None:
+    manager = BudgetManager(1)
+    client = _FailOnCompleteClient()
+    session_manager = _MockSessionManager()
+    action_provider = _ForcedStopActionProvider(
+        session_manager,
+        client,
+        last_response_text=json.dumps(
+            {
+                "violations": [],
+                "summary": {
+                    "total_violations": 0,
+                    "files_reviewed": 0,
+                    "rule_name": "TEST_RULE",
+                },
+            }
+        ),
+    )
+    executor = BudgetAwareExecutor(
+        manager,
+        format_schema=VIOLATION_SCHEMA,
+        skip_intermediate_synthesis=True,
+    )
+    task = TaskSpec(identifier="T-skip", goal="Force synthesis", category="assist")
+
+    result = executor.run(task, action_provider, _NoopToolInvoker())
+
+    assert result.status == "success"
+    assert not client.complete_called
+
+
+def test_skip_intermediate_synthesis_still_forces_when_json_missing() -> None:
+    manager = BudgetManager(1)
+    client = _RecordingClient(response="forced-result")
+    session_manager = _MockSessionManager()
+    action_provider = _ForcedStopActionProvider(
+        session_manager,
+        client,
+        last_response_text=None,
+    )
+    executor = BudgetAwareExecutor(
+        manager,
+        format_schema=VIOLATION_SCHEMA,
+        skip_intermediate_synthesis=True,
+    )
+    task = TaskSpec(identifier="T-force", goal="Force synthesis", category="assist")
+
+    result = executor.run(task, action_provider, _NoopToolInvoker())
+
+    assert result.status == "success"
+    assert client.captured_conversation is not None
 
 
 def test_failure_detector_appends_should_give_up_message(monkeypatch) -> None:

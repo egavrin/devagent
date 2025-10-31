@@ -142,12 +142,16 @@ class BudgetAwareExecutor(ReactiveExecutor):
     """Thin wrapper around the engine executor that honours the CLI budget manager."""
 
     def __init__(
-        self, budget_manager: BudgetManager, format_schema: dict[str, Any] | None = None
+        self,
+        budget_manager: BudgetManager,
+        format_schema: dict[str, Any] | None = None,
+        skip_intermediate_synthesis: bool = False,
     ) -> None:
         super().__init__(evaluator=None)
         self.budget_manager = budget_manager
         self.failure_detector = FailurePatternDetector()
         self.format_schema = format_schema
+        self.skip_intermediate_synthesis = skip_intermediate_synthesis
 
     def _invoke_tool(self, invoker, action):
         """Override to add failure pattern detection."""
@@ -212,6 +216,20 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 # The LLM stopped without calling a tool (usually submit_final_answer)
                 # We need to force a synthesis response to give the user a comprehensive answer
                 # This can happen in the final iteration OR if the LLM stops early
+
+                # Skip synthesis if a valid response already exists (JSON when required)
+                if self.skip_intermediate_synthesis:
+                    latest_response = action_provider.last_response_text()
+                    if latest_response:
+                        if not self.format_schema:
+                            stop_condition = "provider_stop"
+                            natural_stop = True
+                            break
+                        extracted_json = _extract_json(latest_response)
+                        if extracted_json is not None:
+                            stop_condition = "provider_stop"
+                            natural_stop = True
+                            break
 
                 # Always force a synthesis response when LLM stops
                 # Get the LLM to produce a text response without tools
@@ -334,8 +352,7 @@ class BudgetAwareExecutor(ReactiveExecutor):
         last_observation = last_record.observation if last_record else None
 
         if last_observation and last_observation.tool != "submit_final_answer":
-
-            # Force synthesis response
+            # Force synthesis response to ensure a final answer exists
             try:
                 # Get the conversation and add synthesis instructions
                 conversation = action_provider.session_manager.compose(action_provider.session_id)
@@ -926,7 +943,11 @@ def _execute_react_assistant(
         llm_client=client,
     )
 
-    executor = BudgetAwareExecutor(budget_manager, format_schema=format_schema)
+    # For review agent, skip intermediate synthesis to save time (Phase 2 optimization)
+    skip_synthesis = agent_type == "reviewer" and format_schema is not None
+    executor = BudgetAwareExecutor(
+        budget_manager, format_schema=format_schema, skip_intermediate_synthesis=skip_synthesis
+    )
 
     synthesizer = ContextSynthesizer()
     files_discovered: set[str] = set()
@@ -1157,9 +1178,12 @@ def _execute_react_assistant(
         is_incomplete = False
         if candidate_message:
             stripped = candidate_message.strip()
-            # Message looks incomplete if it's very short, ends with ":", or ends mid-sentence
-            if len(stripped) < 50 or stripped.endswith(":") or stripped.endswith("..."):
-                is_incomplete = True
+            if format_schema:
+                is_incomplete = _extract_json(stripped) is None
+            else:
+                # Message looks incomplete if it's very short, ends with ":", or ends mid-sentence
+                if len(stripped) < 50 or stripped.endswith(":") or stripped.endswith("..."):
+                    is_incomplete = True
 
         # Use the candidate if it looks complete, otherwise we'll use auto_generate_summary later
         if candidate_message and not is_incomplete:
@@ -1168,6 +1192,12 @@ def _execute_react_assistant(
         if not silent_mode and os.environ.get("DEVAGENT_DEBUG"):
             logger.debug(f"  is_incomplete: {is_incomplete}")
             logger.debug(f"  Using as final_message: {final_message is not None}")
+
+    # As a final fallback in JSON mode, reuse the last response even if it appeared incomplete
+    if format_schema and not final_message:
+        fallback = action_provider.last_response_text()
+        if fallback:
+            final_message = fallback.strip()
 
     final_json: dict[str, Any] | None = None
     printed_final = False
