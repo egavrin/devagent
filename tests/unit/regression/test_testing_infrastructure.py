@@ -27,6 +27,7 @@ from ai_dev_agent.testing.mocks import (
     MockDatabase,
     MockFileSystem,
     MockGitRepo,
+    MockHTTPClient,
     MockLLM,
     create_mock_agent,
     create_mock_tool,
@@ -336,6 +337,23 @@ class TestMockLLM:
         assert len(chunks) > 0
         assert chunks[-1]["finish_reason"] == "stop"
 
+    @pytest.mark.asyncio
+    async def test_mock_llm_additional_branches_and_async(self):
+        """Test additional prompt branches and async API."""
+        llm = MockLLM(default_response="fallback response")
+
+        review = llm.complete("Please review the code")
+        plan = llm.complete("Plan the roadmap")
+        fix = llm.complete("Fix this regression")
+        fallback = llm.complete("Say hello")
+        async_result = await llm.aComplete("async test")
+
+        assert "review" in review["content"].lower()
+        assert "analyze requirements" in plan["content"].lower()
+        assert "fixed the error" in fix["content"].lower()
+        assert fallback["content"] == "fallback response"
+        assert "def test_example" in async_result["content"]
+
 
 class TestMockFileSystem:
     """Test MockFileSystem implementation."""
@@ -387,6 +405,18 @@ class TestMockFileSystem:
         fs.delete("/test.txt")
         assert not fs.exists("/test.txt")
 
+    def test_mock_filesystem_list_dir_invalid(self):
+        """Test list_dir on invalid path."""
+        fs = MockFileSystem()
+        with pytest.raises(NotADirectoryError):
+            fs.list_dir("/unknown")
+
+    def test_mock_filesystem_delete_missing(self):
+        """Test delete raises when file missing."""
+        fs = MockFileSystem()
+        with pytest.raises(FileNotFoundError):
+            fs.delete("/missing.txt")
+
 
 class TestMockGitRepo:
     """Test MockGitRepo implementation."""
@@ -436,6 +466,34 @@ class TestMockGitRepo:
 
         log = repo.log(n=10)
         assert len(log) == 2
+
+    def test_mock_git_checkout_invalid_branch(self):
+        """Test checkout invalid branch raises."""
+        repo = MockGitRepo()
+        with pytest.raises(ValueError):
+            repo.checkout("unknown-branch")
+
+
+class TestMockHTTPClient:
+    """Test MockHTTPClient implementation."""
+
+    def test_mock_http_client_get_and_post(self):
+        client = MockHTTPClient()
+        client.set_response("api", {"status": 200, "content": {"ok": True}})
+
+        resp = client.get("https://service/api/resource", headers={"x": "1"})
+        assert resp["status"] == 200
+
+        post_resp = client.post("https://service/api/resource", data={"value": 1})
+        assert post_resp["status"] == 200
+        assert any(entry["method"] == "GET" for entry in client.history)
+        assert any(entry["method"] == "POST" for entry in client.history)
+
+    def test_mock_http_client_defaults(self):
+        client = MockHTTPClient()
+        resp = client.get("https://service/other")
+        assert resp["status"] == 404
+        assert client.history[-1]["url"] == "https://service/other"
 
 
 class TestMockDatabase:
@@ -499,6 +557,30 @@ class TestMockDatabase:
         results = db.select("users")
         assert len(results) == 0
 
+    def test_mock_database_error_paths(self):
+        """Test error cases for missing tables."""
+        db = MockDatabase()
+        with pytest.raises(ValueError):
+            db.insert("missing", {"name": "Bob"})
+        with pytest.raises(ValueError):
+            db.select("missing")
+        with pytest.raises(ValueError):
+            db.update("missing", 1, {})
+        with pytest.raises(ValueError):
+            db.delete("missing", 1)
+
+    def test_mock_database_update_and_delete_miss(self):
+        """Test update and delete miss return values."""
+        db = MockDatabase()
+        db.create_table("users", {})
+        db.insert("users", {"name": "Alice"})
+
+        updated = db.update("users", 99, {"name": "ghost"})
+        deleted = db.delete("users", 99)
+
+        assert updated is False
+        assert deleted is False
+
 
 class TestMockCache:
     """Test MockCache implementation."""
@@ -537,6 +619,11 @@ class TestMockCache:
         cache.get("key2")  # miss
 
         assert cache.hit_rate == 50.0
+
+    def test_mock_cache_hit_rate_zero(self):
+        """Test cache hit rate when untouched."""
+        cache = MockCache()
+        assert cache.hit_rate == 0.0
 
     def test_mock_cache_delete(self):
         """Test cache deletion."""

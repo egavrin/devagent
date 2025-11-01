@@ -6,9 +6,11 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
+
 from ai_dev_agent.agents.base import BaseAgent
 from ai_dev_agent.agents.enhanced_registry import AgentDiscovery, AgentLoader, EnhancedAgentRegistry
-from ai_dev_agent.agents.registry import AgentSpec
+from ai_dev_agent.agents.registry import AgentRegistry, AgentSpec
 
 
 class TestEnhancedAgentRegistry:
@@ -54,6 +56,30 @@ class TestEnhancedAgentRegistry:
         assert agent.tools == ["read"]
         assert agent.max_iterations == 15
         assert agent.description == "Created from spec"
+        assert agent.metadata == {}
+
+    def test_create_agent_from_spec_with_suffix_and_overrides(self):
+        """Ensure spec metadata merges correctly."""
+        registry = EnhancedAgentRegistry()
+        spec = AgentSpec(
+            name="suffix_agent",
+            tools=["plan"],
+            max_iterations=5,
+            system_prompt_suffix="### SUFFIX ###",
+            metadata={"priority": "high"},
+        )
+        registry.register_spec(spec)
+
+        agent = registry.create_agent("suffix_agent", description="Overridden")
+
+        assert agent.metadata["system_prompt_suffix"] == "### SUFFIX ###"
+        assert agent.metadata["priority"] == "high"
+        assert agent.description == "Overridden"
+
+        # Mutating the agent metadata should not mutate the spec
+        agent.metadata["priority"] = "low"
+        agent.metadata["extra"] = True
+        assert spec.metadata["priority"] == "high"
 
     def test_list_agents_by_capability(self):
         """Test listing agents by capability."""
@@ -115,6 +141,38 @@ class TestEnhancedAgentRegistry:
 
         assert retrieved.metadata["version"] == "1.0"
         assert "experimental" in retrieved.metadata["tags"]
+
+    def test_clone_agent_with_overrides(self):
+        """Test cloning an existing agent with overrides."""
+        registry = EnhancedAgentRegistry()
+        base = BaseAgent(
+            name="template",
+            description="Template agent",
+            capabilities=["plan"],
+            tools=["grep"],
+            permissions={"scopes": ["read"]},
+            metadata={"origin": "template"},
+        )
+        registry.register_agent(base)
+
+        clone = registry.create_agent(
+            "template",
+            description="Cloned agent",
+            permissions={"scopes": ["read", "write"]},
+            metadata={"origin": "clone", "extra": "yes"},
+        )
+
+        assert clone.name == "template"
+        assert clone.capabilities == ["plan"]
+        assert clone.permissions["scopes"] == ["read", "write"]
+        assert clone.metadata["extra"] == "yes"
+        assert base.metadata["origin"] == "template"
+
+    def test_create_agent_errors_for_unknown(self):
+        """Unknown agent names raise helpful error."""
+        registry = EnhancedAgentRegistry()
+        with pytest.raises(KeyError):
+            registry.create_agent("missing")
 
     def test_registry_persistence(self):
         """Test saving and loading registry state."""
@@ -209,6 +267,63 @@ class TestAgentLoader:
             if Path(temp_file).exists():
                 Path(temp_file).unlink()
 
+    def test_load_agent_from_config_custom_type(self, monkeypatch):
+        """Custom agent types are resolved via load_agent_class."""
+        loader = AgentLoader()
+        config = {
+            "name": "custom",
+            "type": "module.CustomAgent",
+            "tools": [],
+            "max_iterations": 1,
+            "extra": True,
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(config, f)
+            temp_file = f.name
+
+        class CustomAgent(BaseAgent):
+            def __init__(self, extra: bool, **kwargs):
+                super().__init__(name="custom", metadata={"extra": extra})
+
+        monkeypatch.setattr(AgentLoader, "load_agent_class", lambda self, module, cls: CustomAgent)
+
+        try:
+            agent = loader.load_from_config(temp_file)
+            assert agent.metadata["extra"] is True
+        finally:
+            if Path(temp_file).exists():
+                Path(temp_file).unlink()
+
+    def test_load_agent_from_config_unknown_type(self):
+        loader = AgentLoader()
+        config = {"name": "invalid", "type": "UnknownType"}
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(config, f)
+            temp_file = f.name
+
+        try:
+            with pytest.raises(ValueError):
+                loader.load_from_config(temp_file)
+        finally:
+            if Path(temp_file).exists():
+                Path(temp_file).unlink()
+
+    def test_load_agent_from_file_without_subclass(self):
+        loader = AgentLoader()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write("class NotAnAgent:\n    pass\n")
+            temp_file = f.name
+
+        try:
+            with pytest.raises(ValueError):
+                loader.load_from_file(temp_file)
+        finally:
+            if Path(temp_file).exists():
+                Path(temp_file).unlink()
+
 
 class TestAgentDiscovery:
     """Test agent auto-discovery."""
@@ -242,6 +357,14 @@ class CustomAgent2(BaseAgent):
             # Should find 2 agent files
             assert len(agents) >= 2
 
+    def test_discover_agents_skip_private_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            private = Path(tmpdir) / "_ignore.py"
+            private.write_text("def noop():\n    pass\n")
+            discovery = AgentDiscovery()
+            agents = discovery.discover_in_directory(tmpdir)
+            assert private.as_posix() not in agents
+
     def test_discover_builtin_agents(self):
         """Test discovering built-in agents."""
         discovery = AgentDiscovery()
@@ -250,6 +373,26 @@ class CustomAgent2(BaseAgent):
         # Should have at least the default agents
         assert "manager" in builtin
         assert "reviewer" in builtin
+
+    def test_discover_builtin_agents_handles_missing(self, monkeypatch):
+        discovery = AgentDiscovery()
+
+        monkeypatch.setattr(
+            AgentRegistry,
+            "list_agents",
+            classmethod(lambda cls: ["manager", "ghost"]),
+        )
+        original_get = AgentRegistry.get
+
+        def fake_get(cls, name):
+            if name == "ghost":
+                raise KeyError("ghost missing")
+            return original_get.__func__(cls, name)
+
+        monkeypatch.setattr(AgentRegistry, "get", classmethod(fake_get))
+
+        builtin = discovery.discover_builtin_agents()
+        assert "ghost" not in builtin
 
     def test_validate_agent_class(self):
         """Test validating agent class."""
@@ -284,3 +427,51 @@ class CustomAgent2(BaseAgent):
         agent = registry.create_agent("discovered")
         assert agent.name == "discovered"
         assert "grep" in agent.tools
+
+    def test_register_agent_class_handles_init_errors(self):
+        registry = EnhancedAgentRegistry()
+        discovery = AgentDiscovery()
+
+        class NeedsArgs(BaseAgent):
+            def __init__(self, *args, **kwargs):
+                super().__init__(name="needs_args", tools=["echo"])
+
+        # Force __init__ to require argument by raising if no args
+        original_init = NeedsArgs.__init__
+
+        def failing_init(self, *args, **kwargs):
+            if not args:
+                raise TypeError("needs positional arg")
+            return original_init(self, *args, **kwargs)
+
+        NeedsArgs.__init__ = failing_init  # type: ignore
+
+        discovery.register_agent_class(registry, NeedsArgs)
+        assert registry._agent_classes["NeedsArgs"] is NeedsArgs
+
+    def test_auto_discover_and_register_paths(self, monkeypatch):
+        registry = EnhancedAgentRegistry()
+        discovery = AgentDiscovery()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            agent_py = tmpdir_path / "custom_agent.py"
+            agent_py.write_text(
+                "from ai_dev_agent.agents.base import BaseAgent\n"
+                "class TempAgent(BaseAgent):\n"
+                "    def __init__(self):\n"
+                "        super().__init__(name='auto', tools=['scan'])\n"
+            )
+
+            config_path = tmpdir_path / "agent.json"
+            with config_path.open("w") as fh:
+                json.dump({"name": "config_auto", "type": "BaseAgent"}, fh)
+
+            paths = [
+                str(tmpdir_path / "missing_dir"),
+                str(agent_py.parent),
+                str(config_path),
+            ]
+
+            count = discovery.auto_discover_and_register(registry, paths)
+            assert count >= 2

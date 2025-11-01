@@ -253,13 +253,11 @@ def measure_test_performance(func) -> TestMetrics:
         start_time = time.perf_counter()
         assertion_count = [0]
 
-        # Monkey-patch assert to count assertions
-        original_assert = __builtins__.get("assert", None)
-
-        def counting_assert(*args, **kwargs):
+        def record_assertion():
             assertion_count[0] += 1
-            if original_assert:
-                return original_assert(*args, **kwargs)
+
+        # Expose the recorder so test code can opt-in to tracking.
+        wrapper.record_assertion = record_assertion
 
         # Run test
         passed = False
@@ -275,7 +273,7 @@ def measure_test_performance(func) -> TestMetrics:
             _current, peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
 
-            # Create metrics
+            # Capture metrics from this run.
             metrics = TestMetrics(
                 test_name=func.__name__,
                 execution_time=end_time - start_time,
@@ -283,13 +281,12 @@ def measure_test_performance(func) -> TestMetrics:
                 assertions=assertion_count[0],
                 passed=passed,
             )
-
-            # Store metrics for retrieval
             wrapper._test_metrics.append(metrics)
 
         return result
 
     wrapper._test_metrics = []
+    wrapper.record_assertion = lambda: None
     return wrapper
 
 
