@@ -69,7 +69,13 @@ markers = [
 # Run all: pytest -m ''
 # Run integration: pytest -m integration
 # Run slow: pytest -m slow
-addopts = "-m 'not slow and not integration and not llm'"
+addopts = [
+  "-m",
+  "not slow and not integration and not llm",
+  "--cov=ai_dev_agent",
+  "--cov-report=term",
+  "--cov-fail-under=90",
+]
 testpaths = [
   "tests"
 ]

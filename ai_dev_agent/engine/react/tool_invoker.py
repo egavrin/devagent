@@ -332,7 +332,7 @@ class RegistryToolInvoker:
             if cache_key:
                 cached_result = self._get_from_cache(cache_key)
                 if cached_result is not None:
-                    LOGGER.debug(f"Cache hit for READ: {cache_key}")  # pragma: no cover
+                    LOGGER.debug(f"Cache hit for READ: {cache_key}")
                     return cached_result
 
         extra: dict[str, Any] = {
@@ -371,7 +371,7 @@ class RegistryToolInvoker:
             cache_key = self._get_read_cache_key(payload)
             if cache_key:
                 self._add_to_cache(cache_key, result)
-                LOGGER.debug(f"Cached READ result: {cache_key}")  # pragma: no cover
+                LOGGER.debug(f"Cached READ result: {cache_key}")
 
         # Invalidate cache for WRITE/RUN operations (they may not have "success" field either)
         # For WRITE/RUN, any non-exception result means success - they would have raised otherwise
@@ -410,7 +410,7 @@ class RegistryToolInvoker:
         """Invalidate cache entry for a specific file path."""
         if path in self._file_read_cache:
             del self._file_read_cache[path]
-            LOGGER.debug(f"Invalidated cache for: {path}")  # pragma: no cover
+            LOGGER.debug(f"Invalidated cache for: {path}")
 
     def _invalidate_cache_for_write_or_run(
         self, tool_name: str, payload: Mapping[str, Any], result: Mapping[str, Any]
@@ -428,7 +428,7 @@ class RegistryToolInvoker:
             # or try to infer modified files from the command
             # For now, be conservative and clear all cache when RUN is used
             if self._file_read_cache:
-                LOGGER.debug("Clearing all file cache due to RUN operation")  # pragma: no cover
+                LOGGER.debug("Clearing all file cache due to RUN operation")
                 self._file_read_cache.clear()
 
     def _wrap_result(self, tool_name: str, result: Mapping[str, Any]) -> Observation:
@@ -727,7 +727,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             import os
 
             if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
-                print(  # pragma: no cover
+                print(
                     f"[DEBUG-FIND] Formatted output for LLM: {len(file_list)}/{total_files} files",
                     flush=True,
                 )
@@ -761,7 +761,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             import os
 
             if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
-                print(  # pragma: no cover
+                print(
                     f"[DEBUG-GREP] Formatted output for LLM: {len(file_list)}/{total_files} files with counts",
                     flush=True,
                 )
@@ -954,7 +954,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             import os
 
             if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
-                print(  # pragma: no cover
+                print(
                     f"[DEBUG-{canonical.upper()}] Sending to LLM: {len(content_parts[-1])} chars",
                     flush=True,
                 )
@@ -992,9 +992,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         try:
             self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
         except Exception:
-            LOGGER.debug(
-                "Failed to record tool message for %s", action.tool, exc_info=True
-            )  # pragma: no cover
+            LOGGER.debug("Failed to record tool message for %s", action.tool, exc_info=True)
 
     def _record_batch_tool_message(self, result: ToolResult) -> None:
         """Record a tool message for a single result from batch execution."""
@@ -1017,16 +1015,14 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             import uuid
 
             tool_call_id = f"tool-batch-{uuid.uuid4().hex[:8]}"
-            LOGGER.debug(  # pragma: no cover
+            LOGGER.debug(
                 "No call_id found for batch tool %s, generated: %s", result.tool, tool_call_id
             )
 
         try:
             self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
         except Exception:
-            LOGGER.debug(
-                "Failed to record batch tool message for %s", result.tool, exc_info=True
-            )  # pragma: no cover
+            LOGGER.debug("Failed to record batch tool message for %s", result.tool, exc_info=True)
 
 
 def create_tool_invoker(

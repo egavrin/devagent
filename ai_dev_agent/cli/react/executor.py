@@ -554,7 +554,7 @@ def _truncate_shell_history(history: list[Message], max_turns: int) -> list[Mess
     return trimmed
 
 
-def _build_phase_prompt(  # pragma: no cover - pure presentation helper
+def _build_phase_prompt(
     phase: str,
     user_query: str,
     context: str,
@@ -567,7 +567,7 @@ def _build_phase_prompt(  # pragma: no cover - pure presentation helper
         "exploration", "Focus on the task at hand."
     )
     lang_hint = ""
-    if repository_language:  # pragma: no cover - pure string formatting branch
+    if repository_language:
         hint_map = {
             "python": "Consider Python-specific tooling and packaging.",
             "javascript": "Inspect package.json and JS/TS conventions.",
@@ -592,14 +592,14 @@ def _build_phase_prompt(  # pragma: no cover - pure presentation helper
         prompt_parts.append(
             f"LANGUAGE: {repository_language}{f' — {lang_hint}' if lang_hint else ''}"
         )
-    if show_discoveries:  # pragma: no cover - presentation only
+    if show_discoveries:
         prompt_parts.extend(["", "PREVIOUS DISCOVERIES:", context])
-    if constraints.strip():  # pragma: no cover - presentation only
+    if constraints.strip():
         prompt_parts.extend(["", "CONSTRAINTS:", constraints])
     return "\n".join(prompt_parts)
 
 
-def _build_synthesis_prompt(  # pragma: no cover - pure presentation helper
+def _build_synthesis_prompt(
     user_query: str,
     context: str,
     *,
@@ -665,8 +665,35 @@ def _execute_react_assistant(
         printed_final: Whether JSON/text was already emitted to stdout
     """
 
+    start_time = time.time()
+    if not isinstance(getattr(ctx, "obj", None), dict):
+        ctx.obj = {}
+    ctx_obj: dict[str, Any] = ctx.obj
+    ctx_obj["settings"] = settings  # Store settings for access by action_provider
+    ctx_obj["step_records"] = []
+    ctx_obj["phase_history"] = []
+    ctx_obj["search_queries"] = []
+    silent_mode = ctx_obj.get("silent_mode", False)
+
+    planning_active = bool(use_planning)
+    supports_tool_calls = hasattr(client, "invoke_tools")
+    truncated_prompt = user_prompt if len(user_prompt) <= 50 else f"{user_prompt[:50]}..."
+
+    should_emit_status = (
+        planning_active or supports_tool_calls or bool(ctx.meta.pop("_emit_status_messages", False))
+    ) and not silent_mode
+    execution_mode = "with planning" if planning_active else "direct"
+
+    if should_emit_status:
+        if planning_active:
+            click.echo(f"🗺️ Planning: {truncated_prompt}")
+            click.echo("🗺️ Planning mode enabled")
+        else:
+            click.echo(f"⚡ Executing: {truncated_prompt}")
+            click.echo("⚡ Direct execution mode")
+
     # If planning mode is enabled, use the Work Planning Agent
-    if use_planning:
+    if planning_active:
         from ai_dev_agent.cli.react.plan_executor import execute_with_planning
 
         return execute_with_planning(
@@ -679,34 +706,6 @@ def _execute_react_assistant(
             agent_type=agent_type,
             suppress_final_output=suppress_final_output,
         )
-
-    start_time = time.time()
-    planning_active = bool(use_planning)
-    supports_tool_calls = hasattr(client, "invoke_tools")
-    truncated_prompt = user_prompt if len(user_prompt) <= 50 else f"{user_prompt[:50]}..."
-
-    # Check for silent mode
-    if not isinstance(getattr(ctx, "obj", None), dict):
-        ctx.obj = {}
-    ctx_obj: dict[str, Any] = ctx.obj
-    ctx_obj["settings"] = settings  # Store settings for access by action_provider
-    ctx_obj["step_records"] = []
-    ctx_obj["phase_history"] = []
-    ctx_obj["search_queries"] = []
-    silent_mode = ctx_obj.get("silent_mode", False)
-
-    should_emit_status = (
-        planning_active or supports_tool_calls or bool(ctx.meta.pop("_emit_status_messages", False))
-    ) and not silent_mode
-    execution_mode = "with planning" if planning_active else "direct"
-
-    if should_emit_status:  # pragma: no cover - user-facing terminal output
-        if planning_active:
-            click.echo(f"🗺️ Planning: {truncated_prompt}")
-            click.echo("🗺️ Planning mode enabled")
-        else:
-            click.echo(f"⚡ Executing: {truncated_prompt}")
-            click.echo("⚡ Direct execution mode")
 
     history_raw = ctx_obj.get("_shell_conversation_history")
     history_enabled = isinstance(history_raw, list)
@@ -1295,7 +1294,7 @@ def _execute_react_assistant(
         print("This is unexpected - please report this issue.", file=sys.stderr)
         print("\nPartial findings may be available in the conversation history.", file=sys.stderr)
 
-    if should_emit_status and not silent_mode:  # pragma: no cover - CLI progress rendering
+    if should_emit_status and not silent_mode:
         elapsed = time.time() - start_time
         status_icon = "✅" if execution_completed else "⚠️"
         message = result.stop_reason or (

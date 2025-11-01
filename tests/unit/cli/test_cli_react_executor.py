@@ -292,6 +292,30 @@ class StubActionProviderWithStopIteration:
         return self._response_text
 
 
+class FailingActionProvider:
+    """Action provider that emits a tool call which will fail."""
+
+    def __init__(self):
+        self.session_manager = StubSessionManager()
+        self.session_id = "session-1"
+        self.client = MagicMock()
+        self.phase_updates: list[tuple[str, bool]] = []
+
+    def update_phase(self, phase: str, *, is_final: bool = False) -> None:
+        self.phase_updates.append((phase, is_final))
+
+    def __call__(self, task: TaskSpec, history):
+        return {
+            "thought": "Attempt tool",
+            "tool": "find",
+            "args": {"query": "TODO"},
+            "metadata": {"iteration": 1},
+        }
+
+    def last_response_text(self) -> str:
+        return ""
+
+
 @patch("ai_dev_agent.cli.react.executor.SessionManager")
 @patch("ai_dev_agent.cli.react.executor.ContextSynthesizer")
 def test_executor_uses_existing_response_when_llm_stops_without_tools(
@@ -1187,3 +1211,103 @@ def test_execute_react_assistant_fallback_last_response(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert outcome["final_message"] == fallback_text
     assert fallback_text in output
+
+
+@patch("ai_dev_agent.cli.react.executor.SessionManager")
+@patch("ai_dev_agent.cli.react.executor.ContextSynthesizer")
+def test_executor_forced_synthesis_missing_methods_logs_error(
+    mock_synth, mock_session_manager, capsys
+):
+    mock_session_manager.get_instance.return_value = StubSessionManager()
+    mock_synth.return_value = MagicMock(
+        synthesize_previous_steps=lambda *_, **__: "",
+        get_redundant_operations=lambda *_: [],
+        build_constraints_section=lambda *_: "",
+    )
+
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+    action_provider = StubActionProviderWithStopIteration("")
+    action_provider.client = object()
+
+    result = executor.run(
+        TaskSpec(identifier="task-missing", goal="answer"), action_provider, StubInvoker()
+    )
+    assert result.status == "success"
+
+    captured = capsys.readouterr()
+    assert "does not support forced synthesis" in captured.err
+
+
+@patch("ai_dev_agent.cli.react.executor.SessionManager")
+@patch("ai_dev_agent.cli.react.executor.ContextSynthesizer")
+def test_executor_forced_synthesis_empty_response_warnings(
+    mock_synth, mock_session_manager, capsys
+):
+    mock_session_manager.get_instance.return_value = StubSessionManager()
+    mock_synth.return_value = MagicMock(
+        synthesize_previous_steps=lambda *_, **__: "",
+        get_redundant_operations=lambda *_: [],
+        build_constraints_section=lambda *_: "",
+    )
+
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+    action_provider = StubActionProviderWithStopIteration("")
+    empty_client = MagicMock()
+    empty_client.complete.return_value = "   "
+    action_provider.client = empty_client
+
+    executor.run(TaskSpec(identifier="task-empty", goal="answer"), action_provider, StubInvoker())
+    captured = capsys.readouterr()
+    assert "LLM returned empty response" in captured.err
+
+
+def test_executor_failed_observation_sets_stop_reason():
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+    action_provider = FailingActionProvider()
+    failing_invoker = StubToolInvokerWithFailures()
+
+    result = executor.run(
+        TaskSpec(identifier="task-failure", goal="investigate"), action_provider, failing_invoker
+    )
+    assert result.status == "failed"
+    assert "Tool failed" in result.stop_reason
+
+
+def test_executor_budget_exhaustion_completes_when_final_success():
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+    action_provider = StubActionProvider()
+    tool_invoker = StubInvoker()
+
+    result = executor.run(
+        TaskSpec(identifier="task-success", goal="complete"), action_provider, tool_invoker
+    )
+    assert result.status == "success"
+    assert result.stop_reason == "Completed"
+
+
+@patch("ai_dev_agent.cli.react.executor.SessionManager")
+@patch("ai_dev_agent.cli.react.executor.ContextSynthesizer")
+def test_executor_forced_synthesis_invoke_tools_handles_string_result(
+    mock_synth, mock_session_manager
+):
+    mock_session_manager.get_instance.return_value = StubSessionManager()
+    mock_synth.return_value = MagicMock(
+        synthesize_previous_steps=lambda *_, **__: "",
+        get_redundant_operations=lambda *_: [],
+        build_constraints_section=lambda *_: "",
+    )
+
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+    action_provider = StubActionProviderWithStopIteration("")
+
+    class InvokeToolsClient:
+        def invoke_tools(self, messages, tools, temperature=0.1):
+            return "forced-string"
+
+    action_provider.client = InvokeToolsClient()
+
+    result = executor.run(
+        TaskSpec(identifier="task-string", goal="force string"), action_provider, StubInvoker()
+    )
+    assert result.status == "success"
+    assert result.steps[-1].observation.raw_output == "forced-string"

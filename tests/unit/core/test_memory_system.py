@@ -1,8 +1,9 @@
 """Tests for the memory system (ReasoningBank pattern)."""
 
+import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -16,6 +17,29 @@ from ai_dev_agent.memory import (
     Strategy,
 )
 from ai_dev_agent.providers.llm.base import Message
+
+
+class StubEmbeddingGenerator:
+    """Lightweight embedding generator for deterministic testing."""
+
+    def __init__(self, method: str = "cosine"):
+        self.method = method
+        self.generated_texts: list[str] = []
+        self.updated_corpus: list[str] | None = None
+        self.similar_results: list[tuple[int, float]] | None = None
+
+    def generate_embedding(self, text: str) -> np.ndarray:
+        self.generated_texts.append(text)
+        # Deterministic vector encodes text length
+        return np.array([float(len(text)), 1.0])
+
+    def update_tfidf_corpus(self, texts):
+        self.updated_corpus = list(texts)
+
+    def find_similar(self, query, candidates, top_k=5, threshold=0.7):
+        if self.similar_results is not None:
+            return [(idx, sim) for idx, sim in self.similar_results if sim >= threshold][:top_k]
+        return [(idx, 1.0) for idx in range(min(top_k, len(candidates)))]
 
 
 class TestMemoryDistiller:
@@ -554,6 +578,231 @@ class TestMemoryStore:
             effectiveness_scores = [m.effectiveness_score for m in memories]
             # The worst memory (0.0 or 0.2) should have been pruned
             assert min(effectiveness_scores) >= 0.4
+
+    def test_load_store_regenerates_embeddings_and_updates_tfidf(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = Path(tmpdir) / "memory.json"
+            payload = {
+                "memories": [
+                    {
+                        "memory_id": "m1",
+                        "task_type": "debugging",
+                        "title": "Has embedding",
+                        "query": "Fix bug",
+                        "embedding": [0.1, 0.2],
+                        "context_hash": "hash1",
+                    },
+                    {
+                        "memory_id": "m2",
+                        "task_type": "feature",
+                        "title": "Missing embedding",
+                        "query": "Add feature",
+                        "embedding": None,
+                        "context_hash": "hash2",
+                    },
+                ],
+                "usage_stats": {"m1": {"retrievals": 1}},
+            }
+            store_path.write_text(json.dumps(payload))
+
+            generator = StubEmbeddingGenerator(method="tfidf")
+            store = MemoryStore(
+                store_path=store_path,
+                embedding_generator=generator,
+                auto_save=False,
+            )
+
+            assert "m2" in store._embeddings
+            assert generator.generated_texts  # embedding regenerated
+            assert generator.updated_corpus is not None
+            assert len(generator.updated_corpus) == 2
+
+    def test_load_store_invalid_json_resets_state(self, caplog):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = Path(tmpdir) / "memory.json"
+            store_path.write_text("{invalid json")
+
+            generator = StubEmbeddingGenerator()
+            store = MemoryStore(
+                store_path=store_path,
+                embedding_generator=generator,
+                auto_save=False,
+            )
+
+            assert store._memories == {}
+            assert store._embeddings == {}
+
+    def test_search_similar_empty_and_missing_task_type(self):
+        generator = StubEmbeddingGenerator()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                store_path=Path(tmpdir) / "test.json",
+                embedding_generator=generator,
+                auto_save=False,
+            )
+
+            assert store.search_similar("query") == []
+
+            memory = Memory(task_type="debugging", title="Test", query="bug")
+            store.add_memory(memory)
+
+            assert store.search_similar("query", task_type="feature") == []
+
+    def test_remove_memory_and_update_effectiveness_missing_entries(self):
+        generator = StubEmbeddingGenerator()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                store_path=Path(tmpdir) / "test.json",
+                embedding_generator=generator,
+                auto_save=False,
+            )
+
+            assert store.remove_memory("missing") is False
+            store.update_effectiveness("missing", 0.5, "feedback")  # should not raise
+
+    def test_get_statistics_empty_store(self):
+        generator = StubEmbeddingGenerator()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                store_path=Path(tmpdir) / "test.json",
+                embedding_generator=generator,
+                auto_save=False,
+            )
+            stats = store.get_statistics()
+            assert stats["total_memories"] == 0
+            assert stats["avg_effectiveness"] == 0
+
+    def test_search_similar_handles_missing_embeddings(self):
+        generator = StubEmbeddingGenerator()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                store_path=Path(tmpdir) / "test.json",
+                embedding_generator=generator,
+                auto_save=False,
+            )
+            memory = Memory(task_type="debugging", title="Entry", query="query")
+            store.add_memory(memory)
+            store._embeddings.clear()
+            assert store.search_similar("query") == []
+
+    def test_remove_memory_triggers_auto_save_when_enabled(self):
+        generator = StubEmbeddingGenerator()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                store_path=Path(tmpdir) / "test.json",
+                embedding_generator=generator,
+                auto_save=True,
+            )
+            memory = Memory(task_type="debugging", title="Persist", query="persist")
+            memory_id = store.add_memory(memory)
+
+            saver = MagicMock()
+            store.save_store = saver
+            assert store.remove_memory(memory_id) is True
+            saver.assert_called_once()
+
+    def test_find_similar_memory_detects_duplicate(self):
+        generator = StubEmbeddingGenerator()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                store_path=Path(tmpdir) / "test.json",
+                embedding_generator=generator,
+                auto_save=False,
+            )
+
+            baseline = Memory(
+                task_type="debugging", title="Fix bug", query="bug", context_hash="hash"
+            )
+            store.add_memory(baseline)
+
+            generator.similar_results = [(0, 0.995)]
+            duplicate = Memory(task_type="debugging", title="Fix bug again", query="bug")
+            match = store._find_similar_memory(duplicate, threshold=0.9)
+            assert match is not None
+            assert match.memory_id == baseline.memory_id
+
+    def test_prune_task_type_prefers_high_scores(self, monkeypatch):
+        generator = StubEmbeddingGenerator()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                store_path=Path(tmpdir) / "test.json",
+                embedding_generator=generator,
+                auto_save=False,
+            )
+            monkeypatch.setattr(MemoryStore, "MAX_MEMORIES_PER_TYPE", 99)
+            generator.similar_results = []
+
+            mem_low = Memory(
+                task_type="feature",
+                title="Low",
+                query="low",
+                effectiveness_score=0.1,
+                usage_count=0,
+            )
+            mem_mid = Memory(
+                task_type="feature",
+                title="Mid",
+                query="mid",
+                effectiveness_score=0.5,
+                usage_count=1,
+            )
+            mem_high = Memory(
+                task_type="feature",
+                title="High",
+                query="high",
+                effectiveness_score=0.9,
+                usage_count=2,
+            )
+            store.add_memory(mem_low)
+            store.add_memory(mem_mid)
+            store.add_memory(mem_high)
+
+            monkeypatch.setattr(MemoryStore, "MAX_MEMORIES_PER_TYPE", 2)
+            store.MAX_MEMORIES_PER_TYPE = 2
+            store._prune_task_type("feature")
+            remaining_ids = set(store._memories_by_type["feature"])
+            assert len(remaining_ids) == 2
+            titles = {store.get_memory(mid).title for mid in remaining_ids}
+            assert titles == {"Mid", "High"}
+
+    def test_track_retrieval_accumulates_statistics(self):
+        generator = StubEmbeddingGenerator()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                store_path=Path(tmpdir) / "test.json",
+                embedding_generator=generator,
+                auto_save=False,
+            )
+            memory = Memory(task_type="debugging", title="Issue", query="bug")
+            memory_id = store.add_memory(memory)
+
+            store._track_retrieval(memory_id, 0.8)
+            store._track_retrieval(memory_id, 0.6)
+
+            stats = store._usage_stats[memory_id]
+            assert stats["retrievals"] == 2
+            assert 0.6 <= stats["avg_similarity"] <= 0.8
+
+    def test_export_and_import_memories(self, tmp_path):
+        generator = StubEmbeddingGenerator()
+        store_path = tmp_path / "memory.json"
+        store = MemoryStore(store_path=store_path, embedding_generator=generator, auto_save=False)
+
+        memory = Memory(task_type="debugging", title="Exported", query="export")
+        store.add_memory(memory)
+        export_path = tmp_path / "export.json"
+        store.export_memories(export_path)
+        assert export_path.exists()
+
+        # Import into new store
+        new_generator = StubEmbeddingGenerator()
+        new_store = MemoryStore(
+            store_path=tmp_path / "new_store.json",
+            embedding_generator=new_generator,
+            auto_save=False,
+        )
+        count = new_store.import_memories(export_path, merge=True)
+        assert count == 1
 
 
 class TestMemoryIntegration:

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import threading
 import time
@@ -115,6 +116,62 @@ def test_read_with_multiple_paths_bypasses_cache(tmp_path):
     assert invoker._file_read_cache == {}
 
 
+def test_read_cache_records_debug_logs(tmp_path, caplog):
+    read_calls = {"count": 0}
+
+    def read_handler(payload, context):
+        read_calls["count"] += 1
+        path = payload["paths"][0]
+        return {"files": [{"path": path, "content": "cached"}]}
+
+    registry.register(
+        ToolSpec(
+            name=READ, handler=read_handler, request_schema_path=None, response_schema_path=None
+        )
+    )
+
+    invoker = _make_invoker(tmp_path)
+    action = ActionRequest(
+        step_id="cache",
+        thought="cache read",
+        tool=READ,
+        args={"paths": ["foo.txt"]},
+    )
+
+    caplog.clear()
+    logger_name = tool_invoker_module.LOGGER.name
+    with caplog.at_level(logging.DEBUG, logger=logger_name):
+        first_obs = invoker(action)
+        second_obs = invoker(action)
+
+    assert first_obs.success
+    assert second_obs.success
+    assert read_calls["count"] == 1
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Cached READ result: foo.txt" in message for message in messages)
+    assert any("Cache hit for READ: foo.txt" in message for message in messages)
+
+
+def test_invalidate_cache_emits_debug_message(tmp_path, caplog):
+    invoker = _make_invoker(tmp_path)
+    invoker._file_read_cache["bar.txt"] = ({}, time.time())
+
+    logger_name = tool_invoker_module.LOGGER.name
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=logger_name):
+        invoker._invalidate_cache("bar.txt")
+
+    assert "bar.txt" not in invoker._file_read_cache
+    assert "Invalidated cache for: bar.txt" in caplog.text
+
+
+def test_get_read_cache_key_without_paths(tmp_path):
+    invoker = _make_invoker(tmp_path)
+
+    assert invoker._get_read_cache_key({}) is None
+    assert invoker._get_read_cache_key({"paths": []}) is None
+
+
 def test_wrap_result_includes_structure_hints(tmp_path):
     invoker = _make_invoker(tmp_path)
     invoker._structure_hints = {
@@ -127,6 +184,22 @@ def test_wrap_result_includes_structure_hints(tmp_path):
 
     assert observation.structure_hints["project_summary"] == "Widgets everywhere"
     assert observation.structure_hints["symbols"] == ["Widget"]
+
+
+def test_wrap_result_write_rejection_without_reason(tmp_path):
+    invoker = _make_invoker(tmp_path)
+    observation = invoker._wrap_result(WRITE, {"applied": False, "rejected_hunks": []})
+
+    assert observation.success is False
+    assert observation.outcome == "Patch rejected: no changes detected"
+
+
+def test_wrap_result_handles_non_mapping_results(tmp_path):
+    invoker = _make_invoker(tmp_path)
+
+    observation = invoker._wrap_result("custom", ["unexpected"])
+
+    assert observation.metrics["raw"] == ["unexpected"]
 
 
 @contextmanager
@@ -206,7 +279,7 @@ def test_read_cache_and_write_invalidation(tmp_path):
     assert '"two"' in obs_after_write.raw_output
 
 
-def test_run_clears_cache(tmp_path):
+def test_run_clears_cache(tmp_path, caplog):
     file_path = tmp_path / "foo.txt"
     file_path.write_text("data")
 
@@ -232,8 +305,15 @@ def test_run_clears_cache(tmp_path):
     assert invoker._file_read_cache
 
     run_action = ActionRequest(step_id="y", thought="run", tool=RUN, args={"command": "echo"})
-    invoker(run_action)
+    logger_name = tool_invoker_module.LOGGER.name
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=logger_name):
+        invoker(run_action)
     assert invoker._file_read_cache == {}
+    assert any(
+        "Clearing all file cache due to RUN operation" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_tool_invoker_wrap_result_formats_misc_tools(tmp_path):
@@ -412,7 +492,7 @@ def test_submit_final_answer_and_cache_expiry(tmp_path):
     assert obs_final.tool == "submit_final_answer"
 
 
-def test_session_invoker_find_formats_and_records(tmp_path, monkeypatch):
+def test_session_invoker_find_formats_and_records(tmp_path, monkeypatch, capfd):
     session_manager = DummySessionManager()
     invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
 
@@ -426,11 +506,48 @@ def test_session_invoker_find_formats_and_records(tmp_path, monkeypatch):
         )
         observation = invoker(action)
 
-        assert observation.display_message.startswith("🔍 find")
-        assert observation.formatted_output.startswith("Files found")
-        assert session_manager.messages
-        recorded = session_manager.messages[-1][2]
-        assert "Files found" in recorded
+    stdout, _ = capfd.readouterr()
+    assert "[DEBUG-FIND] Formatted output for LLM" in stdout
+    assert "[DEBUG-FIND] Sending to LLM" in stdout
+    assert observation.display_message.startswith("🔍 find")
+    assert observation.formatted_output.startswith("Files found")
+    assert session_manager.messages
+    recorded = session_manager.messages[-1][2]
+    assert "Files found" in recorded
+
+
+def test_session_invoker_logs_when_recording_message_fails(tmp_path, caplog):
+    class FailingSessionManager(DummySessionManager):
+        def add_tool_message(self, session_id, tool_call_id, content):
+            raise RuntimeError("boom")
+
+    session_manager = FailingSessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    def read_handler(payload, context):
+        return {"files": [{"path": payload["paths"][0], "content": ""}]}
+
+    registry.register(
+        ToolSpec(
+            name=READ, handler=read_handler, request_schema_path=None, response_schema_path=None
+        )
+    )
+
+    action = ActionRequest(
+        step_id="r1",
+        thought="read file",
+        tool=READ,
+        args={"paths": ["foo.txt"]},
+    )
+
+    logger_name = tool_invoker_module.LOGGER.name
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=logger_name):
+        observation = invoker(action)
+
+    assert observation.success is True
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Failed to record tool message for read" in message for message in messages)
 
 
 def test_session_invoker_run_summarizes_and_writes_artifact(tmp_path, monkeypatch):
@@ -470,6 +587,283 @@ def test_session_invoker_run_summarizes_and_writes_artifact(tmp_path, monkeypatc
     assert observation.artifact_path == ".devagent/artifacts/saved.txt"
     assert session_manager.messages
     assert "(See .devagent/artifacts/saved.txt" in session_manager.messages[-1][2]
+
+
+def test_session_invoker_logs_batch_message_failures(tmp_path, caplog):
+    class ExplodingSessionManager(DummySessionManager):
+        def add_tool_message(self, session_id, tool_call_id, content):
+            raise RuntimeError("explode")
+
+    session_manager = ExplodingSessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    result = ToolResult(tool="grep", success=True, outcome="ok")
+
+    logger_name = tool_invoker_module.LOGGER.name
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=logger_name):
+        invoker._record_batch_tool_message(result)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("No call_id found for batch tool grep" in message for message in messages)
+    assert any("Failed to record batch tool message for grep" in message for message in messages)
+
+
+def test_format_display_message_find_uses_raw_payload(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="find", thought="find", tool="find", args={"query": "foo"})
+    observation = Observation(
+        success=True,
+        outcome="",
+        metrics={"raw": {"files": [{"path": "src/foo.py"}]}},
+        artifacts=[],
+        tool="find",
+    )
+
+    message = invoker._format_display_message(action, observation, "find")
+
+    assert "foo.py" in message
+    assert "matches found" in message
+
+
+def test_format_display_message_read_without_lines(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(
+        step_id="read",
+        thought="read",
+        tool=READ,
+        args={"paths": ["docs.txt"]},
+    )
+    observation = Observation(
+        success=True,
+        outcome="",
+        metrics={"lines_read": 0},
+        artifacts=[],
+        tool=READ,
+    )
+
+    message = invoker._format_display_message(action, observation, READ)
+
+    assert "docs.txt" in message
+    assert "content captured" in message
+
+
+def test_format_display_message_run_prefers_stderr_preview(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="run", thought="execute", tool=RUN, args={"command": "ls"})
+    observation = Observation(
+        success=False,
+        outcome="",
+        metrics={"exit_code": 1, "stdout_tail": "", "stderr_tail": "error happened\nmore"},
+        artifacts=[],
+        tool=RUN,
+    )
+
+    message = invoker._format_display_message(action, observation, RUN)
+
+    assert "stderr: error happened" in message
+    assert "exit 1" in message
+
+
+def test_format_display_message_write_summarizes_targets(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="write", thought="apply", tool="write", args={})
+    observation = Observation(
+        success=True,
+        outcome="",
+        metrics={"artifacts": ["a.py", "b.py", "c.py", "d.py"]},
+        artifacts=[],
+        tool="write",
+    )
+
+    message = invoker._format_display_message(action, observation, "write")
+
+    assert "a.py" in message and "+1" in message
+
+
+def test_format_display_message_fallback_for_unknown_tool(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="custom", thought="do", tool="custom_tool", args={})
+    observation = Observation(
+        success=True,
+        outcome="completed",
+        metrics={},
+        artifacts=[],
+        tool="custom_tool",
+    )
+
+    message = invoker._format_display_message(action, observation, "custom_tool")
+
+    assert "completed" in message
+
+
+def test_format_display_message_find_counts_artifacts(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="find2", thought="find", tool="find", args={})
+    observation = Observation(
+        success=True,
+        outcome="",
+        metrics={},
+        artifacts=["src/foo.py", "src/bar.py"],
+        tool="find",
+    )
+
+    message = invoker._format_display_message(action, observation, "find")
+
+    assert "2 matches" in message
+
+
+def test_format_display_message_read_with_string_path(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(
+        step_id="read2",
+        thought="read",
+        tool=READ,
+        args={"paths": "single.txt"},
+    )
+    observation = Observation(
+        success=False,
+        outcome="read failed",
+        metrics={},
+        artifacts=[],
+        tool=READ,
+    )
+
+    message = invoker._format_display_message(action, observation, READ)
+
+    assert "single.txt" in message
+    assert "read failed" in message
+
+
+def test_format_display_message_run_joins_args(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(
+        step_id="run2",
+        thought="execute",
+        tool=RUN,
+        args={"args": ["python", "script.py"]},
+    )
+    observation = Observation(
+        success=True,
+        outcome="",
+        metrics={"exit_code": 0, "stdout_tail": "done"},
+        artifacts=[],
+        tool=RUN,
+    )
+
+    message = invoker._format_display_message(action, observation, RUN)
+
+    assert "python script.py" in message
+    assert "stdout: done" in message
+
+
+def test_format_display_message_write_uses_outcome(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="write2", thought="apply", tool="write", args={})
+    observation = Observation(
+        success=False,
+        outcome="no changes detected",
+        metrics={},
+        artifacts=[],
+        tool="write",
+    )
+
+    message = invoker._format_display_message(action, observation, "write")
+
+    assert "no changes detected" in message
+
+
+def test_format_display_message_grep_defaults_to_outcome(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="grep2", thought="search", tool="grep", args={})
+    observation = Observation(
+        success=False,
+        outcome="no matches",
+        metrics={},
+        artifacts=[],
+        tool="grep",
+    )
+
+    message = invoker._format_display_message(action, observation, "grep")
+
+    assert "no matches" in message
+
+
+def test_to_cli_observation_handles_artifact_errors(tmp_path, monkeypatch):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="run", thought="summarize", tool=RUN, args={"cmd": "echo"})
+    observation = Observation(
+        success=True,
+        outcome="",
+        metrics={},
+        artifacts=[],
+        tool=RUN,
+        raw_output="line1\nline2\nline3\nline4",
+    )
+
+    monkeypatch.setattr(tool_invoker_module, "summarize_text", lambda text, limit: "short")
+
+    def raise_write(content, *, suffix=".txt", root=None):
+        raise RuntimeError("artifact failure")
+
+    monkeypatch.setattr(tool_invoker_module, "write_artifact", raise_write)
+
+    cli_observation = invoker._to_cli_observation(action, observation)
+
+    assert cli_observation.formatted_output == "short"
+    assert cli_observation.artifact_path is None
+
+
+def test_normalize_artifact_path_relative_to_workspace(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    target = tmp_path / "nested" / "artifact.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    assert invoker._normalize_artifact_path(target) == "nested/artifact.txt"
+
+
+def test_normalize_artifact_path_handles_cwd_relative(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    external = Path.cwd() / "artifact.log"
+    normalized = invoker._normalize_artifact_path(external)
+
+    assert normalized == "artifact.log"
+
+
+def test_normalize_artifact_path_returns_absolute_when_needed(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    external = Path("/tmp/remote_artifact.txt")
+    normalized = invoker._normalize_artifact_path(external)
+
+    assert normalized == str(external)
 
 
 def test_session_invoker_batch_records_each_result(tmp_path):
@@ -1066,6 +1460,91 @@ def test_session_invoker_passes_cli_context_and_llm(tmp_path, monkeypatch):
     assert "llm_client" in captured
 
 
+def test_record_tool_message_generates_call_id(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="custom", thought="note", tool="custom", args={})
+    observation = CLIObservation(
+        success=True,
+        outcome="done",
+        metrics={},
+        artifacts=[],
+        tool="custom",
+        raw_output="",
+        formatted_output=None,
+        artifact_path=None,
+        display_message=None,
+    )
+
+    invoker._record_tool_message(action, observation)
+
+    assert session_manager.messages
+    session_id, call_id, _ = session_manager.messages[-1]
+    assert session_id == "session-1"
+    assert call_id.startswith("tool-exec-")
+
+
+def test_record_batch_tool_message_records_call_id(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    result = ToolResult(tool="grep", success=True, outcome="ok", call_id="call-1")
+
+    invoker._record_batch_tool_message(result)
+
+    assert session_manager.messages
+    session_id, call_id, content = session_manager.messages[-1]
+    assert session_id == "session-1"
+    assert call_id == "call-1"
+    assert "ok" in content
+
+
+def test_record_tool_message_skips_without_session(tmp_path):
+    settings = Settings()
+    settings.workspace_root = tmp_path
+    invoker = SessionAwareToolInvoker(workspace=tmp_path, settings=settings)
+
+    action = ActionRequest(step_id="noop", thought="noop", tool="custom", args={})
+    observation = CLIObservation(
+        success=True,
+        outcome="",
+        metrics={},
+        artifacts=[],
+        tool="custom",
+        raw_output="",
+        formatted_output=None,
+        artifact_path=None,
+        display_message=None,
+    )
+
+    invoker._record_tool_message(action, observation)
+
+    # No exception and nothing to assert because there is no session manager
+
+
+def test_record_batch_tool_message_handles_error_field(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    result = ToolResult(tool="grep", success=False, outcome="fail", error="boom")
+
+    invoker._record_batch_tool_message(result)
+
+    assert session_manager.messages
+    _, _, content = session_manager.messages[-1]
+    assert "fail" in content and "boom" in content
+
+
+def test_create_tool_invoker_factory(tmp_path):
+    settings = Settings()
+    settings.workspace_root = tmp_path
+
+    invoker = tool_invoker_module.create_tool_invoker(tmp_path, settings)
+
+    assert isinstance(invoker, RegistryToolInvoker)
+
+
 def test_session_invoker_find_formats_large_result(tmp_path):
     session_manager = DummySessionManager()
     invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
@@ -1130,7 +1609,7 @@ def test_session_invoker_final_answer_formatting(tmp_path):
     assert "All tasks complete." in content
 
 
-def test_session_invoker_grep_formats_with_counts(tmp_path, monkeypatch):
+def test_session_invoker_grep_formats_with_counts(tmp_path, monkeypatch, capfd):
     session_manager = DummySessionManager()
     invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
 
@@ -1155,6 +1634,9 @@ def test_session_invoker_grep_formats_with_counts(tmp_path, monkeypatch):
         )
         observation = invoker(action)
 
+    stdout, _ = capfd.readouterr()
+    assert "[DEBUG-GREP] Formatted output for LLM" in stdout
+    assert "[DEBUG-GREP] Sending to LLM" in stdout
     assert observation.formatted_output.startswith("Files with matches:")
     assert "- src/a.py (2 matches)" in observation.formatted_output
     assert "- src/b.py" in observation.formatted_output
