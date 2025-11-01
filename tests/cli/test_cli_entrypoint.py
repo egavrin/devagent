@@ -1,6 +1,10 @@
 """Tests for the new CLI runtime entrypoint scaffolding."""
 
-from unittest.mock import MagicMock
+import os
+import runpy
+import subprocess
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -128,3 +132,74 @@ def test_cli_chat_command_runs(monkeypatch):
     assert result.exit_code == 0
     fake_manager.create_session.assert_called_once()
     fake_manager.close_all.assert_called_once()
+
+
+def test_cli_direct_flag_sets_pending_prompt(monkeypatch):
+    """--direct flag should be accepted and disable planning fallback."""
+    from ai_dev_agent.cli.runtime.main import cli  # (import within test)
+
+    captured: dict[str, object] = {}
+
+    def fake_execute(ctx, state, prompt, force_plan, direct, agent):
+        captured["pending_prompt"] = ctx.meta.get("_pending_nl_prompt")
+        captured["use_planning"] = ctx.meta.get("_use_planning")
+        captured["force_plan"] = force_plan
+        captured["direct"] = direct
+        captured["default_use_planning"] = ctx.obj.get("default_use_planning")
+
+    monkeypatch.setattr(query_module, "execute_query", fake_execute)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--direct", "inspect logs"])
+
+    assert result.exit_code == 0
+    assert captured["pending_prompt"] == "inspect logs"
+    assert captured["use_planning"] is False
+    assert captured["force_plan"] is False
+    assert captured["default_use_planning"] is False
+    assert captured["direct"] is False
+
+
+def test_cli_unknown_flag_surfaces_error():
+    """Unknown CLI flags should return an informative error."""
+    from ai_dev_agent.cli.runtime.main import cli  # (import within test)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--not-a-real-flag"])
+
+    assert result.exit_code != 0
+    assert "No such option: --not-a-real-flag" in result.output
+
+
+def test_cli_module_entrypoint_invokes_main():
+    """`python -m ai_dev_agent.cli` should call cli.main()."""
+    with patch("ai_dev_agent.cli.main") as mock_main:
+        runpy.run_module("ai_dev_agent.cli", run_name="__main__")
+    mock_main.assert_called_once_with()
+
+
+def test_cli_module_help_executes(tmp_path):
+    """Running the module as a script should render help output."""
+    # Use isolated HOME so we do not pollute user cache directories
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "-m", "ai_dev_agent.cli", "--help"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "DevAgent - AI-powered development assistant" in result.stdout
+
+
+def test_cli_plan_and_direct_flags_conflict():
+    """Passing both --plan and --direct should surface a usage error."""
+    from ai_dev_agent.cli.runtime.main import cli  # (import within test)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--plan", "--direct", "summarize logs"])
+
+    assert result.exit_code != 0
+    assert "Use either --plan or --direct" in result.output

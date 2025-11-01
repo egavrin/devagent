@@ -267,6 +267,41 @@ class TestMemoryStore:
             assert len(results) > 0
             assert results[0][0].memory_id == memory_id
 
+    def test_search_similar_threshold_filters_results(self):
+        """Search should respect the similarity threshold."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(store_path=Path(tmpdir) / "test.json", auto_save=False)
+
+            high_match = Memory(task_type="debugging", title="Fix auth", query="auth bug")
+            low_match = Memory(task_type="debugging", title="Refactor", query="refactor code")
+
+            store.add_memory(high_match)
+            store.add_memory(low_match)
+
+            strong_results = store.search_similar("auth bug", threshold=0.2)
+            assert strong_results
+            assert strong_results[0][0].title == "Fix auth"
+
+            strict_results = store.search_similar("auth bug", threshold=1.1)
+            assert strict_results == []
+
+    def test_search_similar_results_are_sorted(self):
+        """Similar memories should be ordered by descending similarity."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(store_path=Path(tmpdir) / "test.json", auto_save=False)
+
+            memory_one = Memory(task_type="debugging", title="Fix auth", query="auth issue")
+            memory_two = Memory(task_type="debugging", title="Fix auth logs", query="auth bug logs")
+
+            store.add_memory(memory_one)
+            store.add_memory(memory_two)
+
+            results = store.search_similar("auth issue", limit=2, threshold=-1.0)
+            assert len(results) == 2
+            # The first result should be the auth memory, with highest similarity
+            assert results[0][0].title == "Fix auth"
+            assert results[0][1] >= results[1][1]
+
     def test_memory_effectiveness_tracking(self):
         """Test tracking memory effectiveness."""
         with tempfile.TemporaryDirectory() as tmpdir:

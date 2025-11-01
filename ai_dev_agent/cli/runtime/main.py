@@ -131,6 +131,11 @@ def _initialise_state(
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON output")
 @click.option("--plan", is_flag=True, help="Use planning mode by default")
 @click.option(
+    "--direct",
+    is_flag=True,
+    help="Disable planning mode by default (inverse of --plan)",
+)
+@click.option(
     "--repomap-debug",
     is_flag=True,
     envvar="DEVAGENT_REPOMAP_DEBUG",
@@ -154,6 +159,7 @@ def cli(
     quiet: bool,
     json_output: bool,
     plan: bool,
+    direct: bool,
     repomap_debug: bool,
     system: Optional[str],
     context: Optional[str],
@@ -171,6 +177,9 @@ def cli(
     """
     ctx.ensure_object(dict)
 
+    if plan and direct:
+        raise click.UsageError("Use either --plan or --direct, not both.")
+
     settings, cli_context, state = _initialise_state(
         config_path,
         verbose=verbose,
@@ -184,6 +193,13 @@ def cli(
     if context:
         settings.global_context_message = context
 
+    default_use_planning = plan and not direct
+
+    if direct:
+        ctx.meta["_use_planning"] = False
+    elif plan:
+        ctx.meta["_use_planning"] = True
+
     ctx.obj.update(
         {
             "cli_state": state,
@@ -191,7 +207,7 @@ def cli(
             "state": cli_context.get("state"),
             "cli_ctx": cli_context,
             "json_output": json_output,
-            "default_use_planning": plan,
+            "default_use_planning": default_use_planning,
             "verbosity_level": verbose,
             "prompt_loader": state.prompt_loader,
             "context_builder": state.context_builder,
@@ -201,7 +217,7 @@ def cli(
     )
 
     cli_context["json_output"] = json_output
-    cli_context["default_use_planning"] = plan
+    cli_context["default_use_planning"] = default_use_planning
     cli_context["verbosity_level"] = verbose
 
 
