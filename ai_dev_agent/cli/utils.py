@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import os
-import platform
 import re
 import shlex
-import shutil
-import tempfile
 import uuid
 from collections.abc import Iterable, Mapping
 from datetime import datetime
@@ -18,6 +15,7 @@ import click
 
 from ai_dev_agent.core.approval.approvals import ApprovalManager
 from ai_dev_agent.core.approval.policy import ApprovalPolicy
+from ai_dev_agent.core.context.builder import ContextBuilder
 from ai_dev_agent.core.utils.constants import MAX_HISTORY_ENTRIES
 from ai_dev_agent.core.utils.context_budget import BudgetedLLMClient, config_from_settings
 from ai_dev_agent.core.utils.devagent_config import load_devagent_yaml
@@ -39,6 +37,17 @@ if TYPE_CHECKING:
     from ai_dev_agent.core.utils.config import Settings
 
 LOGGER = get_logger(__name__)
+
+# Legacy exports maintained for backward compatibility ---------------------------------
+_OS_FRIENDLY_NAMES = ContextBuilder._OS_FRIENDLY_NAMES
+_COMMAND_MAPPINGS = {
+    name: dict(mapping) for name, mapping in ContextBuilder._COMMAND_MAPPINGS.items()
+}
+# Preserve legacy expectation for Windows find command
+_COMMAND_MAPPINGS.setdefault("Windows", {})
+_COMMAND_MAPPINGS["Windows"]["find_files"] = "where"
+_PLATFORM_EXAMPLES = ContextBuilder._PLATFORM_EXAMPLES
+_TOOL_CANDIDATES = tuple(ContextBuilder._TOOL_CANDIDATES)
 
 
 def resolve_prompt_input(value: str | None) -> str | None:
@@ -102,127 +111,11 @@ def resolve_prompt_input(value: str | None) -> str | None:
     return value
 
 
-_OS_FRIENDLY_NAMES = {
-    "Darwin": "macOS",
-    "Linux": "Linux",
-    "Windows": "Windows",
-}
-
-_COMMAND_MAPPINGS = {
-    "Darwin": {
-        "list_files": "ls -la",
-        "find_files": "find",
-        "copy": "cp",
-        "move": "mv",
-        "delete": "rm",
-        "open_file": "open",
-    },
-    "Linux": {
-        "list_files": "ls -la",
-        "find_files": "find",
-        "copy": "cp",
-        "move": "mv",
-        "delete": "rm",
-        "open_file": "xdg-open",
-    },
-    "Windows": {
-        "list_files": "dir",
-        "find_files": "where",
-        "copy": "copy",
-        "move": "move",
-        "delete": "del",
-        "open_file": "start",
-    },
-}
-
-_PLATFORM_EXAMPLES = {
-    "Darwin": "e.g. list files with 'ls -la', open with 'open README.md'",
-    "Linux": "e.g. list files with 'ls -la', open with 'xdg-open README.md'",
-    "Windows": "e.g. list files with 'dir', open with 'start README.md'",
-}
-
-_TOOL_CANDIDATES = (
-    "gh",
-    "git",
-    "docker",
-    "kubectl",
-    "npm",
-    "pip",
-    "python",
-    "node",
-    "make",
-    "cmake",
-    "curl",
-    "jq",
-    "psql",
-    "sqlite3",
-    "mongosh",
-    "grep",
-    "rg",
-    "sed",
-    "awk",
-    "brew",
-    "bundle",
-    "wget",
-)
-
-
 def build_system_context() -> dict[str, Any]:
     """Return runtime environment details useful for prompt construction."""
 
-    system = platform.system() or "unknown"
-    os_friendly = _OS_FRIENDLY_NAMES.get(system, system or "Unknown")
-
-    if system == "Darwin":
-        os_version = platform.mac_ver()[0] or platform.release()
-    elif system == "Windows":
-        os_version = platform.version()
-    else:
-        os_version = platform.release()
-
-    architecture = platform.machine() or platform.processor() or "unknown"
-
-    shell = os.environ.get("SHELL")
-    if not shell:
-        shell = os.environ.get("COMSPEC", "cmd.exe") if system == "Windows" else "/bin/sh"
-
-    cwd = str(Path.cwd())
-    home_dir = str(Path.home())
-    python_version = platform.python_version()
-
-    is_unix = system in {"Darwin", "Linux"}
-    shell_type = "unix" if is_unix else "windows"
-    path_separator = "/" if is_unix else "\\"
-    command_separator = "&&" if is_unix else "&"
-    null_device = "/dev/null" if is_unix else "NUL"
-    temp_dir = tempfile.gettempdir()
-
-    available_tools = [tool for tool in _TOOL_CANDIDATES if shutil.which(tool)]
-    if not available_tools:
-        available_tools = []
-
-    command_mappings = _COMMAND_MAPPINGS.get(system, _COMMAND_MAPPINGS.get("Linux"))
-    platform_examples = _PLATFORM_EXAMPLES.get(system, _PLATFORM_EXAMPLES.get("Linux"))
-
-    return {
-        "os": system,
-        "os_friendly": os_friendly,
-        "os_version": os_version,
-        "shell": shell,
-        "shell_type": shell_type,
-        "architecture": architecture,
-        "home_dir": home_dir,
-        "cwd": cwd,
-        "python_version": python_version,
-        "available_tools": available_tools,
-        "is_unix": is_unix,
-        "path_separator": path_separator,
-        "command_separator": command_separator,
-        "null_device": null_device,
-        "temp_dir": temp_dir,
-        "command_mappings": command_mappings,
-        "platform_examples": platform_examples,
-    }
+    builder = ContextBuilder(workspace=Path.cwd())
+    return builder.build_system_context()
 
 
 def _resolve_repo_path(path_value: str | None) -> Path:

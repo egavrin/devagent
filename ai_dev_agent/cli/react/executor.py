@@ -1292,7 +1292,7 @@ def _execute_react_assistant(
                 )
 
                 context_enhancer = get_context_enhancer(workspace=repo_root, settings=settings)
-                if context_enhancer and context_enhancer._memory_store:
+                if context_enhancer and context_enhancer.has_memory_support:
                     metadata = {"task_type": task_type, "user_prompt": user_prompt}
                     memory_id = context_enhancer.distill_and_store_memory(
                         session_id=session_id, messages=messages, metadata=metadata
@@ -1334,10 +1334,6 @@ def _execute_react_assistant(
                         duration_seconds=None,  # Could add timing if needed
                     )
 
-                # Save dynamic instruction state (Phase 3: Dynamic Instructions)
-                if context_enhancer and context_enhancer._dynamic_instruction_manager:
-                    context_enhancer._dynamic_instruction_manager.save_state()
-                    logger.debug("Saved dynamic instruction state")
         except Exception as e:
             # Don't fail the execution if memory/dynamic storage fails
             logger.debug(f"Failed to store session data: {e}")

@@ -41,18 +41,14 @@ def test_create_design_command_uses_cli_state(monkeypatch, tmp_path):
 
     captured = {}
 
-    class FakeDesignAgent:
-        def __init__(self):
-            pass
-
-        def execute(self, prompt, agent_context):
-            captured["prompt"] = prompt
-            captured["metadata"] = dict(agent_context.metadata)
-            return AgentResult(success=True, output="DESIGN OUTPUT", metadata={"foo": "bar"})
+    def fake_execute_strategy(agent_type, prompt, agent_context, **kwargs):
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(agent_context.metadata)
+        return AgentResult(success=True, output="DESIGN OUTPUT", metadata={"foo": "bar"})
 
     monkeypatch.setattr(
-        "ai_dev_agent.cli.runtime.commands.design.DesignAgent",
-        FakeDesignAgent,
+        "ai_dev_agent.cli.runtime.commands.design.execute_strategy",
+        fake_execute_strategy,
     )
 
     runner = CliRunner()
@@ -83,19 +79,15 @@ def test_generate_tests_command_uses_cli_state(monkeypatch):
 
     captured = {}
 
-    class FakeTestingAgent:
-        def __init__(self):
-            pass
-
-        def execute(self, prompt, agent_context):
-            captured["prompt"] = prompt
-            captured["metadata"] = dict(agent_context.metadata)
-            metadata = {"test_files_created": ["tests/test_feature.py"]}
-            return AgentResult(success=True, output="Generated tests", metadata=metadata)
+    def fake_execute_strategy(agent_type, prompt, agent_context, **kwargs):
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(agent_context.metadata)
+        metadata = {"test_files_created": ["tests/test_feature.py"]}
+        return AgentResult(success=True, output="Generated tests", metadata=metadata)
 
     monkeypatch.setattr(
-        "ai_dev_agent.cli.runtime.commands.generate_tests.TestingAgent",
-        FakeTestingAgent,
+        "ai_dev_agent.cli.runtime.commands.generate_tests.execute_strategy",
+        fake_execute_strategy,
     )
 
     runner = CliRunner()
@@ -124,19 +116,15 @@ def test_write_code_command_uses_cli_state(monkeypatch, tmp_path):
 
     captured = {}
 
-    class FakeImplementationAgent:
-        def __init__(self):
-            pass
-
-        def execute(self, prompt, agent_context):
-            captured["prompt"] = prompt
-            captured["metadata"] = dict(agent_context.metadata)
-            metadata = {"files_created": ["src/module.py"]}
-            return AgentResult(success=True, output="Implementation diff", metadata=metadata)
+    def fake_execute_strategy(agent_type, prompt, agent_context, **kwargs):
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(agent_context.metadata)
+        metadata = {"files_created": ["src/module.py"]}
+        return AgentResult(success=True, output="Implementation diff", metadata=metadata)
 
     monkeypatch.setattr(
-        "ai_dev_agent.cli.runtime.commands.write_code.ImplementationAgent",
-        FakeImplementationAgent,
+        "ai_dev_agent.cli.runtime.commands.write_code.execute_strategy",
+        fake_execute_strategy,
     )
 
     runner = CliRunner()
@@ -173,19 +161,15 @@ def test_review_command_uses_cli_state(monkeypatch, tmp_path):
 
     captured = {}
 
-    class FakeReviewAgent:
-        def __init__(self):
-            pass
-
-        def execute(self, prompt, agent_context):
-            captured["prompt"] = prompt
-            captured["metadata"] = dict(agent_context.metadata)
-            metadata = {"issues_found": 0, "quality_score": 1.0}
-            return AgentResult(success=True, output="No issues", metadata=metadata)
+    def fake_execute_strategy(agent_type, prompt, agent_context, **kwargs):
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(agent_context.metadata)
+        metadata = {"issues_found": 0, "quality_score": 1.0}
+        return AgentResult(success=True, output="No issues", metadata=metadata)
 
     monkeypatch.setattr(
-        "ai_dev_agent.cli.runtime.commands.review.ReviewAgent",
-        FakeReviewAgent,
+        "ai_dev_agent.cli.runtime.commands.review.execute_strategy",
+        fake_execute_strategy,
     )
 
     runner = CliRunner()

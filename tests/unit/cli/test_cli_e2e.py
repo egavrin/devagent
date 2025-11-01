@@ -96,10 +96,11 @@ class TestCLIEndToEnd:
 
         assert result.exit_code == 0
         # Output should be valid JSON
-        output = json.loads(result.output)
+        lines = [line for line in result.output.splitlines() if line.strip()]
+        output = json.loads(lines[-1])
         assert "status" in output
 
-    @patch("ai_dev_agent.agents.specialized.review_agent.ReviewAgent.execute")
+    @patch("ai_dev_agent.cli.runtime.commands.review.execute_strategy")
     @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_review_command_file(self, mock_client, mock_execute, runner, temp_workspace):
         """Test review command with a file."""
@@ -144,7 +145,7 @@ class TestCLIEndToEnd:
         assert result.exit_code != 0
         assert "not found" in result.output.lower() or "error" in result.output.lower()
 
-    @patch("ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute")
+    @patch("ai_dev_agent.cli.runtime.commands.design.execute_strategy")
     @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_create_design_command(self, mock_client, mock_execute, runner, temp_workspace):
         """Test create-design command."""
@@ -166,9 +167,11 @@ class TestCLIEndToEnd:
         mock_execute.assert_called_once()
         # Check that the feature description was passed
         call_args = mock_execute.call_args
-        assert "authentication system" in call_args[0][0]
+        agent_type, prompt, *_ = call_args[0]
+        assert agent_type == "design"
+        assert "authentication system" in prompt
 
-    @patch("ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute")
+    @patch("ai_dev_agent.cli.runtime.commands.design.execute_strategy")
     @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_create_design_with_output_file(
         self, mock_client, mock_execute, runner, temp_workspace
@@ -192,7 +195,7 @@ class TestCLIEndToEnd:
         assert output_file.exists()
         assert output_file.read_text() == design_content
 
-    @patch("ai_dev_agent.agents.specialized.testing_agent.TestingAgent.execute")
+    @patch("ai_dev_agent.cli.runtime.commands.generate_tests.execute_strategy")
     @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_generate_tests_command(self, mock_client, mock_execute, runner, temp_workspace):
         """Test generate-tests command."""
@@ -214,7 +217,7 @@ class TestCLIEndToEnd:
         assert result.exit_code == 0
         mock_execute.assert_called_once()
 
-    @patch("ai_dev_agent.agents.specialized.testing_agent.TestingAgent.execute")
+    @patch("ai_dev_agent.cli.runtime.commands.generate_tests.execute_strategy")
     @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_generate_tests_with_coverage_target(
         self, mock_client, mock_execute, runner, temp_workspace
@@ -235,9 +238,11 @@ class TestCLIEndToEnd:
         assert result.exit_code == 0
         # Check that coverage target was included in prompt
         call_args = mock_execute.call_args
-        assert "95" in str(call_args[0][0])
+        agent_type, prompt, *_ = call_args[0]
+        assert agent_type == "test"
+        assert "95" in prompt
 
-    @patch("ai_dev_agent.agents.specialized.implementation_agent.ImplementationAgent.execute")
+    @patch("ai_dev_agent.cli.runtime.commands.write_code.execute_strategy")
     @patch("ai_dev_agent.cli.utils.get_llm_client")
     def test_write_code_command(self, mock_client, mock_execute, runner, temp_workspace):
         """Test write-code command."""
@@ -374,9 +379,7 @@ class TestCLIEndToEnd:
         """Test review command with JSON output format."""
         mock_client.return_value = MagicMock()
 
-        with patch(
-            "ai_dev_agent.agents.specialized.review_agent.ReviewAgent.execute"
-        ) as mock_execute:
+        with patch("ai_dev_agent.cli.runtime.commands.review.execute_strategy") as mock_execute:
             mock_execute.return_value = MagicMock(
                 success=True,
                 output="Review complete",
@@ -401,7 +404,8 @@ class TestCLIEndToEnd:
 
             assert result.exit_code == 0
             # Should output valid JSON
-            output = json.loads(result.output)
+            lines = [line for line in result.output.splitlines() if line.strip()]
+            output = json.loads(lines[-1])
             assert "success" in output
             assert output["success"]
 

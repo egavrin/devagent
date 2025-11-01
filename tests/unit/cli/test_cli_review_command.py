@@ -36,7 +36,7 @@ def review_cli_stub(cli_stub_runtime, monkeypatch):
     )
     execute_stub = MagicMock(return_value=stub_result)
     monkeypatch.setattr(
-        "ai_dev_agent.agents.specialized.executor_bridge.execute_agent_with_react",
+        "ai_dev_agent.agents.strategy_adapter.execute_agent_with_react",
         execute_stub,
     )
     cli_stub_runtime["agent_execute"] = execute_stub

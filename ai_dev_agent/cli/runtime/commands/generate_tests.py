@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 
 from ai_dev_agent.agents.base import AgentContext
-from ai_dev_agent.agents.specialized import TestingAgent
-from ai_dev_agent.agents.strategies.test import TestGenerationAgentStrategy
+from ai_dev_agent.agents.runtime import create_strategy_agent, execute_strategy
 
 from .._compat import get_cli_state
 
@@ -17,15 +16,17 @@ if TYPE_CHECKING:  # pragma: no cover
     from ..main import CLIState
 
 
-def _build_prompt(state: "CLIState", feature: str, coverage: int, test_type: str) -> str:
+def _build_prompt(
+    state: "CLIState", feature: str, coverage: int, test_type: str
+) -> tuple[str, dict[str, Any]]:
     """Compose testing prompt using shared context."""
-    strategy = TestGenerationAgentStrategy(prompt_loader=state.prompt_loader)
+    adapter = create_strategy_agent("test", prompt_loader=state.prompt_loader)
     base_context = {
         "workspace": str(state.context_builder.workspace),
         "system_context": state.system_context,
         "project_context": state.project_context,
     }
-    strategy.set_context(base_context)
+    adapter.set_strategy_context(base_context)
 
     prompt_context = {
         "coverage_target": coverage,
@@ -33,7 +34,7 @@ def _build_prompt(state: "CLIState", feature: str, coverage: int, test_type: str
     }
 
     try:
-        prompt = strategy.build_prompt(feature, context=prompt_context)
+        prompt = adapter.build_prompt(feature, context=prompt_context)
     except FileNotFoundError:
         prompt = (
             "# Test Generation Prompt\n"
@@ -55,7 +56,7 @@ def _build_prompt(state: "CLIState", feature: str, coverage: int, test_type: str
     prompt += json.dumps(repo_snapshot, indent=2, sort_keys=True)
     prompt += "\n```"
 
-    return prompt
+    return prompt, adapter.get_strategy_context()
 
 
 @click.command(
@@ -93,9 +94,7 @@ def execute_generate_tests(
     test_type: str,
 ) -> None:
     """Shared implementation for test generation."""
-    prompt = _build_prompt(state, feature, coverage, test_type)
-
-    agent = TestingAgent()
+    prompt, strategy_context = _build_prompt(state, feature, coverage, test_type)
     agent_context = AgentContext(session_id=f"test-{feature}")
     agent_context.metadata.update(
         {
@@ -117,7 +116,15 @@ def execute_generate_tests(
     if not json_output:
         click.echo(f"🧪 Generating tests for '{feature}'...")
 
-    result = agent.execute(prompt, agent_context)
+    result = execute_strategy(
+        "test",
+        prompt,
+        agent_context,
+        prompt_loader=state.prompt_loader,
+        strategy_context=strategy_context,
+        ctx=ctx,
+        cli_client=ctx.obj.get("llm_client"),
+    )
 
     if result.success:
         if json_output:

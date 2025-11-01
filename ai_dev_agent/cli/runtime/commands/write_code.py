@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 
 from ai_dev_agent.agents.base import AgentContext
-from ai_dev_agent.agents.specialized import ImplementationAgent
-from ai_dev_agent.agents.strategies.implementation import ImplementationAgentStrategy
+from ai_dev_agent.agents.runtime import create_strategy_agent, execute_strategy
 
 from .._compat import get_cli_state
 
@@ -22,15 +21,15 @@ def _build_prompt(
     state: "CLIState",
     design_file: str,
     test_file: Optional[str],
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     """Compose implementation prompt with repository context."""
-    strategy = ImplementationAgentStrategy(prompt_loader=state.prompt_loader)
+    adapter = create_strategy_agent("implementation", prompt_loader=state.prompt_loader)
     base_context = {
         "workspace": str(state.context_builder.workspace),
         "system_context": state.system_context,
         "project_context": state.project_context,
     }
-    strategy.set_context(base_context)
+    adapter.set_strategy_context(base_context)
 
     task = f"Implement solution from {design_file}"
     prompt_context = {
@@ -40,7 +39,7 @@ def _build_prompt(
         prompt_context["test_file"] = test_file
 
     try:
-        prompt = strategy.build_prompt(task, context=prompt_context)
+        prompt = adapter.build_prompt(task, context=prompt_context)
     except FileNotFoundError:
         prompt = (
             "# Implementation Prompt\n"
@@ -61,7 +60,7 @@ def _build_prompt(
     prompt += json.dumps(repo_snapshot, indent=2, sort_keys=True)
     prompt += "\n```"
 
-    return prompt
+    return prompt, adapter.get_strategy_context()
 
 
 @click.command(
@@ -89,9 +88,7 @@ def execute_write_code(
     test_file: Optional[str],
 ) -> None:
     """Shared implementation for code writing routine."""
-    prompt = _build_prompt(state, design_file, test_file)
-
-    agent = ImplementationAgent()
+    prompt, strategy_context = _build_prompt(state, design_file, test_file)
     agent_context = AgentContext(session_id=f"implement-{Path(design_file).stem}")
     agent_context.metadata.update(
         {
@@ -112,7 +109,15 @@ def execute_write_code(
     if not json_output:
         click.echo(f"⚙️  Implementing from '{design_file}'...")
 
-    result = agent.execute(prompt, agent_context)
+    result = execute_strategy(
+        "implementation",
+        prompt,
+        agent_context,
+        prompt_loader=state.prompt_loader,
+        strategy_context=strategy_context,
+        ctx=ctx,
+        cli_client=ctx.obj.get("llm_client"),
+    )
 
     if result.success:
         if json_output:

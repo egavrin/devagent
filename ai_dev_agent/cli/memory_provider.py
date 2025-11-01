@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -159,3 +159,109 @@ class MemoryProvider:
             lines.append("")
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Extended helpers used by the CLI runtime
+    # ------------------------------------------------------------------
+
+    @property
+    def has_store(self) -> bool:
+        """Return True when the memory subsystem is available."""
+        return bool(MEMORY_SYSTEM_AVAILABLE and self._memory_store)
+
+    def distill_and_store_memory(
+        self,
+        session_id: str,
+        messages: Iterable[Any],
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Distill a session transcript into memory and persist it."""
+        if not self.has_store:
+            return None
+
+        try:
+            distiller = MemoryDistiller()
+            normalized_messages = list(messages)
+            if not normalized_messages:
+                return None
+
+            memory = distiller.distill_from_session(
+                session_id=session_id,
+                messages=normalized_messages,
+                metadata=metadata or {},
+            )
+            if not memory:
+                return None
+            memory_id = self._memory_store.add_memory(memory)
+            logger.debug("Stored distilled memory %s from session %s", memory_id, session_id)
+            return memory_id
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to distill session memory: %s", exc)
+            return None
+
+    def track_memory_effectiveness(
+        self, memory_ids: Iterable[str], success: bool, feedback: Optional[str] = None
+    ) -> None:
+        """Adjust effectiveness for previously retrieved memories."""
+        if not self.has_store:
+            return
+
+        delta = 0.1 if success else -0.1
+        for memory_id in memory_ids:
+            try:
+                self._memory_store.update_effectiveness(memory_id, delta, feedback)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("Failed to update effectiveness for %s: %s", memory_id, exc)
+
+    def record_query_outcome(
+        self,
+        *,
+        session_id: str,
+        success: bool,
+        tools_used: list[str],
+        task_type: str,
+        error_type: Optional[str] = None,
+        duration_seconds: Optional[float] = None,
+    ) -> None:
+        """Persist lightweight usage statistics for diagnostics."""
+        if not self.has_store:
+            return
+
+        try:
+            # Maintain aggregated stats inside MemoryStore usage metadata
+            stats = self._memory_store._usage_stats.setdefault(  # type: ignore[attr-defined]
+                session_id,
+                {
+                    "successes": 0,
+                    "failures": 0,
+                    "tools": {},
+                    "task_type": task_type,
+                    "last_error": None,
+                    "durations": [],
+                },
+            )
+            if success:
+                stats["successes"] += 1
+            else:
+                stats["failures"] += 1
+            for tool in tools_used:
+                stats["tools"][tool] = stats["tools"].get(tool, 0) + 1
+            if error_type:
+                stats["last_error"] = error_type
+            if duration_seconds is not None:
+                stats["durations"].append(duration_seconds)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to record query outcome: %s", exc)
+
+    def collect_statistics(self) -> dict[str, Any]:
+        """Expose lightweight snapshot of memory usage; used for diagnostics."""
+        if not self.has_store:
+            return {}
+        try:
+            return {
+                "total_memories": len(self._memory_store._memories),  # type: ignore[attr-defined]
+                "usage_stats": dict(self._memory_store._usage_stats),  # type: ignore[attr-defined]
+            }
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to collect memory statistics: %s", exc)
+            return {}

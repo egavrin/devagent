@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 
 from ai_dev_agent.agents.base import AgentContext
-from ai_dev_agent.agents.specialized import ReviewAgent
-from ai_dev_agent.agents.strategies.review import ReviewAgentStrategy
+from ai_dev_agent.agents.runtime import create_strategy_agent, execute_strategy
 
 from ... import review as review_module
 from .._compat import get_cli_state
@@ -26,15 +25,15 @@ def _build_review_prompt(
     *,
     rule_file: Optional[str] = None,
     patch_data: Optional[str] = None,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     """Compose review prompt using shared context and strategy."""
-    strategy = ReviewAgentStrategy(prompt_loader=state.prompt_loader)
+    adapter = create_strategy_agent("review", prompt_loader=state.prompt_loader)
     base_context = {
         "workspace": str(state.context_builder.workspace),
         "system_context": state.system_context,
         "project_context": state.project_context,
     }
-    strategy.set_context(base_context)
+    adapter.set_strategy_context(base_context)
 
     task = f"Review '{file_path}' for quality, security, and performance issues."
     prompt_context = {
@@ -44,7 +43,7 @@ def _build_review_prompt(
     }
 
     try:
-        prompt = strategy.build_prompt(task, context=prompt_context)
+        prompt = adapter.build_prompt(task, context=prompt_context)
     except FileNotFoundError:
         prompt = (
             "# Review Prompt\n"
@@ -65,7 +64,7 @@ def _build_review_prompt(
     prompt += json.dumps(repo_snapshot, indent=2, sort_keys=True)
     prompt += "\n```"
 
-    return prompt
+    return prompt, adapter.get_strategy_context()
 
 
 def execute_review(
@@ -127,9 +126,8 @@ def execute_review(
         return
 
     # General review via ReviewAgent
-    prompt = _build_review_prompt(state, file_path)
+    prompt, strategy_context = _build_review_prompt(state, file_path)
 
-    agent = ReviewAgent()
     agent_context = AgentContext(session_id=f"review-{Path(file_path).stem}")
     agent_context.metadata.update(
         {
@@ -148,7 +146,15 @@ def execute_review(
     if not json_output:
         click.echo(f"🔍 Reviewing '{file_path}'...")
 
-    result = agent.execute(prompt, agent_context)
+    result = execute_strategy(
+        "review",
+        prompt,
+        agent_context,
+        prompt_loader=state.prompt_loader,
+        strategy_context=strategy_context,
+        ctx=ctx,
+        cli_client=ctx.obj.get("llm_client"),
+    )
 
     if result.success:
         issues = result.metadata.get("issues_found", 0)

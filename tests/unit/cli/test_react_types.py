@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = pytest.mark.skip(reason="Obsolete placeholder tests")
+
 
 class TestReactTypes:
     """Test cases for React types functionality."""

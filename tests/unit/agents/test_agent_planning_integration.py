@@ -229,23 +229,18 @@ class TestAutomatedWorkflow:
             ],
         )
 
-        # Mock agent executions
-        with (
-            patch(
-                "ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute"
-            ) as mock_design,
-            patch(
-                "ai_dev_agent.agents.specialized.testing_agent.TestingAgent.execute"
-            ) as mock_test,
-        ):
-
-            mock_design.return_value = AgentResult(success=True, output="Design done")
-            mock_test.return_value = AgentResult(success=True, output="Tests done")
+        # Mock agent execution through orchestrator
+        with patch.object(workflow.integration.orchestrator, "delegate_task") as mock_delegate:
+            mock_delegate.side_effect = [
+                AgentResult(success=True, output="Design done"),
+                AgentResult(success=True, output="Tests done"),
+            ]
 
             result = workflow.execute_plan_automatically(plan, context)
 
             assert result["success"] is True
             assert result["tasks_completed"] == 2
+            assert mock_delegate.call_count == 2
 
     def test_stop_on_failure(self):
         """Test stopping workflow when task fails."""
@@ -260,16 +255,14 @@ class TestAutomatedWorkflow:
                 Task(id="2", title="Won't run", tags=["test"], dependencies=["1"]),
             ],
         )
-
-        with patch(
-            "ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute"
-        ) as mock_design:
-            mock_design.return_value = AgentResult(success=False, output="", error="Failed")
+        with patch.object(workflow.integration.orchestrator, "delegate_task") as mock_delegate:
+            mock_delegate.return_value = AgentResult(success=False, output="", error="Failed")
 
             result = workflow.execute_plan_automatically(plan, context, stop_on_failure=True)
 
             assert result["success"] is False
             assert result["tasks_completed"] < 2
+            mock_delegate.assert_called_once()
 
     def test_continue_on_failure(self):
         """Test continuing workflow despite failures."""
@@ -284,23 +277,17 @@ class TestAutomatedWorkflow:
                 Task(id="2", title="Independent task", tags=["review"]),  # No dependency on task 1
             ],
         )
-
-        with (
-            patch(
-                "ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute"
-            ) as mock_design,
-            patch(
-                "ai_dev_agent.agents.specialized.review_agent.ReviewAgent.execute"
-            ) as mock_review,
-        ):
-
-            mock_design.return_value = AgentResult(success=False, output="", error="Failed")
-            mock_review.return_value = AgentResult(success=True, output="Review done")
+        with patch.object(workflow.integration.orchestrator, "delegate_task") as mock_delegate:
+            mock_delegate.side_effect = [
+                AgentResult(success=False, output="", error="Failed"),
+                AgentResult(success=True, output="Review done"),
+            ]
 
             result = workflow.execute_plan_automatically(plan, context, stop_on_failure=False)
 
             # Should complete independent tasks even if one fails
             assert result["tasks_completed"] >= 1
+            assert mock_delegate.call_count == 2
 
     def test_progress_callback(self):
         """Test progress callback during execution."""
@@ -317,10 +304,10 @@ class TestAutomatedWorkflow:
             goal="Check progress",
             tasks=[Task(id="1", title="Task", tags=["design"])],
         )
-
-        with patch("ai_dev_agent.agents.specialized.design_agent.DesignAgent.execute") as mock:
-            mock.return_value = AgentResult(success=True, output="Done")
+        with patch.object(workflow.integration.orchestrator, "delegate_task") as mock_delegate:
+            mock_delegate.return_value = AgentResult(success=True, output="Done")
 
             workflow.execute_plan_automatically(plan, context, progress_callback=progress_callback)
 
             assert len(progress_updates) > 0
+            mock_delegate.assert_called_once()

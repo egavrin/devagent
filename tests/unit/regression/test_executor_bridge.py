@@ -6,7 +6,7 @@ import click
 import pytest
 
 from ai_dev_agent.agents.base import AgentContext, AgentResult, BaseAgent
-from ai_dev_agent.agents.specialized.executor_bridge import AgentExecutor, execute_agent_with_react
+from ai_dev_agent.agents.executor import AgentExecutor, execute_agent_with_react
 from ai_dev_agent.core.utils.config import Settings
 
 
@@ -301,7 +301,7 @@ class TestAgentExecutor:
 class TestModuleFunctions:
     """Test module-level functions."""
 
-    @patch("ai_dev_agent.agents.specialized.executor_bridge._executor.execute_with_react")
+    @patch("ai_dev_agent.agents.executor._executor.execute_with_react")
     def test_execute_agent_with_react(self, mock_execute):
         """Test the convenience function."""
         mock_agent = MagicMock(spec=BaseAgent)

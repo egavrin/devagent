@@ -3,7 +3,7 @@
 import logging
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from ai_dev_agent.cli.memory_provider import MemoryProvider
 from ai_dev_agent.core.repo_map import RepoMapManager
@@ -830,6 +830,9 @@ class ContextEnhancer:
         self, query: str, task_type: Optional[str] = None, limit: int = 5, threshold: float = 0.3
     ) -> tuple[list[dict[str, Any]], Optional[list[str]]]:
         """Retrieve relevant memories for the query - delegates to MemoryProvider."""
+        if not self.has_memory_support:
+            return [], None
+
         memories = self._memory_provider.retrieve_relevant_memories(query, task_type, limit)
         if not memories:
             return [], None
@@ -857,6 +860,52 @@ class ContextEnhancer:
         """Store a new memory - delegates to MemoryProvider."""
         metadata = {"workspace": str(self.workspace)}
         return self._memory_provider.store_memory(query, response, task_type, success, metadata)
+
+    # Memory provider helpers -------------------------------------------------
+
+    @property
+    def has_memory_support(self) -> bool:
+        """Return True when the memory bank is available."""
+        return self._memory_provider.has_store
+
+    def distill_and_store_memory(
+        self,
+        session_id: str,
+        messages: Iterable[Any],
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Distill a session transcript and persist it using the memory provider."""
+        return self._memory_provider.distill_and_store_memory(session_id, messages, metadata)
+
+    def track_memory_effectiveness(
+        self, memory_ids: Iterable[str], success: bool, feedback: Optional[str] = None
+    ) -> None:
+        """Update effectiveness metrics for retrieved memories."""
+        self._memory_provider.track_memory_effectiveness(memory_ids, success, feedback)
+
+    def record_query_outcome(
+        self,
+        *,
+        session_id: str,
+        success: bool,
+        tools_used: list[str],
+        task_type: str,
+        error_type: Optional[str] = None,
+        duration_seconds: Optional[float] = None,
+    ) -> None:
+        """Record lightweight outcome metadata for telemetry."""
+        self._memory_provider.record_query_outcome(
+            session_id=session_id,
+            success=success,
+            tools_used=tools_used,
+            task_type=task_type,
+            error_type=error_type,
+            duration_seconds=duration_seconds,
+        )
+
+    def collect_memory_statistics(self) -> dict[str, Any]:
+        """Expose aggregated memory statistics for diagnostics."""
+        return self._memory_provider.collect_statistics()
 
     # Playbook and dynamic instruction methods have been removed
 

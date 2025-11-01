@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 
 from ai_dev_agent.agents.base import AgentContext
-from ai_dev_agent.agents.specialized import DesignAgent
-from ai_dev_agent.agents.strategies.design import DesignAgentStrategy
+from ai_dev_agent.agents.runtime import create_strategy_agent, execute_strategy
 
 from .._compat import get_cli_state
 
@@ -18,15 +17,17 @@ if TYPE_CHECKING:  # pragma: no cover - type hinting only
     from ..main import CLIState
 
 
-def _build_prompt(state: "CLIState", feature: str, extra_context: Optional[str]) -> str:
+def _build_prompt(
+    state: "CLIState", feature: str, extra_context: Optional[str]
+) -> tuple[str, dict[str, Any]]:
     """Compose the prompt using the design strategy and shared context."""
-    strategy = DesignAgentStrategy(prompt_loader=state.prompt_loader)
+    adapter = create_strategy_agent("design", prompt_loader=state.prompt_loader)
     base_context = {
         "workspace": str(state.context_builder.workspace),
         "system_context": state.system_context,
         "project_context": state.project_context,
     }
-    strategy.set_context(base_context)
+    adapter.set_strategy_context(base_context)
 
     task = f"Design solution for {feature}"
     prompt_context = {"feature_name": feature}
@@ -34,7 +35,7 @@ def _build_prompt(state: "CLIState", feature: str, extra_context: Optional[str])
         prompt_context["additional_context"] = extra_context
 
     try:
-        prompt = strategy.build_prompt(task, context=prompt_context)
+        prompt = adapter.build_prompt(task, context=prompt_context)
     except FileNotFoundError:
         prompt = (
             "# Design Prompt\n"
@@ -57,7 +58,7 @@ def _build_prompt(state: "CLIState", feature: str, extra_context: Optional[str])
     prompt += json.dumps(repo_snapshot, indent=2, sort_keys=True)
     prompt += "\n```"
 
-    return prompt
+    return prompt, adapter.get_strategy_context()
 
 
 def execute_create_design(
@@ -68,9 +69,8 @@ def execute_create_design(
     context: Optional[str],
 ) -> None:
     """Shared implementation for creating a design document."""
-    prompt = _build_prompt(state, feature, context)
+    prompt, strategy_context = _build_prompt(state, feature, context)
 
-    agent = DesignAgent()
     agent_context = AgentContext(session_id=f"design-{feature}")
     agent_context.metadata.update(
         {
@@ -91,7 +91,15 @@ def execute_create_design(
     if not json_output:
         click.echo(f"🎨 Creating design for '{feature}'...")
 
-    result = agent.execute(prompt, agent_context)
+    result = execute_strategy(
+        "design",
+        prompt,
+        agent_context,
+        prompt_loader=state.prompt_loader,
+        strategy_context=strategy_context,
+        ctx=ctx,
+        cli_client=ctx.obj.get("llm_client"),
+    )
 
     if result.success:
         if json_output:

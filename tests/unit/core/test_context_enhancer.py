@@ -8,6 +8,7 @@ import pytest
 
 from ai_dev_agent.cli.context_enhancer import ContextEnhancer, get_context_enhancer
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.providers.llm.base import Message
 
 
 class TestContextEnhancer:
@@ -151,6 +152,7 @@ class TestContextEnhancer:
             {"id": "1", "content": "Test memory 1", "metadata": {"effectiveness": 0.8}},
             {"id": "2", "content": "Test memory 2", "metadata": {"effectiveness": 0.6}},
         ]
+        enhancer._memory_provider._memory_store = object()
         enhancer._memory_provider.retrieve_relevant_memories = MagicMock(return_value=mock_memories)
         enhancer._memory_provider.format_memories_for_context = MagicMock(
             return_value="Formatted memory context"
@@ -172,6 +174,43 @@ class TestContextEnhancer:
 
         assert memory_id == "memory_123"
         enhancer._memory_provider.store_memory.assert_called_once()
+
+    def test_has_memory_support_flag(self, enhancer):
+        """Context enhancer exposes memory availability flag."""
+        enhancer._memory_provider._memory_store = None
+        assert enhancer.has_memory_support is False
+
+        enhancer._memory_provider._memory_store = object()
+        assert enhancer.has_memory_support is True
+
+    def test_distill_and_store_memory_delegates_to_provider(self, enhancer):
+        """distill_and_store_memory forwards to memory provider."""
+        enhancer._memory_provider.distill_and_store_memory = MagicMock(return_value="mem-42")
+        result = enhancer.distill_and_store_memory(
+            session_id="session-1", messages=[Message(role="user", content="hi")], metadata={}
+        )
+
+        enhancer._memory_provider.distill_and_store_memory.assert_called_once()
+        assert result == "mem-42"
+
+    def test_track_memory_effectiveness_handles_provider_missing(self, enhancer):
+        """track_memory_effectiveness is resilient when memory disabled."""
+        enhancer._memory_provider.track_memory_effectiveness = MagicMock()
+        enhancer.track_memory_effectiveness(memory_ids=["m1"], success=True, feedback=None)
+        enhancer._memory_provider.track_memory_effectiveness.assert_called_once()
+
+    def test_record_query_outcome_is_noop_without_provider_method(self, enhancer):
+        """record_query_outcome should call provider hook if available."""
+        enhancer._memory_provider.record_query_outcome = MagicMock()
+        enhancer.record_query_outcome(
+            session_id="session-2",
+            success=True,
+            tools_used=["read"],
+            task_type="debugging",
+            error_type=None,
+            duration_seconds=5.0,
+        )
+        enhancer._memory_provider.record_query_outcome.assert_called_once()
 
     def test_get_context_enhancer_singleton(self):
         """Test singleton pattern for context enhancer."""

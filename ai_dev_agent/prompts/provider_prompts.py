@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 
 @dataclass
@@ -240,101 +239,3 @@ No tools available - provide your complete analysis and recommendations."""
         else:
             return f"""# Available Tools
 {chr(10).join(f'- {tool}' for tool in available_tools)}"""
-
-
-class PromptLoader:
-    """Load custom prompts from files."""
-
-    # Standard instruction files to check
-    INSTRUCTION_FILES = [
-        "DEVAGENT.md",
-        "AGENTS.md",
-        "CLAUDE.md",
-        "CONTEXT.md",  # deprecated but still checked
-        ".devagent/instructions.md",
-    ]
-
-    @classmethod
-    def load_custom_instructions(cls, project_root: Path | None = None) -> str | None:
-        """Load custom instructions from project files."""
-
-        if project_root is None:
-            project_root = Path.cwd()
-
-        instructions = []
-
-        # Check each standard location
-        for filename in cls.INSTRUCTION_FILES:
-            file_path = project_root / filename
-
-            if file_path.exists():
-                try:
-                    with file_path.open(encoding="utf-8") as f:
-                        content = f.read().strip()
-                        if content:
-                            instructions.append(f"# From {filename}\n{content}")
-                except Exception:
-                    continue
-
-        # Also check home directory for global instructions
-        home_instructions = Path.home() / ".devagent" / "instructions.md"
-        if home_instructions.exists():
-            try:
-                with home_instructions.open(encoding="utf-8") as f:
-                    content = f.read().strip()
-                    if content:
-                        instructions.append(f"# Global Instructions\n{content}")
-            except Exception:
-                pass
-
-        if instructions:
-            return "\n\n".join(instructions)
-
-        return None
-
-    @classmethod
-    def get_language_from_project(cls, project_root: Path | None = None) -> str | None:
-        """Detect primary language from project files."""
-
-        if project_root is None:
-            project_root = Path.cwd()
-
-        # Check for language-specific files
-        checks = [
-            ("package.json", "javascript"),
-            ("tsconfig.json", "typescript"),
-            ("requirements.txt", "python"),
-            ("pyproject.toml", "python"),
-            ("go.mod", "go"),
-            ("Cargo.toml", "rust"),
-            ("pom.xml", "java"),
-            ("build.gradle", "java"),
-            ("composer.json", "php"),
-            ("Gemfile", "ruby"),
-        ]
-
-        for filename, language in checks:
-            if (project_root / filename).exists():
-                return language
-
-        # Fallback: count file extensions
-        extension_counts = {}
-        for pattern in ["*.py", "*.js", "*.ts", "*.java", "*.go", "*.rs"]:
-            count = len(list(project_root.glob(f"**/{pattern}")))
-            if count > 0:
-                ext = pattern[2:]
-                extension_counts[ext] = count
-
-        if extension_counts:
-            # Return language with most files
-            most_common = max(extension_counts, key=extension_counts.get)
-            return {
-                "py": "python",
-                "js": "javascript",
-                "ts": "typescript",
-                "java": "java",
-                "go": "go",
-                "rs": "rust",
-            }.get(most_common, "unknown")
-
-        return None

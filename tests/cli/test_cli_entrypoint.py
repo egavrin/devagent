@@ -89,18 +89,14 @@ def test_cli_review_command_executes(tmp_path, monkeypatch):
 
     captured: dict[str, object] = {}
 
-    class FakeReviewAgent:
-        def __init__(self):
-            pass
-
-        def execute(self, prompt, agent_context):
-            captured["prompt"] = prompt
-            captured["metadata"] = dict(agent_context.metadata)
-            return AgentResult(success=True, output="Looks good", metadata={"issues_found": 0})
+    def fake_execute_strategy(agent_type, prompt, agent_context, **kwargs):
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(agent_context.metadata)
+        return AgentResult(success=True, output="Looks good", metadata={"issues_found": 0})
 
     monkeypatch.setattr(
-        "ai_dev_agent.cli.runtime.commands.review.ReviewAgent",
-        FakeReviewAgent,
+        "ai_dev_agent.cli.runtime.commands.review.execute_strategy",
+        fake_execute_strategy,
     )
 
     runner = CliRunner()
