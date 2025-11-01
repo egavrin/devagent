@@ -85,7 +85,7 @@ def test_budget_executor_forced_synthesis_uses_budget_integration(monkeypatch):
     provider = _ForcedSynthesisProvider(integration)
 
     monkeypatch.setattr(
-        "ai_dev_agent.cli.react.executor._sanitize_conversation_for_llm",
+        "ai_dev_agent.cli.react.executor.sanitize_conversation",
         lambda messages: messages,
     )
 

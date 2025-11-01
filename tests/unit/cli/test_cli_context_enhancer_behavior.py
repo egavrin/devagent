@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ai_dev_agent.cli.context_enhancer import ContextEnhancer
+from ai_dev_agent.cli.context_enhancer import ContextEnhancer, enhance_query, get_context_enhancer
 from ai_dev_agent.core.utils.config import Settings
 
 
@@ -294,6 +294,29 @@ def test_context_enhancer_important_file_prioritization(temp_workspace, mock_set
     assert "build/output.bundle.js" not in returned
 
 
+def test_get_important_files_breaks_on_first_pass(temp_workspace, mock_settings):
+    """First-pass important patterns should short-circuit once the cap is reached."""
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    result = enhancer._get_important_files(["README.md", "setup.py"], max_files=1)
+    assert result == [("README.md", 20.0)]
+
+
+def test_get_important_files_hits_second_pass(temp_workspace, mock_settings):
+    """Path-based heuristics should populate the list when exact matches are absent."""
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    result = enhancer._get_important_files(["src/main/server.py", "lib/app.py"], max_files=1)
+    assert result[0][0] == "src/main/server.py"
+
+
+def test_get_important_files_third_pass_includes_generic(temp_workspace, mock_settings):
+    """Third pass should add implementation files after filtering test artefacts."""
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    result = enhancer._get_important_files(
+        ["pkg/component.py", "tests/test_component.py"], max_files=1
+    )
+    assert result == [("pkg/component.py", 3.0)]
+
+
 def test_context_enhancer_filtering_respects_custom_ignores(mock_settings, temp_workspace):
     """Custom ignore fragments and suffixes should be honoured."""
     mock_settings.context_ignore_patterns = ["docs", "experimental"]
@@ -452,6 +475,37 @@ def test_context_enhancer_git_signature_detached_head(temp_workspace, mock_setti
     assert head_sig == commit_hash
 
 
+def test_context_enhancer_git_signature_missing_files(monkeypatch, temp_workspace, mock_settings):
+    """Stat and HEAD read failures should yield a neutral git signature."""
+    git_dir = temp_workspace / ".git"
+    git_dir.mkdir()
+    index_path = git_dir / "index"
+    index_path.write_bytes(b"")
+    head_path = git_dir / "HEAD"
+    head_path.write_text("ref: refs/heads/main", encoding="utf-8")
+
+    original_stat = Path.stat
+    original_read = Path.read_text
+
+    def stub_stat(self):
+        if self == index_path:
+            raise OSError("stat failed")
+        return original_stat(self)
+
+    def stub_read(self, *args, **kwargs):
+        if self == head_path:
+            raise OSError("read failed")
+        return original_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stub_stat)
+    monkeypatch.setattr(Path, "read_text", stub_read)
+
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    signature = enhancer._get_git_signature()
+
+    assert signature == (None, None)
+
+
 def test_extract_symbols_handles_bare_filenames_and_directories(
     monkeypatch, temp_workspace, mock_settings
 ):
@@ -486,6 +540,24 @@ def test_extract_symbols_handles_bare_filenames_and_directories(
     assert "helpers.py" in mentions
     assert "services" in mentions
     assert any(sym in symbols for sym in {"APIClient", "helpers"})
+
+
+def test_extract_symbols_trims_file_mentions(monkeypatch, temp_workspace, mock_settings):
+    """Extracted file mentions should respect the hard limit."""
+
+    repo_map = StubRepoMap(files={}, ranked=[])
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: repo_map,
+    )
+
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    mention_list = [f"file_{idx}.py" for idx in range(ContextEnhancer.FILE_MENTION_LIMIT + 5)]
+    query = "analyse " + " ".join(mention_list)
+
+    symbols, files = enhancer.extract_symbols_and_files(query)
+    assert not symbols
+    assert len(files) == ContextEnhancer.FILE_MENTION_LIMIT
 
 
 def test_enhance_query_with_context_reports_unmatched(monkeypatch, temp_workspace, mock_settings):
@@ -671,6 +743,20 @@ def test_list_repository_files_enforces_limit(monkeypatch, temp_workspace, mock_
     assert subset == ["a.py"]
 
 
+def test_list_repository_files_cache_disabled_without_git_metadata(
+    monkeypatch, temp_workspace, mock_settings
+):
+    """When git metadata is unavailable, caching should be bypassed."""
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    monkeypatch.setattr(enhancer, "_get_git_signature", lambda: (None, None))
+    monkeypatch.setattr(enhancer, "_load_tracked_files", lambda: ["a.py", "b.py"])
+    monkeypatch.setattr(enhancer, "_filter_discoverable_files", lambda files: files)
+
+    files = enhancer.list_repository_files(use_cache=True)
+    assert files == ["a.py", "b.py"]
+    assert enhancer._file_discovery_cache is None
+
+
 def test_get_repomap_messages_requires_existing_workspace(mock_settings, tmp_path):
     """Non-existent workspaces should short-circuit message generation."""
     missing = tmp_path / "absent"
@@ -680,6 +766,114 @@ def test_get_repomap_messages_requires_existing_workspace(mock_settings, tmp_pat
 
     assert messages is None
     assert query == "anything"
+
+
+def test_enhance_query_with_context_missing_workspace(monkeypatch, mock_settings, tmp_path):
+    """Enhancement should no-op when the workspace directory is missing."""
+
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: StubRepoMap(files={}, ranked=[]),
+    )
+
+    missing = tmp_path / "missing"
+    enhancer = ContextEnhancer(workspace=missing, settings=mock_settings)
+
+    assert enhancer.enhance_query_with_context("Review foo") == "Review foo"
+
+
+def test_enhance_query_handles_repomap_failure(monkeypatch, temp_workspace, mock_settings):
+    """Enhancer should gracefully handle RepoMap errors."""
+
+    class FailingRepoMap(StubRepoMap):
+        def get_ranked_files(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    files = {
+        "src/app.py": SimpleNamespace(
+            file_name="app.py",
+            file_stem="app",
+            language="python",
+            size=200,
+            path_parts=("src", "app.py"),
+        )
+    }
+    repo_map = FailingRepoMap(files=files, ranked=[])
+
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: repo_map,
+    )
+
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    assert enhancer.enhance_query_with_context("Check src/app.py") == "Check src/app.py"
+
+
+def test_enhance_query_returns_query_when_no_mentions(monkeypatch, temp_workspace, mock_settings):
+    """Enhancement should return the original query when no symbols or files are detected."""
+
+    repo_map = StubRepoMap(files={}, ranked=[])
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: repo_map,
+    )
+
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    assert enhancer.enhance_query_with_context("the when where how") == "the when where how"
+
+
+def test_get_context_for_files_handles_exception(monkeypatch, temp_workspace, mock_settings):
+    """Context discovery should return an empty list when RepoMap raises."""
+
+    class ErrorRepoMap(StubRepoMap):
+        def get_ranked_files(self, *args, **kwargs):
+            raise RuntimeError("cannot rank")
+
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: ErrorRepoMap(files={}, ranked=[]),
+    )
+
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    assert enhancer.get_context_for_files(["src/app.py"]) == []
+
+
+def test_context_enhancer_singleton_helpers(monkeypatch, temp_workspace, mock_settings):
+    """Singleton helpers should reuse cached instances and expose helper API."""
+
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: StubRepoMap(files={}, ranked=[]),
+    )
+    monkeypatch.setattr("ai_dev_agent.cli.context_enhancer._context_enhancer", None)
+
+    first = get_context_enhancer(temp_workspace, mock_settings)
+    second = get_context_enhancer(temp_workspace, mock_settings)
+    assert first is second
+
+    query, messages = enhance_query("List repo files", workspace=temp_workspace)
+    assert query == "List repo files"
+    assert messages is None or isinstance(messages, list)
+
+
+def test_enhance_query_with_context_debug_failure(monkeypatch, temp_workspace, mock_settings):
+    """Debug logging path should be exercised when enhancement fails."""
+
+    class DebugRepoMap(StubRepoMap):
+        def get_ranked_files(self, *args, **kwargs):
+            raise RuntimeError("debug failure")
+
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: DebugRepoMap(files={}, ranked=[]),
+    )
+
+    mock_settings.repomap_debug_stdout = True
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    assert (
+        enhancer.enhance_query_with_context("Investigate RunLoop behaviour")
+        == "Investigate RunLoop behaviour"
+    )
 
 
 def test_get_repomap_messages_tier_two_low_relevance(monkeypatch, temp_workspace, mock_settings):
@@ -721,3 +915,142 @@ def test_get_repomap_messages_tier_two_low_relevance(monkeypatch, temp_workspace
     query, messages = enhancer.get_repomap_messages("Investigate alpha.py flow", max_files=2)
 
     assert "  • src/alpha.py" in messages[0]["content"]
+
+
+def test_get_repomap_messages_includes_medium_and_low(monkeypatch, temp_workspace, mock_settings):
+    """Tier 2 message formatting should include medium and low relevance entries."""
+
+    ranked = [
+        ("src/high_a.py", 12.0),
+        ("src/high_b.py", 11.0),
+        ("src/medium.py", 6.0),
+        ("src/low.py", 3.1),
+    ]
+    files = {
+        path: SimpleNamespace(
+            file_name=Path(path).name,
+            file_stem=Path(path).stem,
+            language="python",
+            size=128,
+            path_parts=tuple(Path(path).parts),
+        )
+        for path, _ in ranked
+    }
+    repo_map = StubRepoMap(files=files, ranked=ranked)
+
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: repo_map,
+    )
+
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    query_text = "Investigate src/high_a.py alongside src/medium.py and src/low.py"
+    _, messages = enhancer.get_repomap_messages(query_text, max_files=4)
+
+    assert messages is not None
+    content = messages[0]["content"]
+    assert "high_a.py" in content
+    assert "medium.py" in content
+    assert "low.py" in content
+
+
+def test_get_repomap_messages_high_relevance_assistant(monkeypatch, temp_workspace, mock_settings):
+    """Assistant response should reflect the number of highly ranked files."""
+
+    ranked = [(f"src/service_{idx}.py", 12.0) for idx in range(4)]
+    files = {
+        path: SimpleNamespace(
+            file_name=Path(path).name,
+            file_stem=Path(path).stem,
+            language="python",
+            size=128,
+            path_parts=tuple(Path(path).parts),
+        )
+        for path, _ in ranked
+    }
+    repo_map = StubRepoMap(files=files, ranked=ranked)
+
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: repo_map,
+    )
+
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    _, messages = enhancer.get_repomap_messages("Review service modules", max_files=4)
+
+    assert messages is not None
+    assert messages[1]["content"].startswith("I can see 4 relevant files")
+
+
+def test_get_repomap_messages_returns_none_when_all_tiers_fail(
+    monkeypatch, temp_workspace, mock_settings
+):
+    """All fallback tiers should decline to emit messages when no files are available."""
+
+    class EmptyRepoMap(StubRepoMap):
+        def get_ranked_files(self, *, mentioned_files, mentioned_symbols, max_files):
+            return []
+
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: EmptyRepoMap(files={}, ranked=[]),
+    )
+
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    query, messages = enhancer.get_repomap_messages(
+        "Review components", max_files=2, additional_symbols={"Hint"}
+    )
+
+    assert messages is None
+    assert query == "Review components"
+
+
+def test_get_repomap_messages_tier_three_fallback(monkeypatch, temp_workspace, mock_settings):
+    """Tier three should fall back to important files when PageRank provides no matches."""
+
+    class TierThreeRepoMap(StubRepoMap):
+        def __init__(self):
+            files = {
+                "src/seed.py": SimpleNamespace(
+                    file_name="seed.py",
+                    file_stem="seed",
+                    language="python",
+                    size=256,
+                    path_parts=("src", "seed.py"),
+                ),
+                "docs/info.md": SimpleNamespace(
+                    file_name="info.md",
+                    file_stem="info",
+                    language="markdown",
+                    size=120,
+                    path_parts=("docs", "info.md"),
+                ),
+            }
+            super().__init__(files=files, ranked=[])
+            self.calls = []
+
+        def get_ranked_files(self, *, mentioned_files, mentioned_symbols, max_files):
+            self.calls.append((set(mentioned_files), set(mentioned_symbols), max_files))
+            return []
+
+    repo_map = TierThreeRepoMap()
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+        lambda workspace: repo_map,
+    )
+
+    enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+    monkeypatch.setattr(
+        enhancer,
+        "_get_important_files",
+        lambda all_files, max_files: [("src/seed.py", 4.0), ("docs/info.md", 2.0)],
+    )
+
+    query, messages = enhancer.get_repomap_messages(
+        "Explore onboarding flow", max_files=2, additional_files={"seed.txt"}
+    )
+
+    assert messages is not None
+    assert "seed.py" in messages[0]["content"]
+    assert "I can see a high-level view" in messages[1]["content"]
+    assert len(repo_map.calls) >= 3

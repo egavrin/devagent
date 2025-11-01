@@ -10,8 +10,8 @@ from ai_dev_agent.cli.react.executor import (
     _build_synthesis_prompt,
     _extract_json,
     _record_search_query,
-    _sanitize_conversation_for_llm,
     _truncate_shell_history,
+    sanitize_conversation,
 )
 from ai_dev_agent.providers.llm.base import Message
 
@@ -50,7 +50,7 @@ class TestSanitizeConversation:
     def test_sanitize_conversation_empty(self):
         """Test sanitizing empty conversation."""
         messages = []
-        result = _sanitize_conversation_for_llm(messages)
+        result = sanitize_conversation(messages)
         assert result == []
 
     def test_sanitize_conversation_basic(self):
@@ -59,7 +59,7 @@ class TestSanitizeConversation:
             Message(role="user", content="Hello"),
             Message(role="assistant", content="Hi there"),
         ]
-        result = _sanitize_conversation_for_llm(messages)
+        result = sanitize_conversation(messages)
         assert len(result) == 2
         assert result[0].role == "user"
         assert result[1].role == "assistant"
@@ -75,7 +75,7 @@ class TestSanitizeConversation:
             Message(role="tool", content="Result", tool_call_id="call_1"),  # Valid
             Message(role="tool", content="Orphan", tool_call_id="call_999"),  # Orphan
         ]
-        result = _sanitize_conversation_for_llm(messages)
+        result = sanitize_conversation(messages)
         assert len(result) == 2  # Assistant + valid tool message
         assert result[1].tool_call_id == "call_1"
 
@@ -86,7 +86,7 @@ class TestSanitizeConversation:
             Message(role="assistant", content="Hi there"),
             Message(role="system", content="You are helpful"),
         ]
-        result = _sanitize_conversation_for_llm(messages)
+        result = sanitize_conversation(messages)
         assert len(result) == 3
         assert result[0].content == "Hello"
         assert result[1].content == "Hi there"

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ai_dev_agent.cli.react.budget_control import BudgetManager
-from ai_dev_agent.cli.react.executor import BudgetAwareExecutor
+from ai_dev_agent.cli.react.executor import BudgetAwareExecutor, _extract_json
 from ai_dev_agent.engine.react.types import (
     ActionRequest,
     EvaluationResult,
@@ -141,6 +141,239 @@ def test_executor_error_recovery():
     assert "timed out" in (first_step.observation.outcome or "").lower()
     assert forced_step.observation.tool == "submit_final_answer"
     assert forced_step.observation.raw_output == "Recovered answer."
+
+
+def test_extract_json_handles_multiple_sources():
+    """_extract_json should parse direct text, fenced blocks, and nested braces safely."""
+
+    direct = ' { "answer": 42 } \n'
+    assert _extract_json(direct) == {"answer": 42}
+
+    fenced = '```json\n{\n  "status": "ok"\n}\n```'
+    assert _extract_json(fenced) == {"status": "ok"}
+
+    nested = 'Some reply {"note": "contains {braces} and [lists] inside strings"} trailing'
+    assert _extract_json(nested) == {"note": "contains {braces} and [lists] inside strings"}
+
+    escaped = 'leading {"path": "C:\\\\logs\\\\file.json", "quote": "He said \\"hi\\"."}'
+    assert _extract_json(escaped) == {
+        "path": "C:\\logs\\file.json",
+        "quote": 'He said "hi".',
+    }
+
+    malformed_fence = "```json\n{invalid: true]\n```"
+    assert _extract_json(malformed_fence) is None
+
+
+def test_executor_accepts_json_response_without_forcing(monkeypatch):
+    """Provider JSON inside markdown fences should bypass forced synthesis when schema set."""
+
+    class JsonProvider:
+        def __init__(self) -> None:
+            self.session_manager = StubSessionManager()
+            self.session_id = "session-json"
+            self.calls = 0
+
+        def update_phase(self, phase: str, *, is_final: bool = False) -> None:  # pragma: no cover
+            pass
+
+        def __call__(self, task: TaskSpec, history):
+            self.calls += 1
+            raise StopIteration("LLM stopped with JSON block.")
+
+        def last_response_text(self) -> str:
+            return '```json\n{"final": "done"}\n```'
+
+    executor = BudgetAwareExecutor(
+        BudgetManager(1, adaptive_scaling=False), format_schema={"type": "object"}
+    )
+    provider = JsonProvider()
+
+    result = executor.run(
+        TaskSpec(identifier="json", goal="Test JSON shortcut"), provider, MagicMock()
+    )
+
+    assert result.status == "success"
+    assert result.steps == []
+    assert result.stop_reason == "Completed"
+
+
+def test_executor_repeated_failures_surface_diagnostics():
+    """BudgetAwareExecutor should append failure detector guidance after repeated failures."""
+
+    class RepeatingProvider:
+        def __init__(self) -> None:
+            self.session_manager = StubSessionManager()
+            self.session_id = "repeat"
+            self.calls = 0
+
+        def update_phase(self, phase: str, *, is_final: bool = False) -> None:  # pragma: no cover
+            pass
+
+        def __call__(self, task: TaskSpec, history):
+            self.calls += 1
+            return {
+                "step_id": f"S{self.calls}",
+                "thought": "Retry search",
+                "tool": "find",
+                "args": {"query": "missing_symbol"},
+            }
+
+        def last_response_text(self) -> str:
+            return ""
+
+    class AlwaysFailInvoker:
+        def __call__(self, action: ActionRequest) -> Observation:
+            return Observation(
+                success=False,
+                outcome="Pattern not found.",
+                tool=action.tool,
+                error="NotFound",
+            )
+
+    executor = BudgetAwareExecutor(BudgetManager(3, adaptive_scaling=False))
+    provider = RepeatingProvider()
+    invoker = AlwaysFailInvoker()
+
+    result = executor.run(
+        TaskSpec(identifier="repeat", goal="Trigger diagnostics"), provider, invoker
+    )
+
+    assert result.status == "failed"
+    assert len(result.steps) == 3
+    final_outcome = result.steps[-1].observation.outcome or ""
+    assert "Repeated Failure Detected" in final_outcome
+
+
+def test_executor_forced_synthesis_empty_response(capsys):
+    """Forced synthesis should report empty completions for visibility."""
+
+    class SilentProvider:
+        def __init__(self) -> None:
+            self.session_manager = StubSessionManager()
+            self.session_id = "silent"
+            self.client = SimpleNamespace(complete=MagicMock(return_value="   "))
+            self.calls = 0
+
+        def update_phase(self, phase: str, *, is_final: bool = False) -> None:  # pragma: no cover
+            pass
+
+        def __call__(self, task: TaskSpec, history):
+            self.calls += 1
+            raise StopIteration("Stopped without answer.")
+
+        def last_response_text(self) -> str:
+            return ""
+
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+    provider = SilentProvider()
+
+    result = executor.run(
+        TaskSpec(identifier="silent", goal="Force fallback"), provider, MagicMock()
+    )
+
+    err = capsys.readouterr().err
+    assert "LLM returned empty response" in err
+    provider.client.complete.assert_called_once()
+    assert result.status == "success"
+    assert result.stop_reason == "Completed"
+
+
+def test_executor_forced_synthesis_with_integration(monkeypatch):
+    """Forced synthesis path should route through budget integration when available."""
+
+    class TrackingIntegration:
+        def __init__(self) -> None:
+            self.calls: list[tuple] = []
+
+        def execute_with_retry(self, fn, *args, **kwargs):
+            self.calls.append((fn, args, kwargs))
+            return fn(*args, **kwargs)
+
+    class MixedProvider:
+        def __init__(self) -> None:
+            self.session_manager = StubSessionManager()
+            self.session_id = "mixed"
+            self.client = SimpleNamespace(complete=MagicMock(return_value='{"final": "value"}'))
+            self.budget_integration = TrackingIntegration()
+            self.actions = [
+                {
+                    "step_id": "S1",
+                    "thought": "Attempt read",
+                    "tool": "read",
+                    "args": {"path": "missing.md"},
+                }
+            ]
+            self.calls = 0
+
+        def update_phase(self, phase: str, *, is_final: bool = False) -> None:  # pragma: no cover
+            pass
+
+        def __call__(self, task: TaskSpec, history):
+            if self.calls < len(self.actions):
+                action = self.actions[self.calls]
+                self.calls += 1
+                return action
+            self.calls += 1
+            raise StopIteration("Need to synthesize.")
+
+        def last_response_text(self) -> str:
+            return ""
+
+    class FailThenPassInvoker:
+        def __call__(self, action: ActionRequest) -> Observation:
+            return Observation(success=False, outcome="read failed", tool=action.tool)
+
+    executor = BudgetAwareExecutor(
+        BudgetManager(2, adaptive_scaling=False), format_schema={"type": "object"}
+    )
+    provider = MixedProvider()
+    invoker = FailThenPassInvoker()
+
+    result = executor.run(TaskSpec(identifier="mixed", goal="Integration path"), provider, invoker)
+
+    assert result.status == "success"
+    assert result.steps[-1].observation.tool == "submit_final_answer"
+    assert result.steps[-1].observation.raw_output == '{"final": "value"}'
+    assert provider.client.complete.called
+    assert provider.budget_integration.calls, "Integration should wrap the completion call"
+
+
+def test_executor_sanitize_failure_propagates(monkeypatch):
+    """Conversation sanitization errors should surface to callers for quick diagnosis."""
+
+    def explode(_messages):
+        raise ValueError("sanitize failed")
+
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.react.executor.sanitize_conversation",
+        explode,
+    )
+
+    class FailingProvider:
+        def __init__(self) -> None:
+            self.session_manager = StubSessionManager()
+            self.session_id = "sanitize"
+            self.client = SimpleNamespace(complete=MagicMock(return_value="answer"))
+            self.calls = 0
+
+        def update_phase(self, phase: str, *, is_final: bool = False) -> None:  # pragma: no cover
+            pass
+
+        def __call__(self, task: TaskSpec, history):
+            self.calls += 1
+            raise StopIteration("Need synthesis")
+
+        def last_response_text(self) -> str:
+            return ""
+
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+    provider = FailingProvider()
+
+    with pytest.raises(ValueError, match="sanitize failed"):
+        executor.run(
+            TaskSpec(identifier="sanitize", goal="Sanitize failure"), provider, MagicMock()
+        )
 
 
 def test_executor_multi_step_reasoning():

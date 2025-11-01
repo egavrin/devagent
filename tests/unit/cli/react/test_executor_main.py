@@ -82,7 +82,7 @@ def test_execute_react_assistant_exposes_search_queries(monkeypatch, base_settin
         lambda _settings: MagicMock(),
     )
     monkeypatch.setattr(
-        "ai_dev_agent.cli.react.executor._sanitize_conversation_for_llm",
+        "ai_dev_agent.cli.react.executor.sanitize_conversation",
         lambda messages: messages,
     )
 

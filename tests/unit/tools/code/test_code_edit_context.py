@@ -438,6 +438,174 @@ def test_apply_size_limits_honours_total(tmp_path):
     assert len(limited) == 1
 
 
+def test_context_gatherer_handles_repomap_initialization_failure(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def raising_get_instance(_root):
+        raise RuntimeError("repomap unavailable")
+
+    monkeypatch.setattr(context_module.RepoMapManager, "get_instance", raising_get_instance)
+
+    gatherer = ContextGatherer(repo, ContextGatheringOptions(use_repo_map=True))
+    assert gatherer.repo_map is None
+
+
+def test_should_include_file_filters(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    gatherer = ContextGatherer(repo)
+
+    outside = tmp_path / "outside.py"
+    outside.write_text("print('hi')\n", encoding="utf-8")
+    assert gatherer._should_include_file(outside) is False
+
+    excluded = _write(repo, "logs/app.log", "log entry")
+    assert gatherer._should_include_file(excluded) is False
+
+    big_file = repo / "data/huge.txt"
+    big_file.parent.mkdir(parents=True, exist_ok=True)
+    big_file.write_bytes(b"a" * 210_000)
+    assert gatherer._should_include_file(big_file) is False
+
+    binary_file = repo / "bin/blob.bin"
+    binary_file.parent.mkdir(parents=True, exist_ok=True)
+    binary_file.write_bytes(b"\x00\x01\x02\x03")
+    assert gatherer._should_include_file(binary_file) is False
+
+    flaky_stat = _write(repo, "err.txt", "boom")
+    original_stat = Path.stat
+
+    def stub_stat(self):
+        if self == flaky_stat:
+            raise OSError("stat failed")
+        return original_stat(self)
+
+    monkeypatch.setattr(Path, "stat", stub_stat)
+    assert gatherer._should_include_file(flaky_stat) is False
+
+    flaky_open = _write(repo, "err_open.txt", "boom")
+    original_open = Path.open
+
+    def stub_open(self, *args, **kwargs):
+        if self == flaky_open:
+            raise OSError("open failed")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", stub_open)
+    assert gatherer._should_include_file(flaky_open) is False
+
+    allowed = _write(repo, "src/app.py", "print('ok')")
+    assert gatherer._should_include_file(allowed) is True
+
+
+def test_normalize_rel_path_handles_external_inputs(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    gatherer = ContextGatherer(repo)
+
+    inside = gatherer._normalize_rel_path("./pkg/../pkg/module.py")
+    assert inside == "pkg/module.py"
+
+    outside_path = str((tmp_path / "elsewhere.py").resolve())
+    assert gatherer._normalize_rel_path(outside_path) == outside_path
+
+
+def test_search_helpers_handle_exceptions(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    gatherer = ContextGatherer(repo)
+    gatherer._rg_available = True
+    gatherer._git_available = True
+
+    def raising_run(*_args, **_kwargs):
+        raise RuntimeError("subprocess boom")
+
+    monkeypatch.setattr(context_module.subprocess, "run", raising_run)
+
+    assert gatherer._rg_search("pattern", None) == []
+    assert gatherer._git_grep_search("pattern", None) == []
+    assert gatherer._rg_symbol_search("pattern") == []
+    assert gatherer._git_symbol_search("pattern") == []
+
+
+def test_fallback_search_invalid_regex(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    gatherer = ContextGatherer(repo)
+
+    assert gatherer._fallback_search("(", None) == []
+
+
+def test_fallback_symbol_search_invalid_regex(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    gatherer = ContextGatherer(repo)
+
+    assert gatherer._fallback_symbol_search("(") == []
+
+
+def test_gather_contexts_skips_summary_when_outline_missing(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write(repo, "src/app.py", "print('hi')")
+
+    gatherer = ContextGatherer(
+        repo,
+        ContextGatheringOptions(
+            include_structure_summary=True,
+            include_related_files=False,
+        ),
+    )
+
+    gatherer._structure_analyzer.summarize_content = lambda *args, **kwargs: []
+    contexts = gatherer.gather_contexts(["src/app.py"])
+    reasons = {ctx.reason for ctx in contexts}
+    assert "project_structure_summary" not in reasons
+
+
+def test_load_file_context_handles_non_utf8(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "binary.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"hello\xffworld")
+
+    gatherer = ContextGatherer(repo)
+    context = gatherer._load_file_context("binary.txt", "explicit", 1.0)
+    assert context is not None
+    assert "\ufffd" in context.content
+
+
+def test_gather_contexts_excludes_request_for_large_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    big_file = repo / "big.txt"
+    big_file.write_bytes(b"a" * 250_000)
+
+    gatherer = ContextGatherer(
+        repo,
+        ContextGatheringOptions(
+            include_related_files=False,
+            include_structure_summary=False,
+        ),
+    )
+
+    contexts = gatherer.gather_contexts(["big.txt"])
+    assert contexts == []
+
+
+def test_gather_file_contexts_wrapper(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write(repo, "src/app.py", "def run():\n    return 1\n")
+
+    options = ContextGatheringOptions(include_related_files=False, include_structure_summary=False)
+    contexts = context_module.gather_file_contexts(repo, ["src/app.py"], options=options)
+    assert len(contexts) == 1
+    assert contexts[0].path.name == "app.py"
+
+
 def test_should_include_file_outside_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

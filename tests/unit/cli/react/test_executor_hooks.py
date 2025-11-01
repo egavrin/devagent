@@ -76,7 +76,7 @@ def _apply_common_patches(monkeypatch, session_manager):
         lambda _settings: MagicMock(),
     )
     monkeypatch.setattr(
-        "ai_dev_agent.cli.react.executor._sanitize_conversation_for_llm",
+        "ai_dev_agent.cli.react.executor.sanitize_conversation",
         lambda messages: messages,
     )
 

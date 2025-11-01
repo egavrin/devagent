@@ -46,6 +46,7 @@ from ai_dev_agent.providers.llm import LLMError
 from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session import SessionManager
 from ai_dev_agent.session.context_synthesis import ContextSynthesizer
+from ai_dev_agent.session.sanitizer import sanitize_conversation
 
 from ..router import IntentDecision
 from ..router import IntentRouter as _DEFAULT_INTENT_ROUTER
@@ -62,17 +63,6 @@ __all__ = ["_execute_react_assistant"]
 def _build_json_enforcement_instructions(format_schema: dict[str, Any]) -> str:
     """Build strict JSON-only instructions for forced synthesis paths."""
     return _JSON_ENFORCEMENT_TEMPLATE.format(format_schema=json.dumps(format_schema, indent=2))
-
-
-def _sanitize_conversation_for_llm(messages: Sequence[Message]) -> list[Message]:
-    """Remove tool messages whose IDs are not referenced by assistant tool calls.
-
-    DEPRECATED: Use ai_dev_agent.session.sanitizer.sanitize_conversation instead.
-    This wrapper is kept for backward compatibility.
-    """
-    from ai_dev_agent.session.sanitizer import sanitize_conversation
-
-    return sanitize_conversation(messages)
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -237,7 +227,7 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 # Get the LLM to produce a text response without tools
                 # Access session_manager and session_id from action_provider
                 conversation = action_provider.session_manager.compose(action_provider.session_id)
-                conversation = _sanitize_conversation_for_llm(conversation)
+                conversation = sanitize_conversation(conversation)
 
                 if self.format_schema:
                     json_instruction_message = Message(
@@ -373,7 +363,7 @@ class BudgetAwareExecutor(ReactiveExecutor):
             try:
                 # Get the conversation and add synthesis instructions
                 conversation = action_provider.session_manager.compose(action_provider.session_id)
-                conversation = _sanitize_conversation_for_llm(conversation)
+                conversation = sanitize_conversation(conversation)
 
                 # Add a system message to force synthesis
                 synthesis_prompt = Message(
