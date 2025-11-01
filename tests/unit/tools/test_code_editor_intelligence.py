@@ -1,0 +1,162 @@
+"""Focused tests for CodeEditor context analysis helpers."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from ai_dev_agent.tools.code.code_edit.context import FileContext
+from ai_dev_agent.tools.code.code_edit.editor import CodeEditor, FixAttempt, IterativeFixConfig
+
+
+@pytest.fixture
+def editor(tmp_path):
+    """Create a CodeEditor instance with patched session manager."""
+    with (
+        patch("ai_dev_agent.tools.code.code_edit.editor.SessionManager.get_instance") as mock_mgr,
+        patch(
+            "ai_dev_agent.tools.code.code_edit.editor.build_system_messages",
+            return_value=["system"],
+        ),
+    ):
+        session = MagicMock()
+        mock_mgr.return_value = session
+        session.ensure_session.return_value = None
+
+        approvals = MagicMock()
+        approvals.require.return_value = True
+        editor = CodeEditor(
+            repo_root=tmp_path,
+            llm_client=MagicMock(),
+            approvals=approvals,
+            fix_config=IterativeFixConfig(run_tests=False),
+        )
+        yield editor
+
+
+def _make_context(tmp_path, name: str, content: str, reason: str = "matched task"):
+    path = tmp_path / name
+    return FileContext(path=path, content=content, relevance_score=0.8, reason=reason)
+
+
+def test_filter_code_contexts_skips_structure_summary(editor, tmp_path):
+    contexts = [
+        _make_context(tmp_path, "__project_structure__.md", "summary", "project_structure_summary"),
+        _make_context(tmp_path, "app.py", "print('hi')"),
+        _make_context(tmp_path, "empty.py", "", "matched task"),
+    ]
+
+    filtered = editor._filter_code_contexts(contexts)
+
+    assert len(filtered) == 1
+    assert filtered[0].path.name == "app.py"
+
+
+def test_build_style_profile_detects_conventions(editor, tmp_path):
+    contexts = [
+        _make_context(
+            tmp_path,
+            "service.py",
+            "from dataclasses import dataclass\n\n@dataclass\nclass Service:\n    name: str\n",
+        ),
+        _make_context(
+            tmp_path,
+            "handler.py",
+            'def handle(event: str) -> None:\n    print("Processing", event)\n',
+        ),
+    ]
+
+    profile = editor._build_style_profile(contexts)
+
+    assert "4-space indentation" in profile
+    assert "Prefers double quotes" in profile
+    assert "Dataclass-heavy modules" in profile
+    assert "Type hints in function signatures" in profile
+
+
+def test_build_dependency_summary_from_multiple_languages(editor, tmp_path):
+    contexts = [
+        _make_context(tmp_path, "module.py", "import json\nfrom pathlib import Path\n"),
+        _make_context(
+            tmp_path, "component.ts", "import React from 'react'\nimport util from './util'\n"
+        ),
+    ]
+
+    summary = editor._build_dependency_summary(contexts)
+
+    assert "module.py: json, pathlib" in summary
+    assert "component.ts: react, ./util" in summary.lower()
+
+
+def test_identify_common_patterns_across_contexts(editor, tmp_path):
+    contexts = [
+        _make_context(tmp_path, "models.py", "@dataclass\nclass Model:\n    ...\n"),
+        _make_context(tmp_path, "routes.py", "import click\nasync def main():\n    pass\n"),
+        _make_context(tmp_path, "tests/test_api.py", "import pytest\nassert True\n"),
+    ]
+
+    patterns = editor._identify_common_patterns(contexts)
+
+    assert "dataclasses" in patterns
+    assert "pytest-style tests" in patterns
+    assert "async routines" in patterns
+
+
+def test_build_quality_notes_highlights_tests_and_todos(editor, tmp_path):
+    contexts = [
+        _make_context(tmp_path, "tests/test_flow.py", "def test_example():\n    assert True\n"),
+        _make_context(tmp_path, "module.py", "# TODO: refine logic\nprint('ok')\n"),
+    ]
+    latest_attempt = FixAttempt(
+        attempt_number=1,
+        diff="",
+        test_result=SimpleNamespace(command=["pytest"], returncode=1, stdout="", stderr="failure"),
+    )
+
+    notes = editor._build_quality_notes(contexts, "Improve performance", latest_attempt)
+
+    assert "Relevant tests" in notes
+    assert "Outstanding TODO" in notes
+    assert "Assess runtime impact" in notes
+    assert "failed" in notes.lower()
+
+
+def test_format_test_output_includes_exit_code(editor):
+    result = SimpleNamespace(returncode=2, stdout="line1\nline2\n", stderr="boom\n")
+
+    output = editor._format_test_output(result)
+
+    assert "Exit code: 2" in output
+    assert "STDERR" in output
+    assert "STDOUT" in output
+
+
+def test_extract_files_from_diff(editor):
+    diff = """--- a/app.py
++++ b/app.py
+@@
+--- a/unused.py
++++ /dev/null
+"""
+
+    files = editor._extract_files_from_diff(diff)
+
+    assert files == [Path("app.py")]
+
+
+def test_build_fallback_guidance_lists_contexts(editor, tmp_path):
+    contexts = [
+        _make_context(
+            tmp_path, "core/service.py", "class Service:\n    pass\n", reason="High PageRank"
+        ),
+        _make_context(tmp_path, "tests/test_service.py", "def test_service():\n    assert True\n"),
+    ]
+
+    guidance = editor._build_fallback_guidance("Improve service", contexts, reason="llm_error")
+
+    assert "llm_error" in guidance
+    assert "core/service.py" in guidance
+    assert "tests/test_service.py" in guidance

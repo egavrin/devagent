@@ -10,7 +10,48 @@ import click
 import pytest
 from click.testing import CliRunner
 
+from ai_dev_agent.agents import AgentSpec
 from ai_dev_agent.cli import cli
+
+
+@pytest.fixture(autouse=True)
+def stub_cli_dependencies(monkeypatch):
+    """Stub heavy CLI dependencies to keep tests fast and deterministic."""
+    monkeypatch.setenv("DEVAGENT_API_KEY", "test-key")
+
+    executor = MagicMock(name="_execute_react_assistant", return_value={})
+    monkeypatch.setattr("ai_dev_agent.cli.react.executor._execute_react_assistant", executor)
+    monkeypatch.setattr(
+        "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant",
+        executor,
+    )
+
+    dummy_client = object()
+
+    def fake_get_llm_client(ctx):
+        ctx.obj["llm_client"] = dummy_client
+        return dummy_client
+
+    monkeypatch.setattr("ai_dev_agent.cli.utils.get_llm_client", fake_get_llm_client)
+
+    class DummyRegistry:
+        @staticmethod
+        def has_agent(name):
+            return name == "manager"
+
+        @staticmethod
+        def get(name):
+            if name != "manager":
+                raise KeyError(name)
+            return AgentSpec(name="manager", tools=[], max_iterations=10)
+
+        @staticmethod
+        def list_agents():
+            return ["manager"]
+
+    monkeypatch.setattr("ai_dev_agent.cli.router.AgentRegistry", DummyRegistry)
+    monkeypatch.setattr("ai_dev_agent.cli.runtime.commands.query.AgentRegistry", DummyRegistry)
+    yield {"executor": executor, "llm_client": dummy_client}
 
 
 class TestCLIEndToEnd:
@@ -42,15 +83,9 @@ class TestCLIEndToEnd:
 
             yield workspace
 
-    @pytest.mark.skip(reason="Requires complex mocking of LLM client")
-    @pytest.mark.skip(reason="Requires complex mocking of LLM client")
-    @patch("ai_dev_agent.cli.react.executor._execute_react_assistant")
-    @patch("ai_dev_agent.cli.utils.get_llm_client")
-    def test_query_command_basic(self, mock_client, mock_execute, runner, temp_workspace):
+    def test_query_command_basic(self, runner, temp_workspace, stub_cli_dependencies):
         """Test basic query command."""
-        # Mock the LLM client and execution
-        mock_client.return_value = MagicMock()
-        mock_execute.return_value = None  # _execute_react_assistant doesn't return a value
+        stub_cli_dependencies["executor"].return_value = None  # Already a MagicMock
 
         original_cwd = str(Path.cwd())
         try:
@@ -67,29 +102,22 @@ class TestCLIEndToEnd:
             print(f"Command failed with output: {result.output}")
             print(f"Exception: {result.exception}")
         assert result.exit_code == 0
-        assert mock_execute.called
+        assert stub_cli_dependencies["executor"].called
 
-    @pytest.mark.skip(reason="Requires complex mocking of LLM client")
-    @pytest.mark.skip(reason="Requires complex mocking of LLM client")
-    @patch("ai_dev_agent.cli.react.executor._execute_react_assistant")
-    @patch("ai_dev_agent.cli.utils.get_llm_client")
-    def test_query_command_with_json_output(
-        self, mock_client, mock_execute, runner, temp_workspace
-    ):
+    def test_query_command_with_json_output(self, runner, temp_workspace, stub_cli_dependencies):
         """Test query command with JSON output."""
-        mock_client.return_value = MagicMock()
 
         # Mock json output written to stdout
         def mock_execute_json(*args, **kwargs):
             click.echo(json.dumps({"status": "success", "data": "test"}))
 
-        mock_execute.side_effect = mock_execute_json
+        stub_cli_dependencies["executor"].side_effect = mock_execute_json
 
         original_cwd = str(Path.cwd())
         try:
             os.chdir(temp_workspace)
             os.environ["DEVAGENT_API_KEY"] = "test-key"
-            result = runner.invoke(cli, ["query", "--json", "analyze code"])
+            result = runner.invoke(cli, ["--json", "query", "analyze code"])
         finally:
             os.chdir(original_cwd)
             os.environ.pop("DEVAGENT_API_KEY", None)
@@ -127,11 +155,14 @@ class TestCLIEndToEnd:
         assert result.exit_code == 0
         mock_execute.assert_called_once()
 
-    @pytest.mark.skip(reason="Review command requires LLM client")
-    @patch("ai_dev_agent.cli.utils.get_llm_client")
-    def test_review_command_nonexistent_file(self, mock_client, runner, temp_workspace):
-        """Test review command with nonexistent file."""
-        mock_client.return_value = MagicMock()
+    @patch("ai_dev_agent.cli.runtime.commands.review.execute_strategy")
+    def test_review_command_failure_surface(self, mock_execute, runner, temp_workspace):
+        """Test review command surfaces failures from the strategy."""
+        mock_execute.return_value = MagicMock(
+            success=False,
+            output="file not found",
+            metadata={"issues_found": 1},
+        )
 
         original_cwd = str(Path.cwd())
         try:
@@ -143,7 +174,9 @@ class TestCLIEndToEnd:
             os.environ.pop("DEVAGENT_API_KEY", None)
 
         assert result.exit_code != 0
-        assert "not found" in result.output.lower() or "error" in result.output.lower()
+        output = result.output.lower()
+        assert "file not found" in output or "failed" in output
+        mock_execute.assert_called_once()
 
     @patch("ai_dev_agent.cli.runtime.commands.design.execute_strategy")
     @patch("ai_dev_agent.cli.utils.get_llm_client")

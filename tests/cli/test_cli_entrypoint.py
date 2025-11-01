@@ -4,6 +4,7 @@ import os
 import runpy
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,70 @@ from click.testing import CliRunner
 
 from ai_dev_agent.agents.base import AgentResult
 from ai_dev_agent.cli.runtime.commands import query as query_module
+
+
+@pytest.mark.usefixtures("monkeypatch")
+def test_initialise_state_smoke(monkeypatch, tmp_path):
+    """Smoke test that CLI startup wiring populates shared state."""
+    from ai_dev_agent.cli.runtime import main as main_module
+    from ai_dev_agent.core.utils.config import Settings
+
+    monkeypatch.chdir(tmp_path)
+
+    captured: dict[str, object] = {}
+    settings = Settings()
+
+    def fake_load_settings(config_path):
+        captured["config_path"] = config_path
+        return settings
+
+    configure_calls: list[tuple[str, bool]] = []
+
+    def fake_configure_logging(level, *, structured):
+        configure_calls.append((level, structured))
+
+    class DummyPromptLoader:
+        def __init__(self):
+            self.prompts_dir = tmp_path / "prompts"
+
+    class DummyBuilder:
+        def __init__(self, workspace):
+            captured["workspace"] = workspace
+
+        def build_system_context(self):
+            return {"sys": "ctx"}
+
+        def build_project_context(self):
+            return {"project": "ctx"}
+
+    def fake_build_context(in_settings):
+        assert in_settings is settings
+        return {"state": {"session": "ok"}}
+
+    monkeypatch.setattr(main_module, "load_settings", fake_load_settings)
+    monkeypatch.setattr(main_module, "configure_logging", fake_configure_logging)
+    monkeypatch.setattr(main_module, "PromptLoader", lambda: DummyPromptLoader())
+    monkeypatch.setattr(main_module, "ContextBuilder", DummyBuilder)
+    monkeypatch.setattr(main_module, "_build_context", fake_build_context)
+
+    config_path = tmp_path / "devagent.toml"
+    result_settings, cli_context, state = main_module._initialise_state(
+        config_path,
+        verbose=2,
+        quiet=False,
+        repomap_debug=True,
+    )
+
+    assert result_settings is settings
+    assert captured["config_path"] == config_path
+    assert captured["workspace"] == Path(tmp_path)
+    assert settings.log_level == "DEBUG"
+    assert settings.repomap_debug_stdout is True
+    assert configure_calls == [("DEBUG", settings.structured_logging)]
+    assert cli_context["state"] == {"session": "ok"}
+    assert state.system_context == {"sys": "ctx"}
+    assert state.project_context == {"project": "ctx"}
+    assert isinstance(state.prompt_loader, DummyPromptLoader)
 
 
 @pytest.mark.usefixtures("monkeypatch")

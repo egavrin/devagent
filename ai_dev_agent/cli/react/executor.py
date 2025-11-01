@@ -218,21 +218,22 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 # We need to force a synthesis response to give the user a comprehensive answer
                 # This can happen in the final iteration OR if the LLM stops early
 
-                # Skip synthesis if a valid response already exists (JSON when required)
-                if self.skip_intermediate_synthesis:
-                    latest_response = action_provider.last_response_text()
-                    if latest_response:
-                        if not self.format_schema:
-                            stop_condition = "provider_stop"
-                            natural_stop = True
-                            break
-                        extracted_json = _extract_json(latest_response)
-                        if extracted_json is not None:
-                            stop_condition = "provider_stop"
-                            natural_stop = True
-                            break
+                # Check if the LLM already provided a valid response before attempting forced synthesis
+                latest_response = action_provider.last_response_text()
+                if latest_response:
+                    if not self.format_schema:
+                        # Text response is valid - use it
+                        stop_condition = "provider_stop"
+                        natural_stop = True
+                        break
+                    # For JSON mode, check if the response contains valid JSON
+                    extracted_json = _extract_json(latest_response)
+                    if extracted_json is not None:
+                        stop_condition = "provider_stop"
+                        natural_stop = True
+                        break
 
-                # Always force a synthesis response when LLM stops
+                # No valid response exists - force a synthesis response
                 # Get the LLM to produce a text response without tools
                 # Access session_manager and session_id from action_provider
                 conversation = action_provider.session_manager.compose(action_provider.session_id)

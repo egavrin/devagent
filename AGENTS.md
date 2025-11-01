@@ -5,7 +5,7 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 ## Core Expectations
 - **Obey the four critical rules**: do not break existing behavior, study reference repos before coding, keep coverage ≥90%, and follow the documented development process (see `docs/DEVELOPMENT.md`).
 - **Never create new `.md` files unless the user explicitly asks**: capture notes in the conversation or update existing Markdown files instead.
-- **Front-load situational awareness**: run `pytest tests/test_backward_compatibility.py`, gather coverage with `pytest --cov=ai_dev_agent --cov-report=term`, and review `docs/CHANGELOG.md` for current status before touching code.
+- **Front-load situational awareness**: run the CLI smoke suite (`pytest tests/integration/test_end_to_end.py`), gather coverage with `pytest --cov=ai_dev_agent --cov-report=term`, and review `docs/CHANGELOG.md` for current status before touching code.
 - **Inspect references first**: pull patterns from `/Users/eg/Documents/aider`, `cline-1`, `codex`, `claude-code`, and `opencode`; summarize findings inline unless the user explicitly asks for a new `.md` file.
 - **Design before implementation**: draft the approach in the conversation or update existing docs, and never create new `.md` design files unless the user explicitly requests them.
 - **Work in tight loops**: write tests before code, keep functionality changes tiny, and update component status via `python -m ai_dev_agent.status.update` while leaving git commits to the user.

@@ -22,6 +22,19 @@ def _make_provider(workspace, store=None, *, enable_memory=True):
     return provider
 
 
+def test_initialisation_handles_memory_store_failure(workspace):
+    with patch("ai_dev_agent.cli.memory_provider.MemoryStore", side_effect=OSError("disk full")):
+        provider = MemoryProvider(workspace)
+
+    assert provider.has_store is False
+
+
+def test_initialisation_respects_memory_system_flag(workspace, monkeypatch):
+    monkeypatch.setattr("ai_dev_agent.cli.memory_provider.MEMORY_SYSTEM_AVAILABLE", False)
+    provider = MemoryProvider(workspace)
+    assert provider.has_store is False
+
+
 def test_retrieve_relevant_memories_formats_results(workspace):
     with patch("ai_dev_agent.cli.memory_provider.MemoryStore") as mock_store_cls:
         mock_store = MagicMock()
@@ -45,6 +58,27 @@ def test_retrieve_relevant_memories_formats_results(workspace):
         assert pytest.approx(memories[0]["metadata"]["similarity"]) == 0.82
 
 
+def test_retrieve_memories_uses_title_fallback(workspace):
+    with patch("ai_dev_agent.cli.memory_provider.MemoryStore") as mock_store_cls:
+        mock_store = MagicMock()
+        mock_store_cls.return_value = mock_store
+
+        memory = SimpleNamespace(
+            memory_id="mem-2",
+            title="Fallback title",
+            effectiveness_score=0.3,
+            task_type="refactor",
+        )
+        mock_store.search_similar.return_value = [(memory, 0.55)]
+
+        provider = _make_provider(workspace, mock_store)
+        memories = provider.retrieve_relevant_memories("Refactor old code")
+
+        assert memories is not None
+        assert memories[0]["content"] == "Fallback title"
+        assert pytest.approx(memories[0]["metadata"]["similarity"]) == 0.55
+
+
 def test_store_memory_uses_distiller(workspace):
     with (
         patch("ai_dev_agent.cli.memory_provider.MemoryStore") as mock_store_cls,
@@ -64,6 +98,35 @@ def test_store_memory_uses_distiller(workspace):
         assert result == "mem-2"
         mock_distiller.distill_from_session.assert_called_once()
         mock_store.add_memory.assert_called_once_with(memory)
+
+
+def test_store_memory_success_path_includes_payload_metadata(workspace):
+    with (
+        patch("ai_dev_agent.cli.memory_provider.MemoryStore") as mock_store_cls,
+        patch("ai_dev_agent.cli.memory_provider.MemoryDistiller") as mock_distiller_cls,
+    ):
+        mock_store = MagicMock()
+        mock_store_cls.return_value = mock_store
+        mock_store.add_memory.return_value = "mem-xyz"
+
+        distilled = SimpleNamespace(memory_id="mem-xyz", title="Saved")
+        distiller = mock_distiller_cls.return_value
+        distiller.distill_from_session.return_value = distilled
+
+        provider = _make_provider(workspace, mock_store)
+        metadata = {"priority": "high"}
+        memory_id = provider.store_memory(
+            "What happened?",
+            "We added extra logging.",
+            task_type="analysis",
+            metadata=metadata,
+        )
+
+        assert memory_id == "mem-xyz"
+        distiller.distill_from_session.assert_called_once()
+        _, kwargs = distiller.distill_from_session.call_args
+        assert kwargs["metadata"] == metadata
+        assert any(msg["role"] == "assistant" for msg in kwargs["messages"])
 
 
 def test_track_memory_effectiveness_updates_store(workspace):

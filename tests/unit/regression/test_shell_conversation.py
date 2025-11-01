@@ -80,17 +80,10 @@ def test_shell_conversation_history_persists_between_queries(capsys) -> None:
 
     client = FakeClient(
         [
-            # First query iteration
+            # First query - LLM returns text without tool calls, triggering StopIteration
+            # The executor now uses this response directly instead of forcing synthesis
             ToolCallResult(calls=[], message_content="There are 1,369 files.", raw_tool_calls=None),
-            # First query synthesis (when StopIteration is raised)
-            ToolCallResult(calls=[], message_content="There are 1,369 files.", raw_tool_calls=None),
-            # Second query iteration
-            ToolCallResult(
-                calls=[],
-                message_content="72,650 is higher than 1,369.",
-                raw_tool_calls=None,
-            ),
-            # Second query synthesis
+            # Second query - same behavior
             ToolCallResult(
                 calls=[],
                 message_content="72,650 is higher than 1,369.",
@@ -132,14 +125,11 @@ def test_shell_conversation_history_respects_limit(capsys) -> None:
 
     client = FakeClient(
         [
-            # First query
-            ToolCallResult(calls=[], message_content="First answer", raw_tool_calls=None),
+            # First query - no forced synthesis needed with the fix
             ToolCallResult(calls=[], message_content="First answer", raw_tool_calls=None),
             # Second query
             ToolCallResult(calls=[], message_content="Second answer", raw_tool_calls=None),
-            ToolCallResult(calls=[], message_content="Second answer", raw_tool_calls=None),
             # Third query
-            ToolCallResult(calls=[], message_content="Third answer", raw_tool_calls=None),
             ToolCallResult(calls=[], message_content="Third answer", raw_tool_calls=None),
         ]
     )
@@ -183,6 +173,7 @@ def test_shell_history_ignores_tool_intermediate_assistant(monkeypatch, capsys) 
                 message_content="Tool result summarised.",
                 raw_tool_calls=None,
             ),
+            # Post-loop synthesis (called via complete() since last tool wasn't submit_final_answer)
             ToolCallResult(
                 calls=[],
                 message_content="Tool result summarised.",
@@ -194,6 +185,7 @@ def test_shell_history_ignores_tool_intermediate_assistant(monkeypatch, capsys) 
                 message_content="Follow-up answer using earlier info.",
                 raw_tool_calls=None,
             ),
+            # Post-loop synthesis for second query
             ToolCallResult(
                 calls=[],
                 message_content="Follow-up answer using earlier info.",

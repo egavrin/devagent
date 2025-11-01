@@ -170,3 +170,62 @@ def test_budget_aware_executor_handles_tool_exceptions(mock_session_manager):
     assert observation.success is False
     failure_text = (observation.error or observation.outcome or "").lower()
     assert "boom" in failure_text or "exception" in failure_text
+
+
+class StubActionProviderWithStopIteration:
+    """Action provider that returns text without tool calls, triggering StopIteration."""
+
+    def __init__(self, response_text: str = "The answer is 42 lines."):
+        self.session_manager = StubSessionManager()
+        self.session_id = "session-1"
+        self.client = MagicMock()
+        self.phase_updates: list[tuple[str, bool]] = []
+        self.calls = 0
+        self._response_text = response_text
+
+    def update_phase(self, phase: str, *, is_final: bool = False) -> None:
+        self.phase_updates.append((phase, is_final))
+
+    def __call__(self, task: TaskSpec, history):
+        self.calls += 1
+        # Simulate the LLM returning text without tool calls
+        raise StopIteration("No tool calls - synthesis complete")
+
+    def last_response_text(self) -> str:
+        # Return the text response that was already generated
+        return self._response_text
+
+
+@patch("ai_dev_agent.cli.react.executor.SessionManager")
+@patch("ai_dev_agent.cli.react.executor.ContextSynthesizer")
+def test_executor_uses_existing_response_when_llm_stops_without_tools(
+    mock_synth, mock_session_manager, capsys
+):
+    """When LLM raises StopIteration with existing text response, should use that instead of forcing synthesis."""
+    mock_session_manager.get_instance.return_value = StubSessionManager()
+    mock_synth.return_value = MagicMock(
+        synthesize_previous_steps=lambda history, current_step, **_: "",
+        get_redundant_operations=lambda history: [],
+        build_constraints_section=lambda redundant_ops: "",
+    )
+
+    response_text = "The file contains 142 lines of code."
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+    action_provider = StubActionProviderWithStopIteration(response_text)
+    tool_invoker = StubInvoker()
+
+    task = TaskSpec(identifier="task-123", goal="Count lines in file")
+    result = executor.run(task, action_provider, tool_invoker)
+
+    # Should complete successfully without calling client.complete() for forced synthesis
+    assert result.status == "success"
+    assert result.stop_reason in {"provider_stop", "Completed"}
+
+    # Should not have attempted forced synthesis (which would print an error)
+    captured = capsys.readouterr()
+    assert "ERROR: LLM returned empty response" not in captured.err
+    assert "ERROR: Failed to force synthesis" not in captured.err
+
+    # Verify the action provider's client.complete was not called
+    # (since we should use the existing response instead)
+    action_provider.client.complete.assert_not_called()

@@ -304,6 +304,10 @@ class HTTPChatLLMClient(LLMClient, ABC):
     def _wrap_transport_error(self, exc: Exception) -> LLMError:
         if isinstance(exc, requests.Timeout):
             return LLMTimeoutError(f"{self._provider_name} request timed out: {exc}")
+        if isinstance(exc, requests.ConnectionError):
+            return LLMConnectionError(f"{self._provider_name} connection failed: {exc}")
+        if isinstance(exc, OSError):
+            return LLMConnectionError(f"{self._provider_name} transport error: {exc}")
         return LLMConnectionError(f"{self._provider_name} connection failed: {exc}")
 
     def _decode_json(self, response: requests.Response) -> dict[str, Any]:
@@ -347,13 +351,26 @@ class HTTPChatLLMClient(LLMClient, ABC):
 
                 return self._decode_json(response)
 
-            except (requests.Timeout, requests.ConnectionError) as exc:
+            except requests.Timeout as exc:
+                last_error = self._wrap_transport_error(exc)
+                if attempt == self.retry_config.max_retries:
+                    raise last_error from exc
+                time.sleep(self._calculate_delay(attempt))
+            except requests.ConnectionError as exc:
+                last_error = self._wrap_transport_error(exc)
+                if attempt == self.retry_config.max_retries:
+                    raise last_error from exc
+                time.sleep(self._calculate_delay(attempt))
+            except OSError as exc:
                 last_error = self._wrap_transport_error(exc)
                 if attempt == self.retry_config.max_retries:
                     raise last_error from exc
                 time.sleep(self._calculate_delay(attempt))
             except requests.RequestException as exc:
-                raise LLMResponseError(f"{self._provider_name} request failed: {exc}") from exc
+                last_error = self._wrap_transport_error(exc)
+                if attempt == self.retry_config.max_retries:
+                    raise last_error from exc
+                time.sleep(self._calculate_delay(attempt))
 
         if last_error is None:
             message = f"{self._provider_name} request failed for an unknown reason"

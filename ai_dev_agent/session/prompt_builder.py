@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ai_dev_agent.core.utils.context_budget import summarize_text
+from ai_dev_agent.prompts.loader import PromptLoader
 from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.tool_names import FIND, GREP, READ, RUN, SYMBOLS, WRITE
 
@@ -35,14 +36,6 @@ _LANGUAGE_HINTS: dict[str, str] = {
     "dart": "\n- Check pubspec.yaml for dependencies\n- Consider Flutter structure if applicable\n- Use dart analyze for code issues",
 }
 
-_PROVIDER_PREAMBLES: dict[str, str] = {
-    "anthropic": "Anthropic models favour concise tool arguments and defer to user confirmations when tooling is denied.",
-    "deepseek": "DeepSeek models can emit multi-step tool calls; keep responses grounded in repository evidence and summarise final answers clearly.",
-    "openai": "OpenAI GPT models support JSON function calls; prefer structured outputs when sharing lists or diagnostics.",
-    "google": "Gemini models may rate-limit long outputs; batch tool calls and stream concise updates when possible.",
-    "openrouter": "OpenRouter routes to various providers; follow model-specific best practices and provide clear, structured responses.",
-}
-
 _DEFAULT_INSTRUCTION_GLOBS: Sequence[str] = (
     "AGENTS.md",
     "CLAUDE.md",
@@ -54,6 +47,15 @@ _GLOBAL_INSTRUCTION_CANDIDATES: Sequence[Path] = (
     Path.home() / ".devagent" / "AGENTS.md",
     Path.home() / ".config" / "devagent" / "instructions.md",
 )
+
+_PROMPT_LOADER: PromptLoader | None = None
+
+
+def _get_prompt_loader() -> PromptLoader:
+    global _PROMPT_LOADER
+    if _PROMPT_LOADER is None:
+        _PROMPT_LOADER = PromptLoader()
+    return _PROMPT_LOADER
 
 
 def build_system_messages(
@@ -82,10 +84,20 @@ def build_system_messages(
     if provider_preamble:
         guidance_sections.append(provider_preamble)
 
+    prompt_context = _system_prompt_context(
+        iteration_cap=iteration_cap,
+        repository_language=repository_language,
+        settings=settings,
+    )
+
+    base_prompt = _base_system_prompt(prompt_context)
+    if base_prompt:
+        guidance_sections.append(base_prompt)
+
     if include_react_guidance:
-        guidance_sections.append(
-            _react_guidance(iteration_cap, repository_language, settings=settings)
-        )
+        react_guidance = _react_guidance(prompt_context)
+        if react_guidance:
+            guidance_sections.append(react_guidance)
 
     environment_snapshot = _environment_snapshot(root)
     if environment_snapshot:
@@ -126,271 +138,71 @@ def _resolve_workspace_root(workspace_root: Path | None, settings: Settings | No
 
 
 def _provider_preamble(provider: str, model: str | None) -> str:
-    key = provider.lower().strip()
-    if not key:
-        return ""
-
-    # Detect model family for OpenRouter to apply appropriate optimizations
-    model_lower = (model or "").lower()
-    if key == "openrouter":
-        if "claude" in model_lower or "anthropic" in model_lower:
-            # Use Anthropic-specific guidance for Claude models via OpenRouter
-            anthropic_guidance = _PROVIDER_PREAMBLES.get("anthropic", "")
-            openrouter_base = _PROVIDER_PREAMBLES.get("openrouter", "")
-            combined = f"{anthropic_guidance} {openrouter_base}".strip()
-            if model:
-                return f"Model: {model} (via OpenRouter). {combined}"
-            return f"Provider: OpenRouter (Claude). {combined}"
-        elif "gpt" in model_lower or "openai" in model_lower:
-            # Use OpenAI-specific guidance for GPT models via OpenRouter
-            openai_guidance = _PROVIDER_PREAMBLES.get("openai", "")
-            openrouter_base = _PROVIDER_PREAMBLES.get("openrouter", "")
-            combined = f"{openai_guidance} {openrouter_base}".strip()
-            if model:
-                return f"Model: {model} (via OpenRouter). {combined}"
-            return f"Provider: OpenRouter (GPT). {combined}"
-        elif "gemini" in model_lower or "google" in model_lower:
-            # Use Google-specific guidance for Gemini models via OpenRouter
-            google_guidance = _PROVIDER_PREAMBLES.get("google", "")
-            openrouter_base = _PROVIDER_PREAMBLES.get("openrouter", "")
-            combined = f"{google_guidance} {openrouter_base}".strip()
-            if model:
-                return f"Model: {model} (via OpenRouter). {combined}"
-            return f"Provider: OpenRouter (Gemini). {combined}"
-
-    base = _PROVIDER_PREAMBLES.get(key)
-    if not base:
-        return f"You are running on the {provider} provider{f' using {model}' if model else ''}. Optimise tool usage and produce grounded answers."
-    if model:
-        return f"Model: {model} ({provider}). {base}"
-    return f"Provider: {provider}. {base}"
+    """Return an empty preamble to maintain provider-agnostic prompts."""
+    _ = provider, model
+    return ""
 
 
-def _react_guidance(
+def _base_system_prompt(context: dict[str, str]) -> str:
+    loader = _get_prompt_loader()
+    prompt = loader.load_system_prompt(context=context)
+    return prompt.strip()
+
+
+def _react_guidance(context: dict[str, str]) -> str:
+    loader = _get_prompt_loader()
+    prompt = loader.render_prompt("system/react_loop.md", context)
+    return prompt.strip()
+
+
+def _system_prompt_context(
+    *,
     iteration_cap: int | None,
     repository_language: str | None,
-    *,
-    settings: Settings | None = None,
-) -> str:
-    core = (
-        "You are a helpful assistant for the devagent CLI tool, specialised in efficient software development tasks.\n\n"
-        "## MISSION\n"
-        "Complete the user's task efficiently using available tools.\n"
-        "Pay attention to budget status messages that guide your execution strategy.\n\n"
-        "## CORE PRINCIPLES\n"
-        "1. EFFICIENCY: Choose the most appropriate tool for each task\n"
-        "2. AVOID REDUNDANCY: Never repeat identical tool calls\n"
-        "3. BULK OPERATIONS: Prefer batch operations over individual file reads\n"
-        "4. EARLY TERMINATION: Stop when you have sufficient information\n"
-        "5. ADAPTIVE STRATEGY: Change approach if tools fail\n"
-        "6. SCRIPT GENERATION: Create scripts for complex computations\n"
-        "\n"
-        "## COMMUNICATION STYLE\n"
-        "Be concise and direct. Minimize output tokens while maintaining accuracy.\n"
-        "- For simple questions, give direct answers without preamble\n"
-        "- One-word or one-sentence answers are preferred when appropriate\n"
-        "- Avoid unnecessary explanations unless asked\n"
-        "- Don't add phrases like 'The answer is...' or 'Based on...'\n"
-        "\nExamples of proper conciseness:\n"
-        "User: 'What is 2+2?' -> You: '4'\n"
-        "User: 'Is 11 prime?' -> You: 'Yes'\n"
-        "User: 'Which file has the User class?' -> You: 'models/user.py'\n"
-        "User: 'How many Python files in src/?' -> You: '23'\n"
-        "\nFor complex tasks:\n"
-        "- Provide complete information but be succinct\n"
-        "- Match detail level to task complexity\n"
-        "- Explain non-trivial commands before running them\n"
-    )
+    settings: Settings | None,
+) -> dict[str, str]:
+    language_hint = _language_hint_block(repository_language)
+    iteration_note = _iteration_note(iteration_cap, settings)
+    iteration_cap_value = str(iteration_cap) if iteration_cap is not None else ""
 
-    if repository_language:
-        hint = _LANGUAGE_HINTS.get(str(repository_language).lower())
-        if hint:
-            core += f"\nLANGUAGE-SPECIFIC ({repository_language}):{hint}\n"
+    return {
+        "iteration_cap": iteration_cap_value,
+        "iteration_note": iteration_note,
+        "language_hint": language_hint,
+        "repository_language": repository_language or "",
+        "tool_find": FIND,
+        "tool_grep": GREP,
+        "tool_symbols": SYMBOLS,
+        "tool_read": READ,
+        "tool_run": RUN,
+        "tool_write": WRITE,
+    }
 
-    tool_semantics = (
-        "\nTOOL SEMANTICS:\n"
-        f"- {RUN}: Runs commands in POSIX shell; pipes, globs, redirects work\n"
-        "- Prefer machine-parsable output (e.g. find -print0) over formatted listings\n"
-        "- Minimise tool calls – stop once you have the answer\n"
-        "\nPARALLEL TOOL EXECUTION:\n"
-        "- You have the capability to call multiple tools in a single response\n"
-        "- When multiple independent pieces of information are requested, batch your tool calls for optimal performance\n"
-        "- Independent tool calls will execute concurrently, providing 3-5x speedup\n"
-        "- Examples:\n"
-        "  • Reading 3 different files: batch into one response instead of 3 sequential calls\n"
-        f"  • Multiple searches: run {FIND}/{GREP} queries in parallel\n"
-        f"  • File read + search: execute simultaneously if independent\n"
-        "- IMPORTANT: Only batch truly independent operations (don't batch if one depends on another's result)\n"
-    )
 
-    output_discipline = (
-        "\nOUTPUT REQUIREMENTS:\n"
-        "- State scope explicitly (depth, hidden files, symlinks)\n"
-        "- Ensure counts match actual listed items\n"
-        "- Stop executing once you have sufficient information\n"
-    )
-
-    code_edit_guidance = (
-        "\nCODE EDITING BEST PRACTICES:\n"
-        "\nWhen modifying code:\n"
-        "1. Read the file first to understand context and conventions\n"
-        "2. Follow existing code style (indentation, naming, imports)\n"
-        f"3. Use {WRITE} for surgical changes to existing files\n"
-        "4. Don't modify unrelated code - stay focused on the task\n"
-        "5. Verify library imports exist in the project before using them\n"
-        "\nFormat for file changes:\n"
-        f"- Use unified diff format ({WRITE}) for existing files\n"
-        "- Show context lines around changes for clarity\n"
-        "- Make multiple small patches rather than one large rewrite\n"
-        "\nExample patch structure:\n"
-        "  --- a/file.py\n"
-        "  +++ b/file.py\n"
-        "  @@ -10,6 +10,7 @@\n"
-        "   def existing_function():\n"
-        "       existing_line\n"
-        "  +    new_line_added\n"
-        "       another_existing_line\n"
-        "\nDon't:\n"
-        "- Leave TODO/FIXME comments without implementing the code\n"
-        "- Add unnecessary comments explaining obvious code\n"
-        "- Modify code outside the scope of the user's request\n"
-        "- Assume libraries are available without checking\n"
-    )
-
-    fs_recipes = (
-        "\nCOMMON OPERATIONS:\n"
-        "Count files: `find . -maxdepth 1 -type f | wc -l`\n"
-        "List safely: `find . -maxdepth 1 -type f -print0 | xargs -0 -n1 basename`\n"
-        "Verify location: `pwd` and `ls -la`\n"
-    )
-
-    failure_handling = (
-        "\nFAILURE HANDLING:\n"
-        "- First failure: Adjust parameters\n"
-        "- Second failure: Switch tools/approach\n"
-        "- System blocks identical calls after two failures\n"
-        "- Three or more consecutive failures should trigger termination\n"
-    )
-
-    anti_patterns = (
-        "\nANTI-PATTERNS TO AVOID:\n"
-        "\nCode quality:\n"
-        "- NEVER leave TODO or FIXME comments - implement the code completely\n"
-        "- Don't add placeholder functions that need to be 'filled in later'\n"
-        "- Don't write incomplete implementations with '# rest of code here' comments\n"
-        "- Avoid over-commenting obvious code\n"
-        "\nScope discipline:\n"
-        "- Don't refactor or 'improve' code outside the user's request\n"
-        "- Don't fix unrelated bugs or style issues unless asked\n"
-        "- Don't add extra features beyond what was requested\n"
-        "- Stay focused on the specific task at hand\n"
-        "\nTool usage:\n"
-        "- Don't search for the same pattern multiple times\n"
-        "- Don't read files you've already read\n"
-        "- Don't run tests without knowing the test command\n"
-        "- Don't assume build tools or frameworks are available\n"
-        "\nSecurity:\n"
-        "- Never commit API keys, passwords, or secrets\n"
-        "- Don't log sensitive information\n"
-    )
-
-    tool_guidance = (
-        "\nUNIVERSAL TOOL STRATEGIES:\n"
-        "- For counting/metrics: Use shell commands with find/grep/wc\n"
-        "- For pattern search: Start with grep or find, then read specific files\n"
-        "- For exploration: Use symbols for structure and definitions\n"
-        "- For bulk operations: Generate and execute scripts\n"
-        "- For file operations: Prefer find/xargs over individual reads\n"
-        "- Verify unexpected results (especially counts <=1) with pwd and ls -la\n"
-    )
-
-    tool_priority = (
-        "\nTOOL SELECTION GUIDE:\n"
-        f"- Finding files -> {FIND} ('*.py' or '**/test_*.js')\n"
-        f"- Searching content -> {GREP} ('TODO' or 'error.*', regex=true)\n"
-        f"- Finding symbols -> {SYMBOLS} ('ClassName' or 'functionName')\n"
-        f"- Reading specific files -> {READ}\n"
-        f"- Running commands -> {RUN}\n"
-        f"- Making changes -> {WRITE}\n"
-    )
-
-    tool_descriptions = (
-        "\nDETAILED TOOL DESCRIPTIONS:\n"
-        "\nfind:\n"
-        "  Purpose: Find files by pattern using ripgrep glob syntax\n"
-        "  When to use: Looking for files by name or extension\n"
-        "  Examples:\n"
-        "    find('*.py') - all Python files\n"
-        "    find('**/test_*.js') - test files in any directory\n"
-        "    find('src/**/*.ts') - TypeScript files under src\n"
-        "  Parameters: query (glob pattern), path (optional), limit (default 100)\n"
-        "  Results: Sorted by modification time (newest first)\n"
-        "\ngrep:\n"
-        "  Purpose: Search content in files using ripgrep\n"
-        "  When to use: Finding specific text or patterns in code\n"
-        "  Examples:\n"
-        "    grep('TODO') - find all TODO comments\n"
-        "    grep('func.*name', regex=true) - regex search\n"
-        "    grep('error', path='src/') - search only in src\n"
-        "  Parameters: pattern, path (optional), regex (default false), limit\n"
-        "  Results: Grouped by file, sorted by modification time\n"
-        "\nsymbols:\n"
-        "  Purpose: Find symbol definitions using universal ctags\n"
-        "  When to use: Looking for functions, classes, variables by name\n"
-        "  Examples:\n"
-        "    symbols('MyClass') - find class definition\n"
-        "    symbols('process_data') - find function definition\n"
-        "  Parameters: name (substring match), path (optional), limit\n"
-        "  Note: Requires ctags/universal-ctags to be installed\n"
-        f"\n{READ}:\n"
-        "  Purpose: Read file contents from the repository\n"
-        "  When to use: After finding files with find/grep/symbols\n"
-        "  Parameters: paths (list of strings), optional context_lines or byte_range\n"
-        f"\n{RUN}:\n"
-        "  Purpose: Execute shell commands directly\n"
-        "  When to use: For git operations, running tests, building\n"
-        "  Parameters: cmd (string), optional args (list)\n"
-        f"\n{WRITE}:\n"
-        "  Purpose: Apply unified diff patches to files\n"
-        "  When to use: Making precise changes to existing files\n"
-        "  Parameters: patches (list of {path, patch_text})\n"
-    )
-
-    tool_workflows = (
-        "\nCOMMON TOOL WORKFLOWS:\n"
-        "\nFinding files:\n"
-        "  1. find('*.py') -> Lists all Python files\n"
-        f"  2. {READ} to examine specific files\n"
-        "\nFinding and modifying a function:\n"
-        "  1. symbols('function_name') -> Finds definition\n"
-        f"  2. {READ} the file to see full context\n"
-        f"  3. {WRITE} to make changes\n"
-        "\nSearching for patterns:\n"
-        "  1. grep('TODO') -> Finds all occurrences\n"
-        "  2. grep('error.*handling', regex=true) for complex patterns\n"
-        "\nRefactoring across files:\n"
-        "  1. grep for usage patterns\n"
-        f"  2. {READ} files that need changes\n"
-        f"  3. {WRITE} each file\n"
-        "\nSimple principles:\n"
-        f"  - {FIND} for files, {GREP} for content, {SYMBOLS} for definitions\n"
-        "  - Results are sorted by modification time (newest first)\n"
-        "  - No hidden heuristics - what you search is what you get\n"
-    )
-
+def _iteration_note(iteration_cap: int | None, settings: Settings | None) -> str:
+    if iteration_cap is None:
+        fallback = getattr(settings, "max_iterations", None)
+        if fallback:
+            return (
+                f"Iterations default to the configured maximum of {fallback}. "
+                "Respect the budget and stop when the task is complete."
+            )
+        return ""
     return (
-        core
-        + tool_semantics
-        + output_discipline
-        + code_edit_guidance
-        + fs_recipes
-        + failure_handling
-        + anti_patterns
-        + tool_guidance
-        + tool_priority
-        + tool_descriptions
-        + tool_workflows
+        f"Iterations are limited to {iteration_cap} steps. "
+        "Plan tool usage so you finish within the cap."
     )
+
+
+def _language_hint_block(repository_language: str | None) -> str:
+    if not repository_language:
+        return ""
+
+    hint = _LANGUAGE_HINTS.get(str(repository_language).lower())
+    if not hint:
+        return ""
+
+    return f"### Language-Specific Guidance ({repository_language}){hint}"
 
 
 def _environment_snapshot(root: Path) -> str:

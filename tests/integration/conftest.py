@@ -40,10 +40,10 @@ def test_project(integration_test_dir) -> Generator[Path, None, None]:
     project_dir.mkdir(exist_ok=True)
 
     # Create project structure
-    (project_dir / "src").mkdir()
-    (project_dir / "tests").mkdir()
-    (project_dir / "docs").mkdir()
-    (project_dir / ".devagent").mkdir()
+    (project_dir / "src").mkdir(exist_ok=True)
+    (project_dir / "tests").mkdir(exist_ok=True)
+    (project_dir / "docs").mkdir(exist_ok=True)
+    (project_dir / ".devagent").mkdir(exist_ok=True)
 
     # Create project files
     (project_dir / "README.md").write_text(
@@ -203,7 +203,7 @@ def devagent_cli():
         Returns:
             Completed process result
         """
-        cmd = [sys.executable, "-m", "ai_dev_agent.cli.main", *args]
+        cmd = [sys.executable, "-m", "ai_dev_agent.cli", *args]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=30)
         return result
 
