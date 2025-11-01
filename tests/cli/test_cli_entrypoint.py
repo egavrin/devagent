@@ -1,5 +1,6 @@
 """Tests for the new CLI runtime entrypoint scaffolding."""
 
+import importlib
 import os
 import runpy
 import subprocess
@@ -10,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
+import ai_dev_agent.cli
 from ai_dev_agent.agents.base import AgentResult
 from ai_dev_agent.cli.runtime.commands import query as query_module
 
@@ -241,6 +243,14 @@ def test_cli_module_entrypoint_invokes_main():
     with patch("ai_dev_agent.cli.main") as mock_main:
         runpy.run_module("ai_dev_agent.cli", run_name="__main__")
     mock_main.assert_called_once_with()
+
+
+def test_cli_module_import_exposes_main():
+    """Importing the __main__ module should provide the cli.main callable."""
+    module = importlib.import_module("ai_dev_agent.cli.__main__")
+
+    assert hasattr(module, "main")
+    assert module.main is ai_dev_agent.cli.main
 
 
 def test_cli_module_help_executes(tmp_path):
