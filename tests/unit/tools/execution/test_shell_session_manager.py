@@ -163,3 +163,49 @@ def test_history_clearing_api(tmp_path: Path) -> None:
     manager.clear_all_history()
     assert manager.get_history(session_a) == []
     assert manager.get_history(session_b) == []
+
+
+def test_manager_history_error_paths(tmp_path: Path) -> None:
+    manager = ShellSessionManager()
+    session_id = manager.create_session(cwd=tmp_path)
+
+    with pytest.raises(ValueError):
+        manager.clear_history(session_id, keep_last=-1)
+
+    manager.execute(session_id, 'printf "first\\n"')
+    manager.clear_history(session_id)
+    assert manager.get_history(session_id) == []
+
+    manager.close_session(session_id)
+
+    with pytest.raises(ShellSessionError):
+        manager.get_history(session_id)
+    with pytest.raises(ShellSessionError):
+        manager.replay_history(session_id)
+    with pytest.raises(ShellSessionError):
+        manager.clear_history(session_id)
+
+
+def test_execute_appends_history(tmp_path: Path) -> None:
+    manager = ShellSessionManager()
+    session_id = manager.create_session(cwd=tmp_path)
+
+    result = manager.execute(session_id, 'printf "history\\n"')
+    assert result.exit_code == 0
+
+    history = manager.get_history(session_id)
+    assert history
+    assert history[-1].command == 'printf "history\\n"'
+    assert "history" in history[-1].result.stdout
+
+
+def test_clear_history_handles_empty_sessions(tmp_path: Path) -> None:
+    manager = ShellSessionManager()
+    session_id = manager.create_session(cwd=tmp_path)
+
+    manager.clear_history(session_id)
+    assert manager.get_history(session_id) == []
+
+    # Ensure repeated clearing still succeeds
+    manager.clear_history(session_id)
+    assert manager.get_history(session_id) == []

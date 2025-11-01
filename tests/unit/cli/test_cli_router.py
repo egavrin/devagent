@@ -1,6 +1,7 @@
 """Comprehensive tests for the CLI router module."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from ai_dev_agent.agents import AgentSpec
 from ai_dev_agent.cli.router import IntentDecision, IntentRouter, IntentRoutingError
 from ai_dev_agent.core.utils.config import Settings
-from ai_dev_agent.providers.llm.base import LLMError, ToolCallResult
+from ai_dev_agent.providers.llm.base import LLMError, ToolCall, ToolCallResult
 
 
 class TestIntentDecision:
@@ -349,3 +350,108 @@ class TestIntentRouter:
             mock_build.return_value = []
             with pytest.raises(IntentRoutingError):
                 router.route_prompt("Do something")
+
+    def test_normalise_system_context_handles_edge_types(self):
+        router = IntentRouter(client=self.mock_client, settings=self.settings)
+
+        normalized = router._normalise_system_context("not-a-dict")
+        assert normalized["available_tools"] == []
+        assert normalized["cwd"] == "."
+
+        normalized = router._normalise_system_context(
+            {"available_tools": ["find", ""], "cwd": None, "command_mappings": []}
+        )
+        assert normalized["available_tools"] == ["find"]
+        assert normalized["command_mappings"] == {}
+
+    def test_project_context_lines_formats_profile(self):
+        profile = {
+            "language": "Python",
+            "repository_size": 420,
+            "active_plan_complexity": "medium",
+            "recent_files": ["a.py", "b.py", "c.py", "d.py", "e.py"],
+            "style_notes": "PEP8 everywhere",
+            "project_summary": "This project demonstrates extensive routing behaviour " * 4,
+            "workspace_root": "/other",
+        }
+        router = IntentRouter(
+            client=self.mock_client, settings=self.settings, project_profile=profile
+        )
+
+        lines = router._project_context_lines("/expected")
+        joined = "\n".join(lines)
+        assert "Dominant language: Python" in joined
+        assert "Approximate file count: 420" in joined
+        assert "Current plan complexity: medium" in joined
+        assert "Recently touched files" in joined and "…" in joined
+        assert "Style highlights: PEP8 everywhere" in joined
+        assert "Structure summary:" in joined
+        assert "…" in joined
+        assert "Override workspace root: /other" in joined
+
+    def test_tool_performance_lines_sorts_metrics(self):
+        history = {
+            "read": {"success": 8, "failure": 2, "avg_duration": 2.5},
+            "find": {"success": 15, "failure": 5, "avg_duration": 1.2},
+            "write": {"success": 1, "failure": 0, "avg_duration": 0.0},
+        }
+        router = IntentRouter(
+            client=self.mock_client, settings=self.settings, tool_success_history=history
+        )
+
+        lines = router._tool_performance_lines()
+        assert lines[0].startswith("- find:")
+        assert any("avg 2.5s" in line for line in lines)
+
+    def test_build_raw_tool_calls_handles_invalid_arguments(self):
+        router = IntentRouter(client=self.mock_client, settings=self.settings)
+        calls = [
+            ToolCall(name="find", arguments={"query": "*.py"}, call_id="a"),
+            ToolCall(name="run", arguments="not-json", call_id=None),
+        ]
+
+        payload = router._build_raw_tool_calls(calls)
+        assert payload[0]["function"]["arguments"] == json.dumps({"query": "*.py"})
+        assert payload[1]["function"]["arguments"] == "{}"
+
+    def test_parse_arguments_prefers_call_then_result(self):
+        router = IntentRouter(client=self.mock_client, settings=self.settings)
+        result = ToolCallResult()
+        call = SimpleNamespace(name="find", arguments='{"query":"*.py"}')
+
+        parsed = router._parse_arguments(result, call)
+        assert parsed == {"query": "*.py"}
+
+        call.arguments = "invalid"
+        result.arguments = {"fallback": True}
+        parsed = router._parse_arguments(result, call)
+        assert parsed == {"fallback": True}
+
+        result.arguments = None
+        result.content = '{"text": "fallback"}'
+        parsed = router._parse_arguments(result, call)
+        assert parsed == {"text": "fallback"}
+
+    def test_coerce_tool_call_result_tuple_input(self):
+        router = IntentRouter(client=self.mock_client, settings=self.settings)
+        tool_entry = {
+            "id": "call-1",
+            "function": {"name": "find", "arguments": '{"query": "*.py"}'},
+        }
+
+        coerced = router._coerce_tool_call_result(("message", [tool_entry]))
+        assert isinstance(coerced, ToolCallResult)
+        assert coerced.calls[0].name == "find"
+        assert coerced.calls[0].arguments == {"query": "*.py"}
+        assert coerced.raw_tool_calls[0]["id"] == "call-1"
+
+    @patch("ai_dev_agent.cli.router.build_system_messages")
+    def test_route_returns_message_when_no_tool(self, mock_build_messages):
+        mock_build_messages.return_value = []
+
+        router = IntentRouter(client=self.mock_client, settings=self.settings)
+        router._invoke_model = MagicMock(return_value=ToolCallResult(message_content="Here you go"))
+
+        decision = router.route("Explain usage")
+        assert decision.tool is None
+        assert decision.arguments == {"text": "Here you go"}

@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import platform
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import click
 import pytest
 
+from ai_dev_agent.cli.context_enhancer import ContextEnhancer
 from ai_dev_agent.cli.utils import (
     _build_context,
     _build_context_pruning_config_from_settings,
     _collect_project_structure_outline,
     _detect_repository_language,
     _export_structure_hints_state,
+    _get_repo_context_enhancer,
     _get_structure_hints_state,
     _invoke_registry_tool,
     _make_tool_context,
@@ -28,9 +32,11 @@ from ai_dev_agent.cli.utils import (
     get_llm_client,
     infer_task_files,
     resolve_prompt_input,
+    update_task_state,
 )
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.core.utils.state import InMemoryStateStore
+from ai_dev_agent.providers.llm import DEEPSEEK_DEFAULT_BASE_URL
 
 
 def test_build_system_context():
@@ -208,6 +214,10 @@ class TestDetectRepositoryLanguage:
             StubEnhancer,
             raising=False,
         )
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils.extract_keywords",
+            lambda text: {"api"},
+        )
 
         def fail_rglob(self, pattern="*"):
             raise OSError("Filesystem traversal disabled")
@@ -226,6 +236,92 @@ class TestDetectRepositoryLanguage:
         assert total == 2
         assert captured["limit"] == 400
         assert captured["workspace"] == tmp_path.resolve()
+
+    def test_get_repo_context_enhancer_caches_instances(self, monkeypatch, tmp_path):
+        """Enhancer retrieval should reuse cache per repo and settings."""
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils._CLI_CONTEXT_ENHANCERS",
+            {},
+            raising=False,
+        )
+
+        first = _get_repo_context_enhancer(tmp_path)
+        second = _get_repo_context_enhancer(tmp_path)
+        assert first is second
+
+        settings = Settings()
+        third = _get_repo_context_enhancer(tmp_path, settings=settings)
+        assert third is not first
+        assert third.settings is settings
+
+    def test_detect_language_handles_rglob_edge_cases(self, monkeypatch, tmp_path):
+        """Fallback filesystem scan should skip directories and handle ValueError."""
+        (tmp_path / "src").mkdir()
+        main_file = tmp_path / "src" / "main.py"
+        main_file.write_text("print('hi')\n", encoding="utf-8")
+        external = tmp_path.parent / "external.txt"
+        external.write_text("noop\n", encoding="utf-8")
+
+        class StubEnhancer:
+            _DEFAULT_IGNORE_SUBSTRINGS: tuple[str, ...] = tuple(
+                ContextEnhancer._DEFAULT_IGNORE_SUBSTRINGS
+            )
+
+            def __init__(self, workspace, settings=None):
+                pass
+
+            def list_repository_files(self, limit=None, use_cache=True):
+                return []
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils.ContextEnhancer",
+            StubEnhancer,
+            raising=False,
+        )
+
+        def fake_rglob(self, pattern="*"):
+            assert self == tmp_path.resolve()
+            git_dir = tmp_path / ".git"
+            git_dir.mkdir(exist_ok=True)
+            config_path = git_dir / "config"
+            config_path.write_text("config\n", encoding="utf-8")
+            yield tmp_path / "src"
+            yield main_file
+            yield config_path
+            yield external
+
+        monkeypatch.setattr(Path, "rglob", fake_rglob, raising=False)
+
+        language, total = _detect_repository_language(tmp_path, max_files=10)
+
+        assert language == "python"
+        assert total == 2
+
+    def test_detect_language_respects_max_files(self, monkeypatch, tmp_path):
+        """Max file limit should stop scanning early."""
+        first = tmp_path / "first.py"
+        first.write_text("print('first')\n", encoding="utf-8")
+        second = tmp_path / "second.py"
+        second.write_text("print('second')\n", encoding="utf-8")
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils._get_repo_context_enhancer",
+            lambda repo_root, settings=None: SimpleNamespace(
+                list_repository_files=lambda limit=1: []
+            ),
+        )
+
+        def fake_rglob(self, pattern="*"):
+            yield first
+            yield second
+            yield second
+
+        monkeypatch.setattr(Path, "rglob", fake_rglob, raising=False)
+
+        language, total = _detect_repository_language(tmp_path, max_files=1)
+
+        assert language == "python"
+        assert total == 1
 
 
 class TestInferTaskFiles:
@@ -313,6 +409,66 @@ class TestInferTaskFiles:
         assert "limit" in captured
         assert captured["workspace"] == tmp_path.resolve()
 
+    def test_infer_task_files_skips_ignored_fragments(self, tmp_path):
+        """Repository scans should ignore paths containing default skip substrings."""
+        (tmp_path / "src").mkdir()
+        good = tmp_path / "src" / "deploy.py"
+        good.write_text("print('deploy')\n", encoding="utf-8")
+        git_hook = tmp_path / ".git" / "hooks"
+        git_hook.mkdir(parents=True)
+        (git_hook / "post_deploy.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+
+        task = {"description": "Review deploy hooks"}
+
+        files = infer_task_files(task, tmp_path)
+
+        assert "src/deploy.py" in files
+        assert all(".git" not in path for path in files)
+
+    def test_infer_task_files_ignores_outside_repo_paths(self, tmp_path):
+        """Paths resolving outside of repo root should be ignored."""
+        external = tmp_path.parent / "external.py"
+        external.write_text("print('ext')\n", encoding="utf-8")
+
+        task = {
+            "commands": [f"devagent --files {external}"],
+            "description": "Touch external file",
+        }
+
+        files = infer_task_files(task, tmp_path)
+
+        assert files == []
+
+    def test_infer_task_files_uses_keyword_candidates(self, monkeypatch, tmp_path):
+        """Keyword-derived scans should consider repository candidates."""
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        target = reports_dir / "monthly.md"
+        target.write_text("# report\n", encoding="utf-8")
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils.extract_keywords",
+            lambda text: {"reports"},
+        )
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils._get_repo_context_enhancer",
+            lambda repo_root, settings=None: SimpleNamespace(
+                list_repository_files=lambda limit=800: []
+            ),
+        )
+
+        def fake_rglob(self, pattern="*"):
+            yield reports_dir
+            yield target
+
+        monkeypatch.setattr(Path, "rglob", fake_rglob, raising=False)
+
+        task = {"description": "Analyze quarterly reports"}
+
+        files = infer_task_files(task, tmp_path)
+
+        assert files == ["reports/monthly.md"]
+
 
 class TestNormalizeArgumentList:
     """Test argument list normalization."""
@@ -385,6 +541,13 @@ class TestProjectStructureOutline:
             assert "tests/" in outline
             assert "README.md" in outline
 
+    def test_collect_project_structure_outline_empty_returns_none(self, tmp_path):
+        """Empty outlines should return None rather than an empty string."""
+        with patch("ai_dev_agent.cli.utils.generate_repo_outline", return_value=""):
+            result = _collect_project_structure_outline(tmp_path)
+
+        assert result is None
+
 
 class TestMakeToolContext:
     """Test tool context creation."""
@@ -398,13 +561,38 @@ class TestMakeToolContext:
             "approval_policy": MagicMock(),
         }
 
-        with patch("ai_dev_agent.cli.utils.ApprovalManager"):
+        with (
+            patch("ai_dev_agent.cli.utils.ApprovalManager"),
+            patch("ai_dev_agent.cli.utils.load_devagent_yaml", return_value={"cfg": 1}),
+        ):
             tool_ctx = _make_tool_context(ctx)
 
             # ToolContext uses the actual current directory
             assert tool_ctx.repo_root == Path.cwd()
             assert hasattr(tool_ctx, "settings")
             assert tool_ctx.settings == ctx.obj["settings"]
+
+    def test_make_tool_context_with_sandbox_and_shell_manager(self, monkeypatch):
+        """Sandbox flag and shell manager metadata should populate extra fields."""
+        ctx = click.Context(click.Command("test"))
+        settings = Settings()
+        settings.workspace_root = Path.cwd()
+        ctx.obj = {
+            "settings": settings,
+            "_shell_session_manager": "manager",
+            "_shell_session_id": "session-xyz",
+        }
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils._create_sandbox",
+            lambda s: "sandbox",
+        )
+
+        tool_ctx = _make_tool_context(ctx, with_sandbox=True)
+
+        assert tool_ctx.sandbox == "sandbox"
+        assert tool_ctx.extra["shell_session_manager"] == "manager"
+        assert tool_ctx.extra["shell_session_id"] == "session-xyz"
 
 
 class TestGetLLMClient:
@@ -444,6 +632,113 @@ class TestGetLLMClient:
 
         assert client == mock_client
 
+    def test_get_llm_client_configures_provider_overrides(self, monkeypatch):
+        ctx = click.Context(click.Command("test"))
+        settings = Settings()
+        settings.api_key = "key"
+        settings.provider = "OpenRouter"
+        settings.model = "gpt"
+        settings.base_url = DEEPSEEK_DEFAULT_BASE_URL
+        settings.provider_only = ["anthropic"]
+        settings.provider_config = {"anthropic": {"model": "claude"}}
+        settings.request_headers = {"X-Test": "1"}
+        settings.context_pruner_max_total_tokens = 500
+        settings.context_pruner_trigger_ratio = 0.6
+        settings.context_pruner_keep_recent_messages = 4
+        settings.context_pruner_summary_max_chars = 120
+        settings.context_pruner_max_event_history = 8
+        settings.max_tool_messages_kept = 12
+        settings.disable_context_pruner = True
+
+        ctx.obj = {"settings": settings}
+
+        captured_client_kwargs: dict[str, Any] = {}
+
+        class DummyClient:
+            def __init__(self):
+                self.timeout = None
+                self.retry = None
+
+            def configure_timeout(self, value):
+                self.timeout = value
+
+            def configure_retry(self, config):
+                self.retry = config
+
+        def fake_create_client(**kwargs):
+            captured_client_kwargs.update(kwargs)
+            return DummyClient()
+
+        monkeypatch.setattr("ai_dev_agent.cli.utils.create_client", fake_create_client)
+
+        captured_budget: dict[str, Any] = {}
+
+        def fake_budgeted(client, budget_config, disabled):
+            captured_budget["client"] = client
+            captured_budget["budget"] = budget_config
+            captured_budget["disabled"] = disabled
+            return {"wrapped": client}
+
+        monkeypatch.setattr("ai_dev_agent.cli.utils.BudgetedLLMClient", fake_budgeted)
+
+        pruning_config = object()
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils._build_context_pruning_config_from_settings",
+            lambda s: pruning_config,
+        )
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils.config_from_settings",
+            lambda s: "budget-config",
+        )
+
+        class StubSessionManager:
+            def __init__(self):
+                self.args = None
+
+            def configure_context_service(self, config, summarizer):
+                self.args = (config, summarizer)
+
+        session_manager = StubSessionManager()
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils.SessionManager.get_instance",
+            lambda: session_manager,
+        )
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils.LLMConversationSummarizer",
+            lambda client: {"summarizer": client},
+        )
+
+        monkeypatch.setitem(
+            sys.modules,
+            "ai_dev_agent.session.enhanced_summarizer_wrapper",
+            SimpleNamespace(create_enhanced_summarizer=lambda client: None),
+        )
+
+        client = get_llm_client(ctx)
+
+        assert captured_client_kwargs["provider"] == "OpenRouter"
+        assert captured_client_kwargs["base_url"] is None
+        assert captured_client_kwargs["provider_only"] == tuple(settings.provider_only)
+        assert "provider_config" in captured_client_kwargs
+        assert "default_headers" in captured_client_kwargs
+
+        raw_client = captured_budget["client"]
+        assert isinstance(raw_client, DummyClient)
+        assert raw_client.timeout == 120.0
+        assert raw_client.retry is not None
+        assert captured_budget["budget"] == "budget-config"
+        assert captured_budget["disabled"] is True
+        assert ctx.obj["_raw_llm_client"] is raw_client
+        assert ctx.obj["llm_client"] == {"wrapped": raw_client}
+
+        assert session_manager.args == (
+            pruning_config,
+            {"summarizer": ctx.obj["llm_client"]},
+        )
+        assert client == {"wrapped": raw_client}
+
 
 class TestBuildContextPruningConfig:
     """Test context pruning config building."""
@@ -462,6 +757,19 @@ class TestBuildContextPruningConfig:
         assert config.trigger_tokens == int(5000 * 0.8)
         assert config.keep_recent_messages == 10
 
+    def test_build_context_pruning_config_with_explicit_trigger(self):
+        settings = Settings()
+        settings.context_pruner_max_total_tokens = 200
+        settings.context_pruner_trigger_tokens = 50
+        settings.context_pruner_keep_recent_messages = 1
+        settings.context_pruner_summary_max_chars = 0
+        settings.context_pruner_max_event_history = 0
+
+        config = _build_context_pruning_config_from_settings(settings)
+
+        assert config.trigger_tokens == 50
+        assert config.keep_recent_messages >= 2
+
 
 class TestResolvePromptInput:
     """Test prompt resolution helper."""
@@ -471,6 +779,18 @@ class TestResolvePromptInput:
         source = "Title\n* bullet"
 
         assert resolve_prompt_input(source) == source
+
+    def test_resolve_prompt_input_none_returns_none(self):
+        """None inputs should return None without error."""
+        assert resolve_prompt_input(None) is None
+
+    def test_resolve_prompt_input_blank_returns_none(self):
+        """Whitespace-only prompt strings should return None."""
+        assert resolve_prompt_input("   \t") is None
+
+    def test_resolve_prompt_input_inline_literal_returns_value(self):
+        """Inline single-line text should be returned unchanged."""
+        assert resolve_prompt_input("Hello world") == "Hello world"
 
     def test_resolve_prompt_input_reads_file(self, tmp_path):
         """Prompt file paths should be read and returned as text."""
@@ -542,6 +862,23 @@ class TestStructureHintsState:
         assert state["files"]["src/other.py"]["symbols"] == ["DirectSymbol"]
         assert state["project_summary"] == "Overall summary"
 
+    def test_get_structure_hints_state_normalizes_existing_state(self):
+        """Existing state with incorrect container types should be normalized."""
+        ctx = click.Context(click.Command("test"))
+        ctx.obj = {
+            "_structure_hints_state": {
+                "symbols": ["Alpha"],
+                "files": [],
+                "project_summary": None,
+            }
+        }
+
+        state = _get_structure_hints_state(ctx)
+
+        assert isinstance(state["symbols"], set)
+        assert isinstance(state["files"], dict)
+        assert state["symbols"] == set()
+
     def test_export_structure_hints_state_formats_output(self):
         """Exported state should provide sorted symbols and shallow copies."""
         state = {
@@ -555,6 +892,36 @@ class TestStructureHintsState:
         assert exported["symbols"] == ["Alpha", "Beta"]
         assert exported["files"] == state["files"]
         assert exported["project_summary"] == "Summary"
+
+    def test_merge_structure_hints_state_ignores_none_payload(self):
+        """None payloads should leave the state unchanged."""
+        state = {"symbols": {"Existing"}, "files": {"file.py": {}}, "project_summary": "Summary"}
+
+        _merge_structure_hints_state(state, None)
+
+        assert state == {
+            "symbols": {"Existing"},
+            "files": {"file.py": {}},
+            "project_summary": "Summary",
+        }
+
+    def test_merge_structure_hints_state_ignores_non_mapping_files(self):
+        """File entries without mapping metadata should be skipped."""
+        state = {"symbols": set(), "files": {}, "project_summary": None}
+        payload = {"files": {"bad": "value", "good": {"symbols": ["A"]}}}
+
+        _merge_structure_hints_state(state, payload)
+
+        assert "good" in state["files"]
+        assert "bad" not in state["files"]
+
+    def test_merge_structure_hints_state_handles_non_mapping_container(self):
+        """Non-mapping file payloads should be ignored entirely."""
+        state = {"symbols": set(), "files": {}, "project_summary": None}
+
+        _merge_structure_hints_state(state, {"files": ["not", "mapping"]})
+
+        assert state["files"] == {}
 
 
 class TestUpdateFilesDiscovered:
@@ -582,6 +949,27 @@ class TestUpdateFilesDiscovered:
             "SUMMARY.md",
             "notes.txt",
         }
+
+    def test_update_files_discovered_handles_non_iterable_fields(self):
+        """String and non-iterable payload sections should be ignored."""
+        files_discovered: set[str] = set()
+        payload = {
+            "files": ["src/app.py", "", None],
+            "matches": "not-a-list",
+            "summaries": "summary.txt",
+        }
+
+        _update_files_discovered(files_discovered, payload)
+
+        assert files_discovered == {"src/app.py"}
+
+    def test_update_files_discovered_none_payload(self):
+        """None payload should exit immediately."""
+        files_discovered: set[str] = set()
+
+        _update_files_discovered(files_discovered, None)
+
+        assert files_discovered == set()
 
 
 class TestInvokeRegistryTool:
@@ -630,3 +1018,65 @@ class TestRecordInvocation:
         assert entry["command_path"] == ["plan"]
         assert entry["params"]["arg"] == "override"
         assert "timestamp" in entry
+
+    def test_record_invocation_skips_history_command(self):
+        """History command invocations should not be recorded."""
+        root_cmd = click.Group("devagent")
+        history_cmd = click.Command("history")
+        root_cmd.add_command(history_cmd)
+        root_ctx = root_cmd.make_context("devagent", ["history"])  # root invocation
+        ctx = history_cmd.make_context("history", [], parent=root_ctx)
+        store = InMemoryStateStore()
+        ctx.obj = {"state": store}
+
+        _record_invocation(ctx)
+
+        snapshot = store.load()
+        assert snapshot["command_history"] == []
+
+
+class TestUpdateTaskState:
+    """Tests for plan/task persistence helper."""
+
+    def test_update_task_state_applies_reasoning_hooks(self, monkeypatch):
+        store = InMemoryStateStore()
+        plan = {"tasks": [{"id": "task-1", "status": "pending"}]}
+        task = {"id": "task-1", "status": "pending"}
+        updates = {"status": "complete"}
+
+        class DummyReasoning:
+            def apply_to_task(self, task_obj):
+                task_obj["status"] = "enriched"
+
+            def merge_into_plan(self, plan_obj):
+                plan_obj["notes"] = "merged"
+
+        update_task_state(store, plan, task, updates, reasoning=DummyReasoning())
+
+        snapshot = store.load()
+        assert plan["status"] == "complete"
+        assert plan["notes"] == "merged"
+        assert task["status"] == "enriched"
+        saved_task = snapshot["last_plan"]["tasks"][0]
+        assert saved_task["status"] == "enriched"
+
+    def test_update_task_state_appends_when_missing(self):
+        store = InMemoryStateStore()
+        plan = {"tasks": []}
+        task = {"id": "task-2", "status": "todo"}
+
+        update_task_state(store, plan, task, {"status": "in_progress"})
+
+        assert plan["tasks"][0]["id"] == "task-2"
+        snapshot = store.load()
+        assert snapshot["last_plan"]["tasks"][0]["status"] == "in_progress"
+
+    def test_update_task_state_handles_missing_identifier(self):
+        store = InMemoryStateStore()
+        plan = {"tasks": []}
+        task = {"title": "Ad-hoc"}
+
+        update_task_state(store, plan, task, {"status": "queued"})
+
+        assert plan["tasks"] == []  # no identifier, nothing appended
+        assert task["status"] == "queued"

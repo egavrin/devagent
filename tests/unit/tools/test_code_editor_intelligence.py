@@ -160,3 +160,115 @@ def test_build_fallback_guidance_lists_contexts(editor, tmp_path):
     assert "llm_error" in guidance
     assert "core/service.py" in guidance
     assert "tests/test_service.py" in guidance
+
+
+def test_build_style_profile_handles_tabs_and_single_quotes(editor, tmp_path):
+    contexts = [
+        _make_context(tmp_path, "tabbed.py", "\tdef handler():\n\t\treturn 'value'\n"),
+        _make_context(tmp_path, "plain.py", "\tif flag:\n\t\treturn 'fallback'\n"),
+    ]
+
+    profile = editor._build_style_profile(contexts)
+
+    assert "Tab-indented codebase" in profile
+    assert "Prefers single quotes" in profile
+
+
+def test_build_style_profile_no_contexts_returns_default(editor):
+    profile = editor._build_style_profile([])
+
+    assert profile == "No dominant style detected from provided files; mirror local context."
+
+
+def test_build_dependency_summary_without_dependencies(editor, tmp_path):
+    contexts = [
+        _make_context(tmp_path, "module.py", "value = 1\n"),
+    ]
+
+    summary = editor._build_dependency_summary(contexts)
+
+    assert summary == "No external dependencies detected in the provided snippets."
+
+
+def test_build_quality_notes_handles_external_paths_and_security(editor, tmp_path):
+    external = FileContext(
+        path=Path("/outside/tests/test_alpha.py"),
+        content="def test_alpha():\n    pass\n",
+        relevance_score=0.8,
+        reason="external-discovery",
+    )
+    test_contexts = [
+        _make_context(
+            tmp_path, f"tests/test_module_{idx}.py", "def test_case():\n    assert True\n"
+        )
+        for idx in range(4)
+    ]
+    todo_context = _make_context(
+        tmp_path, "module.py", "# TODO: tighten auth checks\nvalue = compute()\n"
+    )
+    contexts = [external, *test_contexts, todo_context]
+
+    notes = editor._build_quality_notes(
+        contexts,
+        "Perform security hardening",
+        latest_attempt=None,
+    )
+
+    assert "Outstanding TODO" in notes
+    assert "Relevant tests" in notes
+    assert "…" in notes
+    assert "Validate security invariants" in notes
+    assert "/outside/tests/test_alpha.py" in notes
+
+
+def test_build_fallback_guidance_with_external_paths(editor):
+    contexts = [
+        FileContext(
+            path=Path("/opt/project/service.py"),
+            content="def run():\n    pass\n",
+            relevance_score=0.9,
+            reason="external-match",
+        )
+    ]
+
+    guidance = editor._build_fallback_guidance(
+        "Handle fallback guidance", contexts, reason="network error"
+    )
+
+    assert "- /opt/project/service.py" in guidance
+    assert "network error" in guidance
+
+
+def test_build_fallback_guidance_without_context(editor):
+    guidance = editor._build_fallback_guidance("   ", [], reason="no context")
+
+    assert "No task description provided" in guidance
+    assert "no context" in guidance
+
+
+def test_run_tests_requires_configured_runner(editor):
+    with pytest.raises(RuntimeError):
+        editor._run_tests()
+
+
+def test_run_tests_with_command(editor):
+    runner = MagicMock()
+    editor.test_runner = runner
+
+    result = MagicMock()
+    runner.run.return_value = result
+
+    command = ["pytest", "-k", "fast"]
+    assert editor._run_tests(command) is result
+    runner.run.assert_called_once_with(command)
+
+
+def test_run_tests_with_default_pytest(editor):
+    runner = MagicMock()
+    editor.test_runner = runner
+
+    result = MagicMock()
+    runner.run_pytest.return_value = result
+
+    assert editor._run_tests() is result
+    runner.run_pytest.assert_called_once_with()

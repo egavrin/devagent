@@ -11,7 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ai_dev_agent.core.utils.logger import get_logger
 
@@ -126,6 +126,7 @@ class ShellSession:
         env: Mapping[str, str] | None = None,
         cpu_time_limit: int | None = None,
         memory_limit_mb: int | None = None,
+        stderr_consumer_factory: Callable[[Callable[[], None]], threading.Thread] | None = None,
     ) -> None:
         command = _resolve_shell_executable(shell)
         run_cwd = Path(cwd).resolve() if cwd else Path.cwd()
@@ -139,18 +140,22 @@ class ShellSession:
 
         preexec_fn = _make_preexec_fn(cpu_time_limit, memory_limit_mb)
 
-        self._process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(run_cwd),
-            env=shell_env,
-            text=True,
-            bufsize=1,
-            universal_newlines=True,
-            preexec_fn=preexec_fn,
-        )
+        try:
+            self._process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=str(run_cwd),
+                env=shell_env,
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+                preexec_fn=preexec_fn,
+            )
+        except OSError as exc:
+            executable = command[0] if command else "<unknown>"
+            raise ShellSessionError(f"Failed to launch shell '{executable}': {exc}") from exc
 
         if not self._process.stdin or not self._process.stdout or not self._process.stderr:
             raise ShellSessionError("Failed to initialise shell session pipes.")
@@ -161,6 +166,13 @@ class ShellSession:
         self._lock = threading.Lock()
         self._closed = False
         self._shell_description = " ".join(command)
+        self._stderr_consumer_factory: Callable[[Callable[[], None]], threading.Thread]
+        if stderr_consumer_factory is None:
+            self._stderr_consumer_factory = lambda target: threading.Thread(
+                target=target, daemon=True
+            )
+        else:
+            self._stderr_consumer_factory = stderr_consumer_factory
 
     # ------------------------------------------------------------------
     # Public API
@@ -251,7 +263,14 @@ class ShellSession:
             finally:
                 stderr_done.set()
 
-        stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
+        try:
+            stderr_thread = self._stderr_consumer_factory(consume_stderr)
+        except Exception as exc:  # pragma: no cover - defensive
+            raise ShellSessionError("Failed to prepare stderr consumer.") from exc
+
+        if not hasattr(stderr_thread, "start"):  # pragma: no cover - defensive guard
+            raise ShellSessionError("Stderr consumer factory must return an object with start().")
+
         stderr_thread.start()
 
         exit_code: int | None = None

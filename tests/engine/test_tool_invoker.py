@@ -10,7 +10,13 @@ import pytest
 import ai_dev_agent.engine.react.tool_invoker as tool_invoker_module
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.engine.react.tool_invoker import RegistryToolInvoker, SessionAwareToolInvoker
-from ai_dev_agent.engine.react.types import ActionRequest, CLIObservation, ToolCall, ToolResult
+from ai_dev_agent.engine.react.types import (
+    ActionRequest,
+    CLIObservation,
+    Observation,
+    ToolCall,
+    ToolResult,
+)
 from ai_dev_agent.tools import READ, RUN, WRITE, ToolSpec, registry
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
 
@@ -69,6 +75,58 @@ class DummySessionManager:
 
     def add_tool_message(self, session_id, tool_call_id, content):
         self.messages.append((session_id, tool_call_id, content))
+
+
+def test_sanitize_artifact_list_skips_falsey_entries(tmp_path):
+    invoker = _make_invoker(tmp_path)
+
+    sanitized = invoker._sanitize_artifact_list(["notes.txt", "", None, Path("docs/readme.md")])
+
+    assert "notes.txt" in sanitized
+    assert "docs/readme.md" in sanitized
+    assert "" not in sanitized
+
+
+def test_read_with_multiple_paths_bypasses_cache(tmp_path):
+    read_calls = {"count": 0}
+
+    def read_handler(payload, context):
+        read_calls["count"] += 1
+        return {"files": [{"path": path, "content": ""} for path in payload.get("paths", [])]}
+
+    registry.register(
+        ToolSpec(
+            name=READ, handler=read_handler, request_schema_path=None, response_schema_path=None
+        )
+    )
+
+    invoker = _make_invoker(tmp_path)
+    action = ActionRequest(
+        step_id="1",
+        thought="read multiple files",
+        tool=READ,
+        args={"paths": ["a.txt", "b.txt"]},
+    )
+
+    invoker(action)
+    invoker(action)
+
+    assert read_calls["count"] == 2
+    assert invoker._file_read_cache == {}
+
+
+def test_wrap_result_includes_structure_hints(tmp_path):
+    invoker = _make_invoker(tmp_path)
+    invoker._structure_hints = {
+        "symbols": {"Widget"},
+        "files": {"src/widget.py": {"outline": ["class Widget:"], "symbols": ["Widget"]}},
+        "project_summary": "Widgets everywhere",
+    }
+
+    observation = invoker._wrap_result("custom", {"detail": True})
+
+    assert observation.structure_hints["project_summary"] == "Widgets everywhere"
+    assert observation.structure_hints["symbols"] == ["Widget"]
 
 
 @contextmanager
@@ -1102,3 +1160,104 @@ def test_session_invoker_grep_formats_with_counts(tmp_path, monkeypatch):
     assert "- src/b.py" in observation.formatted_output
     assert observation.metrics["match_counts"]["src/b.py"] == 0
     assert "garbage" not in observation.formatted_output
+
+
+def test_session_invoker_invalid_max_tool_output_chars_uses_default(tmp_path):
+    session_manager = DummySessionManager()
+    settings = Settings()
+    settings.workspace_root = tmp_path
+    settings.max_tool_output_chars = "invalid-size"
+
+    invoker = SessionAwareToolInvoker(
+        workspace=tmp_path,
+        settings=settings,
+        session_manager=session_manager,
+        session_id="session-invalid",
+    )
+
+    assert invoker._max_tool_output_chars == tool_invoker_module.DEFAULT_MAX_TOOL_OUTPUT_CHARS
+
+
+def test_session_invoker_large_find_results_include_tip(monkeypatch, tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    def large_find(self, tool_name, payload):
+        return {"files": [{"path": f"src/module_{idx}.py"} for idx in range(60)]}
+
+    monkeypatch.setattr(SessionAwareToolInvoker, "_invoke_registry", large_find)
+    monkeypatch.setattr(
+        tool_invoker_module, "write_artifact", lambda content: tmp_path / "artifact.txt"
+    )
+    monkeypatch.setattr(tool_invoker_module, "summarize_text", lambda text, limit: text)
+
+    action = ActionRequest(
+        step_id="find",
+        thought="enumerate files",
+        tool="find",
+        args={"query": "module"},
+    )
+
+    observation = invoker(action)
+    formatted = observation.formatted_output or ""
+
+    assert "... and 40 more files" in formatted
+    assert "Tip: Use more specific pattern to narrow results" in formatted
+
+
+def test_format_display_message_uses_raw_hint(tmp_path):
+    invoker = _make_session_invoker(tmp_path, session_manager=DummySessionManager())
+    action = ActionRequest(
+        step_id="find",
+        thought="search models",
+        tool="find",
+        args={"pattern": "models"},
+    )
+    observation = Observation(
+        success=True,
+        outcome="Found 1 file",
+        metrics={
+            "files": 1,
+            "raw": {"files": [{"path": "src/models/user.py"}]},
+        },
+        artifacts=[],
+        tool="find",
+    )
+
+    message = invoker._format_display_message(action, observation, "find")
+
+    assert "(src/models/user.py)" in message
+
+
+def test_format_display_message_run_truncates_preview(tmp_path):
+    invoker = _make_session_invoker(tmp_path, session_manager=DummySessionManager())
+    action = ActionRequest(
+        step_id="run",
+        thought="long output",
+        tool=RUN,
+        args={"cmd": "generate-report"},
+    )
+    long_stdout = "result line " + ("x" * 150)
+    observation = Observation(
+        success=True,
+        outcome="Executed run",
+        metrics={"exit_code": 0, "stdout_tail": long_stdout},
+        artifacts=[],
+        tool=RUN,
+    )
+
+    message = invoker._format_display_message(action, observation, RUN)
+
+    assert "(stdout:" in message
+    assert "..." in message
+
+
+def test_normalize_artifact_path_handles_external_paths(tmp_path):
+    invoker = _make_session_invoker(tmp_path, session_manager=DummySessionManager())
+    outside_path = Path.cwd() / "external.log"
+    outside_path.write_text("log")
+    try:
+        normalized = invoker._normalize_artifact_path(outside_path)
+        assert normalized.endswith("external.log")
+    finally:
+        outside_path.unlink()
