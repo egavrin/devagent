@@ -1,7 +1,10 @@
 """Automatic context enhancement using RepoMap and Memory Bank for all queries."""
 
+from __future__ import annotations
+
 import logging
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -19,12 +22,29 @@ class ContextEnhancer:
 
     FILE_MENTION_LIMIT = 40
     DIRECTORY_MENTION_LIMIT = 8
+    LARGE_REPO_FILE_LIMIT = 4000
+
+    _DEFAULT_IGNORE_SUBSTRINGS = (
+        "node_modules",
+        "__pycache__",
+        "dist/",
+        "build/",
+        "/.git/",
+        ".git/",
+        "/.devagent/",
+        "/.devagent_cache/",
+        "devagent_cache",
+        "/.venv/",
+        "/venv/",
+    )
+    _DEFAULT_IGNORE_SUFFIXES = (".pyc", ".pyo", ".swp", ".tmp", "~")
 
     def __init__(self, workspace: Optional[Path] = None, settings: Optional[Settings] = None):
         self.workspace = workspace or Path.cwd()
         self.settings = settings or Settings()
         self._repo_map = None
         self._initialized = False
+        self._file_discovery_cache: dict[str, Any] | None = None
 
         # Initialize memory provider
         enable_memory = getattr(settings, "enable_memory_bank", True) if settings else True
@@ -209,12 +229,172 @@ class ContextEnhancer:
         important_files.sort(key=lambda x: x[1], reverse=True)
         return important_files[:max_files]
 
+    # Repository file discovery ------------------------------------------------
+
+    def _filter_discoverable_files(self, files: Iterable[str]) -> list[str]:
+        """Filter tracked files using default and user-provided ignore patterns."""
+        ignore_fragments = list(self._DEFAULT_IGNORE_SUBSTRINGS)
+        custom_ignores = getattr(self.settings, "context_ignore_patterns", None)
+        if custom_ignores:
+            ignore_fragments.extend(str(pattern).lower() for pattern in custom_ignores)
+
+        custom_suffixes = getattr(self.settings, "context_ignore_suffixes", None)
+        if custom_suffixes:
+            suffixes = tuple(str(suffix) for suffix in custom_suffixes)
+        else:
+            suffixes = self._DEFAULT_IGNORE_SUFFIXES
+        suffixes_lower = tuple(s.lower() for s in suffixes)
+
+        filtered: list[str] = []
+        for entry in files:
+            if not entry:
+                continue
+            normalized = entry.strip()
+            if not normalized:
+                continue
+            lowered = normalized.lower()
+            if any(fragment in lowered for fragment in ignore_fragments):
+                continue
+            if lowered.endswith(suffixes_lower):
+                continue
+            filtered.append(normalized)
+        return filtered
+
+    def _get_git_signature(self) -> tuple[int | None, str | None]:
+        """Return metadata describing git state for cache invalidation."""
+        git_dir = self.workspace / ".git"
+        if not git_dir.exists():
+            return (None, None)
+
+        index_path = git_dir / "index"
+        try:
+            index_mtime = index_path.stat().st_mtime_ns
+        except OSError:
+            index_mtime = None
+
+        head_signature: str | None = None
+        head_path = git_dir / "HEAD"
+        try:
+            head_contents = head_path.read_text(encoding="utf-8").strip()
+            if head_contents.startswith("ref:"):
+                ref_path = git_dir / head_contents[5:].strip()
+                try:
+                    head_signature = ref_path.read_text(encoding="utf-8").strip()
+                except OSError:
+                    head_signature = head_contents
+            else:
+                head_signature = head_contents
+        except OSError:
+            head_signature = None
+
+        return (index_mtime, head_signature)
+
+    def _load_tracked_files(self) -> list[str]:
+        """Load tracked files using git when available, falling back to RepoMap."""
+        git_dir = self.workspace / ".git"
+        if git_dir.exists():
+            try:
+                result = subprocess.run(
+                    ["git", "-C", str(self.workspace), "ls-files"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0 and result.stdout:
+                    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                    if lines:
+                        return lines
+                else:
+                    logger.debug(
+                        "git ls-files returned code %s with stderr: %s",
+                        result.returncode,
+                        (result.stderr or "").strip(),
+                    )
+            except (OSError, ValueError) as exc:  # pragma: no cover - defensive logging
+                logger.debug("git ls-files unavailable: %s", exc)
+
+        repo_map = None
+        try:
+            repo_map = self.repo_map
+        except Exception:  # pragma: no cover - defensive logging
+            repo_map = None
+
+        if repo_map and getattr(repo_map.context, "files", None):
+            return list(repo_map.context.files.keys())
+
+        if self.workspace.exists():
+            return [
+                str(path.relative_to(self.workspace))
+                for path in self.workspace.rglob("*")
+                if path.is_file()
+            ]
+
+        return []
+
+    def list_repository_files(
+        self, limit: Optional[int] = None, use_cache: bool = True
+    ) -> list[str]:
+        """Return tracked files with git awareness, ignore handling, and caching."""
+        repo_map = None
+        try:
+            repo_map = self.repo_map
+        except Exception:
+            repo_map = None
+
+        version = 0.0
+        if repo_map and getattr(repo_map.context, "last_updated", None):
+            version = repo_map.context.last_updated
+
+        git_signature = self._get_git_signature()
+        cache_supported = git_signature != (None, None)
+
+        effective_limit = (
+            self.LARGE_REPO_FILE_LIMIT if limit is None else min(limit, self.LARGE_REPO_FILE_LIMIT)
+        )
+
+        if use_cache and self._file_discovery_cache:
+            cache_version = self._file_discovery_cache.get("version")
+            cache_limit = self._file_discovery_cache.get("limit")
+            cache_signature = self._file_discovery_cache.get("git_signature")
+            if (
+                cache_version == version
+                and cache_limit == effective_limit
+                and cache_signature == git_signature
+            ):
+                cached_files = self._file_discovery_cache.get("files", [])
+                return list(cached_files)
+
+        tracked_files = self._load_tracked_files()
+        filtered_files = self._filter_discoverable_files(tracked_files)
+
+        if effective_limit and len(filtered_files) > effective_limit:
+            filtered_files = filtered_files[:effective_limit]
+
+        if use_cache and cache_supported:
+            self._file_discovery_cache = {
+                "version": version,
+                "limit": effective_limit,
+                "files": list(filtered_files),
+                "git_signature": git_signature,
+            }
+        elif use_cache:
+            # If we cannot reliably detect changes, avoid returning stale caches.
+            self._file_discovery_cache = None
+
+        return filtered_files
+
     def extract_symbols_and_files(self, text: str) -> tuple[set[str], set[str]]:
         """Extract symbols and file mentions from text."""
         symbols: set[str] = set()
         files_in_order: list[str] = []
         files_seen: set[str] = set()
         directory_mentions = 0
+
+        repo_map = None
+        try:
+            repo_map = self.repo_map
+        except Exception:
+            repo_map = None
 
         # Common English words to exclude
         stop_words = {
@@ -357,7 +537,13 @@ class ContextEnhancer:
         # Matches: path/to/file.ext, ./file.ext, ../path/file.ext
         potential_files = re.findall(r"[\w./\-]+\.\w+", text)
         for pf in potential_files:
-            if "." in pf and not pf.startswith("http") and pf not in files_seen:
+            if (
+                "." in pf
+                and not pf.startswith("http")
+                and "://" not in pf
+                and not pf.startswith("//")
+                and pf not in files_seen
+            ):
                 files_seen.add(pf)
                 files_in_order.append(pf)
 
@@ -370,17 +556,18 @@ class ContextEnhancer:
                 if (
                     len(parts) == 2
                     and parts[1].lower() in file_extensions
+                    and "://" not in word
                     and word not in files_seen
                 ):
                     files_seen.add(word)
                     files_in_order.append(word)
 
         # NEW: Match against actual repo files (most powerful)
-        if self._initialized and self.repo_map.context.files:
+        if repo_map and repo_map.context.files:
             text_lower = text.lower()
 
             # Iterate with items() to get FileInfo for potential caching
-            for file_path, _file_info in self.repo_map.context.files.items():
+            for file_path, _file_info in repo_map.context.files.items():
                 # Create Path object once and reuse (aider's approach)
                 path_obj = Path(file_path)
                 file_name = path_obj.name.lower()
@@ -459,10 +646,10 @@ class ContextEnhancer:
         symbols.update(w for w in single_caps if _should_keep_symbol(w))
 
         prioritized_files: list[str]
-        if self._initialized and self.repo_map.context.files:
+        if repo_map and repo_map.context.files:
             repo_files: list[str] = []
             extra_entries: list[str] = []
-            repo_index = self.repo_map.context.files
+            repo_index = repo_map.context.files
             for entry in files_in_order:
                 if entry in repo_index:
                     repo_files.append(entry)
@@ -490,7 +677,8 @@ class ContextEnhancer:
             if not symbols and not mentioned_files:
                 return query
 
-            repo_files = self.repo_map.context.files
+            repo_map = self.repo_map
+            repo_files = repo_map.context.files
             repo_file_names = {
                 info.file_name.lower() for info in repo_files.values() if info.file_name
             }
@@ -514,9 +702,7 @@ class ContextEnhancer:
                     continue
                 unmatched_mentions.append(candidate)
 
-            missing_symbols = [
-                sym for sym in symbols if sym not in self.repo_map.context.symbol_index
-            ]
+            missing_symbols = [sym for sym in symbols if sym not in repo_map.context.symbol_index]
 
             if not relevant_files:
                 notice_lines = []
@@ -552,7 +738,7 @@ class ContextEnhancer:
             low_relevance = []
 
             for file_path, score in relevant_files:
-                file_info = self.repo_map.context.files.get(file_path)
+                file_info = repo_map.context.files.get(file_path)
                 lang = file_info.language if file_info else "unknown"
 
                 # Show full relative path for clarity

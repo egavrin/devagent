@@ -25,6 +25,13 @@ try:  # pragma: no cover - platform dependent
 except ImportError:  # pragma: no cover - Windows
     resource = None  # type: ignore
 
+try:  # pragma: no cover - platform dependent
+    import select
+except ImportError:  # pragma: no cover - minimal python builds
+    select = None  # type: ignore
+
+_HAS_SELECT = select is not None and os.name != "nt"
+
 
 class ShellSessionError(RuntimeError):
     """Raised when a shell session encounters an unrecoverable error."""
@@ -44,6 +51,14 @@ class ShellCommandResult:
     duration_ms: int
 
 
+@dataclass
+class ShellCommandHistoryEntry:
+    """Record of a command executed inside a shell session."""
+
+    command: str
+    result: ShellCommandResult
+
+
 def _resolve_shell_executable(shell: str | Sequence[str] | None) -> list[str]:
     """Return the command list used to spawn the interactive shell."""
 
@@ -59,6 +74,14 @@ def _resolve_shell_executable(shell: str | Sequence[str] | None) -> list[str]:
         return shlex.split(shell)
     # This shouldn't happen given the type signature, but handle it defensively
     return [str(shell)]
+
+
+def _stringify_command(command: Sequence[str] | str) -> str:
+    """Return a shell-friendly string representation of the command."""
+
+    if isinstance(command, str):
+        return command
+    return " ".join(shlex.quote(str(part)) for part in command)
 
 
 def _make_preexec_fn(
@@ -236,12 +259,24 @@ class ShellSession:
 
         try:
             while True:
+                wait_timeout = None
                 if timeout is not None and timeout > 0:
                     elapsed = time.perf_counter() - start_time
-                    if elapsed > timeout:
+                    remaining = timeout - elapsed
+                    if remaining <= 0:
+                        raise ShellSessionTimeout(f"Command exceeded timeout of {timeout} seconds")
+                    wait_timeout = remaining
+
+                if wait_timeout is not None and _HAS_SELECT:
+                    ready, _, _ = select.select([self._stdout], [], [], wait_timeout)
+                    if not ready:
                         raise ShellSessionTimeout(f"Command exceeded timeout of {timeout} seconds")
 
                 line = self._stdout.readline()
+                if wait_timeout is not None and not _HAS_SELECT:
+                    elapsed = time.perf_counter() - start_time
+                    if elapsed > timeout:
+                        raise ShellSessionTimeout(f"Command exceeded timeout of {timeout} seconds")
                 if line == "":
                     if self._process.poll() is not None:
                         raise ShellSessionError("Shell session terminated unexpectedly.")
@@ -281,9 +316,7 @@ class ShellSession:
         )
 
     def _coerce_command(self, command: Sequence[str] | str) -> str:
-        if isinstance(command, str):
-            return command
-        return " ".join(shlex.quote(str(part)) for part in command)
+        return _stringify_command(command)
 
     def _handle_command_failure(self) -> None:
         try:
@@ -303,12 +336,17 @@ class ShellSessionManager:
         default_timeout: float | None = None,
         cpu_time_limit: int | None = None,
         memory_limit_mb: int | None = None,
+        max_history_entries: int | None = None,
     ) -> None:
         self._shell = shell
         self._default_timeout = default_timeout
         self._cpu_limit = cpu_time_limit
         self._memory_limit = memory_limit_mb
+        self._max_history_entries = (
+            max_history_entries if max_history_entries and max_history_entries > 0 else None
+        )
         self._sessions: dict[str, ShellSession] = {}
+        self._history: dict[str, list[ShellCommandHistoryEntry]] = {}
         self._lock = threading.Lock()
 
     def create_session(
@@ -333,6 +371,7 @@ class ShellSessionManager:
                 memory_limit_mb=self._memory_limit,
             )
             self._sessions[sid] = session
+            self._history[sid] = []
         return sid
 
     def start_session(
@@ -371,11 +410,29 @@ class ShellSessionManager:
     ) -> ShellCommandResult:
         session = self.get_session(session_id)
         effective_timeout = timeout if timeout is not None else self._default_timeout
-        return session.run(command, timeout=effective_timeout)
+        command_text = _stringify_command(command)
+        try:
+            result = session.run(command, timeout=effective_timeout)
+        except (ShellSessionError, ShellSessionTimeout):
+            self.close_session(session_id)
+            raise
+        else:
+            with self._lock:
+                history = self._history.get(session_id)
+                if history is not None:
+                    history.append(
+                        ShellCommandHistoryEntry(
+                            command=command_text,
+                            result=result,
+                        )
+                    )
+                    self._enforce_history_limits(session_id)
+            return result
 
     def close_session(self, session_id: str) -> None:
         with self._lock:
             session = self._sessions.pop(session_id, None)
+            self._history.pop(session_id, None)
         if session:
             session.close()
 
@@ -383,6 +440,7 @@ class ShellSessionManager:
         with self._lock:
             sessions = list(self._sessions.items())
             self._sessions.clear()
+            self._history.clear()
         for _, session in sessions:
             session.close()
 
@@ -395,8 +453,87 @@ class ShellSessionManager:
         with self._lock:
             return session_id in self._sessions
 
+    def get_history(self, session_id: str) -> list[ShellCommandHistoryEntry]:
+        """Return a copy of the command history for the specified session."""
+
+        with self._lock:
+            if session_id not in self._sessions:
+                raise ShellSessionError(f"Unknown shell session '{session_id}'")
+            entries = self._history.get(session_id, [])
+            return [
+                ShellCommandHistoryEntry(
+                    command=entry.command,
+                    result=ShellCommandResult(
+                        exit_code=entry.result.exit_code,
+                        stdout=entry.result.stdout,
+                        stderr=entry.result.stderr,
+                        duration_ms=entry.result.duration_ms,
+                    ),
+                )
+                for entry in entries
+            ]
+
+    def replay_history(
+        self,
+        session_id: str,
+        index: int = -1,
+        *,
+        timeout: float | None = None,
+    ) -> ShellCommandResult:
+        """Re-execute a previously recorded command by index."""
+
+        with self._lock:
+            if session_id not in self._sessions:
+                raise ShellSessionError(f"Unknown shell session '{session_id}'")
+            entries = self._history.get(session_id, [])
+            if not entries:
+                raise ShellSessionError(f"No recorded history for shell session '{session_id}'")
+            try:
+                command = entries[index].command
+            except IndexError as exc:  # pragma: no cover - defensive
+                raise ShellSessionError(
+                    f"History index {index} out of range for shell session '{session_id}'"
+                ) from exc
+        return self.execute(session_id, command, timeout=timeout)
+
+    def clear_history(self, session_id: str, *, keep_last: int = 0) -> None:
+        """Remove history for a session, optionally retaining latest entries."""
+
+        if keep_last < 0:
+            raise ValueError("keep_last must be >= 0")
+
+        with self._lock:
+            if session_id not in self._sessions:
+                raise ShellSessionError(f"Unknown shell session '{session_id}'")
+            entries = self._history.get(session_id, [])
+            if not entries:
+                self._history[session_id] = []
+                return
+            if keep_last == 0:
+                self._history[session_id] = []
+            else:
+                self._history[session_id] = entries[-keep_last:]
+
+    def clear_all_history(self) -> None:
+        """Remove history for all active sessions."""
+
+        with self._lock:
+            for session_id in list(self._history.keys()):
+                self._history[session_id] = []
+
+    def _enforce_history_limits(self, session_id: str) -> None:
+        if self._max_history_entries is None:
+            return
+        entries = self._history.get(session_id)
+        if not entries:
+            return
+        excess = len(entries) - self._max_history_entries
+        if excess > 0:
+            del entries[:excess]
+
 
 __all__ = [
+    "ShellCommandHistoryEntry",
     "ShellCommandResult",
     "ShellSession",
     "ShellSessionError",

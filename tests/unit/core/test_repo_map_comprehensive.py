@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import networkx as nx
 import pytest
 
 from ai_dev_agent.core.repo_map import FileInfo, RepoContext, RepoMap, RepoMapManager
@@ -531,3 +532,346 @@ def indexed_function():
         repo_map.scan_repository(force=True)
         file_info = repo_map.context.files["initial.py"]
         assert "modified" in file_info.symbols
+
+    def test_extract_cpp_info_captures_symbols_and_imports(self, repo_map, tmp_path):
+        """Ensure C++ extraction captures diverse symbol types."""
+        cpp_file = tmp_path / "engine.cpp"
+        cpp_file.write_text(
+            """
+#include "engine/base.h"
+#define EXPERIMENTAL_FLAG
+template <typename T>
+class EngineCore : public BaseEngine<T> {
+public:
+    void ComputeValue();
+};
+
+void EngineCore<int>::ComputeValue() {
+    HelperUtility();
+}
+"""
+        )
+
+        file_info = FileInfo(
+            path="engine.cpp",
+            size=0,
+            modified_time=0,
+            language="cpp",
+            file_name="engine.cpp",
+            file_stem="engine",
+        )
+
+        repo_map._extract_cpp_info(cpp_file, file_info)
+
+        assert {"EngineCore", "ComputeValue", "EXPERIMENTAL_FLAG"} <= set(file_info.symbols)
+        assert "engine/base.h" in file_info.imports
+        assert "BaseEngine" in file_info.symbols_used
+
+    def test_extract_java_and_rust_info(self, repo_map, tmp_path):
+        """Verify Java and Rust extraction handle packages, imports, and symbols."""
+        java_file = tmp_path / "Service.java"
+        java_file.write_text(
+            """
+package com.example.project;
+
+import com.example.lib.HelperUtil;
+
+public class ProjectService {
+    private HelperUtil helper;
+
+    public ProjectService() {}
+
+    public String process() {
+        return helper.toString();
+    }
+}
+"""
+        )
+
+        java_info = FileInfo(
+            path="Service.java",
+            size=0,
+            modified_time=0,
+            language="java",
+            file_name="Service.java",
+            file_stem="Service",
+        )
+
+        repo_map._extract_java_info(java_file, java_info)
+
+        assert {"ProjectService", "process"} <= set(java_info.symbols)
+        assert "com.example.lib.HelperUtil" in java_info.imports
+        assert "package:com.example.project" in java_info.imports
+
+        rust_file = tmp_path / "lib.rs"
+        rust_file.write_text(
+            """
+use crate::prelude::Logger;
+
+pub struct DataStore {
+    value: i32,
+}
+
+impl DataStore {
+    pub fn new() -> Self {
+        Self { value: 0 }
+    }
+}
+
+pub fn fetch_data() -> DataStore {
+    DataStore::new()
+}
+
+mod tests {
+    pub fn helper_test() {}
+}
+"""
+        )
+
+        rust_info = FileInfo(
+            path="lib.rs",
+            size=0,
+            modified_time=0,
+            language="rust",
+            file_name="lib.rs",
+            file_stem="lib",
+        )
+
+        repo_map._extract_rust_info(rust_file, rust_info)
+
+        assert {"DataStore", "fetch_data", "tests"} <= set(rust_info.symbols)
+        assert "crate::prelude::Logger" in rust_info.imports
+
+    def test_normalize_mentions_limits_outputs_trimmed(self, repo_map):
+        """Large mention sets should be trimmed deterministically."""
+        mentions = {f"src/module_{idx}.py" for idx in range(repo_map.MAX_FASTPATH_MENTIONS + 10)}
+        mentions.update({f"src/subdir_{idx}/" for idx in range(repo_map.MAX_DIRECTORY_MATCHES + 5)})
+
+        trimmed, names, stems, directories = repo_map._normalize_mentions(mentions)
+
+        assert len(trimmed) == repo_map.MAX_FASTPATH_MENTIONS
+        assert all(name.endswith(".py") for name in names)
+        assert len(directories) <= repo_map.MAX_DIRECTORY_MATCHES
+
+    def test_quick_rank_by_symbols_combines_signals(self, repo_map, tmp_path):
+        """Quick ranking should accumulate symbol, file, and directory boosts."""
+        file_path = "src/app/main.py"
+        on_disk = tmp_path / "src" / "app" / "main.py"
+        on_disk.parent.mkdir(parents=True, exist_ok=True)
+        on_disk.write_text("class VerySpecificClass:\n    pass\n", encoding="utf-8")
+
+        info = FileInfo(
+            path=file_path,
+            size=on_disk.stat().st_size,
+            modified_time=on_disk.stat().st_mtime,
+            language="python",
+            symbols=["VerySpecificClass"],
+            symbols_used=["VerySpecificClass"],
+            file_name="main.py",
+            file_stem="main",
+            path_parts=("src", "app", "main.py"),
+        )
+        repo_map.context.files[file_path] = info
+
+        ranked = repo_map._quick_rank_by_symbols(
+            {file_path},
+            {"VerySpecificClass"},
+            max_files=3,
+            mentioned_names={"main.py"},
+            mentioned_stems={"main"},
+            directory_mentions=("src/app",),
+            long_symbol_prefixes=("VerySpec",),
+        )
+
+        assert ranked
+        score = dict(ranked)[file_path]
+        assert score >= 1100.0
+
+    def test_get_ranked_files_fast_path_skips_pagerank(self, repo_map, tmp_path, monkeypatch):
+        """Direct symbol matches should avoid the expensive PageRank path."""
+        target_file = tmp_path / "main.py"
+        target_file.write_text("class VerySpecificClass:\n    pass\n", encoding="utf-8")
+
+        info = FileInfo(
+            path="main.py",
+            size=target_file.stat().st_size,
+            modified_time=target_file.stat().st_mtime,
+            language="python",
+            symbols=["VerySpecificClass"],
+            file_name="main.py",
+            file_stem="main",
+            path_parts=("main.py",),
+        )
+        repo_map.context.files["main.py"] = info
+        repo_map._rebuild_indices()
+
+        def fail_compute(*args, **kwargs):
+            raise AssertionError("PageRank should not be computed for fast-path matches")
+
+        monkeypatch.setattr(repo_map, "compute_pagerank", fail_compute)
+
+        ranked = repo_map.get_ranked_files({"main.py"}, {"VerySpecificClass"}, max_files=1)
+
+        assert ranked and ranked[0][0] == "main.py"
+
+    def test_get_ranked_files_directory_mentions_triggers_pagerank(
+        self, repo_map, tmp_path, monkeypatch
+    ):
+        """Directory-only hints should fall back to PageRank ranking."""
+        src_dir = tmp_path / "src" / "app"
+        src_dir.mkdir(parents=True)
+        (src_dir / "core.py").write_text("class Core:\n    pass\n", encoding="utf-8")
+        (src_dir / "utils.py").write_text("class Util:\n    pass\n", encoding="utf-8")
+
+        repo_map.context.files["src/app/core.py"] = FileInfo(
+            path="src/app/core.py",
+            size=1,
+            modified_time=0,
+            language="python",
+            symbols=["Core"],
+            file_name="core.py",
+            file_stem="core",
+            path_parts=("src", "app", "core.py"),
+        )
+        repo_map.context.files["src/app/utils.py"] = FileInfo(
+            path="src/app/utils.py",
+            size=1,
+            modified_time=0,
+            language="python",
+            symbols=["Util"],
+            file_name="utils.py",
+            file_stem="utils",
+            path_parts=("src", "app", "utils.py"),
+        )
+        repo_map._rebuild_indices()
+        repo_map.context.pagerank_scores = {}
+        repo_map.context.dependency_graph = None
+
+        def fake_build():
+            graph = nx.DiGraph()
+            graph.add_edge("src/app/core.py", "src/app/utils.py", weight=2.0)
+            repo_map.context.dependency_graph = graph
+            return graph
+
+        compute_calls = {}
+
+        def fake_compute(*args, **kwargs):
+            compute_calls["count"] = compute_calls.get("count", 0) + 1
+            repo_map.context.pagerank_scores = {
+                "src/app/core.py": 0.6,
+                "src/app/utils.py": 0.4,
+            }
+            return repo_map.context.pagerank_scores
+
+        monkeypatch.setattr(repo_map, "build_dependency_graph", fake_build)
+        monkeypatch.setattr(repo_map, "compute_pagerank", fake_compute)
+
+        ranked = repo_map.get_ranked_files({"src/app"}, set(), max_files=2)
+
+        assert compute_calls.get("count", 0) == 1
+        assert ranked and ranked[0][0] == "src/app/core.py"
+
+    def test_compute_pagerank_personalization_preserves_cache(self, repo_map):
+        """Personalized PageRank should not mutate the cached baseline."""
+        graph = nx.DiGraph()
+        graph.add_edge("a.py", "b.py", weight=2.0)
+        graph.add_edge("b.py", "c.py", weight=1.0)
+        repo_map.context.dependency_graph = graph
+
+        base_scores = repo_map.compute_pagerank()
+        assert repo_map.context.pagerank_scores == base_scores
+
+        personalized = repo_map.compute_pagerank({"b.py": 1.0}, cache_results=False)
+
+        assert repo_map.context.pagerank_scores == base_scores
+        assert personalized != base_scores
+        assert pytest.approx(sum(personalized.values()), rel=1e-6) == 1.0
+
+    def test_scan_repository_large_repo_resets_caches(self, tmp_path, monkeypatch):
+        """Large rescans should prune stale files and clear ranking caches."""
+        repo_map = RepoMap(root_path=tmp_path, cache_enabled=False, use_tree_sitter=False)
+        repo_map.context.files["stale.py"] = FileInfo(
+            path="stale.py",
+            size=1,
+            modified_time=0,
+            language="python",
+            file_name="stale.py",
+            file_stem="stale",
+            path_parts=("stale.py",),
+        )
+        repo_map.context.pagerank_scores = {"stale.py": 0.5}
+        repo_map.context.dependency_graph = nx.DiGraph()
+        repo_map.context.last_pagerank_update = 123.0
+
+        class DummyEntry:
+            def __init__(self, root: Path, relative: str) -> None:
+                self._root = root
+                self._relative = relative
+                self.name = Path(relative).name
+                self.parts = (root / relative).parts
+
+            def is_file(self) -> bool:
+                return True
+
+            @property
+            def suffix(self) -> str:
+                return Path(self._relative).suffix
+
+            def relative_to(self, root: Path) -> Path:
+                assert root == self._root
+                return Path(self._relative)
+
+        entries = [DummyEntry(tmp_path, f"src/file_{idx}.py") for idx in range(15050)]
+
+        original_rglob = Path.rglob
+
+        def fake_rglob(self, pattern):
+            if self == tmp_path:
+                yield from entries
+            else:
+                yield from original_rglob(self, pattern)
+
+        monkeypatch.setattr(Path, "rglob", fake_rglob, raising=False)
+        monkeypatch.setattr(repo_map, "_save_cache", lambda: None)
+
+        def fake_scan(self, file_path):
+            rel = str(file_path.relative_to(self.root_path))
+            info = FileInfo(
+                path=rel,
+                size=64,
+                modified_time=0,
+                language="python",
+                file_name=Path(rel).name,
+                file_stem=Path(rel).stem,
+                path_parts=tuple(Path(rel).parts),
+            )
+            self.context.files[rel] = info
+            return "scanned"
+
+        monkeypatch.setattr(repo_map, "_scan_file", fake_scan.__get__(repo_map, RepoMap))
+
+        repo_map.scan_repository(force=True)
+
+        assert len(repo_map.context.files) == len(entries)
+        assert "stale.py" not in repo_map.context.files
+        assert repo_map.context.dependency_graph is None
+        assert repo_map.context.pagerank_scores == {}
+        assert repo_map.context.last_pagerank_update == 0.0
+
+    def test_msgpack_cache_roundtrip_rebuilds_indices(self, tmp_path):
+        """Msgpack caches should restore symbols and ranking metadata."""
+        repo_map = RepoMap(root_path=tmp_path, cache_enabled=True, use_tree_sitter=False)
+        (tmp_path / "models.py").write_text("class CacheModel:\n    pass\n", encoding="utf-8")
+        repo_map.scan_repository(force=True)
+        repo_map.context.pagerank_scores = {"models.py": 0.42}
+        repo_map.context.last_pagerank_update = 321.0
+        repo_map._save_cache()
+
+        cache_path = repo_map.cache_path.with_suffix(".msgpack")
+        assert cache_path.exists()
+
+        reloaded = RepoMap(root_path=tmp_path, cache_enabled=True, use_tree_sitter=False)
+
+        assert "models.py" in reloaded.context.files
+        assert "CacheModel" in reloaded.context.symbol_index
+        assert reloaded.context.pagerank_scores.get("models.py") == pytest.approx(0.42)

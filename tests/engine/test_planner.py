@@ -1,9 +1,13 @@
-from types import SimpleNamespace
-
 import pytest
 
-from ai_dev_agent.engine.planning.planner import Planner, PlanningContext, PlanTask
-from ai_dev_agent.providers.llm import LLMError
+from ai_dev_agent.engine.planning.planner import (
+    Planner,
+    PlanningContext,
+    PlanResult,
+    PlanTask,
+    _normalize_int_list,
+)
+from ai_dev_agent.providers.llm import LLMConnectionError, LLMError, LLMTimeoutError
 from ai_dev_agent.session.manager import SessionManager
 
 
@@ -105,3 +109,111 @@ def test_planner_raises_on_invalid_json():
 
     created_sessions = set(manager.list_sessions()) - existing_sessions
     _cleanup_sessions(created_sessions)
+
+
+def test_plan_task_normalizes_identifiers_and_fields():
+    task_with_identifier = PlanTask(
+        step_number=None,
+        title="Refine scope",
+        description="Clarify the deliverable",
+        dependencies=["2", "not-an-int", 3, None],
+        deliverables=["Annotated doc"],
+        commands=["pytest tests/unit"],
+        effort=5,
+        reach=3,
+        impact=4,
+        confidence=0.85,
+        risk_mitigation="Peer review the plan",
+        identifier="T7",
+    )
+    assert task_with_identifier.step_number == 7
+    assert task_with_identifier.dependencies == [2, 3]
+    assert task_with_identifier.deliverables == ["Annotated doc"]
+    assert task_with_identifier.commands == ["pytest tests/unit"]
+
+    task_without_identifier = PlanTask(step_number=None, title="Bootstrap")
+    assert task_without_identifier.step_number == 1
+    assert task_without_identifier.identifier == "T1"
+
+    task_data = task_with_identifier.to_dict()
+    assert task_data["id"] == "T7"
+    assert task_data["effort"] == 5
+    assert task_data["risk_mitigation"] == "Peer review the plan"
+    assert "deliverables" in task_data and task_data["deliverables"] == ["Annotated doc"]
+    assert "commands" in task_data and task_data["commands"] == ["pytest tests/unit"]
+
+
+def test_plan_result_to_dict_includes_optional_fields():
+    task = PlanTask(step_number=1, title="Draft")
+    result = PlanResult(
+        goal="Ship feature",
+        summary="End-to-end delivery",
+        tasks=[task],
+        raw_response="{}",
+        fallback_reason="temporary outage",
+        project_structure="src/\n  - main.py",
+        context_snapshot="Repository Metrics:\nOK",
+        complexity="high",
+        success_criteria=["All tests green", "Docs updated"],
+    )
+
+    serialized = result.to_dict()
+    assert serialized["status"] == "planned"
+    assert serialized["fallback_reason"] == "temporary outage"
+    assert serialized["project_structure"] == "src/\n  - main.py"
+    assert serialized["context_snapshot"] == "Repository Metrics:\nOK"
+    assert serialized["complexity"] == "high"
+    assert serialized["success_criteria"] == ["All tests green", "Docs updated"]
+
+
+def test_planner_retries_and_preserves_context(monkeypatch):
+    manager = SessionManager.get_instance()
+    existing_sessions = set(manager.list_sessions())
+
+    responses = [
+        LLMTimeoutError("slow model"),
+        LLMConnectionError("network hiccup"),
+        """{
+          "summary": "Stabilize feature",
+          "complexity": "low",
+          "success_criteria": "Regression tests pass",
+          "tasks": [
+            {
+              "title": "Investigate",
+              "dependencies": ["1", "invalid"],
+              "deliverables": "Report",
+              "commands": "pytest -k regression"
+            }
+          ]
+        }""",
+    ]
+    planner = Planner(StubLLM(responses))
+
+    time_values = iter([1000.0, 1012.0, 1025.0])
+
+    def fake_time():
+        return next(time_values, 1035.0)
+
+    monkeypatch.setattr("ai_dev_agent.engine.planning.planner.time.time", fake_time)
+
+    result = planner.generate("Improve stability")
+    created_sessions = set(manager.list_sessions()) - existing_sessions
+
+    try:
+        assert result.summary == "Stabilize feature"
+        assert result.complexity == "low"
+        assert result.success_criteria == ["Regression tests pass"]
+        assert result.tasks[0].dependencies == [1]
+        assert result.tasks[0].deliverables == ["Report"]
+        assert result.tasks[0].commands == ["pytest -k regression"]
+        assert result.context_snapshot and "Primary Language" in result.context_snapshot
+    finally:
+        _cleanup_sessions(created_sessions)
+
+
+def test_normalize_int_list_handles_various_inputs():
+    assert _normalize_int_list(None) == []
+    assert _normalize_int_list(4) == [4]
+    assert _normalize_int_list("5") == [5]
+    assert _normalize_int_list(["1", "oops", 2]) == [1, 2]
+    assert _normalize_int_list(5.5) == []

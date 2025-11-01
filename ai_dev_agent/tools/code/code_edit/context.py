@@ -204,7 +204,11 @@ class ContextGatherer:
         # Add chat files to mentioned_files to boost their connected files
         if chat_files:
             for chat_file in chat_files:
-                rel_path = str(chat_file.relative_to(self.repo_root))
+                try:
+                    rel_path = str(Path(chat_file).resolve().relative_to(self.repo_root))
+                except (ValueError, OSError):
+                    LOGGER.debug("Skipping chat file outside repo: %s", chat_file)
+                    continue
                 mentioned_files.add(rel_path)
 
         # Use the existing RepoMap instance which should already be computed
@@ -270,10 +274,15 @@ class ContextGatherer:
             relevance_score=score,
             reason=reason,
         )
-        outline = self._structure_analyzer.summarize_content(rel_path, content)
-        if outline:
-            context.structure_outline = outline
-            context.symbols = extract_symbols_from_outline(outline)
+
+        try:
+            outline = self._structure_analyzer.summarize_content(rel_path, content)
+        except Exception as exc:
+            LOGGER.warning("Failed to analyze structure for %s: %s", rel_path, exc)
+        else:
+            if outline:
+                context.structure_outline = outline
+                context.symbols = extract_symbols_from_outline(outline)
         return context
 
     def _build_structure_summary(self, contexts: list[FileContext]) -> FileContext | None:

@@ -466,26 +466,39 @@ class MemoryDistiller:
     def _extract_context(self, messages: list[Message]) -> str:
         """Extract context about when to apply strategy/lesson."""
         # Look for file mentions, error types, etc.
-        context_parts = []
+        context_parts: list[str] = []
+        seen_parts: set[str] = set()
 
         for msg in messages[-3:]:  # Last 3 messages before
             if msg.content:
                 # Look for file extensions
                 extensions = re.findall(r"\.\w{2,4}\b", msg.content)
                 if extensions:
-                    context_parts.append(f"Working with {', '.join(set(extensions))} files")
+                    unique_extensions = list(dict.fromkeys(extensions))
+                    part = f"Working with {', '.join(unique_extensions)} files"
+                    if part not in seen_parts:
+                        context_parts.append(part)
+                        seen_parts.add(part)
 
                 # Look for error types
-                errors = re.findall(r"(?:Type|Syntax|Runtime|Import|Attribute)Error", msg.content)
+                errors = re.findall(r"\b([A-Za-z]+Error)\b", msg.content, flags=re.IGNORECASE)
                 if errors:
-                    context_parts.append(f"Dealing with {', '.join(set(errors))}")
+                    unique_errors = list(dict.fromkeys(errors))
+                    part = f"Dealing with {', '.join(unique_errors)}"
+                    if part not in seen_parts:
+                        context_parts.append(part)
+                        seen_parts.add(part)
 
                 # Look for frameworks/libraries
                 frameworks = re.findall(
                     r"\b(?:django|flask|react|vue|numpy|pandas|pytest)\b", msg.content.lower()
                 )
                 if frameworks:
-                    context_parts.append(f"Using {', '.join(set(frameworks))}")
+                    unique_frameworks = list(dict.fromkeys(frameworks))
+                    part = f"Using {', '.join(unique_frameworks)}"
+                    if part not in seen_parts:
+                        context_parts.append(part)
+                        seen_parts.add(part)
 
         return "; ".join(context_parts) if context_parts else "General development context"
 
@@ -499,9 +512,10 @@ class MemoryDistiller:
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, content.lower())
+            match = re.search(pattern, content, flags=re.IGNORECASE)
             if match:
-                return match.group(1).strip()
+                extracted = match.group(1).strip()
+                return re.sub(r"\s+", " ", extracted)
 
         # Fallback: summarize the content
         return self._summarize_approach(content)
@@ -516,9 +530,10 @@ class MemoryDistiller:
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, content.lower())
+            match = re.search(pattern, content, flags=re.IGNORECASE)
             if match:
-                return match.group(1).strip()
+                extracted = match.group(1).strip()
+                return re.sub(r"\s+", " ", extracted)
 
         # Look in following messages for the fix
         for msg in following_msgs[:2]:

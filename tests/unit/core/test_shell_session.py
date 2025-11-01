@@ -11,7 +11,11 @@ import pytest
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.tools import RUN, ToolContext
 from ai_dev_agent.tools import registry as tool_registry
-from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
+from ai_dev_agent.tools.execution.shell_session import (
+    ShellSessionError,
+    ShellSessionManager,
+    ShellSessionTimeout,
+)
 
 
 def _select_shell() -> str:
@@ -23,6 +27,14 @@ def _select_shell() -> str:
         if path and Path(path).exists():
             return path
     pytest.skip("No suitable shell executable available for shell session tests")
+    return ""
+
+
+def _select_bash_shell() -> str:
+    bash_path = shutil.which("bash")
+    if bash_path and Path(bash_path).exists():
+        return bash_path
+    pytest.skip("Bash is required for shell history tests")
     return ""
 
 
@@ -56,6 +68,56 @@ def test_shell_session_persists_state(tmp_path: Path) -> None:
         assert nested_result.stdout.strip().endswith("nested_dir")
     finally:
         manager.close_all()
+
+
+def test_shell_session_timeout_removes_session(tmp_path: Path) -> None:
+    """A timed-out command should close and deregister the shell session."""
+    shell_path = _select_shell()
+    manager = ShellSessionManager(shell=shell_path)
+    session_id = manager.create_session(cwd=tmp_path)
+
+    try:
+        with pytest.raises(ShellSessionTimeout):
+            manager.execute(
+                session_id,
+                "while true; do echo tick; sleep 0.1; done",
+                timeout=0.3,
+            )
+
+        assert not manager.is_session_active(session_id)
+        with pytest.raises(ShellSessionError):
+            manager.execute(session_id, "echo should not run")
+    finally:
+        manager.close_all()
+
+
+def test_shell_session_writes_command_history(tmp_path: Path) -> None:
+    """Interactive shells should persist command history to the configured HISTFILE."""
+    bash_path = _select_bash_shell()
+    histfile = tmp_path / "shell_history"
+
+    manager = ShellSessionManager(shell=[bash_path, "-i"])
+    session_id = manager.create_session(
+        cwd=tmp_path,
+        env={
+            "HISTFILE": str(histfile),
+            "HISTSIZE": "50",
+            "HISTFILESIZE": "50",
+        },
+    )
+
+    try:
+        manager.execute(session_id, "set -o history")
+        manager.execute(session_id, "history -c")
+        manager.execute(session_id, "echo history-one")
+        manager.execute(session_id, "printf 'history-two\\n'")
+        manager.execute(session_id, "history -w")
+    finally:
+        manager.close_all()
+
+    history_lines = histfile.read_text().splitlines()
+    assert any("echo history-one" in line for line in history_lines)
+    assert any("printf 'history-two" in line for line in history_lines)
 
 
 def test_exec_tool_uses_persistent_shell(tmp_path: Path) -> None:

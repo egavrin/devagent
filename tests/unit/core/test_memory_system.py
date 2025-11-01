@@ -117,6 +117,94 @@ class TestMemoryDistiller:
         outcome = distiller._determine_outcome(partial_messages)
         assert outcome in ["partial", "failure"]
 
+    def test_extract_steps_from_content_handles_various_formats(self):
+        """Ensure step extraction supports numbered, bullet, and action lines."""
+        distiller = MemoryDistiller()
+        content = """
+        1. Inspect the failing route handler for malformed responses.
+        - Update the middleware guard to validate authentication tokens.
+        Check logging configuration to confirm the errors stop.
+        """
+
+        steps = distiller._extract_steps_from_content(content)
+
+        assert "Inspect the failing route handler for malformed responses." in steps
+        assert "Update the middleware guard to validate authentication tokens." in steps
+        assert "Check logging configuration to confirm the errors stop." in steps
+
+    def test_summarize_approach_prefers_first_meaningful_sentence(self):
+        """Verify summarization skips overly short openings."""
+        distiller = MemoryDistiller()
+        content = (
+            "Ok. This is the first meaningful sentence detailing the approach. Another follows."
+        )
+
+        summary = distiller._summarize_approach(content)
+
+        assert summary == "This is the first meaningful sentence detailing the approach"
+
+    def test_extract_context_aggregates_recent_signals(self):
+        """Context should include file types, errors, and frameworks."""
+        distiller = MemoryDistiller()
+        messages = [
+            Message(role="user", content="Please inspect the data pipeline for pandas usage."),
+            Message(role="assistant", content="Reviewing service/api.py for the ValueError trace."),
+            Message(role="user", content="The stack trace still shows ValueError in pandas."),
+        ]
+
+        context = distiller._extract_context(messages)
+
+        assert "Working with .py files" in context
+        assert "Dealing with ValueError" in context
+        assert "Using pandas" in context
+
+    def test_extract_mistake_preserves_original_casing(self):
+        """Mistake extraction should keep original phrasing intact."""
+        distiller = MemoryDistiller()
+        content = "The issue was Missing Null Check in Auth Handler."
+
+        mistake = distiller._extract_mistake(content)
+
+        assert mistake == "Missing Null Check in Auth Handler"
+
+    def test_extract_correction_prefers_current_message(self):
+        """Corrections described inline should be extracted verbatim."""
+        distiller = MemoryDistiller()
+        content = "The fix was unclear but we should Add Guard before accessing the session."
+
+        correction = distiller._extract_correction(content, [])
+
+        assert correction == "Add Guard before accessing the session"
+
+    def test_extract_correction_looks_ahead_when_needed(self):
+        """Fallback should summarize following assistant messages."""
+        distiller = MemoryDistiller()
+        content = "No direct fix mentioned here."
+        following = [
+            Message(role="assistant", content="Fixed the bug by adding Null Check to the handler.")
+        ]
+
+        correction = distiller._extract_correction(content, following)
+
+        assert correction.startswith("Fixed the bug by adding Null Check")
+
+    def test_assess_severity_levels(self):
+        """Severity mapping should differentiate critical, major, and minor issues."""
+        distiller = MemoryDistiller()
+
+        assert distiller._assess_severity("Critical crash happening nightly") == "critical"
+        assert distiller._assess_severity("Error persists after deployment") == "major"
+        assert distiller._assess_severity("Maybe worth noting") == "minor"
+
+    def test_generate_title_combines_metadata(self):
+        """Title generation should reflect task type and outcome."""
+        distiller = MemoryDistiller()
+
+        title = distiller._generate_title("Implement payment workflow", "feature", "success")
+
+        assert title.startswith("✓ [Feature]")
+        assert "Implement payment workflow" in title
+
     def test_merge_similar_memories(self):
         """Test merging two similar memories."""
         distiller = MemoryDistiller()

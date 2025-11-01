@@ -223,8 +223,9 @@ def prune_messages(messages: Sequence[Message], config: ContextBudgetConfig) -> 
 
     # Keep the most recent assistant messages
     assistant_indices = [idx for idx, msg in enumerate(pruned) if msg.role == "assistant"]
-    for idx in assistant_indices[-config.keep_last_assistant :]:
-        keep_indices.add(idx)
+    if config.keep_last_assistant > 0:
+        for idx in assistant_indices[-config.keep_last_assistant :]:
+            keep_indices.add(idx)
 
     # Summarize tool messages older than the most recent ones
     tool_indices = [idx for idx, msg in enumerate(pruned) if msg.role == "tool"]

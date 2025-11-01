@@ -12,7 +12,7 @@ from ai_dev_agent.cli.react.budget_control import (
     get_tools_for_iteration,
 )
 from ai_dev_agent.cli.react.executor import BudgetAwareExecutor
-from ai_dev_agent.engine.react.types import ActionRequest, Observation, TaskSpec
+from ai_dev_agent.engine.react.types import ActionRequest, Observation, TaskSpec, ToolResult
 
 
 def test_budget_manager_iteration_progression():
@@ -229,3 +229,166 @@ def test_executor_uses_existing_response_when_llm_stops_without_tools(
     # Verify the action provider's client.complete was not called
     # (since we should use the existing response instead)
     action_provider.client.complete.assert_not_called()
+
+
+class MultiStepActionProvider:
+    """Action provider that emits tool calls before requiring forced synthesis."""
+
+    def __init__(self):
+        self.session_manager = StubSessionManager()
+        self.session_id = "session-1"
+        self.client = MagicMock()
+        self.client.complete.return_value = "Synthesized final answer"
+        self.calls = 0
+        self._actions = [
+            {
+                "thought": "Investigate repository",
+                "tool": "find",
+                "args": {"query": "tests/"},
+                "metadata": {"iteration": 1},
+            },
+            {
+                "thought": "Read supporting file",
+                "tool": "read",
+                "args": {"path": "README.md"},
+                "metadata": {"iteration": 2},
+            },
+        ]
+
+    def update_phase(self, phase: str, *, is_final: bool = False) -> None:
+        pass
+
+    def __call__(self, task: TaskSpec, history):
+        action = self._actions[self.calls]
+        self.calls += 1
+        return action
+
+    def last_response_text(self) -> str:
+        # Looks incomplete so the executor keeps the forced synthesis output instead.
+        return "Partial findings:"
+
+
+class StubToolInvokerWithFailures:
+    """Invoker that fails and captures injected guidance."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, action: ActionRequest) -> Observation:
+        self.calls += 1
+        return Observation(success=False, outcome="Tool failed", tool=action.tool, error="nope")
+
+
+@patch("ai_dev_agent.cli.react.executor.ContextSynthesizer")
+def test_executor_forces_synthesis_after_tool_iteration(mock_synth):
+    """When final iteration uses a tool, executor should force a synthesis answer."""
+    mock_synth.return_value = MagicMock(
+        synthesize_previous_steps=lambda history, current_step, **_: "",
+        get_redundant_operations=lambda history: [],
+        build_constraints_section=lambda redundant_ops: "",
+    )
+
+    executor = BudgetAwareExecutor(BudgetManager(2, adaptive_scaling=False))
+    action_provider = MultiStepActionProvider()
+    tool_invoker = StubInvoker()
+
+    iteration_phases: list[tuple[str, bool]] = []
+
+    def track_iteration(context, _history):
+        iteration_phases.append((context.phase, context.is_final))
+
+    task = TaskSpec(identifier="task-456", goal="Perform multi-step investigation")
+    result = executor.run(
+        task,
+        action_provider,
+        tool_invoker,
+        iteration_hook=track_iteration,
+    )
+
+    assert result.status == "success"
+    assert iteration_phases[-1][1] is True  # Final iteration reached
+    action_provider.client.complete.assert_called_once()
+    assert result.steps[-1].action.tool == "submit_final_answer"
+    assert result.steps[-1].observation.raw_output == "Synthesized final answer"
+
+
+@patch("ai_dev_agent.cli.react.executor.FailurePatternDetector")
+def test_invoke_tool_injects_failure_guidance(stub_failure_detector, capsys):
+    """Failure detector guidance should be surfaced in observation outcome."""
+    detector_instance = MagicMock()
+    detector_instance.should_give_up.return_value = (True, "⚠️ Stop repeating this.")
+    stub_failure_detector.return_value = detector_instance
+
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+    action = ActionRequest(step_id="S1", thought="Try tool", tool="grep", args={"pattern": "TODO"})
+
+    invoker = StubToolInvokerWithFailures()
+    observation = executor._invoke_tool(invoker, action)
+
+    assert invoker.calls == 1
+    assert detector_instance.record_failure.called
+    assert detector_instance.should_give_up.called
+    assert "⚠️ Stop repeating this." in observation.outcome
+
+
+def test_run_handles_budget_exhaustion_without_actions():
+    """Budget exhaustion before any iteration should return a failed result gracefully."""
+    manager = BudgetManager(1, adaptive_scaling=False)
+    manager._current = manager.max_iterations  # Force exhaustion
+
+    executor = BudgetAwareExecutor(manager)
+    action_provider = MagicMock(side_effect=AssertionError("Action provider should not be called"))
+    tool_invoker = MagicMock(side_effect=AssertionError("Tool invoker should not be called"))
+
+    task = TaskSpec(identifier="task-789", goal="Nothing happens")
+    result = executor.run(task, action_provider, tool_invoker)
+
+    assert result.status == "failed"
+    assert result.stop_reason == "No actions executed"
+    action_provider.assert_not_called()
+    tool_invoker.assert_not_called()
+
+
+def test_executor_records_multi_tool_results_in_step():
+    """Executor should carry batch tool results through to the RunResult."""
+    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
+
+    class BatchInvoker:
+        def __call__(self, action: ActionRequest) -> Observation:
+            assert action.tool_calls  # Ensure batch payload provided
+            return Observation(
+                success=True,
+                outcome="Executed 2 tool(s): 2 succeeded",
+                tool="batch[2]",
+                results=[
+                    ToolResult(tool="find", success=True, outcome="Found files."),
+                    ToolResult(tool="grep", success=True, outcome="Matches located."),
+                ],
+            )
+
+    action_provider = MagicMock(
+        return_value={
+            "thought": "Run two tools",
+            "tool": "batch",
+            "tool_calls": [
+                {"tool": "find", "args": {"query": "foo"}},
+                {"tool": "grep", "args": {"pattern": "TODO"}},
+            ],
+        }
+    )
+    action_provider.session_manager = StubSessionManager()
+    action_provider.session_id = "session-1"
+    action_provider.client = MagicMock()
+    action_provider.client.complete.return_value = "Fallback synthesis"
+    action_provider.last_response_text.return_value = (
+        "Batch complete with enough detail to be treated as final."
+    )
+
+    task = TaskSpec(identifier="task-101", goal="Execute batch tools")
+    result = executor.run(task, action_provider, BatchInvoker())
+
+    assert result.status == "success"
+    assert result.steps
+    batch_step = result.steps[0]
+    assert batch_step.observation.tool == "batch[2]"
+    assert len(batch_step.observation.results) == 2

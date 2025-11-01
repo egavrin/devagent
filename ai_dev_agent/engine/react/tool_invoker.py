@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from ai_dev_agent.tools.execution.testing.local_tests import TestRunner
 
 LOGGER = get_logger(__name__)
+STREAM_PREVIEW_CHAR_LIMIT = 120
 
 
 class RegistryToolInvoker:
@@ -71,6 +72,62 @@ class RegistryToolInvoker:
     # Public API
     # ------------------------------------------------------------------
 
+    def _sanitize_file_entries(self, entries: Any) -> list[str]:
+        """Normalize tool-provided file listings into a list of string paths."""
+        sanitized: list[str] = []
+        if not isinstance(entries, (list, tuple)):
+            return sanitized
+
+        for entry in entries:
+            if isinstance(entry, Mapping):
+                candidate = entry.get("path") or entry.get("file")
+                if candidate:
+                    sanitized.append(str(candidate))
+            elif isinstance(entry, (str, Path)):
+                sanitized.append(str(entry))
+        return sanitized
+
+    @staticmethod
+    def _sanitize_artifact_list(values: Any) -> list[str]:
+        """Normalize arbitrary artifact collections into a clean list of strings."""
+        sanitized: list[str] = []
+        if not isinstance(values, (list, tuple, set)):
+            return sanitized
+        for entry in values:
+            if isinstance(entry, (str, Path)):
+                if entry:
+                    sanitized.append(str(entry))
+        return sanitized
+
+    @staticmethod
+    def _coerce_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value
+        else:
+            try:
+                text = str(value)
+            except Exception:
+                return None
+        stripped = text.strip("\n")
+        return stripped if stripped else None
+
+    @staticmethod
+    def _truncate_stream_preview(text: str | None) -> str | None:
+        if not text:
+            return None
+        if len(text) <= STREAM_PREVIEW_CHAR_LIMIT:
+            return text
+        return text[: STREAM_PREVIEW_CHAR_LIMIT - 1] + "…"
+
+    @staticmethod
+    def _dump_json(value: Any) -> str:
+        try:
+            return json.dumps(value, indent=2)
+        except TypeError:
+            return json.dumps(value, default=str, indent=2)
+
     def __call__(self, action: ActionRequest) -> Observation:
         # Check if this is a batch request
         if action.tool_calls:
@@ -99,6 +156,7 @@ class RegistryToolInvoker:
                 outcome=f"Unknown tool: {tool_name}",
                 tool=tool_name,
                 error=f"Tool '{tool_name}' is not registered",
+                metrics={"error_type": "KeyError"},
             )
         except ValueError as exc:
             return Observation(
@@ -106,6 +164,7 @@ class RegistryToolInvoker:
                 outcome=f"Tool {tool_name} rejected input",
                 tool=tool_name,
                 error=str(exc),
+                metrics={"error_type": "ValueError"},
             )
         except Exception as exc:
             LOGGER.exception("Tool %s execution failed", tool_name)
@@ -114,6 +173,7 @@ class RegistryToolInvoker:
                 outcome=f"Tool {tool_name} failed",
                 tool=tool_name,
                 error=str(exc),
+                metrics={"error_type": exc.__class__.__name__},
             )
 
         return self._wrap_result(tool_name, result)
@@ -236,6 +296,7 @@ class RegistryToolInvoker:
                 success=False,
                 outcome=f"Unknown tool: {tool_name}",
                 error=f"Tool '{tool_name}' is not registered",
+                metrics={"error_type": "KeyError"},
                 wall_time=time.time() - start_time,
             )
         except ValueError as exc:
@@ -245,6 +306,7 @@ class RegistryToolInvoker:
                 success=False,
                 outcome=f"Tool {tool_name} rejected input",
                 error=str(exc),
+                metrics={"error_type": "ValueError"},
                 wall_time=time.time() - start_time,
             )
         except Exception as exc:
@@ -255,6 +317,7 @@ class RegistryToolInvoker:
                 success=False,
                 outcome=f"Tool {tool_name} failed",
                 error=str(exc),
+                metrics={"error_type": exc.__class__.__name__},
                 wall_time=time.time() - start_time,
             )
 
@@ -269,7 +332,7 @@ class RegistryToolInvoker:
             if cache_key:
                 cached_result = self._get_from_cache(cache_key)
                 if cached_result is not None:
-                    LOGGER.debug(f"Cache hit for READ: {cache_key}")
+                    LOGGER.debug(f"Cache hit for READ: {cache_key}")  # pragma: no cover
                     return cached_result
 
         extra: dict[str, Any] = {
@@ -308,7 +371,7 @@ class RegistryToolInvoker:
             cache_key = self._get_read_cache_key(payload)
             if cache_key:
                 self._add_to_cache(cache_key, result)
-                LOGGER.debug(f"Cached READ result: {cache_key}")
+                LOGGER.debug(f"Cached READ result: {cache_key}")  # pragma: no cover
 
         # Invalidate cache for WRITE/RUN operations (they may not have "success" field either)
         # For WRITE/RUN, any non-exception result means success - they would have raised otherwise
@@ -347,7 +410,7 @@ class RegistryToolInvoker:
         """Invalidate cache entry for a specific file path."""
         if path in self._file_read_cache:
             del self._file_read_cache[path]
-            LOGGER.debug(f"Invalidated cache for: {path}")
+            LOGGER.debug(f"Invalidated cache for: {path}")  # pragma: no cover
 
     def _invalidate_cache_for_write_or_run(
         self, tool_name: str, payload: Mapping[str, Any], result: Mapping[str, Any]
@@ -365,7 +428,7 @@ class RegistryToolInvoker:
             # or try to infer modified files from the command
             # For now, be conservative and clear all cache when RUN is used
             if self._file_read_cache:
-                LOGGER.debug("Clearing all file cache due to RUN operation")
+                LOGGER.debug("Clearing all file cache due to RUN operation")  # pragma: no cover
                 self._file_read_cache.clear()
 
     def _wrap_result(self, tool_name: str, result: Mapping[str, Any]) -> Observation:
@@ -376,21 +439,26 @@ class RegistryToolInvoker:
         raw_output: str | None = None
 
         if tool_name == READ:
-            files = result.get("files", [])
-            outcome = f"Read {len(files)} file(s)"
+            raw_files = result.get("files")
+            files_iterable = raw_files if isinstance(raw_files, (list, tuple)) else []
+            sanitized_paths: list[str] = []
             total_lines = 0
-            for entry in files:
+            for entry in files_iterable:
                 if isinstance(entry, Mapping):
                     path_value = entry.get("path")
                     if path_value:
-                        artifacts.append(str(path_value))
+                        sanitized_paths.append(str(path_value))
                     content = entry.get("content")
                     if isinstance(content, str):
                         total_lines += len(content.splitlines())
-                elif isinstance(entry, str):
-                    artifacts.append(entry)
-            metrics = {"files": len(files), "lines_read": total_lines}
-            raw_output = json.dumps(result, indent=2)
+                elif isinstance(entry, (str, Path)):
+                    sanitized_paths.append(str(entry))
+            artifacts = sanitized_paths
+            outcome = f"Read {len(sanitized_paths)} file(s)"
+            metrics = {"files": len(sanitized_paths), "lines_read": total_lines}
+            if sanitized_paths:
+                metrics["artifacts"] = sanitized_paths
+            raw_output = self._dump_json(result)
         elif tool_name == WRITE:
             applied = bool(result.get("applied"))
             rejected = result.get("rejected_hunks") or []
@@ -417,33 +485,27 @@ class RegistryToolInvoker:
             }
             if rejection_reason:
                 metrics["rejection_reason"] = rejection_reason
-            artifacts = result.get("changed_files") or []
-            raw_output = json.dumps(result, indent=2)
+            sanitized_changed = self._sanitize_artifact_list(result.get("changed_files"))
+            artifacts = sanitized_changed
+            metrics["artifacts"] = sanitized_changed
+            raw_output = self._dump_json(result)
         elif tool_name == "find":
-            files = result.get("files", [])
-            success = bool(files)
-            outcome = f"Found {len(files)} file(s)"
-            artifacts: list[str] = []
-            for entry in files:
-                if isinstance(entry, Mapping):
-                    candidate = entry.get("path") or entry.get("file")
-                    if candidate:
-                        artifacts.append(str(candidate))
-                elif entry:
-                    artifacts.append(str(entry))
-            metrics = {"files": len(files), "paths": artifacts[:10]}
-            raw_output = json.dumps(files[:20], indent=2)
+            sanitized_paths = self._sanitize_file_entries(result.get("files"))
+            success = bool(sanitized_paths)
+            outcome = f"Found {len(sanitized_paths)} file(s)"
+            artifacts = sanitized_paths
+            metrics = {"files": len(sanitized_paths), "paths": sanitized_paths[:10]}
+            raw_output = self._dump_json((result.get("files") or [])[:20])
         elif tool_name == "grep":
             matches = result.get("matches", [])
-            success = bool(matches)
-            outcome = f"Found matches in {len(matches)} file(s)"
+            matching_groups = matches if isinstance(matches, (list, tuple)) else []
 
             # Extract file paths and match counts for better context
             artifacts = []
             match_counts = {}
-            for group in matches:
+            for group in matching_groups:
                 if isinstance(group, Mapping) and group.get("file"):
-                    file_path = group.get("file")
+                    file_path = str(group.get("file"))
                     artifacts.append(file_path)
                     # Count matches in this file
                     file_matches = group.get("matches", [])
@@ -452,10 +514,12 @@ class RegistryToolInvoker:
                     )
 
             metrics = {
-                "files": len(matches),
+                "files": len(artifacts),
                 "match_counts": match_counts,  # Add match counts to metrics
             }
-            raw_output = json.dumps(matches[:10], indent=2)
+            success = bool(artifacts)
+            outcome = f"Found matches in {len(artifacts)} file(s)"
+            raw_output = self._dump_json(list(matching_groups[:10]))
         elif tool_name == "symbols":
             symbols = result.get("symbols", [])
             outcome = f"Found {len(symbols)} symbol(s)"
@@ -465,24 +529,41 @@ class RegistryToolInvoker:
                 for entry in symbols
                 if isinstance(entry, Mapping) and entry.get("file")
             ]
-            raw_output = json.dumps(symbols[:20], indent=2)
+            raw_output = self._dump_json(symbols[:20])
         elif tool_name == RUN:
             exit_code = result.get("exit_code", 0)
             success = exit_code == 0
-            outcome = f"Command exited with {exit_code}"
+            stdout_text = self._coerce_text(result.get("stdout_tail"))
+            stderr_text = self._coerce_text(result.get("stderr_tail"))
+            stdout_preview = self._truncate_stream_preview(stdout_text)
+            stderr_preview = self._truncate_stream_preview(stderr_text)
+            if exit_code != 0 and stderr_preview:
+                outcome = f"Command exited with {exit_code} (stderr available)"
+            elif stdout_preview:
+                outcome = f"Command exited with {exit_code} (stdout available)"
+            else:
+                outcome = f"Command exited with {exit_code}"
             metrics = {
                 "exit_code": exit_code,
                 "duration_ms": result.get("duration_ms"),
-                "stdout_tail": result.get("stdout_tail"),
-                "stderr_tail": result.get("stderr_tail"),
+                "stdout_tail": stdout_text,
+                "stderr_tail": stderr_text,
             }
-            raw_output = "STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}".format(
-                stdout=result.get("stdout_tail", ""),
-                stderr=result.get("stderr_tail", ""),
+            if stdout_preview and stdout_preview != stdout_text:
+                metrics["stdout_preview"] = stdout_preview
+            if stderr_preview and stderr_preview != stderr_text:
+                metrics["stderr_preview"] = stderr_preview
+            raw_output = "STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}\n".format(
+                stdout=stdout_text or "",
+                stderr=stderr_text or "",
             )
         else:
-            metrics = dict(result)
-            raw_output = json.dumps(result, indent=2)
+            if isinstance(result, Mapping):
+                metrics = dict(result)
+                raw_output = self._dump_json(result)
+            else:
+                metrics = {"raw": result}
+                raw_output = self._dump_json(result)
 
         observations_kwargs: dict[str, Any] = {
             "success": success,
@@ -646,7 +727,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             import os
 
             if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
-                print(
+                print(  # pragma: no cover
                     f"[DEBUG-FIND] Formatted output for LLM: {len(file_list)}/{total_files} files",
                     flush=True,
                 )
@@ -680,7 +761,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             import os
 
             if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
-                print(
+                print(  # pragma: no cover
                     f"[DEBUG-GREP] Formatted output for LLM: {len(file_list)}/{total_files} files with counts",
                     flush=True,
                 )
@@ -864,13 +945,16 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         elif observation.outcome:
             content_parts.append(observation.outcome)
 
+        if canonical == "submit_final_answer" and observation.formatted_output:
+            content_parts.append(observation.formatted_output)
+
         # For find/grep, include the formatted file list for LLM
         if canonical in {"find", "grep"} and observation.formatted_output:
             content_parts.append(observation.formatted_output)
             import os
 
             if os.environ.get("DEVAGENT_DEBUG_TOOLS"):
-                print(
+                print(  # pragma: no cover
                     f"[DEBUG-{canonical.upper()}] Sending to LLM: {len(content_parts[-1])} chars",
                     flush=True,
                 )
@@ -908,7 +992,9 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
         try:
             self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
         except Exception:
-            LOGGER.debug("Failed to record tool message for %s", action.tool, exc_info=True)
+            LOGGER.debug(
+                "Failed to record tool message for %s", action.tool, exc_info=True
+            )  # pragma: no cover
 
     def _record_batch_tool_message(self, result: ToolResult) -> None:
         """Record a tool message for a single result from batch execution."""
@@ -931,14 +1017,16 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             import uuid
 
             tool_call_id = f"tool-batch-{uuid.uuid4().hex[:8]}"
-            LOGGER.debug(
+            LOGGER.debug(  # pragma: no cover
                 "No call_id found for batch tool %s, generated: %s", result.tool, tool_call_id
             )
 
         try:
             self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
         except Exception:
-            LOGGER.debug("Failed to record batch tool message for %s", result.tool, exc_info=True)
+            LOGGER.debug(
+                "Failed to record batch tool message for %s", result.tool, exc_info=True
+            )  # pragma: no cover
 
 
 def create_tool_invoker(

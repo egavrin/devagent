@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -223,3 +224,123 @@ class TestContextEnhancer:
         # This is the actual behavior - singleton is truly global
         enhancer3 = get_context_enhancer(workspace=Path("/different"))
         assert enhancer3 is enhancer1  # Same instance regardless of workspace
+
+    def test_extract_symbols_and_files_matches_repo_entries(self, enhancer):
+        """extract_symbols_and_files should map mentions onto repo files and directories."""
+        repo_map = SimpleNamespace(
+            context=SimpleNamespace(
+                files={
+                    "src/utils/helpers.py": SimpleNamespace(
+                        file_name="helpers.py",
+                        file_stem="helpers",
+                        language="python",
+                        path_parts=("src", "utils", "helpers.py"),
+                    ),
+                    "modules/bytecode_optimizer/core.py": SimpleNamespace(
+                        file_name="core.py",
+                        file_stem="core",
+                        language="python",
+                        path_parts=("modules", "bytecode_optimizer", "core.py"),
+                    ),
+                },
+                symbol_index={},
+            ),
+        )
+        enhancer._repo_map = repo_map
+        enhancer._initialized = True
+
+        text = (
+            "Please review HelpersManager behavior in src/utils/helpers.py "
+            "and check the bytecode_optimizer utilities alongside stray words."
+        )
+        symbols, files = enhancer.extract_symbols_and_files(text)
+
+        assert "HelpersManager" in symbols
+        assert "src/utils/helpers.py" in files
+        assert "bytecode_optimizer" in files
+        assert "Please" not in symbols
+
+    def test_repo_map_only_scans_workspace_once(self, temp_workspace, mock_settings, monkeypatch):
+        """RepoMap initialization should avoid redundant scans once populated."""
+
+        class StubRepoMap:
+            def __init__(self):
+                self.context = SimpleNamespace(files={}, symbol_index={})
+                self.scan_calls = 0
+
+            def scan_repository(self):
+                self.scan_calls += 1
+                self.context.files = {
+                    "src/main.py": SimpleNamespace(
+                        file_name="main.py",
+                        file_stem="main",
+                        language="python",
+                        path_parts=("src", "main.py"),
+                    )
+                }
+
+        stub_repo_map = StubRepoMap()
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+            lambda workspace: stub_repo_map,
+        )
+
+        enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+
+        _ = enhancer.repo_map
+        assert stub_repo_map.scan_calls == 1
+
+        _ = enhancer.repo_map
+        assert stub_repo_map.scan_calls == 1
+
+    def test_get_repomap_messages_tier_two_expands_scope(
+        self, temp_workspace, mock_settings, monkeypatch
+    ):
+        """Tier-two fallback should expand the search space with important files."""
+
+        class TieredRepoMap:
+            def __init__(self):
+                self.context = SimpleNamespace(
+                    files={
+                        "src/core.py": SimpleNamespace(
+                            file_name="core.py",
+                            file_stem="core",
+                            language="python",
+                            path_parts=("src", "core.py"),
+                        )
+                    },
+                    symbol_index={"ServiceManager": {"src/core.py"}},
+                )
+                self.responses = [
+                    [],
+                    [("src/core.py", 9.5)],
+                ]
+                self.calls = []
+
+            def get_ranked_files(self, mentioned_files, mentioned_symbols, max_files):
+                self.calls.append((set(mentioned_files), set(mentioned_symbols), max_files))
+                idx = min(len(self.responses) - 1, len(self.calls) - 1)
+                return self.responses[idx]
+
+            def scan_repository(self):
+                return None
+
+        repo_map = TieredRepoMap()
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+            lambda workspace: repo_map,
+        )
+
+        enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+        monkeypatch.setattr(
+            enhancer, "_get_important_files", lambda files, max_files: [("src/core.py", 9.5)]
+        )
+
+        query = "Investigate ServiceManager regressions urgently."
+        _, messages = enhancer.get_repomap_messages(query, max_files=4)
+
+        assert messages is not None
+        assert len(repo_map.calls) >= 2
+        assert repo_map.calls[0][2] == 4
+        assert repo_map.calls[1][2] == 8
+        assert "src/core.py" in repo_map.calls[1][0]

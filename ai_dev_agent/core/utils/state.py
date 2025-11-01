@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +55,7 @@ class InMemoryStateStore:
 
     state_file: Path | None = None
     _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.state_file is not None and type(self) is InMemoryStateStore:
@@ -62,33 +65,48 @@ class InMemoryStateStore:
                 self.state_file,
             )
 
-    def load(self) -> dict[str, Any]:
-        """Return the current state data, creating defaults when empty."""
+    def _ensure_cache_locked(self) -> dict[str, Any]:
         if not self._cache:
             self._cache = self._create_default_state()
         return self._cache
 
+    def _snapshot_locked(self) -> dict[str, Any]:
+        return copy.deepcopy(self._ensure_cache_locked())
+
+    def _commit_locked(self, data: dict[str, Any]) -> dict[str, Any]:
+        self._validate_state(data)
+        self._cache = copy.deepcopy(data)
+        self._after_save_locked()
+        return copy.deepcopy(self._cache)
+
+    def _after_save_locked(self) -> None:
+        LOGGER.debug("State stored in memory (not persisted)")
+
+    def load(self) -> dict[str, Any]:
+        """Return the current state data, creating defaults when empty."""
+        with self._lock:
+            return self._snapshot_locked()
+
     def save(self, data: dict[str, Any]) -> None:
         """Replace the in-memory state after validation."""
-        self._validate_state(data)
-        self._cache = data
-        LOGGER.debug("State stored in memory (not persisted)")
+        with self._lock:
+            self._commit_locked(data)
 
     def update(self, **updates: Any) -> dict[str, Any]:
         """Update state with automatic timestamping."""
-        data = self.load().copy()
-        data.update(updates)
-        data["last_updated"] = datetime.utcnow().isoformat()
-        self.save(data)
-        return data
+        with self._lock:
+            data = self._snapshot_locked()
+            data.update(updates)
+            data["last_updated"] = datetime.utcnow().isoformat()
+            return self._commit_locked(data)
 
     def get_current_session(self) -> PlanSession | None:
         """Get the current active plan session."""
-        data = self.load()
-        session_data = data.get("current_session")
-        if session_data:
-            return PlanSession.from_dict(session_data)
-        return None
+        with self._lock:
+            session_data = copy.deepcopy(self._ensure_cache_locked().get("current_session"))
+            if session_data:
+                return PlanSession.from_dict(session_data)
+            return None
 
     def start_session(self, goal: str, session_id: str | None = None) -> PlanSession:
         """Start a new plan session."""
@@ -97,56 +115,64 @@ class InMemoryStateStore:
 
         session = PlanSession(session_id=session_id, goal=goal, status="active")
 
-        history = list(self._get_session_history())
-        history.append(session.to_dict())
-
-        self.update(
-            current_session=session.to_dict(),
-            session_history=history,
-        )
+        with self._lock:
+            data = self._snapshot_locked()
+            history = list(data.get("session_history", []))
+            history.append(session.to_dict())
+            data["current_session"] = session.to_dict()
+            data["session_history"] = history
+            self._commit_locked(data)
 
         LOGGER.info("Started new in-memory session: %s", session_id)
         return session
 
     def update_session(self, **updates: Any) -> PlanSession | None:
         """Update the current session."""
-        session = self.get_current_session()
-        if not session:
-            LOGGER.warning("No active session to update")
-            return None
+        with self._lock:
+            session = self.get_current_session()
+            if not session:
+                LOGGER.warning("No active session to update")
+                return None
 
-        for key, value in updates.items():
-            if hasattr(session, key):
-                setattr(session, key, value)
+            for key, value in updates.items():
+                if hasattr(session, key):
+                    setattr(session, key, value)
 
-        session.updated_at = datetime.utcnow().isoformat()
+            session.updated_at = datetime.utcnow().isoformat()
 
-        self.update(current_session=session.to_dict())
-        return session
+            data = self._snapshot_locked()
+            data["current_session"] = session.to_dict()
+            self._commit_locked(data)
+            return session
 
     def end_session(self, status: str = "completed") -> None:
         """End the current session."""
-        session = self.get_current_session()
-        if session:
-            session.status = status
-            session.updated_at = datetime.utcnow().isoformat()
+        with self._lock:
+            session = self.get_current_session()
+            if session:
+                session.status = status
+                session.updated_at = datetime.utcnow().isoformat()
 
-            history = []
-            replaced = False
-            for entry in self._get_session_history():
-                if not replaced and entry.get("session_id") == session.session_id:
+                history = []
+                replaced = False
+                for entry in self._ensure_cache_locked().get("session_history", []):
+                    if not replaced and entry.get("session_id") == session.session_id:
+                        history.append(session.to_dict())
+                        replaced = True
+                    else:
+                        history.append(entry)
+                if not replaced:
                     history.append(session.to_dict())
-                    replaced = True
-                else:
-                    history.append(entry)
-            if not replaced:
-                history.append(session.to_dict())
 
-            self.update(
-                current_session=None,
-                session_history=history,
-            )
-            LOGGER.info("Ended in-memory session: %s with status: %s", session.session_id, status)
+                data = self._snapshot_locked()
+                data["current_session"] = None
+                data["session_history"] = history
+                self._commit_locked(data)
+                LOGGER.info(
+                    "Ended in-memory session: %s with status: %s",
+                    session.session_id,
+                    status,
+                )
 
     def can_resume(self) -> bool:
         """Check if there's a session that can be resumed."""
@@ -155,9 +181,9 @@ class InMemoryStateStore:
 
     def get_resumable_tasks(self) -> list[dict[str, Any]]:
         """Get tasks that can be resumed."""
-        data = self.load()
-        plan = data.get("last_plan", {})
-        tasks = plan.get("tasks", [])
+        with self._lock:
+            plan = self._ensure_cache_locked().get("last_plan", {}) or {}
+            tasks = plan.get("tasks", [])
 
         return [
             task
@@ -190,30 +216,32 @@ class InMemoryStateStore:
 
     def _get_session_history(self) -> list[dict[str, Any]]:
         """Get session history list."""
-        data = self.load()
-        return data.get("session_history", [])
+        with self._lock:
+            return list(self._ensure_cache_locked().get("session_history", []))
 
     def append_history(self, entry: dict[str, Any], limit: int = MAX_HISTORY_ENTRIES) -> None:
         """Append an entry to the in-memory command history."""
-        data = self.load()
-        history = list(data.get("command_history", []))
-        history.append(entry)
-        if limit and len(history) > limit:
-            history = history[-limit:]
-        data["command_history"] = history
-        data["last_updated"] = datetime.utcnow().isoformat()
-        self.save(data)
+        with self._lock:
+            data = self._snapshot_locked()
+            history = list(data.get("command_history", []))
+            history.append(entry)
+            if limit and len(history) > limit:
+                history = history[-limit:]
+            data["command_history"] = history
+            data["last_updated"] = datetime.utcnow().isoformat()
+            self._commit_locked(data)
 
     def record_metric(self, entry: dict[str, Any], limit: int = MAX_METRICS_ENTRIES) -> None:
         """Record a metrics entry while bounding total storage."""
-        data = self.load()
-        metrics = list(data.get("metrics", []))
-        metrics.append(entry)
-        if limit and len(metrics) > limit:
-            metrics = metrics[-limit:]
-        data["metrics"] = metrics
-        data["last_updated"] = datetime.utcnow().isoformat()
-        self.save(data)
+        with self._lock:
+            data = self._snapshot_locked()
+            metrics = list(data.get("metrics", []))
+            metrics.append(entry)
+            if limit and len(metrics) > limit:
+                metrics = metrics[-limit:]
+            data["metrics"] = metrics
+            data["last_updated"] = datetime.utcnow().isoformat()
+            self._commit_locked(data)
 
 
 class StateStore(InMemoryStateStore):
@@ -228,39 +256,44 @@ class StateStore(InMemoryStateStore):
         if self.state_file is None:
             return super().load()
 
-        if self._cache:
-            return self._cache
+        with self._lock:
+            if self._cache:
+                return self._snapshot_locked()
 
-        if self.state_file.exists():
-            try:
-                with self.state_file.open("r", encoding="utf-8") as handle:
-                    data = json.load(handle)
-                self._validate_state(data)
-                self._cache = data
-                return self._cache
-            except Exception as exc:  # pragma: no cover - defensive logging
-                LOGGER.warning(
-                    "Failed to load state from %s: %s — using defaults.",
-                    self.state_file,
-                    exc,
-                )
+            if self.state_file.exists():
+                try:
+                    with self.state_file.open("r", encoding="utf-8") as handle:
+                        data = json.load(handle)
+                    self._validate_state(data)
+                    self._cache = data
+                    return copy.deepcopy(self._cache)
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    LOGGER.warning(
+                        "Failed to load state from %s: %s — using defaults.",
+                        self.state_file,
+                        exc,
+                    )
 
-        self._cache = self._create_default_state()
-        self._write_cache_to_disk()
-        return self._cache
+            self._cache = self._create_default_state()
+            self._write_cache_to_disk_locked()
+            return copy.deepcopy(self._cache)
 
     def save(self, data: dict[str, Any]) -> None:
         if self.state_file is None:
             super().save(data)
             return
 
-        self._validate_state(data)
-        self._cache = data
-        self._write_cache_to_disk()
+        with self._lock:
+            self._commit_locked(data)
 
-    def _write_cache_to_disk(self) -> None:
+    def _after_save_locked(self) -> None:
         if self.state_file is None:
             LOGGER.debug("State stored in memory (no persistence path configured)")
+            return
+        self._write_cache_to_disk_locked()
+
+    def _write_cache_to_disk_locked(self) -> None:
+        if self.state_file is None:
             return
 
         try:

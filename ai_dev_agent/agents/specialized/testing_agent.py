@@ -9,6 +9,8 @@ from ai_dev_agent.agents.strategy_adapter import StrategyAgentAdapter
 class TestingAgent(StrategyAgentAdapter):
     """Backwards-compatible testing agent backed by the strategy implementation."""
 
+    __test__ = False
+
     def __init__(self):
         super().__init__(
             TestGenerationAgentStrategy(),

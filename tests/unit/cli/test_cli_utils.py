@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import click
@@ -14,14 +15,22 @@ from ai_dev_agent.cli.utils import (
     _build_context_pruning_config_from_settings,
     _collect_project_structure_outline,
     _detect_repository_language,
+    _export_structure_hints_state,
+    _get_structure_hints_state,
+    _invoke_registry_tool,
     _make_tool_context,
+    _merge_structure_hints_state,
     _normalize_argument_list,
+    _record_invocation,
     _resolve_repo_path,
+    _update_files_discovered,
     build_system_context,
     get_llm_client,
     infer_task_files,
+    resolve_prompt_input,
 )
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.utils.state import InMemoryStateStore
 
 
 def test_build_system_context():
@@ -175,6 +184,49 @@ class TestDetectRepositoryLanguage:
         # With only non-code files, it might return None or a generic type
         assert language in ["unknown", None, "text"]
 
+    def test_detect_language_prefers_context_enhancer(self, monkeypatch, tmp_path):
+        """Detection should fall back to ContextEnhancer listings when rglob is unavailable."""
+
+        captured: dict[str, Any] = {}
+
+        class StubEnhancer:
+            def __init__(self, workspace, settings=None):
+                captured["workspace"] = workspace
+                captured["settings"] = settings
+
+            def list_repository_files(self, limit=None, use_cache=True):
+                captured["limit"] = limit
+                captured["use_cache"] = use_cache
+                return ["src/main.py", "docs/readme.md"]
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.context_enhancer.ContextEnhancer",
+            StubEnhancer,
+        )
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils.ContextEnhancer",
+            StubEnhancer,
+            raising=False,
+        )
+
+        def fail_rglob(self, pattern="*"):
+            raise OSError("Filesystem traversal disabled")
+
+        monkeypatch.setattr(Path, "rglob", fail_rglob)
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "readme.md").write_text("hello\n", encoding="utf-8")
+
+        settings = Settings()
+        language, total = _detect_repository_language(tmp_path, settings=settings)
+
+        assert language == "python"
+        assert total == 2
+        assert captured["limit"] == 400
+        assert captured["workspace"] == tmp_path.resolve()
+
 
 class TestInferTaskFiles:
     """Test task file inference."""
@@ -218,6 +270,48 @@ class TestInferTaskFiles:
         files = infer_task_files(task, tmp_path)
 
         assert files == []
+
+    def test_infer_task_files_uses_context_enhancer_keywords(self, monkeypatch, tmp_path):
+        """Keyword inference should consult ContextEnhancer listings when filesystem scan blocked."""
+
+        captured: dict[str, Any] = {}
+
+        class StubEnhancer:
+            def __init__(self, workspace, settings=None):
+                captured["workspace"] = workspace
+                captured["settings"] = settings
+
+            def list_repository_files(self, limit=None, use_cache=True):
+                captured["limit"] = limit
+                captured["use_cache"] = use_cache
+                return ["src/api/routes.py", "README.md"]
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.context_enhancer.ContextEnhancer",
+            StubEnhancer,
+        )
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.utils.ContextEnhancer",
+            StubEnhancer,
+            raising=False,
+        )
+
+        def fail_rglob(self, pattern="*"):
+            raise OSError("Traversal disabled")
+
+        monkeypatch.setattr(Path, "rglob", fail_rglob)
+
+        (tmp_path / "src" / "api").mkdir(parents=True)
+        target = tmp_path / "src" / "api" / "routes.py"
+        target.write_text("ROUTES = []\n", encoding="utf-8")
+
+        task = {"description": "Refine API routes to support versioning"}
+
+        files = infer_task_files(task, tmp_path)
+
+        assert files == ["src/api/routes.py"]
+        assert "limit" in captured
+        assert captured["workspace"] == tmp_path.resolve()
 
 
 class TestNormalizeArgumentList:
@@ -367,3 +461,172 @@ class TestBuildContextPruningConfig:
         # trigger_tokens should be 80% of max_total_tokens
         assert config.trigger_tokens == int(5000 * 0.8)
         assert config.keep_recent_messages == 10
+
+
+class TestResolvePromptInput:
+    """Test prompt resolution helper."""
+
+    def test_resolve_prompt_input_passes_through_multiline_text(self):
+        """Inline prompt text containing newlines should be returned unchanged."""
+        source = "Title\n* bullet"
+
+        assert resolve_prompt_input(source) == source
+
+    def test_resolve_prompt_input_reads_file(self, tmp_path):
+        """Prompt file paths should be read and returned as text."""
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("# Heading", encoding="utf-8")
+
+        result = resolve_prompt_input(str(prompt_file))
+
+        assert result == "# Heading"
+
+    def test_resolve_prompt_input_missing_file_raises(self, tmp_path):
+        """Missing prompt files should raise FileNotFoundError with guidance."""
+        missing = tmp_path / "missing.md"
+
+        with pytest.raises(FileNotFoundError) as exc:
+            resolve_prompt_input(str(missing))
+
+        assert "does not exist" in str(exc.value)
+
+    def test_resolve_prompt_input_directory_raises(self, tmp_path):
+        """Directories passed as prompt input should raise a clear error."""
+        prompt_dir = tmp_path / "prompts"
+        prompt_dir.mkdir()
+
+        with pytest.raises(IsADirectoryError) as exc:
+            resolve_prompt_input(str(prompt_dir))
+
+        assert "Expected prompt file" in str(exc.value)
+
+
+class TestStructureHintsState:
+    """Test helpers that capture project structure hints."""
+
+    def test_get_structure_hints_state_initializes_defaults(self):
+        """Initial call should populate state containers."""
+        ctx = click.Context(click.Command("test"))
+        ctx.obj = {}
+
+        state = _get_structure_hints_state(ctx)
+
+        assert isinstance(state["symbols"], set)
+        assert isinstance(state["files"], dict)
+        assert state["project_summary"] is None
+        # Ensure subsequent calls reuse the same object
+        assert _get_structure_hints_state(ctx) is state
+
+    def test_merge_structure_hints_state_merges_payload(self):
+        """Merging payload should accumulate symbols, file info, and summary."""
+        state = {"symbols": {"Existing"}, "files": {}, "project_summary": None}
+        payload = {
+            "symbols": ["NewSymbol"],
+            "files": {
+                "src/app.py": {"outline": "class App:", "summary": "Updated app"},
+                "src/other.py": {"symbols": ["DirectSymbol"]},
+            },
+            "project_summary": "Overall summary",
+        }
+
+        with patch(
+            "ai_dev_agent.cli.utils.extract_symbols_from_outline",
+            return_value=["OutlineSymbol"],
+        ) as mock_extract:
+            _merge_structure_hints_state(state, payload)
+
+        mock_extract.assert_called_once_with("class App:")
+        assert {"Existing", "NewSymbol"} == set(state["symbols"])
+        assert state["files"]["src/app.py"]["symbols"] == ["OutlineSymbol"]
+        assert state["files"]["src/app.py"]["summaries"] == ["Updated app"]
+        assert state["files"]["src/other.py"]["symbols"] == ["DirectSymbol"]
+        assert state["project_summary"] == "Overall summary"
+
+    def test_export_structure_hints_state_formats_output(self):
+        """Exported state should provide sorted symbols and shallow copies."""
+        state = {
+            "symbols": {"Beta", "Alpha"},
+            "files": {"file.py": {"symbols": ["Zeta", "Eta"]}},
+            "project_summary": "Summary",
+        }
+
+        exported = _export_structure_hints_state(state)
+
+        assert exported["symbols"] == ["Alpha", "Beta"]
+        assert exported["files"] == state["files"]
+        assert exported["project_summary"] == "Summary"
+
+
+class TestUpdateFilesDiscovered:
+    """Test helper gathering discovered file paths."""
+
+    def test_update_files_discovered_collects_paths(self):
+        """Payload entries from multiple sections should be normalized."""
+        files_discovered: set[str] = set()
+        payload = {
+            "files": {
+                "first": {"path": "src/app.py"},
+                "second": {"path": Path("docs/README.md")},
+            },
+            "matches": [{"path": "tests/test_app.py"}, "lib/module.py"],
+            "summaries": [{"path": "SUMMARY.md"}, {"no_path": "skip"}, "notes.txt"],
+        }
+
+        _update_files_discovered(files_discovered, payload)
+
+        assert files_discovered == {
+            "src/app.py",
+            "docs/README.md",
+            "tests/test_app.py",
+            "lib/module.py",
+            "SUMMARY.md",
+            "notes.txt",
+        }
+
+
+class TestInvokeRegistryTool:
+    """Test registry tool invocation helper."""
+
+    def test_invoke_registry_tool_uses_context(self):
+        """Helper should build context and pass payload to the registry."""
+        ctx = click.Context(click.Command("test"))
+        ctx.obj = {}
+
+        with (
+            patch("ai_dev_agent.cli.utils._make_tool_context") as mock_context,
+            patch("ai_dev_agent.cli.utils.tool_registry.invoke") as mock_invoke,
+        ):
+            sentinel_context = object()
+            mock_context.return_value = sentinel_context
+            mock_invoke.return_value = {"status": "ok"}
+
+            result = _invoke_registry_tool(ctx, "tool-name", {"foo": "bar"}, with_sandbox=True)
+
+        mock_context.assert_called_once_with(ctx, with_sandbox=True)
+        mock_invoke.assert_called_once_with("tool-name", {"foo": "bar"}, sentinel_context)
+        assert result == {"status": "ok"}
+
+
+class TestRecordInvocation:
+    """Test command invocation recording."""
+
+    def test_record_invocation_appends_history(self):
+        """Recording should capture trimmed command path and overrides."""
+        root_cmd = click.Group("devagent")
+        sub_cmd = click.Command("plan")
+        root_cmd.add_command(sub_cmd)
+        root_ctx = root_cmd.make_context("devagent", ["plan"])
+        ctx = sub_cmd.make_context("plan", [], parent=root_ctx)
+        store = InMemoryStateStore()
+        ctx.obj = {"state": store}
+        ctx.params = {"arg": "original"}
+
+        _record_invocation(ctx, overrides={"arg": "override"})
+
+        snapshot = store.load()
+        history = snapshot["command_history"]
+        assert len(history) == 1
+        entry = history[0]
+        assert entry["command_path"] == ["plan"]
+        assert entry["params"]["arg"] == "override"
+        assert "timestamp" in entry

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import click
 
+from ai_dev_agent.cli.context_enhancer import ContextEnhancer
 from ai_dev_agent.core.approval.approvals import ApprovalManager
 from ai_dev_agent.core.approval.policy import ApprovalPolicy
 from ai_dev_agent.core.context.builder import ContextBuilder
@@ -37,6 +38,23 @@ if TYPE_CHECKING:
     from ai_dev_agent.core.utils.config import Settings
 
 LOGGER = get_logger(__name__)
+
+# Cached context enhancers keyed by repository root to reuse RepoMap listings.
+_CLI_CONTEXT_ENHANCERS: dict[Path, ContextEnhancer] = {}
+
+
+def _get_repo_context_enhancer(
+    repo_root: Path, settings: "Settings | None" = None
+) -> ContextEnhancer:
+    """Return a context enhancer instance for the given repository root."""
+
+    key = repo_root.resolve()
+    enhancer = _CLI_CONTEXT_ENHANCERS.get(key)
+    if enhancer is None or (settings is not None and enhancer.settings is not settings):
+        enhancer = ContextEnhancer(workspace=key, settings=settings)
+        _CLI_CONTEXT_ENHANCERS[key] = enhancer
+    return enhancer
+
 
 # Legacy exports maintained for backward compatibility ---------------------------------
 _OS_FRIENDLY_NAMES = ContextBuilder._OS_FRIENDLY_NAMES
@@ -261,28 +279,76 @@ def _detect_repository_language(
     repo_root: Path,
     *,
     max_files: int = 400,
+    settings: "Settings | None" = None,
 ) -> tuple[str | None, int | None]:
+    repo_root = repo_root.resolve()
     counts: dict[str, int] = {}
     total = 0
+
+    processed: set[str] = set()
+
     try:
-        for path in repo_root.rglob("*"):
-            if total >= max_files:
-                break
-            if not path.is_file():
+        enhancer = _get_repo_context_enhancer(repo_root, settings)
+        candidate_entries = enhancer.list_repository_files(limit=max_files)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        LOGGER.debug("ContextEnhancer listing failed: %s", exc)
+        candidate_entries = []
+
+    if candidate_entries:
+        for relative in candidate_entries:
+            candidate = repo_root / relative
+            try:
+                rel_key = str(candidate.relative_to(repo_root))
+            except ValueError:
+                rel_key = str(candidate)
+            if rel_key in processed:
                 continue
+            if not candidate.is_file():
+                continue
+            processed.add(rel_key)
             total += 1
-            ext = path.suffix.lower()
+            ext = candidate.suffix.lower()
             language = _LANGUAGE_EXTENSIONS.get(ext)
             if language:
                 counts[language] = counts.get(language, 0) + 1
-    except OSError:
-        pass
+
+    if total < max_files:
+        try:
+            for path in repo_root.rglob("*"):
+                if total >= max_files:
+                    break
+                if not path.is_file():
+                    continue
+                try:
+                    path_key = str(path.relative_to(repo_root))
+                except ValueError:
+                    path_key = str(path)
+                if path_key in processed:
+                    continue
+                lowered_key = path_key.lower()
+                if any(
+                    fragment in lowered_key
+                    for fragment in ContextEnhancer._DEFAULT_IGNORE_SUBSTRINGS
+                ):
+                    continue
+                processed.add(path_key)
+                total += 1
+                ext = path.suffix.lower()
+                language = _LANGUAGE_EXTENSIONS.get(ext)
+                if language:
+                    counts[language] = counts.get(language, 0) + 1
+        except OSError:
+            pass
 
     language = max(counts, key=counts.get) if counts else None
     return language, total if total else None
 
 
-def infer_task_files(task: Mapping[str, Any], repo_root: Path) -> list[str]:
+def infer_task_files(
+    task: Mapping[str, Any],
+    repo_root: Path,
+    settings: "Settings | None" = None,
+) -> list[str]:
     """Infer target files for a task using commands, deliverables, and textual hints."""
     repo_root = repo_root.resolve()
     results: list[str] = []
@@ -333,8 +399,31 @@ def infer_task_files(task: Mapping[str, Any], repo_root: Path) -> list[str]:
         keywords = set()
 
     if keywords:
+        repo_candidates: Iterable[Path]
+        repo_file_entries: list[str] = []
+        try:
+            enhancer = _get_repo_context_enhancer(repo_root, settings)
+            repo_file_entries = enhancer.list_repository_files(limit=800)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            LOGGER.debug("ContextEnhancer listing failed in infer_task_files: %s", exc)
+
+        if repo_file_entries:
+
+            def _iter_candidates() -> Iterable[Path]:
+                for relative in repo_file_entries:
+                    try:
+                        candidate = (repo_root / relative).resolve()
+                    except OSError:
+                        continue
+                    if candidate.is_file():
+                        yield candidate
+
+            repo_candidates = _iter_candidates()
+        else:
+            repo_candidates = repo_root.rglob("*")
+
         examined = 0
-        for path_candidate in repo_root.rglob("*"):
+        for path_candidate in repo_candidates:
             if examined >= 200:
                 break
             examined += 1

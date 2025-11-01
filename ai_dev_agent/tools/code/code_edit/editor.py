@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 import time
 from collections import Counter
@@ -430,6 +431,81 @@ class CodeEditor:
         if not self._apply_diff_with_approval(proposal):
             raise PermissionError("Code change not approved by user.")
 
+    def search_and_replace(
+        self,
+        file_path: str,
+        pattern: str,
+        replacement: str,
+        *,
+        regex: bool = False,
+        case_sensitive: bool = True,
+        whole_word: bool = False,
+    ) -> DiffProposal:
+        """Perform a search-and-replace edit and return the resulting diff."""
+        relative_path = Path(file_path)
+        target_path = (self.repo_root / relative_path).resolve()
+        if not target_path.exists():
+            raise FileNotFoundError(f"File not found for search/replace: {relative_path}")
+
+        original_text = target_path.read_text(encoding="utf-8")
+        flags = 0 if case_sensitive else re.IGNORECASE
+
+        if regex:
+            expression = pattern
+        else:
+            expression = re.escape(pattern)
+            if whole_word:
+                expression = r"\b" + expression + r"\b"
+
+        try:
+            compiled = re.compile(expression, flags)
+        except re.error as exc:
+            raise ValueError(f"Invalid search pattern: {exc}") from exc
+
+        new_text, count = compiled.subn(replacement, original_text)
+        if count == 0 or new_text == original_text:
+            raise ValueError(
+                "Search pattern produced no changes; verify the pattern, case, and bounds."
+            )
+
+        diff_text = self._build_manual_diff(relative_path, original_text, new_text)
+        preview = self.diff_processor.create_preview(diff_text)
+
+        session = self._session_manager.ensure_session(
+            self._session_id,
+            system_messages=self._base_system_messages,
+            metadata={
+                "mode": "code-editor",
+                "task": f"search-replace:{relative_path}",
+            },
+        )
+        message = (
+            "Manual search/replace request\n"
+            f"File: {relative_path}\n"
+            f"Pattern: {pattern}\n"
+            f"Replacement: {replacement}\n"
+            f"Options: regex={regex}, case_sensitive={case_sensitive}, whole_word={whole_word}\n"
+            f"Matches: {count}"
+        )
+        self._session_manager.add_user_message(self._session_id, message)
+        with session.lock:
+            session.metadata["last_context_summary"] = {
+                "style": preview.summary,
+                "dependency": f"Manual search/replace ({count} matches)",
+            }
+        self._session_manager.add_assistant_message(
+            self._session_id,
+            f"Generated manual diff for {relative_path} with {count} replacements.",
+        )
+
+        return DiffProposal(
+            diff=diff_text,
+            raw_response=diff_text,
+            files=[relative_path],
+            preview=preview,
+            validation_errors=list(preview.validation_result.errors),
+        )
+
     def _apply_diff_with_approval(self, proposal: DiffProposal) -> bool:
         """Apply diff with approval check."""
         if proposal.fallback_reason:
@@ -759,6 +835,23 @@ class CodeEditor:
             f"Reason: {reason}\n"
             f"Task context: {details}"
         )
+
+    def _build_manual_diff(self, relative_path: Path, old_text: str, new_text: str) -> str:
+        """Construct a unified diff for manual edits."""
+        old_lines = old_text.splitlines()
+        new_lines = new_text.splitlines()
+        diff_lines = list(
+            difflib.unified_diff(
+                old_lines,
+                new_lines,
+                fromfile=f"a/{relative_path.as_posix()}",
+                tofile=f"b/{relative_path.as_posix()}",
+                lineterm="",
+            )
+        )
+        if not diff_lines:
+            raise ValueError("Search/replace did not produce any textual differences.")
+        return "\n".join(diff_lines) + "\n"
 
 
 __all__ = ["CodeEditor", "DiffProposal", "FixAttempt", "IterativeFixConfig"]

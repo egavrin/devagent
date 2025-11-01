@@ -46,12 +46,28 @@ class TreeSitterParser:
         "clojure": "clojure",
     }
 
-    def __init__(self):
+    def __init__(self, max_file_size: int = 1 * 1024 * 1024):
         """Initialize tree-sitter parser."""
         self.parsers = {}
         self.compiled_queries = {}  # OPTIMIZATION: Cache compiled queries
+        self.max_file_size = max_file_size
+        self.stats: dict[str, int] = {
+            "skipped_large": 0,
+            "parse_errors": 0,
+            "invalid_tree": 0,
+            "unsupported_language": 0,
+            "stat_errors": 0,
+        }
         if not TREE_SITTER_AVAILABLE:
             logger.warning("tree-sitter-languages not available, falling back to regex parsing")
+
+    def _empty_result(self) -> dict[str, list[Any]]:
+        """Return the canonical empty result structure."""
+        return {"symbols": [], "imports": [], "references": []}
+
+    def _increment_stat(self, key: str) -> None:
+        """Increment a parser statistic counter."""
+        self.stats[key] = self.stats.get(key, 0) + 1
 
     def get_parser(self, language: str):
         """Get or create a parser for the given language."""
@@ -74,11 +90,29 @@ class TreeSitterParser:
     def extract_symbols(self, file_path: Path, language: str) -> dict[str, list[Any]]:
         """Extract symbols from a file using tree-sitter."""
         if not TREE_SITTER_AVAILABLE:
-            return {"symbols": [], "imports": [], "references": []}
+            return self._empty_result()
+
+        try:
+            file_size = file_path.stat().st_size
+        except OSError as exc:
+            logger.info("Tree-sitter skipping %s: unable to stat file (%s)", file_path.name, exc)
+            self._increment_stat("stat_errors")
+            return self._empty_result()
+
+        if self.max_file_size and file_size > self.max_file_size:
+            self._increment_stat("skipped_large")
+            logger.debug(
+                "Skipping tree-sitter for %s (%.1f KB > %.1f KB limit)",
+                file_path.name,
+                file_size / 1024,
+                self.max_file_size / 1024,
+            )
+            return self._empty_result()
 
         parser = self.get_parser(language)
         if not parser:
-            return {"symbols": [], "imports": [], "references": []}
+            self._increment_stat("unsupported_language")
+            return self._empty_result()
 
         try:
             with Path(file_path).open("rb") as f:
@@ -90,7 +124,8 @@ class TreeSitterParser:
             # This saves ~50-60 seconds on large repos with syntax errors
             if tree.root_node.has_error:
                 # Don't spam logs - only log once per run with summary
-                return {"symbols": [], "imports": [], "references": []}
+                self._increment_stat("invalid_tree")
+                return self._empty_result()
 
             symbols: list[str] = []
             imports: list[str] = []
@@ -133,8 +168,9 @@ class TreeSitterParser:
 
         except Exception as e:
             # Reduce logging verbosity - only log at info level with count
+            self._increment_stat("parse_errors")
             logger.info(f"Tree-sitter parsing failed for {file_path.name}: {type(e).__name__}")
-            return {"symbols": [], "imports": [], "references": []}
+            return self._empty_result()
 
     def _extract_python_symbols(
         self, tree, content: bytes

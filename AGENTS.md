@@ -8,13 +8,13 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 - **Front-load situational awareness**: run the CLI smoke suite (`pytest tests/integration/test_end_to_end.py`), gather coverage with `pytest --cov=ai_dev_agent --cov-report=term`, and review `docs/CHANGELOG.md` for current status before touching code.
 - **Inspect references first**: pull patterns from `/Users/eg/Documents/aider`, `cline-1`, `codex`, `claude-code`, and `opencode`; summarize findings inline unless the user explicitly asks for a new `.md` file.
 - **Design before implementation**: draft the approach in the conversation or update existing docs, and never create new `.md` design files unless the user explicitly requests them.
-- **Work in tight loops**: write tests before code, keep functionality changes tiny, and update component status via `python -m ai_dev_agent.status.update` while leaving git commits to the user.
+- **Work in tight loops**: write tests before code, keep functionality changes tiny, and record component status through the state store helper (`ai_dev_agent.core.utils.state.StateStore`) while leaving git commits to the user.
 
 ## Implementation Loop
 - **Tests-first TDD**: add or extend tests in `tests/` before touching production modules; ensure the new tests fail for the expected reason before editing functionality.
 - **Implement after failing tests**: once the tests define the behavior and fail, update production code in minimal increments to make them pass without breaking prior capabilities.
 - **Commit handoff**: never run `git commit` or otherwise write to git history; prepare commit-ready diffs and message suggestions so the user can apply them when satisfied.
-- **Continuous status updates**: log each milestone with the status updater module so parallel efforts stay synchronized.
+- **Continuous status updates**: log each milestone by calling the shared state store (e.g., `StateStore.append_history(...)`) so parallel efforts stay synchronized.
 - **Judge and gate checks**: after features stabilize, run `python -m ai_dev_agent.judges.verify --feature "<feature>"`, `pytest --cov=ai_dev_agent --cov-fail-under=90`, targeted compatibility suites under `tests/compatibility/`, performance benchmarks, and the full test battery before concluding the task.
 - **Documentation upkeep**: refresh existing docs such as `docs/CHANGELOG.md` when needed, but do not add new `.md` files unless the user explicitly asks.
 

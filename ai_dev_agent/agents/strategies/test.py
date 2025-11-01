@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 class TestGenerationAgentStrategy(AgentStrategy):
     """Strategy for the test generation agent."""
 
+    __test__ = False
+
     @property
     def name(self) -> str:
         """Get the agent name."""

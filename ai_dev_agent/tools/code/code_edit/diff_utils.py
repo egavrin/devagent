@@ -13,6 +13,7 @@ from ai_dev_agent.core.utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 DIFF_BLOCK = re.compile(r"```diff\s*(?P<diff>.*?)```", re.DOTALL)
+CONFLICT_MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
 
 
 class DiffError(RuntimeError):
@@ -142,8 +143,23 @@ class DiffProcessor:
         in_hunk = False
         hunk_context = 0
         last_old_file: str | None = None
+        conflict_reported_for: set[str | None] = set()
 
         for line_num, line in enumerate(lines, 1):
+            stripped_line = line.lstrip(" +-")
+            if any(stripped_line.startswith(marker) for marker in CONFLICT_MARKERS):
+                conflict_key = current_file or last_old_file or "<unknown>"
+                if conflict_key not in conflict_reported_for:
+                    conflict_reported_for.add(conflict_key)
+                    if conflict_key and conflict_key != "<unknown>":
+                        errors.append(
+                            f"Potential merge conflict markers detected in {conflict_key} at line {line_num}"
+                        )
+                    else:
+                        errors.append(
+                            f"Potential merge conflict markers detected near line {line_num}"
+                        )
+
             # File headers
             if line.startswith("--- "):
                 old_file_raw = line[4:].strip()

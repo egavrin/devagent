@@ -724,7 +724,7 @@ def _execute_react_assistant(
     repository_language = ctx_obj.get("_detected_language")
     repository_size_estimate = ctx_obj.get("_repo_file_count")
     if repository_language is None or repository_size_estimate is None:
-        detected_language, file_count = _detect_repository_language(repo_root)
+        detected_language, file_count = _detect_repository_language(repo_root, settings=settings)
         if repository_language is None:
             repository_language = detected_language
             ctx_obj["_detected_language"] = detected_language

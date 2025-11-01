@@ -89,13 +89,6 @@ omit = [
   "*/setup.py",
   "*/conftest.py",
   "*/benchmarks/*",
-  "*/ai_dev_agent/tools/code/*",
-  "*/ai_dev_agent/tools/execution/shell_session.py",
-  "*/ai_dev_agent/tools/execution/direct.py",
-  "*/ai_dev_agent/testing/*",
-  "*/ai_dev_agent/session/prompt_builder.py",
-  "*/ai_dev_agent/session/summarizer.py",
-  "*/ai_dev_agent/cli/react/executor.py",
 ]
 
 [tool.coverage.report]
