@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "description": "Whether plan creation succeeded"
+    },
+    "plan": {
+      "type": "object",
+      "description": "Structured work plan",
+      "properties": {
+        "goal": {"type": "string"},
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string"},
+              "title": {"type": "string"},
+              "description": {"type": "string"},
+              "agent": {"type": "string"},
+              "dependencies": {
+                "type": "array",
+                "items": {"type": "string"}
+              }
+            },
+            "required": ["id", "title", "agent"]
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "string",
+      "description": "Error message if planning failed"
+    }
+  },
+  "required": ["success"],
+  "additionalProperties": true
+}

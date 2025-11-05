@@ -41,16 +41,29 @@ class WorkPlanningAgent:
         Returns:
             WorkPlan with generated tasks
         """
+        # Determine complexity
+        complexity = "medium"  # default
+        if context:
+            if context.get("complexity"):
+                complexity = context.get("complexity", "medium")
+            elif context.get("num_tasks"):
+                num_tasks = context.get("num_tasks", 4)
+                if num_tasks <= 2:
+                    complexity = "simple"
+                elif num_tasks >= 5:
+                    complexity = "complex"
+
         # Create plan
         plan_name = (context or {}).get("name") or goal or "Work Plan"
         plan = WorkPlan(
             name=plan_name,
             goal=goal,
             context=context.get("description", "") if context else "",
+            complexity=complexity,
         )
 
         if llm_client:
-            # Use LLM to generate tasks (Phase 3 feature)
+            # Use LLM to generate tasks using unified plan tool
             tasks = self._generate_tasks_with_llm(goal, context, llm_client)
             plan.tasks = tasks
         else:
@@ -75,9 +88,7 @@ class WorkPlanningAgent:
         llm_client: Any,
     ) -> list[Task]:
         """
-        Use LLM to generate structured task breakdown.
-
-        This is a Phase 3 feature. For now, returns empty list.
+        Use LLM to generate structured task breakdown using the plan workflow tool.
 
         Args:
             goal: High-level objective
@@ -87,9 +98,71 @@ class WorkPlanningAgent:
         Returns:
             List of Task objects
         """
-        # TODO: Implement in Phase 3
-        # Will use prompts to generate structured task breakdown
-        return []
+        from pathlib import Path
+
+        from ai_dev_agent.core.utils.config import load_settings
+        from ai_dev_agent.tools.registry import ToolContext
+        from ai_dev_agent.tools.workflow.plan import plan
+
+        # Prepare tool context with LLM client
+        # Load settings and create minimal tool context for plan tool
+        settings = load_settings()
+        tool_context = ToolContext(
+            repo_root=Path.cwd(),
+            settings=settings,
+            sandbox=None,  # Sandbox not required for planning
+            extra={"llm_client": llm_client},
+        )
+
+        # Determine complexity based on context hints
+        complexity = "medium"  # default
+        if context:
+            if context.get("complexity"):
+                complexity = context.get("complexity", "medium")
+            elif context.get("num_tasks"):
+                num_tasks = context.get("num_tasks", 4)
+                if num_tasks <= 2:
+                    complexity = "simple"
+                elif num_tasks >= 5:
+                    complexity = "complex"
+
+        # Call the unified plan tool
+        plan_context = context.get("description", "") if context else ""
+        plan_result = plan(
+            {"goal": goal, "context": plan_context, "complexity": complexity},
+            tool_context,
+        )
+
+        if not plan_result.get("success") or not plan_result.get("plan"):
+            # Fallback to placeholder task
+            return [
+                Task(
+                    title=f"Implement: {goal}",
+                    description=goal,
+                    priority=Priority.HIGH,
+                )
+            ]
+
+        # Convert plan tool tasks to WorkPlanner Task objects
+        tasks = []
+        plan_data = plan_result["plan"]
+
+        for task_dict in plan_data.get("tasks", []):
+            # Map priority (plan tool doesn't have priority, use medium default)
+            priority = Priority.MEDIUM
+
+            tasks.append(
+                Task(
+                    id=task_dict["id"],
+                    title=task_dict["title"],
+                    description=task_dict.get("description", ""),
+                    agent=task_dict.get("agent"),
+                    priority=priority,
+                    dependencies=task_dict.get("dependencies", []),
+                )
+            )
+
+        return tasks
 
     def update_plan(
         self,

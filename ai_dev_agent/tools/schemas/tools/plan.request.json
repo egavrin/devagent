@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "goal": {
+      "type": "string",
+      "description": "High-level goal for the work plan",
+      "minLength": 1
+    },
+    "context": {
+      "type": "string",
+      "description": "Additional context for planning"
+    },
+    "complexity": {
+      "type": "string",
+      "description": "Expected complexity level",
+      "enum": ["simple", "medium", "complex"]
+    }
+  },
+  "required": ["goal"],
+  "additionalProperties": false
+}

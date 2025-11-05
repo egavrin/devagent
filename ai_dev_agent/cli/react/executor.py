@@ -46,7 +46,6 @@ from ai_dev_agent.providers.llm import LLMError
 from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session import SessionManager
 from ai_dev_agent.session.context_synthesis import ContextSynthesizer
-from ai_dev_agent.session.sanitizer import sanitize_conversation
 
 from ..router import IntentDecision
 from ..router import IntentRouter as _DEFAULT_INTENT_ROUTER
@@ -227,7 +226,6 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 # Get the LLM to produce a text response without tools
                 # Access session_manager and session_id from action_provider
                 conversation = action_provider.session_manager.compose(action_provider.session_id)
-                conversation = sanitize_conversation(conversation)
 
                 if self.format_schema:
                     json_instruction_message = Message(
@@ -363,7 +361,6 @@ class BudgetAwareExecutor(ReactiveExecutor):
             try:
                 # Get the conversation and add synthesis instructions
                 conversation = action_provider.session_manager.compose(action_provider.session_id)
-                conversation = sanitize_conversation(conversation)
 
                 # Add a system message to force synthesis
                 synthesis_prompt = Message(

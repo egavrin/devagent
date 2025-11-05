@@ -75,10 +75,6 @@ def _apply_common_patches(monkeypatch, session_manager):
         "ai_dev_agent.cli.react.executor.create_budget_integration",
         lambda _settings: MagicMock(),
     )
-    monkeypatch.setattr(
-        "ai_dev_agent.cli.react.executor.sanitize_conversation",
-        lambda messages: messages,
-    )
 
 
 def test_step_hook_persists_records_in_context(monkeypatch, lightweight_settings):

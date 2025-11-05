@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from types import SimpleNamespace
 
 import click
+import pytest
 
 from ai_dev_agent.cli.handlers import registry_handlers
 from ai_dev_agent.cli.react.executor import _execute_react_assistant
@@ -239,6 +240,7 @@ def test_shell_history_records_user_without_response(capsys) -> None:
 
 
 def test_adds_dummy_tool_message_for_raw_tool_calls(capsys) -> None:
+    """Test that LLM parsing failures raise RuntimeError instead of masking the error."""
     settings = Settings()
     raw_tool_calls = [
         {
@@ -259,19 +261,10 @@ def test_adds_dummy_tool_message_for_raw_tool_calls(capsys) -> None:
 
     ctx = _make_context(settings)
 
-    _execute_react_assistant(ctx, client, settings, "Trigger tool fallback", use_planning=False)
-
-    session_id = ctx.obj.get("_session_id")
-    assert session_id, "Session ID should be recorded on context"
-
-    session_manager = SessionManager.get_instance()
-    session = session_manager.get_session(str(session_id))
-    tool_messages = [msg for msg in session.history if msg.role == "tool"]
-
-    assert any(
-        msg.tool_call_id == "call-missing-func" and "not executed" in (msg.content or "")
-        for msg in tool_messages
-    ), "Expected a dummy tool response tied to the raw tool call identifier"
+    # With our "fail fast" philosophy, this should raise RuntimeError
+    # when raw_tool_calls exist but result.calls is empty (LLM parsing bug)
+    with pytest.raises(RuntimeError, match="LLM parsing failure"):
+        _execute_react_assistant(ctx, client, settings, "Trigger tool fallback", use_planning=False)
 
 
 def test_generates_tool_call_id_when_provider_omits_id(monkeypatch, capsys) -> None:

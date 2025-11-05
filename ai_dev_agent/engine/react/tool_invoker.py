@@ -655,10 +655,21 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
 
         # For batch execution, record a tool message for each result
         if cli_observation.results:
+            LOGGER.debug(
+                "Tool %s: batch mode, recording %d tool messages (session_id=%s)",
+                action.tool,
+                len(cli_observation.results),
+                self.session_id,
+            )
             for result in cli_observation.results:
                 self._record_batch_tool_message(result)
         else:
             # Single tool mode - record the primary action
+            LOGGER.debug(
+                "Tool %s: single mode, recording tool message (session_id=%s)",
+                action.tool,
+                self.session_id,
+            )
             self._record_tool_message(action, cli_observation)
 
         return cli_observation
@@ -923,6 +934,12 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
 
     def _record_tool_message(self, action: ActionRequest, observation: CLIObservation) -> None:
         if not self.session_manager or not self.session_id:
+            LOGGER.warning(
+                "Skipping tool message recording for %s: session_manager=%s, session_id=%s",
+                action.tool,
+                "present" if self.session_manager else "missing",
+                self.session_id or "missing",
+            )
             return
 
         canonical = canonical_tool_name(action.tool)
@@ -991,8 +1008,15 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
 
         try:
             self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
-        except Exception:
-            LOGGER.debug("Failed to record tool message for %s", action.tool, exc_info=True)
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to record tool message for %s (tool_call_id=%s, session_id=%s): %s",
+                action.tool,
+                tool_call_id,
+                self.session_id,
+                e,
+                exc_info=True,
+            )
 
     def _record_batch_tool_message(self, result: ToolResult) -> None:
         """Record a tool message for a single result from batch execution."""
@@ -1021,8 +1045,15 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
 
         try:
             self.session_manager.add_tool_message(self.session_id, tool_call_id, content)
-        except Exception:
-            LOGGER.debug("Failed to record batch tool message for %s", result.tool, exc_info=True)
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to record batch tool message for %s (tool_call_id=%s, session_id=%s): %s",
+                result.tool,
+                tool_call_id,
+                self.session_id,
+                e,
+                exc_info=True,
+            )
 
 
 def create_tool_invoker(

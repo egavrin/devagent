@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from ai_dev_agent.engine.react.types import ActionRequest, StepRecord, TaskSpec, ToolCall
-from ai_dev_agent.providers.llm.base import LLMClient, ToolCallResult
+from ai_dev_agent.providers.llm.base import LLMClient, Message, ToolCallResult
 
 if TYPE_CHECKING:
     from ai_dev_agent.core.utils.budget_integration import BudgetIntegration
@@ -54,17 +54,59 @@ class LLMActionProvider:
         iteration_index = len(history) + 1
 
         # Check if RepoMap refresh is pending and inject before LLM call
+        # IMPORTANT: Only inject if there are no incomplete tool_calls pending
         if self._ctx_obj.get("_repomap_refresh_pending"):
-            self._inject_repomap_update()
-            self._ctx_obj["_repomap_refresh_pending"] = False
+            conversation_check = self.session_manager.compose(self.session_id)
+            has_incomplete_tool_calls = self._has_incomplete_tool_calls(conversation_check)
+
+            if has_incomplete_tool_calls:
+                logger.warning(
+                    "Skipping RepoMap injection - incomplete tool_calls detected. "
+                    "Will retry on next iteration after tool responses are added."
+                )
+            else:
+                self._inject_repomap_update()
+                self._ctx_obj["_repomap_refresh_pending"] = False
 
         conversation = self.session_manager.compose(self.session_id)
 
-        # Sanitize conversation to remove orphaned tool messages
-        # This prevents API errors from strict providers like DeepSeek
-        from ai_dev_agent.session.sanitizer import sanitize_conversation
+        # Pre-flight validation: Check for incomplete tool_calls before sending to LLM
+        # Strict providers like DeepSeek require all tool responses to be present
+        # If incomplete tool_calls are detected, this is a BUG - halt execution
+        if self._has_incomplete_tool_calls(conversation):
+            # Find which tool_call_ids are missing responses
+            pending_ids: set[str] = set()
+            for msg in conversation:
+                if msg.role == "assistant" and msg.tool_calls:
+                    for call in msg.tool_calls:
+                        if isinstance(call, Mapping):
+                            call_id = call.get("id") or call.get("tool_call_id")
+                            if isinstance(call_id, str) and call_id:
+                                pending_ids.add(call_id)
+                elif msg.role == "tool" and msg.tool_call_id:
+                    pending_ids.discard(msg.tool_call_id)
 
-        conversation = sanitize_conversation(conversation)
+            # Build conversation structure for error message
+            conv_structure = []
+            for i, msg in enumerate(conversation[-10:]):
+                if msg.role == "assistant" and msg.tool_calls:
+                    tool_ids = [
+                        c.get("id") or c.get("tool_call_id")
+                        for c in msg.tool_calls
+                        if isinstance(c, Mapping)
+                    ]
+                    conv_structure.append(f"  [{i}] assistant with tool_calls: {tool_ids}")
+                elif msg.role == "tool":
+                    conv_structure.append(f"  [{i}] tool response: tool_call_id={msg.tool_call_id}")
+                else:
+                    conv_structure.append(f"  [{i}] {msg.role} message")
+
+            raise RuntimeError(
+                f"Incomplete tool_calls detected before LLM call! "
+                f"Missing tool responses for tool_call_ids: {list(pending_ids)} "
+                f"(session_id={self.session_id}, iteration={iteration_index})\n"
+                f"Conversation structure (last 10 messages):\n" + "\n".join(conv_structure)
+            )
 
         # Pre-flight check: Ensure conversation fits within model's context limit
         # This prevents "context length exceeded" API errors
@@ -164,6 +206,21 @@ class LLMActionProvider:
             result.raw_tool_calls = normalized_tool_calls
 
         if result.message_content is not None or normalized_tool_calls:
+            num_tool_calls = len(normalized_tool_calls) if normalized_tool_calls else 0
+            logger.debug(
+                "Adding assistant message to session %s: tool_calls=%d, iteration=%d",
+                self.session_id,
+                num_tool_calls,
+                iteration_index,
+            )
+            if normalized_tool_calls:
+                tool_call_ids = [
+                    tc.get("id") or tc.get("tool_call_id")
+                    for tc in normalized_tool_calls
+                    if isinstance(tc, Mapping)
+                ]
+                logger.debug("Tool call IDs that need responses: %s", tool_call_ids)
+
             self.session_manager.add_assistant_message(
                 self.session_id,
                 result.message_content,
@@ -207,7 +264,14 @@ class LLMActionProvider:
                     },
                 )
 
-            self._record_dummy_tool_messages(normalized_tool_calls)
+            # If we have raw_tool_calls but no parsed calls, this is an LLM parsing bug
+            if normalized_tool_calls:
+                raise RuntimeError(
+                    f"LLM parsing failure: raw_tool_calls exist but result.calls is empty. "
+                    f"This indicates a bug in tool call parsing. "
+                    f"(session_id={self.session_id}, iteration={iteration_index})"
+                )
+
             raise StopIteration("No tool calls - synthesis complete")
 
         tool_calls = self._convert_tool_calls(result.calls, used_call_ids)
@@ -376,29 +440,32 @@ class LLMActionProvider:
             if settings and settings.repomap_debug_stdout:
                 logger.debug(f"Failed to inject RepoMap update: {e}")
 
-    def _record_dummy_tool_messages(self, raw_tool_calls: Sequence[Any] | None) -> None:
-        if not raw_tool_calls:
-            return
-        for entry in raw_tool_calls:
-            if not isinstance(entry, Mapping):
-                continue
-            function_payload = (
-                entry.get("function") if isinstance(entry.get("function"), Mapping) else {}
-            )
-            tool_name = function_payload.get("name") or entry.get("name") or "tool"
-            # The normalized tool calls always have an "id" field set by _normalize_tool_calls
-            call_id = entry.get("id") or entry.get("tool_call_id")
-            if not call_id:
-                # This shouldn't happen after normalization, but generate one as fallback
-                import uuid
+    def _has_incomplete_tool_calls(self, conversation: Sequence[Message]) -> bool:
+        """
+        Check if the conversation has an assistant message with tool_calls
+        that doesn't have all corresponding tool response messages.
 
-                call_id = f"tool-dummy-{uuid.uuid4().hex[:8]}"
-            message = f"Tool '{tool_name}' was referenced but not executed."
-            try:
-                self.session_manager.add_tool_message(self.session_id, call_id, message)
-            except Exception as e:
-                # Log the exception for debugging instead of silently failing
-                import logging
+        This is important for strict LLM providers like DeepSeek that require
+        tool responses to immediately follow tool_calls.
+        """
+        if not conversation:
+            return False
 
-                logger = logging.getLogger(__name__)
-                logger.debug(f"Failed to record dummy tool message: {e}")
+        # Track tool_calls that are waiting for responses
+        pending_tool_call_ids: set[str] = set()
+
+        for msg in conversation:
+            if msg.role == "assistant" and msg.tool_calls:
+                # Assistant message with tool_calls - record the IDs
+                for call in msg.tool_calls:
+                    if isinstance(call, Mapping):
+                        call_id = call.get("id") or call.get("tool_call_id")
+                        if isinstance(call_id, str) and call_id:
+                            pending_tool_call_ids.add(call_id)
+
+            elif msg.role == "tool" and msg.tool_call_id:
+                # Tool response - remove from pending
+                pending_tool_call_ids.discard(msg.tool_call_id)
+
+        # If there are any pending tool_call_ids, the conversation is incomplete
+        return len(pending_tool_call_ids) > 0

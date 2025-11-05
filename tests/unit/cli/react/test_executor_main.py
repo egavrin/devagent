@@ -81,10 +81,6 @@ def test_execute_react_assistant_exposes_search_queries(monkeypatch, base_settin
         "ai_dev_agent.cli.react.executor.create_budget_integration",
         lambda _settings: MagicMock(),
     )
-    monkeypatch.setattr(
-        "ai_dev_agent.cli.react.executor.sanitize_conversation",
-        lambda messages: messages,
-    )
 
     ctx = _build_click_context()
     client = SimpleNamespace(invoke_tools=MagicMock(), complete=MagicMock())

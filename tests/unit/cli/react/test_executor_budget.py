@@ -84,11 +84,6 @@ def test_budget_executor_forced_synthesis_uses_budget_integration(monkeypatch):
     integration = _StubBudgetIntegration()
     provider = _ForcedSynthesisProvider(integration)
 
-    monkeypatch.setattr(
-        "ai_dev_agent.cli.react.executor.sanitize_conversation",
-        lambda messages: messages,
-    )
-
     executor = _build_executor()
 
     result = executor.run(

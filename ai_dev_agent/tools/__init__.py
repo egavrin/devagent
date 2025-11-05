@@ -11,13 +11,17 @@ from . import filesystem as _filesystem
 from . import find as _find
 from . import grep as _grep
 from . import symbols as _symbols
-from .names import ALL_TOOLS, FIND, GREP, READ, RUN, SYMBOLS, WRITE
+from . import workflow as _workflow
+from .names import ALL_TOOLS, DELEGATE, FIND, GET_TASK_STATUS, GREP, PLAN, READ, RUN, SYMBOLS, WRITE
 from .registry import ToolContext, ToolSpec, registry
 
 __all__ = [
     "ALL_TOOLS",
+    "DELEGATE",
     "FIND",
     "GREP",
+    "GET_TASK_STATUS",
+    "PLAN",
     "READ",
     "RUN",
     "SYMBOLS",

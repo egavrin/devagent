@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "description": "Whether the task was queued successfully"
+    },
+    "agent": {
+      "type": "string",
+      "description": "Agent that will execute the task"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Unique identifier for the queued task"
+    },
+    "status": {
+      "type": "string",
+      "description": "Current task status (queued, running, completed, failed)"
+    },
+    "result": {
+      "type": "string",
+      "description": "Status message or result from the agent"
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "List of files or artifacts produced (empty until completed)",
+      "items": {"type": "string"}
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message if task failed"
+    }
+  },
+  "required": ["success"],
+  "additionalProperties": true
+}

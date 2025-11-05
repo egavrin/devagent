@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "agent": {
+      "type": "string",
+      "description": "Target agent name",
+      "enum": ["design_agent", "test_agent", "review_agent", "implementation_agent"]
+    },
+    "task": {
+      "type": "string",
+      "description": "Task description for the specialized agent",
+      "minLength": 1
+    },
+    "context": {
+      "type": "object",
+      "description": "Additional context to pass to the agent",
+      "additionalProperties": true
+    }
+  },
+  "required": ["agent", "task"],
+  "additionalProperties": false
+}

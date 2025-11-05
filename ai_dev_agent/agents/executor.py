@@ -166,7 +166,7 @@ class AgentExecutor:
 
         ctx_obj = self._build_context_object(settings, metadata)
         ctx_obj["_session_id"] = f"delegate-{uuid4()}"
-        ctx_obj["silent_mode"] = True
+        ctx_obj["silent_mode"] = False  # Show delegated agent's tool usage
 
         ctx = click.Context(click.Command("agent-executor"), obj=ctx_obj)
         return ctx
@@ -182,8 +182,10 @@ class AgentExecutor:
             ctx.obj = {}
         for key, value in ctx_obj.items():
             ctx.obj.setdefault(key, value)
-        ctx.obj.setdefault("_session_id", f"delegate-{uuid4()}")
-        ctx.obj["silent_mode"] = True
+        # IMPORTANT: Force a new session_id for delegated agents to ensure session isolation
+        # Using setdefault would inherit parent's session_id, causing DeepSeek errors
+        ctx.obj["_session_id"] = f"delegate-{uuid4()}"
+        ctx.obj["silent_mode"] = False  # Show delegated agent's tool usage
         return ctx
 
     def _build_agent_prompt(

@@ -1,63 +1,7 @@
 """Test to ensure tool messages always have tool_call_id for API compatibility."""
 
-from unittest.mock import MagicMock
-
-from ai_dev_agent.cli.react.action_provider import LLMActionProvider
 from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session import SessionManager
-
-
-def test_dummy_tool_messages_have_tool_call_id():
-    """Test that _record_dummy_tool_messages ensures all tool messages have tool_call_id."""
-    # Setup
-    mock_client = MagicMock()
-    session_manager = SessionManager.get_instance()
-    session_id = "test-session"
-    session_manager.ensure_session(session_id)
-
-    action_provider = LLMActionProvider(
-        llm_client=mock_client, session_manager=session_manager, session_id=session_id, tools=[]
-    )
-
-    # Simulate normalized tool calls (as they would be after _normalize_tool_calls)
-    raw_tool_calls = [
-        {
-            "id": "tool-0-abc123",  # ID should be present after normalization
-            "type": "function",
-            "function": {"name": "test_tool", "arguments": '{"arg": "value"}'},
-        },
-        {
-            # Edge case: missing ID (shouldn't happen after normalization but testing fallback)
-            "type": "function",
-            "function": {"name": "another_tool", "arguments": "{}"},
-        },
-    ]
-
-    # Call the method
-    action_provider._record_dummy_tool_messages(raw_tool_calls)
-
-    # Get the session history
-    conversation = session_manager.compose(session_id)
-
-    # Find tool messages
-    tool_messages = [msg for msg in conversation if msg.role == "tool"]
-
-    # Verify all tool messages have tool_call_id
-    assert len(tool_messages) == 2, f"Expected 2 tool messages, got {len(tool_messages)}"
-
-    for i, msg in enumerate(tool_messages):
-        payload = msg.to_payload()
-        assert "tool_call_id" in payload, f"Tool message {i} missing tool_call_id field"
-        assert payload["tool_call_id"], f"Tool message {i} has empty tool_call_id"
-
-        # First message should have the original ID
-        if i == 0:
-            assert payload["tool_call_id"] == "tool-0-abc123"
-        # Second message should have a generated ID
-        else:
-            assert payload["tool_call_id"].startswith(
-                "tool-"
-            ), f"Generated tool_call_id should start with 'tool-', got {payload['tool_call_id']}"
 
 
 def test_tool_message_to_payload_includes_tool_call_id():
@@ -126,9 +70,6 @@ def test_deepseek_api_compatibility():
 
 if __name__ == "__main__":
     # Run tests directly
-    test_dummy_tool_messages_have_tool_call_id()
-    print("✅ test_dummy_tool_messages_have_tool_call_id passed")
-
     test_tool_message_to_payload_includes_tool_call_id()
     print("✅ test_tool_message_to_payload_includes_tool_call_id passed")
 

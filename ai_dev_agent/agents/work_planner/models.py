@@ -33,6 +33,7 @@ class Task(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     title: str
     description: str = ""
+    agent: Optional[str] = None  # Agent assigned to execute this task (e.g., "design_agent")
     acceptance_criteria: List[str] = Field(default_factory=list)
     status: TaskStatus = TaskStatus.PENDING
     priority: Priority = Priority.MEDIUM
@@ -69,6 +70,7 @@ class WorkPlan(BaseModel):
     name: str
     goal: str
     context: str = ""
+    complexity: str = "medium"  # Plan complexity: simple, medium, complex
     tasks: List[Task] = Field(default_factory=list)
     version: int = 1
     created_at: datetime = Field(default_factory=datetime.now)

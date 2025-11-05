@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from ai_dev_agent.tools.names import ALL_TOOLS, FIND, GREP, READ, RUN, SYMBOLS, WRITE
+from ai_dev_agent.tools.names import (
+    ALL_TOOLS,
+    DELEGATE,
+    FIND,
+    GET_TASK_STATUS,
+    GREP,
+    PLAN,
+    READ,
+    RUN,
+    SYMBOLS,
+    WRITE,
+)
 from ai_dev_agent.tools.registry import registry
 
 
@@ -13,8 +24,21 @@ def test_constants_match_expected_strings() -> None:
     assert READ == "read"
     assert RUN == "run"
     assert SYMBOLS == "symbols"
+    assert DELEGATE == "delegate"
+    assert GET_TASK_STATUS == "get_task_status"
+    assert PLAN == "plan"
     assert WRITE == "write"
-    assert ALL_TOOLS == (READ, WRITE, RUN, FIND, GREP, SYMBOLS)
+    assert ALL_TOOLS == (
+        READ,
+        WRITE,
+        RUN,
+        FIND,
+        GREP,
+        SYMBOLS,
+        DELEGATE,
+        GET_TASK_STATUS,
+        PLAN,
+    )
 
 
 def test_all_tools_are_registered() -> None:

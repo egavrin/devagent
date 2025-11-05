@@ -406,3 +406,145 @@ class TestWorkPlan:
         assert len(restored_plan.tasks) == len(original_plan.tasks)
         assert restored_plan.tasks[0].id == original_plan.tasks[0].id
         assert restored_plan.tasks[1].dependencies == original_plan.tasks[1].dependencies
+
+    def test_workplan_update_task_status_to_in_progress(self):
+        """Test updating task status to IN_PROGRESS sets started_at."""
+        task = Task(title="Task 1", status=TaskStatus.PENDING)
+        plan = WorkPlan(name="Test", goal="Goal", tasks=[task])
+
+        # Task should not have started_at initially
+        assert task.started_at is None
+
+        # Update to IN_PROGRESS
+        result = plan.update_task_status(task.id, TaskStatus.IN_PROGRESS)
+
+        assert result is True
+        assert task.status == TaskStatus.IN_PROGRESS
+        assert task.started_at is not None
+        assert isinstance(task.started_at, datetime)
+        assert task.updated_at is not None
+
+    def test_workplan_update_task_status_to_completed(self):
+        """Test updating task status to COMPLETED sets completed_at."""
+        task = Task(title="Task 1", status=TaskStatus.IN_PROGRESS)
+        plan = WorkPlan(name="Test", goal="Goal", tasks=[task])
+
+        # Task should not have completed_at initially
+        assert task.completed_at is None
+
+        # Update to COMPLETED
+        result = plan.update_task_status(task.id, TaskStatus.COMPLETED)
+
+        assert result is True
+        assert task.status == TaskStatus.COMPLETED
+        assert task.completed_at is not None
+        assert isinstance(task.completed_at, datetime)
+        assert task.updated_at is not None
+
+    def test_workplan_update_task_status_preserves_timestamps(self):
+        """Test that updating status preserves existing timestamps."""
+        task = Task(title="Task 1", status=TaskStatus.IN_PROGRESS)
+        plan = WorkPlan(name="Test", goal="Goal", tasks=[task])
+
+        # First update to IN_PROGRESS
+        plan.update_task_status(task.id, TaskStatus.IN_PROGRESS)
+        started_at_first = task.started_at
+
+        # Update again to BLOCKED - should not change started_at
+        plan.update_task_status(task.id, TaskStatus.BLOCKED)
+
+        assert task.started_at == started_at_first
+        assert task.status == TaskStatus.BLOCKED
+
+    def test_workplan_update_task_status_non_existent(self):
+        """Test updating non-existent task returns False."""
+        task = Task(title="Task 1")
+        plan = WorkPlan(name="Test", goal="Goal", tasks=[task])
+
+        result = plan.update_task_status("non-existent-id", TaskStatus.COMPLETED)
+
+        assert result is False
+
+    def test_workplan_update_task_status_multiple_transitions(self):
+        """Test multiple status transitions update timestamps correctly."""
+        task = Task(title="Task 1", status=TaskStatus.PENDING)
+        plan = WorkPlan(name="Test", goal="Goal", tasks=[task])
+
+        # PENDING -> IN_PROGRESS
+        plan.update_task_status(task.id, TaskStatus.IN_PROGRESS)
+        assert task.started_at is not None
+        assert task.completed_at is None
+        started_at = task.started_at
+
+        # IN_PROGRESS -> COMPLETED
+        plan.update_task_status(task.id, TaskStatus.COMPLETED)
+        assert task.completed_at is not None
+        assert task.started_at == started_at  # Preserved
+        assert isinstance(task.completed_at, datetime)
+
+    def test_workplan_get_next_task_all_blocked(self):
+        """Test when all tasks are blocked by dependencies."""
+        task1 = Task(title="Task 1", dependencies=["nonexistent"])
+        task2 = Task(title="Task 2", dependencies=["also-nonexistent"])
+
+        plan = WorkPlan(name="Test", goal="Goal", tasks=[task1, task2])
+
+        # All tasks are blocked, should return None
+        next_task = plan.get_next_task()
+        assert next_task is None
+
+    def test_workplan_completion_percentage(self):
+        """Test completion percentage calculation."""
+        task1 = Task(title="Task 1", status=TaskStatus.COMPLETED)
+        task2 = Task(title="Task 2", status=TaskStatus.COMPLETED)
+        task3 = Task(title="Task 3", status=TaskStatus.PENDING)
+        task4 = Task(title="Task 4", status=TaskStatus.IN_PROGRESS)
+
+        plan = WorkPlan(name="Test", goal="Goal", tasks=[task1, task2, task3, task4])
+
+        progress = plan.get_completion_percentage()
+        assert progress == 50.0  # 2 out of 4 tasks completed
+
+    def test_workplan_completion_percentage_no_tasks(self):
+        """Test completion percentage when there are no tasks."""
+        plan = WorkPlan(name="Test", goal="Goal", tasks=[])
+
+        progress = plan.get_completion_percentage()
+        assert progress == 0.0
+
+    def test_workplan_with_mixed_task_statuses(self):
+        """Test work plan with tasks in various states."""
+        tasks = [
+            Task(title="T1", status=TaskStatus.COMPLETED),
+            Task(title="T2", status=TaskStatus.IN_PROGRESS),
+            Task(title="T3", status=TaskStatus.PENDING),
+            Task(title="T4", status=TaskStatus.BLOCKED),
+            Task(title="T5", status=TaskStatus.CANCELLED),
+        ]
+
+        plan = WorkPlan(name="Mixed Plan", goal="Test", tasks=tasks)
+
+        assert len(plan.tasks) == 5
+        assert plan.get_completion_percentage() == 20.0  # Only 1 completed
+
+    def test_task_with_complex_dependencies(self):
+        """Test task with multiple dependencies."""
+        task1 = Task(title="Foundation", priority=Priority.CRITICAL)
+        task2 = Task(title="Module A", dependencies=[task1.id], priority=Priority.HIGH)
+        task3 = Task(title="Module B", dependencies=[task1.id], priority=Priority.HIGH)
+        task4 = Task(
+            title="Integration", dependencies=[task2.id, task3.id], priority=Priority.MEDIUM
+        )
+
+        plan = WorkPlan(name="Complex", goal="Build", tasks=[task1, task2, task3, task4])
+
+        # Task 1 should be next (no dependencies, highest priority)
+        next_task = plan.get_next_task()
+        assert next_task.id == task1.id
+
+        # Mark task1 complete
+        plan.update_task_status(task1.id, TaskStatus.COMPLETED)
+
+        # Now either task2 or task3 should be available (both HIGH priority)
+        next_task = plan.get_next_task()
+        assert next_task.id in [task2.id, task3.id]

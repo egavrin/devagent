@@ -339,43 +339,6 @@ def test_executor_forced_synthesis_with_integration(monkeypatch):
     assert provider.budget_integration.calls, "Integration should wrap the completion call"
 
 
-def test_executor_sanitize_failure_propagates(monkeypatch):
-    """Conversation sanitization errors should surface to callers for quick diagnosis."""
-
-    def explode(_messages):
-        raise ValueError("sanitize failed")
-
-    monkeypatch.setattr(
-        "ai_dev_agent.cli.react.executor.sanitize_conversation",
-        explode,
-    )
-
-    class FailingProvider:
-        def __init__(self) -> None:
-            self.session_manager = StubSessionManager()
-            self.session_id = "sanitize"
-            self.client = SimpleNamespace(complete=MagicMock(return_value="answer"))
-            self.calls = 0
-
-        def update_phase(self, phase: str, *, is_final: bool = False) -> None:  # pragma: no cover
-            pass
-
-        def __call__(self, task: TaskSpec, history):
-            self.calls += 1
-            raise StopIteration("Need synthesis")
-
-        def last_response_text(self) -> str:
-            return ""
-
-    executor = BudgetAwareExecutor(BudgetManager(1, adaptive_scaling=False))
-    provider = FailingProvider()
-
-    with pytest.raises(ValueError, match="sanitize failed"):
-        executor.run(
-            TaskSpec(identifier="sanitize", goal="Sanitize failure"), provider, MagicMock()
-        )
-
-
 def test_executor_multi_step_reasoning():
     """Complex multi-step execution should track history and phase hooks."""
 

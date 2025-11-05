@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Unique task identifier returned by delegate tool",
+      "minLength": 1
+    }
+  },
+  "required": ["task_id"],
+  "additionalProperties": false
+}

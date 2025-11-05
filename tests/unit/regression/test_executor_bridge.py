@@ -67,7 +67,7 @@ class TestAgentExecutor:
         assert ctx.obj["settings"] is settings
         assert ctx.obj["system_context"]["os"] == "TestOS"
         assert ctx.obj["project_context"]["workspace"] == "repo"
-        assert ctx.obj["silent_mode"] is True
+        assert ctx.obj["silent_mode"] is False  # Show delegated agent's tool usage
         assert ctx.obj["_session_id"].startswith("delegate-")
 
     def test_build_agent_prompt_with_spec(self, executor, mock_agent):
@@ -257,7 +257,7 @@ class TestAgentExecutor:
 
         # Verify context was modified
         assert "_session_id" in ctx.obj
-        assert ctx.obj["silent_mode"] is True
+        assert ctx.obj["silent_mode"] is False  # Show delegated agent's tool usage
         assert ctx.obj["existing"] == "data"  # Original data preserved
 
     @patch("ai_dev_agent.cli.utils.get_llm_client")

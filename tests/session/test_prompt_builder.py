@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -63,19 +64,19 @@ def test_build_system_messages_fallback_without_guidance(monkeypatch, tmp_worksp
 
 def test_build_system_messages_uses_markdown_templates(monkeypatch, tmp_workspace):
     settings = Settings()
-    call_log: dict[str, list[tuple[str, dict[str, str] | None]]] = {}
+    call_log: dict[str, list[tuple[str, Optional[dict[str, str]]]]] = {}
 
     class DummyPromptLoader:
         def __init__(self, prompts_dir=None):
             call_log["init"] = [(str(prompts_dir), None)]
 
         def load_system_prompt(
-            self, system_name: str = "base_context", context: dict | None = None
+            self, system_name: str = "base_context", context: Optional[dict] = None
         ):
             call_log.setdefault("system", []).append((system_name, context))
             return "BASE_TEMPLATE"
 
-        def render_prompt(self, prompt_path: str, context: dict | None = None) -> str:
+        def render_prompt(self, prompt_path: str, context: Optional[dict] = None) -> str:
             call_log.setdefault("render", []).append((prompt_path, context))
             if prompt_path == "system/react_loop.md":
                 return "REACT_TEMPLATE"

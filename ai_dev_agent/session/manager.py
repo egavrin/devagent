@@ -144,6 +144,15 @@ class SessionManager:
         return message
 
     def add_tool_message(self, session_id: str, tool_call_id: str | None, content: str) -> Message:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.debug(
+            "add_tool_message: session_id=%s, tool_call_id=%s",
+            session_id,
+            tool_call_id,
+        )
+
         session = self.get_session(session_id)
         normalized_id = self._normalize_tool_call_id(session, tool_call_id)
         message = Message(role="tool", content=content, tool_call_id=normalized_id)

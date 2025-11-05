@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "description": "Whether the status check succeeded"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Task identifier"
+    },
+    "status": {
+      "type": "string",
+      "description": "Current task status",
+      "enum": ["queued", "running", "completed", "failed", "cancelled"]
+    },
+    "agent": {
+      "type": "string",
+      "description": "Agent executing the task"
+    },
+    "result": {
+      "type": ["string", "null"],
+      "description": "Result from the agent (available when completed)"
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "List of files or artifacts produced",
+      "items": {"type": "string"}
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message if task failed"
+    },
+    "created_at": {
+      "type": ["string", "null"],
+      "description": "Task creation timestamp (ISO format)"
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "description": "Task completion timestamp (ISO format)"
+    }
+  },
+  "required": ["success"],
+  "additionalProperties": true
+}

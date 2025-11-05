@@ -1,8 +1,14 @@
 # DevAgent AI Agent Guide
 
-This guide condenses the working rules, launch instructions, and helper tooling for Claude Code, Codex CLI, and any DevAgent-based automation. It combines the authoritative rules in `.devagent/ai_agent_instructions.md`, the user guide in `docs/USER_GUIDE.md`, the context builder in `scripts/ai_develop.sh`, and the copy-ready prompts in `CLAUDE_CODEX_PROMPT.txt`.
+This guide condenses the working rules, launch instructions, and helper tooling for Claude Code, Codex CLI, and any DevAgent-based automation. It combines the authoritative rules in `.devagent/ai_agent_instructions.md`, the user guide in `docs/USER_GUIDE.md`, the context builder in `scripts/ai_develop.sh`, and the copy-ready prompts in `CLAUDE_CODEX_PROMPT.txt`. Every practice described here flows from the fail-fast philosophy: surface bugs loudly, avoid masking symptoms, and force root-cause fixes.
+
+## Fail Fast Philosophy
+- **Expose issues immediately**: let exceptions surface and prefer explicit failures over defensive fallbacks. Hidden errors compound into larger outages.
+- **Fix causes, not symptoms**: trace failures to their root, add tests that reproduce them, and delete band-aid code once the underlying issue is resolved.
+- **Learn from every failure**: capture the signal in tests, documentation, and status updates so the next agent starts with context instead of rediscovering the bug.
 
 ## Core Expectations
+- **Lean into fail-fast coding**: no silent guards, no best-effort recoveries—raise loudly and repair quickly.
 - **Obey the four critical rules**: do not break existing behavior, study reference repos before coding, keep coverage ≥90%, and follow the documented development process (see `docs/DEVELOPMENT.md`).
 - **Never create new `.md` files unless the user explicitly asks**: capture notes in the conversation or update existing Markdown files instead.
 - **Front-load situational awareness**: run the CLI smoke suite (`pytest tests/integration/test_end_to_end.py`), gather coverage with `pytest --cov=ai_dev_agent --cov-report=term`, and review `docs/CHANGELOG.md` for current status before touching code.
@@ -12,7 +18,9 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 
 ## Implementation Loop
 - **Tests-first TDD**: add or extend tests in `tests/` before touching production modules; ensure the new tests fail for the expected reason before editing functionality.
+- **Run to failure**: execute the new tests and let them fail—capture stack traces and error messages so the root cause is obvious.
 - **Implement after failing tests**: once the tests define the behavior and fail, update production code in minimal increments to make them pass without breaking prior capabilities.
+- **Delete defensive shims**: remove temporary guards or fallback logic once the fix lands to keep the failure path visible if it ever regresses.
 - **Commit handoff**: never run `git commit` or otherwise write to git history; prepare commit-ready diffs and message suggestions so the user can apply them when satisfied.
 - **Continuous status updates**: log each milestone by calling the shared state store (e.g., `StateStore.append_history(...)`) so parallel efforts stay synchronized.
 - **Judge and gate checks**: after features stabilize, run `python -m ai_dev_agent.judges.verify --feature "<feature>"`, `pytest --cov=ai_dev_agent --cov-fail-under=90`, targeted compatibility suites under `tests/compatibility/`, performance benchmarks, and the full test battery before concluding the task.
@@ -30,11 +38,12 @@ This guide condenses the working rules, launch instructions, and helper tooling 
 - **End of day**: rerun full tests, record progress, draft commit guidance for the user (do not commit), log the next plan.
 
 ## Emergency Playbooks
-- **Breakage**: stop, inspect `git status`/`git diff`, undo the faulty change set, restart with smaller steps.
-- **Failing tests**: repair the regression before proceeding; guard compatibility explicitly.
-- **Coverage drop**: pause feature work, add tests (manual or AI-assisted), and restore ≥90 %.
+- **Breakage**: stop, inspect `git status`/`git diff`, undo the faulty change set, restart with smaller steps. Do not mask the failure; ensure it reproduces until fixed.
+- **Failing tests**: repair the regression before proceeding; guard compatibility explicitly and avoid muting tests unless the user commands it.
+- **Coverage drop**: pause feature work, add tests (manual or AI-assisted), and restore ≥90 %. Coverage reports should stay noisy until the gap closes.
 
 ## Anti-Patterns To Avoid
+- **Silent guards**: never swallow exceptions or return default values to keep the workflow limping along. If a dependency misbehaves, raise and investigate.
 - **Maze-of-fallback logic**: When resolving files, configuration, or CLI entrypoints, avoid layered "best guess" heuristics. Resolve a single authoritative location (or require the caller to provide one) and fail fast if it is missing. Silent fallbacks mask packaging and deployment bugs.
 - **Heuristic prompt substitutions**: Do not invent inline prompt text when a file is absent—ship the markdown file in `prompts/system/` (and ensure it is included in package data) or stop with a `FileNotFoundError`.
 - **Implicit behavioural switches**: Configuration like settings, prompt paths, or tooling should be explicit. If logic needs to diverge, wire it through a well-documented parameter rather than hidden fallbacks.
