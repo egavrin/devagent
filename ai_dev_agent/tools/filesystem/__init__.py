@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict
+
+from ai_dev_agent.tools.code.code_edit.diff_utils import DiffError, DiffProcessor
 
 from ..names import READ, WRITE
 from ..registry import ToolContext, ToolSpec, registry
@@ -74,78 +75,134 @@ def _fs_read(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, A
 
 
 def _parse_diff_stats(diff: str) -> tuple[int, int, list[str], list[str]]:
+    """Parse diff statistics supporting both git format and simple unified diff.
+
+    Returns: (total_lines_changed, file_count, changed_files, new_files)
+    """
     total_lines = 0
     files: set[str] = set()
     new_files: set[str] = set()
     current_file: str | None = None
+    last_old_file: str | None = None
+
     for line in diff.splitlines():
         if line.startswith("diff --git "):
+            # Git format: diff --git a/file.txt b/file.txt
             parts = line.split()
             if len(parts) >= 4:
-                a_part = parts[2][2:]
-                b_part = parts[3][2:]
+                a_part = parts[2][2:]  # Remove "a/" prefix
+                b_part = parts[3][2:]  # Remove "b/" prefix
                 current_file = b_part
                 if a_part == "/dev/null":
                     new_files.add(b_part)
                 files.add(b_part)
-        elif line.startswith("+++") or line.startswith("---"):
-            continue
+        elif line.startswith("--- "):
+            # Unified diff old file marker
+            old_file = line[4:].strip()
+            if old_file == "/dev/null":
+                last_old_file = "/dev/null"
+            elif old_file:
+                # Extract just the filename, removing a/ prefix if present
+                if old_file.startswith("a/"):
+                    old_file = old_file[2:]
+                last_old_file = old_file
+        elif line.startswith("+++ "):
+            # Unified diff new file marker
+            new_file = line[4:].strip()
+            if new_file and new_file != "/dev/null":
+                # Extract just the filename, removing b/ prefix if present
+                if new_file.startswith("b/"):
+                    new_file = new_file[2:]
+                current_file = new_file
+                files.add(new_file)
+                # Check if this is a new file creation (old file was /dev/null)
+                if last_old_file == "/dev/null":
+                    new_files.add(new_file)
         elif line.startswith("+") or line.startswith("-"):
-            total_lines += 1
-            if current_file:
-                files.add(current_file)
+            # Count changed lines (excluding hunk headers like @@ -1 +1 @@)
+            if not line.startswith("+++") and not line.startswith("---"):
+                total_lines += 1
+                if current_file:
+                    files.add(current_file)
+
     return total_lines, len(files), sorted(files), sorted(new_files)
 
 
-def _run_git_apply(
-    repo_root: Path, diff: str, check_only: bool
-) -> subprocess.CompletedProcess[str]:
-    args = ["git", "apply"]
-    if check_only:
-        args.append("--check")
-    process = subprocess.run(
-        args,
-        cwd=str(repo_root),
-        input=diff,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    return process
-
-
 def _fs_write_patch(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
+    """Apply a diff patch using DiffProcessor with validation and fallback.
+
+    This provides:
+    - Pre-validation of diff format
+    - Three-tier fallback: git apply → patch command → Python fallback
+    - Detailed error messages for troubleshooting
+    - Conflict marker detection
+    """
     repo_root = context.repo_root
     diff = payload["diff"]
 
-    process = _run_git_apply(repo_root, diff, check_only=True)
-    if process.returncode != 0:
+    # Create DiffProcessor for enhanced diff handling
+    processor = DiffProcessor(repo_root)
+
+    try:
+        # Validate the diff before attempting to apply
+        # This catches format errors early with helpful messages
+        validation = processor._validate_diff(diff)
+
+        if validation.errors:
+            # Return validation errors as rejected hunks
+            return {
+                "applied": False,
+                "rejected_hunks": [f"Diff validation failed: {'; '.join(validation.errors)}"],
+                "new_files": [],
+                "changed_files": [],
+                "diff_stats": {"lines": 0, "files": 0},
+            }
+
+        # Apply the diff with three-tier fallback strategy
+        success = processor.apply_diff_safely(diff)
+
+        if not success:
+            # This shouldn't normally happen after validation, but handle it
+            return {
+                "applied": False,
+                "rejected_hunks": ["Patch application failed after validation"],
+                "new_files": [],
+                "changed_files": [],
+                "diff_stats": {"lines": 0, "files": 0},
+            }
+
+        # Parse stats from successfully applied diff
+        lines, file_count, files, new_files = _parse_diff_stats(diff)
+
+        return {
+            "applied": True,
+            "rejected_hunks": [],
+            "new_files": new_files,
+            "changed_files": files,
+            "diff_stats": {"lines": lines, "files": file_count},
+        }
+
+    except DiffError as exc:
+        # DiffProcessor raised an error - capture the detailed message
+        error_msg = str(exc)
         return {
             "applied": False,
-            "rejected_hunks": [process.stderr.strip() or process.stdout.strip()],
+            "rejected_hunks": [error_msg],
             "new_files": [],
             "changed_files": [],
             "diff_stats": {"lines": 0, "files": 0},
         }
 
-    apply_proc = _run_git_apply(repo_root, diff, check_only=False)
-    if apply_proc.returncode != 0:
+    except Exception as exc:
+        # Unexpected error - provide context for debugging
+        error_msg = f"Unexpected error applying patch: {type(exc).__name__}: {exc}"
         return {
             "applied": False,
-            "rejected_hunks": [apply_proc.stderr.strip() or apply_proc.stdout.strip()],
+            "rejected_hunks": [error_msg],
             "new_files": [],
             "changed_files": [],
             "diff_stats": {"lines": 0, "files": 0},
         }
-
-    lines, file_count, files, new_files = _parse_diff_stats(diff)
-    return {
-        "applied": True,
-        "rejected_hunks": [],
-        "new_files": new_files,
-        "changed_files": files,
-        "diff_stats": {"lines": lines, "files": file_count},
-    }
 
 
 registry.register(
