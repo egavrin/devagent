@@ -15,16 +15,10 @@ from ai_dev_agent.core.utils.context_budget import (
 )
 from ai_dev_agent.providers.llm.base import Message
 
-from .summarizer import ConversationSummarizer, HeuristicConversationSummarizer
-
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
-try:
-    from .enhanced_summarizer import EnhancedSummarizer, SummarizationConfig
-except ImportError:
-    EnhancedSummarizer = None
-    SummarizationConfig = None
+    from .summarizer import ConversationSummarizer
 
 
 SUMMARY_PREFIX = "[Context summary]"
@@ -72,7 +66,7 @@ class ContextPruningService:
         self,
         config: ContextPruningConfig | None = None,
         *,
-        summarizer: ConversationSummarizer | None = None,
+        summarizer: "ConversationSummarizer | None" = None,
     ) -> None:
         self._config = config or ContextPruningConfig()
         headroom = max(int(self._config.max_total_tokens * 0.1), 0)
@@ -86,15 +80,8 @@ class ContextPruningService:
         )
         self._last_summarized_count = 0
 
-        # Use EnhancedSummarizer if available, otherwise fall back to standard
-        if summarizer:
-            self._summarizer = summarizer
-        else:
-            # EnhancedSummarizer requires models to be provided, so we can't use it here
-            # without models. Fall back to HeuristicConversationSummarizer
-            self._summarizer = HeuristicConversationSummarizer()
-
-        self._fallback_summarizer = HeuristicConversationSummarizer()
+        # Summarizer can be None during initialization, but will fail fast when actually used
+        self._summarizer = summarizer
         self._logger = logging.getLogger(__name__)
 
     @property
@@ -102,7 +89,7 @@ class ContextPruningService:
         return self._config
 
     @property
-    def summarizer(self) -> ConversationSummarizer:
+    def summarizer(self) -> "ConversationSummarizer | None":
         return self._summarizer
 
     # ------------------------------------------------------------------
@@ -201,27 +188,19 @@ class ContextPruningService:
 
     def _build_summary(self, messages: Iterable[Message]) -> str:
         message_list = list(messages)
-        try:
-            summary = self._summarizer.summarize(
-                message_list,
-                max_chars=self._config.summary_max_chars,
-            )
-        except Exception as exc:  # pragma: no cover - defensive logging path
-            self._logger.exception(
-                "Conversation summarizer raised an exception; falling back",
-                exc_info=exc,
-            )
-            summary = self._fallback_summarizer.summarize(
-                message_list,
-                max_chars=self._config.summary_max_chars,
-            )
-        else:
-            if not summary.strip():
-                summary = self._fallback_summarizer.summarize(
-                    message_list,
-                    max_chars=self._config.summary_max_chars,
-                )
 
+        # Fail fast if summarizer not configured
+        if not self._summarizer:
+            raise ValueError(
+                "ConversationSummarizer not configured. "
+                "Call SessionManager.configure_context_service() with a summarizer before use."
+            )
+
+        # Let exceptions propagate - fail fast
+        summary = self._summarizer.summarize(
+            message_list,
+            max_chars=self._config.summary_max_chars,
+        )
         return summary
 
     def _is_summary_message(self, message: Message) -> bool:

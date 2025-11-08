@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from ai_dev_agent.core.utils.cost_tracker import CostTracker, create_token_usage_from_response
 from ai_dev_agent.core.utils.retry_handler import RetryConfig, create_retry_handler
-from ai_dev_agent.core.utils.summarizer import SummarizationConfig, create_summarizer
+from ai_dev_agent.session.summarizer import SummarizationConfig, create_summarizer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -67,14 +67,9 @@ class BudgetIntegration:
         """
         if self.settings.enable_summarization:
             config = SummarizationConfig(
-                summarization_model=self.settings.summarization_model,
                 async_summarization=False,  # Can be made configurable
             )
-            # Use two_tier based on settings
-            use_two_tier = getattr(self.settings, "enable_two_tier_pruning", True)
-            self.summarizer = create_summarizer(
-                llm_client, two_tier=use_two_tier, **config.__dict__
-            )
+            self.summarizer = create_summarizer(llm_client, config=config)
             # Silent initialization - no logs
 
     def track_llm_call(

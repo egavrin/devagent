@@ -670,18 +670,8 @@ def get_llm_client(ctx: click.Context):
     session_manager = SessionManager.get_instance()
     pruning_config = _build_context_pruning_config_from_settings(settings)
 
-    # Try to use enhanced summarizer if available
-    summarizer = None
-    try:
-        from ai_dev_agent.session.enhanced_summarizer_wrapper import create_enhanced_summarizer
-
-        summarizer = create_enhanced_summarizer(wrapped_client)
-    except ImportError:
-        pass
-
-    # Fall back to standard LLM summarizer if enhanced not available
-    if summarizer is None:
-        summarizer = LLMConversationSummarizer(wrapped_client)
+    # Create LLM-only summarizer (fail fast if LLM unavailable)
+    summarizer = LLMConversationSummarizer(wrapped_client)
 
     session_manager.configure_context_service(config=pruning_config, summarizer=summarizer)
     return wrapped_client

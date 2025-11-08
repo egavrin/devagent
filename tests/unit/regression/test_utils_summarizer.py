@@ -7,12 +7,8 @@ from typing import List
 
 import pytest
 
-from ai_dev_agent.core.utils.summarizer import (
-    ConversationSummarizer,
-    SummarizationConfig,
-    TwoTierSummarizer,
-)
 from ai_dev_agent.providers.llm.base import Message
+from ai_dev_agent.session.summarizer import LLMConversationSummarizer, SummarizationConfig
 
 
 class StubLLM:
@@ -39,7 +35,9 @@ def _make_messages(count: int, *, content: str = "data") -> list[Message]:
 def test_summarize_if_needed_below_threshold_returns_original() -> None:
     """Small conversations should bypass summarization."""
     llm = StubLLM()
-    summarizer = ConversationSummarizer(llm, SummarizationConfig(min_messages_to_summarize=5))
+    summarizer = LLMConversationSummarizer(
+        llm, config=SummarizationConfig(min_messages_to_summarize=5)
+    )
 
     messages = _make_messages(3)
     result = summarizer.summarize_if_needed(messages, target_tokens=10_000)
@@ -53,7 +51,7 @@ def test_summarize_if_needed_invokes_llm_when_over_budget() -> None:
     llm = StubLLM(response="short summary")
     # Low thresholds to force summarization
     config = SummarizationConfig(min_messages_to_summarize=2, summary_max_tokens=50)
-    summarizer = ConversationSummarizer(llm, config)
+    summarizer = LLMConversationSummarizer(llm, config=config)
 
     messages = _make_messages(6, content="long message" * 50)
     result = summarizer.summarize_if_needed(messages, target_tokens=20)
@@ -66,7 +64,7 @@ def test_summarize_if_needed_invokes_llm_when_over_budget() -> None:
 def test_create_summary_is_cached_for_identical_inputs() -> None:
     """Internal cache should prevent duplicate LLM calls."""
     llm = StubLLM(response="cached summary")
-    summarizer = ConversationSummarizer(llm, SummarizationConfig())
+    summarizer = LLMConversationSummarizer(llm, config=SummarizationConfig())
 
     messages = _make_messages(3, content="cache" * 10)
     first = summarizer._create_summary(messages)  # - exercising cache path
@@ -80,12 +78,12 @@ def test_create_summary_is_cached_for_identical_inputs() -> None:
 def test_two_tier_summarizer_truncates_tool_outputs() -> None:
     """The two-tier strategy should prune large tool outputs before summarizing."""
     llm = StubLLM(response="combined summary")
-    summarizer = TwoTierSummarizer(
-        llm,
-        SummarizationConfig(min_messages_to_summarize=2),
+    config = SummarizationConfig(
+        min_messages_to_summarize=2,
         prune_threshold=10,
         protect_recent=0,
     )
+    summarizer = LLMConversationSummarizer(llm, config=config)
 
     tool_message = Message(role="tool", content="X" * 800, tool_call_id="call-1")
     messages = [tool_message, *_make_messages(3, content="payload" * 10)]
@@ -101,7 +99,9 @@ def test_two_tier_summarizer_truncates_tool_outputs() -> None:
 async def test_summarize_async_delegates_to_sync_path() -> None:
     """Async wrapper should reuse the synchronous summarization path."""
     llm = StubLLM(response="async summary")
-    summarizer = ConversationSummarizer(llm, SummarizationConfig(min_messages_to_summarize=2))
+    summarizer = LLMConversationSummarizer(
+        llm, config=SummarizationConfig(min_messages_to_summarize=2)
+    )
     messages = _make_messages(4, content="async" * 30)
 
     result = await summarizer.summarize_async(messages, target_tokens=50)

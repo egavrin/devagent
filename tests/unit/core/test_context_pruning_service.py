@@ -28,6 +28,7 @@ def test_pruning_service_inserts_summary() -> None:
     with session.lock:
         session.history.extend(_make_heavy_messages(12))
 
+    summarizer = _StubSummarizer("Summary of conversation so far")
     service = ContextPruningService(
         ContextPruningConfig(
             max_total_tokens=600,
@@ -35,7 +36,8 @@ def test_pruning_service_inserts_summary() -> None:
             keep_recent_messages=4,
             summary_max_chars=200,
             max_event_history=4,
-        )
+        ),
+        summarizer=summarizer,
     )
 
     service.update_session(session)
@@ -62,7 +64,8 @@ def test_session_manager_uses_pruning_service() -> None:
         max_event_history=4,
     )
 
-    manager.configure_context_service(config)
+    summarizer = _StubSummarizer("Summary of conversation")
+    manager.configure_context_service(config, summarizer=summarizer)
     try:
         session = manager.ensure_session()
 

@@ -23,12 +23,8 @@ from ai_dev_agent.core.utils.cost_tracker import (
     create_token_usage_from_response,
 )
 from ai_dev_agent.core.utils.retry_handler import RetryConfig, RetryHandler
-from ai_dev_agent.core.utils.summarizer import (
-    ConversationSummarizer,
-    TwoTierSummarizer,
-    create_summarizer,
-)
 from ai_dev_agent.providers.llm.base import Message
+from ai_dev_agent.session.summarizer import LLMConversationSummarizer, create_summarizer
 
 
 class TestToolFiltering:
@@ -233,44 +229,35 @@ class TestSummarizerIntegration:
     """Test summarizer integration and interfaces."""
 
     def test_conversation_summarizer_has_both_methods(self):
-        """Test ConversationSummarizer has both interface methods."""
+        """Test LLMConversationSummarizer has both interface methods."""
         mock_llm = Mock()
         mock_llm.complete = Mock(return_value="Summary")
 
-        summarizer = create_summarizer(mock_llm, two_tier=False)
-        assert isinstance(summarizer, ConversationSummarizer)
+        summarizer = create_summarizer(mock_llm)
+        assert isinstance(summarizer, LLMConversationSummarizer)
         assert hasattr(summarizer, "summarize_if_needed")
         assert hasattr(summarizer, "optimize_context")
 
     def test_two_tier_summarizer_has_both_methods(self):
-        """Test TwoTierSummarizer has both interface methods."""
+        """Test LLMConversationSummarizer has optimize_context (two-tier) method."""
         mock_llm = Mock()
         mock_llm.complete = Mock(return_value="Summary")
 
-        summarizer = create_summarizer(mock_llm, two_tier=True)
-        assert isinstance(summarizer, TwoTierSummarizer)
+        summarizer = create_summarizer(mock_llm)
+        assert isinstance(summarizer, LLMConversationSummarizer)
         assert hasattr(summarizer, "optimize_context")
         assert hasattr(summarizer, "summarize_if_needed")
 
-    def test_budget_integration_works_with_both_summarizers(self):
-        """Test BudgetIntegration works with both summarizer types."""
+    def test_budget_integration_works_with_unified_summarizer(self):
+        """Test BudgetIntegration works with unified LLMConversationSummarizer."""
         mock_llm = Mock()
         mock_llm.complete = Mock(return_value="Summary")
         messages = [Message(role="user", content="Test message")]
 
-        # Test with ConversationSummarizer
+        # Test with unified summarizer
         settings = Settings()
         settings.enable_summarization = True
-        settings.enable_two_tier_pruning = False
 
-        integration = create_budget_integration(settings)
-        integration.initialize_summarizer(mock_llm)
-
-        result = integration.summarize_if_needed(messages, 100)
-        assert isinstance(result, list)
-
-        # Test with TwoTierSummarizer
-        settings.enable_two_tier_pruning = True
         integration = create_budget_integration(settings)
         integration.initialize_summarizer(mock_llm)
 
