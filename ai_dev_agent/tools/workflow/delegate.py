@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Mapping
 
-from ai_dev_agent.agents.task_queue import TaskQueue, TaskStatus, TaskStore, create_task
+from ai_dev_agent.agents.task_queue import TaskQueue, TaskStatus, create_task
 from ai_dev_agent.core.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -169,10 +169,7 @@ def delegate(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str,
         if result.metadata:
             artifacts = result.metadata.get("artifacts", [])
 
-        try:
-            TaskStore().save_task(task)
-        except Exception:  # pragma: no cover - persistence best effort
-            LOGGER.debug("Failed to persist delegated task %s", task.id, exc_info=True)
+        # Note: Task is already in short-term memory (ephemeral, process-scoped)
 
         return {
             "success": result.success,
@@ -189,10 +186,7 @@ def delegate(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str,
         task.completed_at = datetime.now()
         task.error = str(exc)
         task_queue.update_task(task)
-        try:
-            TaskStore().save_task(task)
-        except Exception:  # pragma: no cover - defensive
-            LOGGER.debug("Failed to persist failed delegated task %s", task.id, exc_info=True)
+        # Note: Task is in short-term memory (ephemeral, process-scoped)
         LOGGER.exception("Failed to execute %s", agent_name)
         return {
             "success": False,

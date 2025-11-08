@@ -10,14 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ai_dev_agent.agents.task_queue import (
-    Task,
-    TaskExecutor,
-    TaskQueue,
-    TaskStatus,
-    TaskStore,
-    create_task,
-)
+from ai_dev_agent.agents.task_queue import Task, TaskExecutor, TaskQueue, TaskStatus, create_task
 
 
 class TestTaskStatus:
@@ -252,40 +245,8 @@ class TestTaskQueue:
         assert len(task_ids) == len(set(task_ids))
 
 
-class TestTaskStore:
-    """Test TaskStore."""
-
-    def test_save_and_get_task(self):
-        """Test saving and retrieving task."""
-        store = TaskStore()
-        task = create_task("design_agent", "Design API")
-
-        store.save_task(task)
-        retrieved = store.get_task(task.id)
-
-        assert retrieved is not None
-        assert retrieved.id == task.id
-        assert retrieved.agent == "design_agent"
-        assert retrieved.prompt == "Design API"
-
-        # Cleanup
-        store.delete_task(task.id)
-
-    def test_get_nonexistent_task(self):
-        """Test getting non-existent task returns None."""
-        store = TaskStore()
-        assert store.get_task("nonexistent") is None
-
-    def test_delete_task(self):
-        """Test deleting task."""
-        store = TaskStore()
-        task = create_task("design_agent", "Design API")
-
-        store.save_task(task)
-        assert store.get_task(task.id) is not None
-
-        store.delete_task(task.id)
-        assert store.get_task(task.id) is None
+# TestTaskStore removed - tasks are now ephemeral (short-term memory only)
+# Tasks are automatically cleared when the devagent process ends.
 
 
 class TestTaskExecutor:

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import copy
 import json
-import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from ai_dev_agent.core.storage.short_term_memory import ShortTermMemory
 
 from .constants import MAX_HISTORY_ENTRIES, MAX_METRICS_ENTRIES
 from .logger import get_logger
@@ -51,13 +52,19 @@ class PlanSession:
 
 @dataclass
 class InMemoryStateStore:
-    """Process-local state container that deliberately avoids persistence."""
+    """Process-local state container using short-term memory (no persistence)."""
 
     state_file: Path | None = None
-    _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
-    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _memory: ShortTermMemory[dict[str, Any]] = field(
+        default_factory=lambda: ShortTermMemory[dict[str, Any]](),
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
+        # Initialize with default state
+        self._memory.set("_root", self._create_default_state())
+
         if self.state_file is not None and type(self) is InMemoryStateStore:
             # Provide a debug hint when a state file is configured but ignored.
             LOGGER.debug(
@@ -65,22 +72,33 @@ class InMemoryStateStore:
                 self.state_file,
             )
 
+    @property
+    def _lock(self):
+        """Expose lock for compatibility with existing code."""
+        return self._memory._lock
+
     def _ensure_cache_locked(self) -> dict[str, Any]:
-        if not self._cache:
-            self._cache = self._create_default_state()
-        return self._cache
+        """Get current state, creating defaults if needed (called with lock held)."""
+        root = self._memory.get("_root")
+        if not root:
+            root = self._create_default_state()
+            self._memory.set("_root", root)
+        return root
 
     def _snapshot_locked(self) -> dict[str, Any]:
+        """Return deep copy of current state (called with lock held)."""
         return copy.deepcopy(self._ensure_cache_locked())
 
     def _commit_locked(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Validate and store state (called with lock held)."""
         self._validate_state(data)
-        self._cache = copy.deepcopy(data)
+        self._memory.set("_root", copy.deepcopy(data))
         self._after_save_locked()
-        return copy.deepcopy(self._cache)
+        return copy.deepcopy(data)
 
     def _after_save_locked(self) -> None:
-        LOGGER.debug("State stored in memory (not persisted)")
+        """Hook called after state is saved (can be overridden)."""
+        LOGGER.debug("State stored in short-term memory (not persisted)")
 
     def load(self) -> dict[str, Any]:
         """Return the current state data, creating defaults when empty."""
@@ -245,40 +263,39 @@ class InMemoryStateStore:
 
 
 class StateStore(InMemoryStateStore):
-    """State store that persists to disk when a state file path is provided."""
+    """State store with optional file persistence (short-term memory + disk)."""
 
     def __post_init__(self) -> None:
         if self.state_file is not None:
             self.state_file = Path(self.state_file)
-        super().__post_init__()
+
+        # Initialize short-term memory first
+        self._memory = ShortTermMemory[dict[str, Any]]()
+
+        # Load from disk if file exists, otherwise use defaults
+        if self.state_file and self.state_file.exists():
+            self._load_from_disk()
+        else:
+            self._memory.set("_root", self._create_default_state())
+            if self.state_file:
+                self._write_cache_to_disk_locked()
 
     def load(self) -> dict[str, Any]:
+        """Load state from short-term memory (lazily loads from disk first time)."""
         if self.state_file is None:
             return super().load()
 
         with self._lock:
-            if self._cache:
-                return self._snapshot_locked()
+            root = self._memory.get("_root")
+            if not root:
+                # Lazy load from disk
+                self._load_from_disk()
+                root = self._memory.get("_root")
 
-            if self.state_file.exists():
-                try:
-                    with self.state_file.open("r", encoding="utf-8") as handle:
-                        data = json.load(handle)
-                    self._validate_state(data)
-                    self._cache = data
-                    return copy.deepcopy(self._cache)
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    LOGGER.warning(
-                        "Failed to load state from %s: %s — using defaults.",
-                        self.state_file,
-                        exc,
-                    )
-
-            self._cache = self._create_default_state()
-            self._write_cache_to_disk_locked()
-            return copy.deepcopy(self._cache)
+            return copy.deepcopy(root) if root else self._create_default_state()
 
     def save(self, data: dict[str, Any]) -> None:
+        """Save state to short-term memory and optionally to disk."""
         if self.state_file is None:
             super().save(data)
             return
@@ -287,19 +304,44 @@ class StateStore(InMemoryStateStore):
             self._commit_locked(data)
 
     def _after_save_locked(self) -> None:
+        """Write to disk after saving to short-term memory."""
         if self.state_file is None:
-            LOGGER.debug("State stored in memory (no persistence path configured)")
+            LOGGER.debug("State stored in short-term memory (no persistence path configured)")
             return
         self._write_cache_to_disk_locked()
 
+    def _load_from_disk(self) -> None:
+        """Load state from JSON file into short-term memory."""
+        if not self.state_file or not self.state_file.exists():
+            return
+
+        try:
+            with self.state_file.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            self._validate_state(data)
+            self._memory.set("_root", data)
+            LOGGER.debug("State loaded from %s", self.state_file)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            LOGGER.warning(
+                "Failed to load state from %s: %s — using defaults.",
+                self.state_file,
+                exc,
+            )
+            self._memory.set("_root", self._create_default_state())
+
     def _write_cache_to_disk_locked(self) -> None:
+        """Write short-term memory state to JSON file (called with lock held)."""
         if self.state_file is None:
+            return
+
+        root = self._memory.get("_root")
+        if not root:
             return
 
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             with self.state_file.open("w", encoding="utf-8") as handle:
-                json.dump(self._cache, handle, indent=2, sort_keys=True)
+                json.dump(root, handle, indent=2, sort_keys=True)
             LOGGER.debug("State written to %s", self.state_file)
         except Exception as exc:  # pragma: no cover - defensive logging
             LOGGER.error("Failed to write state file %s: %s", self.state_file, exc)

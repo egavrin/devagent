@@ -15,8 +15,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import uuid4
 
+from ai_dev_agent.core.storage.short_term_memory import ShortTermMemory
 from ai_dev_agent.core.utils.logger import get_logger
-from ai_dev_agent.core.utils.state import StateStore
 
 if TYPE_CHECKING:
     from ai_dev_agent.agents.base import AgentResult
@@ -108,20 +108,21 @@ class Task:
 
 
 class TaskQueue:
-    """Thread-safe task queue for agent delegation.
+    """Thread-safe task queue using short-term memory for agent delegation.
 
     Singleton pattern ensures a single queue instance across the application.
+    Tasks are ephemeral and cleared when the process ends.
     """
 
     _instance: ClassVar[TaskQueue | None] = None
     _lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self):
-        """Initialize task queue."""
-        self._queue: deque[Task] = deque()
+        """Initialize task queue with short-term memory."""
+        self._queue: deque[str] = deque()  # Task IDs only (FIFO order)
         self._queue_lock = threading.Lock()
-        self._tasks: dict[str, Task] = {}  # All tasks by ID
-        self._tasks_lock = threading.Lock()
+        # Use short-term memory for task lookup (no persistence)
+        self._tasks = ShortTermMemory[Task]()
 
     @classmethod
     def get_instance(cls) -> TaskQueue:
@@ -145,10 +146,9 @@ class TaskQueue:
             task: Task to enqueue
         """
         with self._queue_lock:
-            self._queue.append(task)
+            self._queue.append(task.id)  # Store task ID
 
-        with self._tasks_lock:
-            self._tasks[task.id] = task
+        self._tasks.set(task.id, task)  # ShortTermMemory handles locking
 
         # Update visualization (removes verbose logs)
         _update_visualization()
@@ -157,7 +157,7 @@ class TaskQueue:
         LOGGER.debug(f"Task {task.id} enqueued for {task.agent}")
 
     def dequeue(self) -> Task | None:
-        """Remove and return next task from queue.
+        """Remove and return next task from queue (FIFO).
 
         Returns:
             Next task or None if queue is empty
@@ -165,10 +165,10 @@ class TaskQueue:
         with self._queue_lock:
             if not self._queue:
                 return None
-            task = self._queue.popleft()
+            task_id = self._queue.popleft()
 
-        # No log needed - visualization handles status updates
-        return task
+        # Retrieve task from short-term memory
+        return self._tasks.get(task_id)
 
     def get_task(self, task_id: str) -> Task | None:
         """Get task by ID.
@@ -179,8 +179,7 @@ class TaskQueue:
         Returns:
             Task if found, None otherwise
         """
-        with self._tasks_lock:
-            return self._tasks.get(task_id)
+        return self._tasks.get(task_id)
 
     def update_task(self, task: Task) -> None:
         """Update task status.
@@ -188,8 +187,7 @@ class TaskQueue:
         Args:
             task: Updated task
         """
-        with self._tasks_lock:
-            self._tasks[task.id] = task
+        self._tasks.set(task.id, task)  # ShortTermMemory handles locking
 
         # Don't spam visualization on every update
         # Only show on significant events (enqueue handles this)
@@ -209,72 +207,12 @@ class TaskQueue:
         Returns:
             List of all tasks
         """
-        with self._tasks_lock:
-            return list(self._tasks.values())
+        task_ids = self._tasks.keys()
+        return [task for tid in task_ids if (task := self._tasks.get(tid))]
 
 
-class TaskStore:
-    """Persistent storage for tasks using StateStore.
-
-    Note: StateStore manages structured state for sessions/plans. For task storage,
-    we store tasks in the 'tasks' key of the state dict.
-    """
-
-    def __init__(self):
-        """Initialize task store."""
-        self.state_store = StateStore()
-
-    def save_task(self, task: Task) -> None:
-        """Save task to persistent storage.
-
-        Args:
-            task: Task to save
-        """
-        try:
-            state = self.state_store.load()
-            tasks_dict = state.get("tasks", {})
-            tasks_dict[task.id] = task.to_dict()
-            state["tasks"] = tasks_dict
-            self.state_store.save(state)
-            LOGGER.debug(f"Task {task.id} saved to store")
-        except Exception as exc:
-            LOGGER.warning(f"Failed to save task {task.id}: {exc}")
-
-    def get_task(self, task_id: str) -> Task | None:
-        """Load task from persistent storage.
-
-        Args:
-            task_id: Task identifier
-
-        Returns:
-            Task if found, None otherwise
-        """
-        try:
-            state = self.state_store.load()
-            tasks_dict = state.get("tasks", {})
-            task_data = tasks_dict.get(task_id)
-            if task_data:
-                return Task.from_dict(task_data)
-        except Exception as exc:
-            LOGGER.warning(f"Failed to load task {task_id}: {exc}")
-        return None
-
-    def delete_task(self, task_id: str) -> None:
-        """Delete task from persistent storage.
-
-        Args:
-            task_id: Task identifier
-        """
-        try:
-            state = self.state_store.load()
-            tasks_dict = state.get("tasks", {})
-            if task_id in tasks_dict:
-                del tasks_dict[task_id]
-                state["tasks"] = tasks_dict
-                self.state_store.save(state)
-                LOGGER.debug(f"Task {task_id} deleted from store")
-        except Exception as exc:
-            LOGGER.warning(f"Failed to delete task {task_id}: {exc}")
+# TaskStore class removed - tasks are now ephemeral (short-term memory only)
+# Tasks are cleared when the devagent process ends, which is the intended behavior.
 
 
 class TaskExecutor:
@@ -449,15 +387,11 @@ class TaskExecutor:
             task.status = TaskStatus.FAILED
             task.completed_at = datetime.now()
 
-        # Update task
+        # Update task in short-term memory
         self.queue.update_task(task)
 
-        # Optionally persist to storage
-        try:
-            store = TaskStore()
-            store.save_task(task)
-        except Exception as exc:
-            LOGGER.warning(f"Failed to persist task {task.id}: {exc}")
+        # Note: Tasks are now ephemeral (short-term memory only).
+        # They are automatically cleared when the devagent process ends.
 
 
 def create_task(agent: str, prompt: str, context: dict[str, Any] | None = None) -> Task:

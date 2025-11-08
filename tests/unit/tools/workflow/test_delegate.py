@@ -110,12 +110,9 @@ class TestDelegateValidation:
 class TestDelegateExecution:
     """Test execution paths with proper mocking."""
 
-    @patch("ai_dev_agent.agents.task_queue.TaskStore")
     @patch("ai_dev_agent.agents.task_queue.TaskQueue")
     @patch("ai_dev_agent.agents.executor.AgentExecutor")
-    def test_successful_delegation(
-        self, mock_executor_cls, mock_queue_cls, mock_store_cls, mock_context
-    ):
+    def test_successful_delegation(self, mock_executor_cls, mock_queue_cls, mock_context):
         """Test successful agent delegation."""
         # Setup mocks
         mock_queue = MagicMock()
@@ -134,12 +131,9 @@ class TestDelegateExecution:
         assert result["result"] == "Task completed"
         assert result["artifacts"] == ["file.md"]
 
-    @patch("ai_dev_agent.agents.task_queue.TaskStore")
     @patch("ai_dev_agent.agents.task_queue.TaskQueue")
     @patch("ai_dev_agent.agents.executor.AgentExecutor")
-    def test_failed_delegation(
-        self, mock_executor_cls, mock_queue_cls, mock_store_cls, mock_context
-    ):
+    def test_failed_delegation(self, mock_executor_cls, mock_queue_cls, mock_context):
         """Test delegation when agent fails."""
         mock_queue = MagicMock()
         mock_queue_cls.get_instance.return_value = mock_queue
@@ -155,12 +149,9 @@ class TestDelegateExecution:
         assert result["success"] is False
         assert result["error"] == "Agent failed"
 
-    @patch("ai_dev_agent.agents.task_queue.TaskStore")
     @patch("ai_dev_agent.agents.task_queue.TaskQueue")
     @patch("ai_dev_agent.agents.executor.AgentExecutor")
-    def test_delegation_exception(
-        self, mock_executor_cls, mock_queue_cls, mock_store_cls, mock_context
-    ):
+    def test_delegation_exception(self, mock_executor_cls, mock_queue_cls, mock_context):
         """Test exception handling during delegation."""
         mock_queue = MagicMock()
         mock_queue_cls.get_instance.return_value = mock_queue
