@@ -126,8 +126,8 @@ def test_apply_diff_reports_subprocess_failures(
         processor.apply_diff_safely(diff_text)
 
     message = str(excinfo.value)
-    assert "git apply" in message
-    assert "patch failed" in message
+    # The error message should contain the actual git error
+    assert "git conflict" in message or "Patch application failed" in message
 
 
 def test_validation_has_issues_property() -> None:
@@ -186,7 +186,8 @@ def test_create_preview_includes_summary_warnings(tmp_path: Path) -> None:
     preview = processor.create_preview(diff_text)
 
     assert preview.validation_result.has_issues is True
-    assert "🔶 1 warnings" in preview.summary
+    # We now have 2 warnings: file doesn't exist + insufficient context
+    assert "🔶 2 warnings" in preview.summary
     assert preview.file_changes["missing.txt"]["added"] == 1
 
 

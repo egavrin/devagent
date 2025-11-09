@@ -193,6 +193,15 @@ class DiffProcessor:
                 else:
                     in_hunk = True
                     hunk_context = 0
+                    # Extract line counts for validation
+                    old_count = int(hunk_match.group(2) or 1)
+                    new_count = int(hunk_match.group(4) or 1)
+                    # Check if there's enough context
+                    if old_count < 3 and new_count < 3:
+                        warnings.append(
+                            f"Insufficient context in hunk at line {line_num}. "
+                            "Include at least 3 lines of context for reliable matching."
+                        )
 
             elif in_hunk:
                 if line.startswith("+") and not line.startswith("+++"):
@@ -211,7 +220,9 @@ class DiffProcessor:
 
         # Additional validation checks
         if not affected_files:
-            errors.append("No files found in diff")
+            errors.append(
+                "No files found in diff. Ensure diff includes '--- a/file' and '+++ b/file' headers."
+            )
 
         if lines_added == 0 and lines_removed == 0:
             warnings.append("Diff appears to have no actual changes")
@@ -350,14 +361,58 @@ class DiffProcessor:
                 LOGGER.info("Diff applied using simplified Python fallback")
                 return True
 
-            # Both methods failed
-            error_msg = f"git apply: {process.stderr.decode('utf-8')}\npatch: {patch_process.stderr.decode('utf-8')}"
-            raise DiffError(f"Failed to apply diff:\n{error_msg}")
+            # Both methods failed - parse error messages for clarity
+            git_stderr = process.stderr.decode("utf-8").strip()
+            patch_stderr = patch_process.stderr.decode("utf-8").strip()
+
+            # Extract the most relevant error message
+            if "error: corrupt patch" in git_stderr:
+                # Extract line number from git error
+                line_match = re.search(r"line (\d+)", git_stderr)
+                line_info = f" at line {line_match.group(1)}" if line_match else ""
+                raise DiffError(
+                    f"Malformed patch format{line_info}. Please ensure the diff follows unified diff format with proper headers."
+                )
+            elif (
+                "does not exist" in git_stderr
+                or "No such file" in git_stderr
+                or "No such file" in patch_stderr
+            ):
+                # Extract filename
+                file_match = re.search(r"error: ([^:]+): does not exist", git_stderr)
+                if not file_match:
+                    file_match = re.search(r"error: ([^:]+): No such file", git_stderr)
+                if not file_match:
+                    file_match = re.search(r"can't find file .([^']+)", patch_stderr)
+                filename = file_match.group(1) if file_match else "specified file"
+                raise DiffError(
+                    f"Cannot apply patch: {filename} does not exist. Ensure the file path is correct."
+                )
+            elif "patch does not apply" in git_stderr:
+                raise DiffError(
+                    "Patch context doesn't match the current file content. "
+                    "The lines around the change don't match what's expected. "
+                    "Please regenerate the patch with the current file content."
+                )
+            else:
+                # Provide concise, actionable error
+                primary_error = (
+                    git_stderr.split("\n")[0]
+                    if git_stderr
+                    else patch_stderr.split("\n")[0] if patch_stderr else "Unknown error"
+                )
+                raise DiffError(f"Patch application failed: {primary_error}")
 
         except subprocess.TimeoutExpired:
-            raise DiffError("Diff application timed out")
+            raise DiffError(
+                "Diff application timed out after 30 seconds. The patch may be too large or complex."
+            )
+        except DiffError:
+            # Re-raise DiffError without wrapping
+            raise
         except Exception as exc:
-            raise DiffError(f"Unexpected error applying diff: {exc}")
+            # Only wrap non-DiffError exceptions
+            raise DiffError(f"System error while applying patch: {type(exc).__name__}: {exc}")
 
     def _apply_simple_fallback(self, diff_text: str) -> bool:
         """Attempt to handle simple diff operations (currently deletions)."""
