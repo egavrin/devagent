@@ -6,9 +6,10 @@ import logging
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from ai_dev_agent.cli.memory_provider import MemoryProvider
+from ai_dev_agent.core.context.builder import ContextBuilder
 from ai_dev_agent.core.repo_map import RepoMapManager
 from ai_dev_agent.core.utils.config import Settings
 
@@ -17,8 +18,14 @@ logger = logging.getLogger(__name__)
 # Playbook and dynamic instructions have been removed from the codebase
 
 
-class ContextEnhancer:
-    """Automatically enhances queries with RepoMap context, like Aider does."""
+class ContextEnhancer(ContextBuilder):
+    """Automatically enhances queries with RepoMap context, like Aider does.
+
+    Extends ContextBuilder to add:
+    - RepoMap integration for code structure awareness
+    - Memory Bank integration for conversation context
+    - Query enhancement with relevant context
+    """
 
     FILE_MENTION_LIMIT = 40
     DIRECTORY_MENTION_LIMIT = 8
@@ -40,7 +47,10 @@ class ContextEnhancer:
     _DEFAULT_IGNORE_SUFFIXES = (".pyc", ".pyo", ".swp", ".tmp", "~")
 
     def __init__(self, workspace: Optional[Path] = None, settings: Optional[Settings] = None):
-        self.workspace = workspace or Path.cwd()
+        # Initialize parent ContextBuilder
+        super().__init__(workspace=workspace or Path.cwd())
+
+        # ContextEnhancer-specific attributes
         self.settings = settings or Settings()
         self._repo_map = None
         self._initialized = False
@@ -1094,6 +1104,72 @@ class ContextEnhancer:
         return self._memory_provider.collect_statistics()
 
     # Playbook and dynamic instruction methods have been removed
+
+    def build_enhanced_context(
+        self,
+        include_repomap: bool = True,
+        include_memory: bool = True,
+        include_outline: bool = False,
+        query: Optional[str] = None,
+        chat_files: Optional[list[str]] = None,
+        other_files: Optional[list[str]] = None,
+        max_files: int = 15,
+    ) -> Dict[str, Any]:
+        """Unified context building combining all layers.
+
+        This method provides a single interface for building comprehensive context
+        that combines:
+        - System context (OS, shell, tools) from ContextBuilder
+        - Project context (git, config files) from ContextBuilder
+        - RepoMap context (code structure awareness)
+        - Memory context (conversation history)
+
+        Args:
+            include_repomap: Include RepoMap messages for code structure
+            include_memory: Include Memory Bank context for conversation history
+            include_outline: Include project structure outline
+            query: Query string for context-aware enhancement
+            chat_files: Files explicitly mentioned in conversation
+            other_files: Additional relevant files
+            max_files: Maximum number of files to include in RepoMap
+
+        Returns:
+            Dictionary containing all context layers
+        """
+        # Build base context from parent ContextBuilder
+        context: Dict[str, Any] = {
+            "system": self.build_system_context(),
+            "project": self.build_project_context(include_outline=include_outline),
+        }
+
+        # Add RepoMap context if requested
+        if include_repomap:
+            try:
+                repomap_messages = self.get_repomap_messages(
+                    query=query or "",
+                    chat_files=chat_files or [],
+                    other_files=other_files or [],
+                    max_files=max_files,
+                )
+                if repomap_messages:
+                    context["repomap_messages"] = repomap_messages
+            except Exception as e:
+                logger.warning(f"Failed to build RepoMap context: {e}")
+                context["repomap_messages"] = None
+
+        # Add Memory context if requested
+        if include_memory:
+            try:
+                memory_context = self.get_memory_context(
+                    query=query or "", max_memories=5, min_relevance=0.5
+                )
+                if memory_context and memory_context.get("memories"):
+                    context["memory"] = memory_context
+            except Exception as e:
+                logger.warning(f"Failed to build Memory context: {e}")
+                context["memory"] = None
+
+        return context
 
 
 # Singleton instance

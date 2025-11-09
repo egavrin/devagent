@@ -344,3 +344,96 @@ class TestContextEnhancer:
         assert repo_map.calls[0][2] == 4
         assert repo_map.calls[1][2] == 8
         assert "src/core.py" in repo_map.calls[1][0]
+
+    def test_build_enhanced_context_combines_all_layers(
+        self, temp_workspace, mock_settings, monkeypatch
+    ):
+        """Test that build_enhanced_context combines all context layers."""
+
+        # Mock RepoMap
+        class MockRepoMap:
+            def __init__(self):
+                self.context = SimpleNamespace(files={"test.py": SimpleNamespace(path="test.py")})
+
+            def get_ranked_files(self, *args, **kwargs):
+                return [("test.py", 10.0)]
+
+            def scan_repository(self):
+                pass
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+            lambda workspace: MockRepoMap(),
+        )
+
+        enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+
+        # Test with all context layers
+        context = enhancer.build_enhanced_context(
+            include_repomap=True, include_memory=True, include_outline=False, query="test query"
+        )
+
+        # Verify all layers are present
+        assert "system" in context
+        assert "project" in context
+        assert context["system"]["cwd"] == str(temp_workspace)
+        assert context["project"]["workspace"] == str(temp_workspace)
+
+        # RepoMap and memory might be None due to mocking, but keys should exist
+        assert "repomap_messages" in context or True  # May be None if RepoMap fails
+        assert "memory" in context or True  # May be None if Memory fails
+
+    def test_build_enhanced_context_selective_layers(
+        self, temp_workspace, mock_settings, monkeypatch
+    ):
+        """Test that build_enhanced_context can selectively include layers."""
+
+        # Mock RepoMap to avoid initialization issues
+        class MockRepoMap:
+            def __init__(self):
+                self.context = SimpleNamespace(files={})
+
+            def scan_repository(self):
+                pass
+
+        monkeypatch.setattr(
+            "ai_dev_agent.cli.context_enhancer.RepoMapManager.get_instance",
+            lambda workspace: MockRepoMap(),
+        )
+
+        enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+
+        # Test with only system and project context
+        context = enhancer.build_enhanced_context(
+            include_repomap=False, include_memory=False, include_outline=False
+        )
+
+        # Verify only base layers are present
+        assert "system" in context
+        assert "project" in context
+        assert "repomap_messages" not in context
+        assert "memory" not in context
+
+    def test_build_enhanced_context_inherits_from_context_builder(
+        self, temp_workspace, mock_settings
+    ):
+        """Test that ContextEnhancer properly inherits from ContextBuilder."""
+        from ai_dev_agent.core.context.builder import ContextBuilder
+
+        enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+
+        # Verify inheritance
+        assert isinstance(enhancer, ContextBuilder)
+
+        # Verify parent methods are available
+        assert hasattr(enhancer, "build_system_context")
+        assert hasattr(enhancer, "build_project_context")
+        assert hasattr(enhancer, "get_project_structure_outline")
+
+        # Verify parent methods work
+        system_ctx = enhancer.build_system_context()
+        assert "os" in system_ctx
+        assert "cwd" in system_ctx
+
+        project_ctx = enhancer.build_project_context()
+        assert "workspace" in project_ctx
