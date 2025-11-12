@@ -46,8 +46,18 @@ def _prepare_repomap_context(ctx: click.Context, pending: str) -> None:
         LOGGER.debug("RepoMap context unavailable: %s", exc)
 
 
-def _resolve_planning_flag(ctx: click.Context, force_plan: bool, direct: bool) -> bool:
+def _resolve_planning_flag(
+    ctx: click.Context, force_plan: bool, direct: bool, settings=None
+) -> bool:
     """Resolve whether planning mode should be enabled."""
+    # Check always_use_planning config if settings are available
+    if settings and getattr(settings, "always_use_planning", False):
+        # If always_use_planning is True, only --direct can override it
+        if direct:
+            return False
+        return True
+
+    # Normal resolution
     use_planning = ctx.obj.get("default_use_planning", False)
     if force_plan:
         return True
@@ -78,7 +88,7 @@ def execute_query(
     _record_invocation(ctx, overrides={"prompt": pending, "mode": "query"})
     settings = state.settings
 
-    use_planning = _resolve_planning_flag(ctx, force_plan, direct)
+    use_planning = _resolve_planning_flag(ctx, force_plan, direct, settings)
 
     if not settings.api_key:
         raise click.ClickException(
