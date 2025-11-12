@@ -117,4 +117,7 @@ def query_command(
 ) -> None:
     """Run the query command using the shared CLI runtime."""
     state = get_cli_state(ctx)
-    execute_query(ctx, state, prompt, force_plan, direct, agent)
+    inherited_direct = bool(ctx.obj.get("default_direct", False))
+    meta_direct = bool(ctx.meta.get("_force_direct", False))
+    effective_direct = direct or meta_direct or inherited_direct
+    execute_query(ctx, state, prompt, force_plan, effective_direct, agent)

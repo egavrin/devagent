@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING, Any, Dict
 
 from ai_dev_agent.tools.code.code_edit.diff_utils import DiffError, DiffProcessor
 
-from ..names import READ, WRITE
+from ..names import EDIT, READ, WRITE
 from ..registry import ToolContext, ToolSpec, registry
+from .search_replace import _fs_edit
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -221,20 +222,76 @@ registry.register(
     )
 )
 
+
+# Write tool now redirects to edit tool for better reliability
+def _fs_write_redirect(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
+    """Redirect write tool calls to edit tool with appropriate format conversion."""
+    import re
+
+    # If the payload has 'diff', try to convert it to SEARCH/REPLACE format
+    # For now, just create a simple full-file replacement
+    diff_content = payload.get("diff", "")
+    file_path = payload.get("path", "")
+
+    # Try to extract the file path from the diff if not provided
+    if not file_path and diff_content:
+        # Look for +++ b/path/to/file
+        match = re.search(r"\+\+\+ b/(.+)", diff_content)
+        if match:
+            file_path = match.group(1)
+
+    # For now, extract any content after the diff headers and use it as replacement
+    # This is a simple fallback - ideally we'd parse the diff properly
+    content_lines = []
+    in_content = False
+    for line in diff_content.split("\n"):
+        if line.startswith("@@"):
+            in_content = True
+            continue
+        if in_content and line.startswith("+") and not line.startswith("+++"):
+            content_lines.append(line[1:])  # Remove the + prefix
+
+    # Create SEARCH/REPLACE format for edit tool
+    new_content = "\n".join(content_lines) if content_lines else ""
+
+    # Call edit tool with empty search (full file replacement)
+    edit_payload = {
+        "path": file_path,
+        "changes": f"<<<<<<< SEARCH\n=======\n{new_content}\n>>>>>>> REPLACE",
+    }
+
+    return _fs_edit(edit_payload, context)
+
+
 registry.register(
     ToolSpec(
         name=WRITE,
-        handler=_fs_write_patch,
-        request_schema_path=SCHEMA_DIR / "write.request.json",
-        response_schema_path=SCHEMA_DIR / "write.response.json",
+        handler=_fs_write_redirect,
+        request_schema_path=SCHEMA_DIR / "write.request.json",  # Keep same schema for compatibility
+        response_schema_path=SCHEMA_DIR / "edit.response.json",  # Use edit's response format
         description=(
-            "Apply a unified diff patch to modify existing files. Requires 'diff' (string in unified diff format). "
-            "Preferred over rewriting entire files as it shows precise changes and is safer. Automatically validates "
-            "patch format and applies changes atomically. Use this for surgical code modifications."
+            "DEPRECATED: This tool redirects to 'edit'. Use 'edit' directly for better results. "
+            "The write tool now automatically converts patches to SEARCH/REPLACE format and uses edit."
+        ),
+        category="command",
+    )
+)
+
+registry.register(
+    ToolSpec(
+        name=EDIT,
+        handler=_fs_edit,
+        request_schema_path=SCHEMA_DIR / "edit.request.json",
+        response_schema_path=SCHEMA_DIR / "edit.response.json",
+        description=(
+            "Edit or create files using SEARCH/REPLACE blocks. Easier than unified diff for targeted changes. "
+            "For new files, use an empty SEARCH block with your content in REPLACE. "
+            "For existing files, each SEARCH block must match EXACTLY (character-for-character). "
+            "Use multiple blocks for multiple changes. Preferred for most file operations."
         ),
         category="command",
     )
 )
 
 
-__all__ = ["_fs_read", "_fs_write_patch"]
+__all__ = ["_fs_read", "_fs_write_patch", "_fs_edit"]

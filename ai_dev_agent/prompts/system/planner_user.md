@@ -1,13 +1,8 @@
-Create a detailed plan for the following task:
-
-{goal}
+Task: {goal}
 
 {context_block}
 
-Break it down into specific, actionable steps. Consider:
-- Prerequisites and dependencies
-- Implementation order
-- Testing and verification
-- Potential issues
+If this task needs multiple steps, break it down.
+If it's simple, just describe what to do.
 
-Output a clear, numbered plan.
+No padding. No templates. Just the actual work.

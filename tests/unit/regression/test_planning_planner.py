@@ -190,7 +190,7 @@ def test_planner_generate_returns_plan(
 def test_planner_generate_fallback_on_llm_error(
     monkeypatch: pytest.MonkeyPatch, stub_manager: StubSessionManager
 ) -> None:
-    """Planner should produce a fallback plan when the LLM fails."""
+    """Planner should fail fast when the LLM fails (no fallback)."""
 
     class FailingLLM(FakeLLM):
         def complete(self, messages: list[Message], temperature: float = 0.1) -> str:
@@ -198,12 +198,9 @@ def test_planner_generate_fallback_on_llm_error(
 
     planner = Planner(FailingLLM([]))
 
-    result = planner.generate("Investigate outage")
-
-    assert result.fallback_reason == "timeout"
-    assert len(result.tasks) == 3
-    assert all(isinstance(task, PlanTask) for task in result.tasks)
-    assert stub_manager.system_messages, "Fallback should record system notice"
+    # Now the planner should fail fast instead of generating a fallback
+    with pytest.raises(LLMError, match="Failed to generate plan: timeout"):
+        planner.generate("Investigate outage")
 
 
 @pytest.mark.parametrize(

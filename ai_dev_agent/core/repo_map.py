@@ -11,7 +11,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import networkx as nx
+# Import networkx if available (optional dependency)
+try:
+    import networkx as nx
+
+    NETWORKX_AVAILABLE = True
+except ImportError:
+    NETWORKX_AVAILABLE = False
+    nx = None
 
 # Import tree-sitter parser if available
 try:
@@ -61,7 +68,7 @@ class RepoContext:
     import_graph: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     file_rankings: dict[str, float] = field(default_factory=dict)
     pagerank_scores: dict[str, float] = field(default_factory=dict)  # PageRank scores
-    dependency_graph: nx.DiGraph | None = None  # NetworkX graph for PageRank
+    dependency_graph: Any | None = None  # NetworkX DiGraph for PageRank (when available)
     last_updated: float = 0.0
     last_pagerank_update: float = 0.0  # Track when PageRank was last computed
 
@@ -1672,7 +1679,7 @@ class RepoMap:
 
         return multiplier
 
-    def build_dependency_graph(self) -> nx.DiGraph:
+    def build_dependency_graph(self) -> Any | None:
         """Build dependency graph for PageRank computation with sophisticated edge weighting.
 
         Performance optimizations:
@@ -1681,6 +1688,9 @@ class RepoMap:
         - Iterate over unique symbols only
         - Filter noisy symbols (reduces edges by ~10-20%)
         """
+        if not NETWORKX_AVAILABLE:
+            return None
+
         G = nx.DiGraph()
 
         # Add all files as nodes
@@ -1792,13 +1802,17 @@ class RepoMap:
         When ``use_edge_distribution`` is True, we distribute node rank across edges
         based on edge weights (Aider's approach for more accurate symbol importance).
         """
+        if not NETWORKX_AVAILABLE:
+            # Fallback to simple file-based ranking
+            return {file: 1.0 for file in self.context.files}
+
         # Build or get cached graph
         if self.context.dependency_graph is None:
             self.build_dependency_graph()
 
         G = self.context.dependency_graph
 
-        if G.number_of_nodes() == 0:
+        if G is None or G.number_of_nodes() == 0:
             return {}
 
         try:
@@ -1821,7 +1835,7 @@ class RepoMap:
         return pagerank_scores
 
     def _distribute_pagerank_to_edges(
-        self, G: nx.DiGraph, node_ranks: dict[str, float]
+        self, G: Any, node_ranks: dict[str, float]
     ) -> dict[str, float]:
         """Distribute node PageRank scores across edges based on weights.
 

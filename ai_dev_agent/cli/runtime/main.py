@@ -33,9 +33,11 @@ class NaturalLanguageGroup(click.Group):
             arg = args[index]
             if arg == "--plan":
                 planning_flag = True
+                ctx.meta["_force_direct"] = False
                 index += 1
             elif arg == "--direct":
                 planning_flag = False
+                ctx.meta["_force_direct"] = True
                 index += 1
             else:
                 filtered_args.append(arg)
@@ -197,8 +199,10 @@ def cli(
 
     if direct:
         ctx.meta["_use_planning"] = False
+        ctx.meta["_force_direct"] = True
     elif plan:
         ctx.meta["_use_planning"] = True
+        ctx.meta["_force_direct"] = False
 
     ctx.obj.update(
         {
@@ -208,6 +212,7 @@ def cli(
             "cli_ctx": cli_context,
             "json_output": json_output,
             "default_use_planning": default_use_planning,
+            "default_direct": direct,
             "verbosity_level": verbose,
             "prompt_loader": state.prompt_loader,
             "context_builder": state.context_builder,
@@ -218,6 +223,7 @@ def cli(
 
     cli_context["json_output"] = json_output
     cli_context["default_use_planning"] = default_use_planning
+    cli_context["default_direct"] = direct
     cli_context["verbosity_level"] = verbose
 
 

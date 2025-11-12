@@ -689,7 +689,7 @@ def _execute_react_assistant(
             click.echo(f"⚡ Executing: {truncated_prompt}")
             click.echo("⚡ Direct execution mode")
 
-    # If planning mode is enabled, use the Work Planning Agent
+    # If planning mode is enabled, use the simplified planning system
     if planning_active:
         from ai_dev_agent.cli.react.plan_executor import execute_with_planning
 

@@ -82,21 +82,18 @@ def test_planner_generates_plan_with_context(monkeypatch):
         _cleanup_sessions(created_sessions)
 
 
-def test_planner_fallback_on_llm_error():
+def test_planner_fails_fast_on_llm_error():
     manager = SessionManager.get_instance()
     existing_sessions = set(manager.list_sessions())
 
     planner = Planner(StubLLM([LLMError("failure")]))
-    result = planner.generate("Improve docs")
-    created_sessions = set(manager.list_sessions()) - existing_sessions
 
-    try:
-        assert result.fallback_reason == "failure"
-        assert len(result.tasks) == 3
-        assert all(task.step_number for task in result.tasks)
-        assert result.summary.startswith("Fallback plan")
-    finally:
-        _cleanup_sessions(created_sessions)
+    # Should fail fast without fallback
+    with pytest.raises(LLMError, match="Failed to generate plan"):
+        planner.generate("Improve docs")
+
+    created_sessions = set(manager.list_sessions()) - existing_sessions
+    _cleanup_sessions(created_sessions)
 
 
 def test_planner_raises_on_invalid_json():

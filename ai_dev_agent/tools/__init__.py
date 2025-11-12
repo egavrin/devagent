@@ -12,12 +12,25 @@ from . import find as _find
 from . import grep as _grep
 from . import symbols as _symbols
 from . import workflow as _workflow
-from .names import ALL_TOOLS, DELEGATE, FIND, GET_TASK_STATUS, GREP, PLAN, READ, RUN, SYMBOLS, WRITE
+from .names import (
+    ALL_TOOLS,
+    DELEGATE,
+    EDIT,
+    FIND,
+    GET_TASK_STATUS,
+    GREP,
+    PLAN,
+    READ,
+    RUN,
+    SYMBOLS,
+    WRITE,
+)
 from .registry import ToolContext, ToolSpec, registry
 
 __all__ = [
     "ALL_TOOLS",
     "DELEGATE",
+    "EDIT",
     "FIND",
     "GREP",
     "GET_TASK_STATUS",

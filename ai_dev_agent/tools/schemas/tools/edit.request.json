@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "edit request",
+  "type": "object",
+  "required": ["path", "changes"],
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Path to the file to edit"
+    },
+    "changes": {
+      "type": "string",
+      "description": "SEARCH/REPLACE blocks in the format: <<<<<<< SEARCH\\n[content to find]\\n=======\\n[replacement]\\n>>>>>>> REPLACE"
+    }
+  },
+  "additionalProperties": false
+}

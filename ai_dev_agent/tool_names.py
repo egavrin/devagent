@@ -4,6 +4,7 @@ from __future__ import annotations
 
 READ = "read"
 WRITE = "write"
+EDIT = "edit"
 RUN = "run"
 FIND = "find"
 GREP = "grep"
@@ -14,7 +15,8 @@ PLAN = "plan"
 
 ALL_TOOLS = (
     READ,
-    WRITE,
+    # WRITE,  # Disabled in favor of EDIT
+    EDIT,
     RUN,
     FIND,
     GREP,
@@ -27,6 +29,7 @@ ALL_TOOLS = (
 __all__ = [
     "ALL_TOOLS",
     "DELEGATE",
+    "EDIT",
     "FIND",
     "GREP",
     "GET_TASK_STATUS",

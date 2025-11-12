@@ -17,7 +17,7 @@ from ai_dev_agent.core.utils.devagent_config import DevAgentConfig, load_devagen
 from ai_dev_agent.core.utils.logger import get_logger
 from ai_dev_agent.core.utils.tool_utils import canonical_tool_name
 from ai_dev_agent.session import SessionManager
-from ai_dev_agent.tools import READ, RUN, WRITE, ToolContext, registry
+from ai_dev_agent.tools import EDIT, READ, RUN, WRITE, ToolContext, registry
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
 
 # Pipeline module removed - functionality integrated into tool invoker
@@ -373,9 +373,9 @@ class RegistryToolInvoker:
                 self._add_to_cache(cache_key, result)
                 LOGGER.debug(f"Cached READ result: {cache_key}")
 
-        # Invalidate cache for WRITE/RUN operations (they may not have "success" field either)
-        # For WRITE/RUN, any non-exception result means success - they would have raised otherwise
-        if tool_name in (WRITE, RUN) and isinstance(result, dict):
+        # Invalidate cache for WRITE/EDIT/RUN operations (they may not have "success" field either)
+        # For WRITE/EDIT/RUN, any non-exception result means success - they would have raised otherwise
+        if tool_name in (WRITE, EDIT, "edit", RUN) and isinstance(result, dict):
             self._invalidate_cache_for_write_or_run(tool_name, payload, result)
 
         return result
@@ -416,9 +416,10 @@ class RegistryToolInvoker:
         self, tool_name: str, payload: Mapping[str, Any], result: Mapping[str, Any]
     ) -> None:
         """Invalidate cache entries that might be affected by WRITE or RUN operations."""
-        if tool_name == WRITE:
-            # WRITE returns changed_files and new_files - invalidate those
-            if result.get("applied"):
+        if tool_name in (WRITE, EDIT, "edit"):
+            # WRITE/EDIT returns changed_files and new_files - invalidate those
+            # Check both "applied" (for WRITE) and "success" (for EDIT)
+            if result.get("applied") or result.get("success"):
                 changed = result.get("changed_files", [])
                 new = result.get("new_files", [])
                 for file_path in set(changed + new):
@@ -530,6 +531,60 @@ class RegistryToolInvoker:
                 if isinstance(entry, Mapping) and entry.get("file")
             ]
             raw_output = self._dump_json(symbols[:20])
+        elif tool_name == "edit" or tool_name == EDIT:
+            # Handle EDIT tool results - support both new EDIT format and legacy WRITE format
+            # Check for WRITE-style response (has "applied" field)
+            if "applied" in result:
+                # Legacy WRITE format
+                applied = bool(result.get("applied"))
+                rejected = result.get("rejected_hunks") or []
+                success = applied and not rejected
+
+                if applied:
+                    outcome = "Patch applied"
+                    rejection_reason = None
+                else:
+                    first_reason = next((msg for msg in rejected if msg), "")
+                    if first_reason:
+                        # Keep the reason compact so the observation stays readable for the agent.
+                        first_line = first_reason.splitlines()[0][:200]
+                        rejection_reason = first_line
+                        outcome = f"Patch rejected: {first_line}"
+                    else:
+                        rejection_reason = None
+                        outcome = "Patch rejected: no changes detected"
+
+                metrics = {
+                    "applied": applied,
+                    "rejected_hunks": len(rejected),
+                    **(result.get("diff_stats") or {}),
+                }
+                if rejection_reason:
+                    metrics["rejection_reason"] = rejection_reason
+                sanitized_changed = self._sanitize_artifact_list(result.get("changed_files"))
+                artifacts = sanitized_changed
+                metrics["artifacts"] = sanitized_changed
+            else:
+                # New EDIT format
+                success = bool(result.get("success", True))
+                errors = result.get("errors", [])
+
+                if success:
+                    outcome = "Executed edit"
+                    # Check for changed_files in successful edits
+                    changed_files = result.get("changed_files", [])
+                    if changed_files:
+                        artifacts = self._sanitize_artifact_list(changed_files)
+                else:
+                    if errors:
+                        first_error = errors[0] if isinstance(errors, list) else str(errors)
+                        outcome = f"Edit failed: {first_error[:200]}"
+                    else:
+                        outcome = "Edit failed"
+
+                metrics = dict(result)
+
+            raw_output = self._dump_json(result)
         elif tool_name == RUN:
             exit_code = result.get("exit_code", 0)
             success = exit_code == 0

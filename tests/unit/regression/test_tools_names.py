@@ -5,6 +5,7 @@ from __future__ import annotations
 from ai_dev_agent.tools.names import (
     ALL_TOOLS,
     DELEGATE,
+    EDIT,
     FIND,
     GET_TASK_STATUS,
     GREP,
@@ -28,9 +29,12 @@ def test_constants_match_expected_strings() -> None:
     assert GET_TASK_STATUS == "get_task_status"
     assert PLAN == "plan"
     assert WRITE == "write"
+    assert EDIT == "edit"
+    # Note: WRITE is disabled but still defined as a constant
     assert ALL_TOOLS == (
         READ,
-        WRITE,
+        # WRITE,  # Disabled in favor of EDIT
+        EDIT,
         RUN,
         FIND,
         GREP,
@@ -42,7 +46,11 @@ def test_constants_match_expected_strings() -> None:
 
 
 def test_all_tools_are_registered() -> None:
-    """Every exported tool name should be available in the registry."""
+    """Every exported tool name should be available in the registry (except WRITE which is disabled)."""
     available = set(registry.available())
     for name in ALL_TOOLS:
-        assert name in available, f"{name} is missing from the registry"
+        # WRITE is intentionally disabled, skip it
+        if name == WRITE:
+            assert name not in available, f"{name} should be disabled but is still in registry"
+        else:
+            assert name in available, f"{name} is missing from the registry"

@@ -15,12 +15,14 @@ LOGGER = get_logger(__name__)
 
 def plan(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str, Any]:
     """
-    Create a structured work plan for a complex task.
+    Create a structured work plan for a task when needed.
+
+    Simple tasks should be executed directly without planning.
+    Only multi-step or complex tasks need explicit plans.
 
     Args:
         payload: {"goal": "High-level goal",
-                  "context": "Additional context (optional)",
-                  "complexity": "simple|medium|complex (optional)"}
+                  "context": "Additional context (optional)"}
         context: Tool execution context
 
     Returns:
@@ -28,7 +30,6 @@ def plan(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str, Any
     """
     goal = payload.get("goal")
     plan_context = payload.get("context", "")
-    complexity = payload.get("complexity", "medium")
 
     if not goal:
         return {
@@ -36,27 +37,41 @@ def plan(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str, Any
             "error": "Missing required parameter: goal",
         }
 
-    # For now, create a simple structured plan
-    # In the future, this can integrate with PlanningIntegration from
-    # ai_dev_agent/agents/integration/planning_integration.py
+    # Check if planning is enabled
+    from ai_dev_agent.core.utils.config import load_settings
+
+    settings = load_settings()
+
+    if not settings.planning_enabled:
+        LOGGER.info("Planning is disabled in configuration")
+        return {
+            "success": True,
+            "plan": {"goal": goal, "tasks": [], "disabled": True},
+            "result": "Planning is disabled - execute task directly.",
+        }
 
     try:
-        # Analyze the goal and create tasks
-        tasks = _generate_tasks_from_goal(goal, plan_context, complexity, context)
+        # Check if task needs planning
+        if not _needs_plan(goal, plan_context):
+            LOGGER.info(f"Simple task detected, skipping plan generation: {goal[:100]}")
+            return {
+                "success": True,
+                "plan": {"goal": goal, "tasks": [], "simple": True},
+                "result": "Simple task - execute directly without plan.",
+            }
 
-        plan_structure = {
-            "goal": goal,
-            "tasks": tasks,
-            "complexity": complexity,
-        }
+        # Generate contextual plan using LLM
+        tasks = _generate_tasks_from_goal(goal, plan_context, context)
+
+        plan_structure = {"goal": goal, "tasks": tasks, "simple": False}
 
         # Start plan tracking visualization
         start_plan_tracking(plan_structure)
 
         # Format result message
         result_lines = [
-            f"Created {complexity} plan with {len(tasks)} tasks.",
-            "Execute tasks sequentially using delegate tool.",
+            f"Created plan with {len(tasks)} task(s).",
+            "Tasks will be executed based on dependencies.",
         ]
 
         return {
@@ -73,28 +88,98 @@ def plan(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str, Any
         }
 
 
+def _needs_plan(goal: str, context: str = "") -> bool:
+    """
+    Determine if a task needs explicit planning.
+
+    Simple heuristics to avoid over-planning trivial tasks.
+    """
+    goal_lower = goal.lower()
+    combined = (goal + " " + context).lower()
+
+    # Indicators of simple tasks that don't need plans
+    simple_indicators = [
+        "fix typo",
+        "rename",
+        "update comment",
+        "change variable",
+        "fix syntax",
+        "correct spelling",
+        "update version",
+        "add import",
+        "remove unused",
+        "format code",
+        "add docstring",
+        "update readme",
+    ]
+
+    # Check for simple task indicators
+    for indicator in simple_indicators:
+        if indicator in goal_lower:
+            return False
+
+    # Indicators of complex tasks that need plans
+    complex_indicators = [
+        "implement",
+        "build",
+        "create",
+        "refactor",
+        "design",
+        "integrate",
+        "migrate",
+        "optimize",
+        "architecture",
+        "multiple",
+        "system",
+        "feature",
+        "workflow",
+        "pipeline",
+        " and ",  # Multiple things
+        ", ",  # List of items
+    ]
+
+    # Check for complex task indicators
+    complex_count = sum(1 for indicator in complex_indicators if indicator in combined)
+
+    # If multiple complexity indicators, definitely needs plan
+    if complex_count >= 2:
+        return True
+
+    # If goal is very short (< 50 chars), probably simple
+    if len(goal) < 50 and complex_count == 0:
+        return False
+
+    # If goal is long (> 200 chars) or has complexity indicator, needs plan
+    if len(goal) > 200 or complex_count > 0:
+        return True
+
+    # Default to planning for safety
+    return True
+
+
 def _generate_tasks_from_goal(
-    goal: str, plan_context: str, complexity: str, tool_context: ToolContext
+    goal: str, plan_context: str, tool_context: ToolContext
 ) -> list[dict[str, Any]]:
     """
-    Generate tasks from a goal description using LLM analysis.
+    Generate tasks from a goal using LLM.
 
-    The LLM analyzes the goal and creates appropriate tasks with:
-    - Specific titles and descriptions
-    - Correct agent assignments
-    - Proper task dependencies
-    - Appropriate number of tasks
+    Fail-fast approach: if LLM is unavailable or fails, raise an error.
+    No fallbacks, no templates.
 
     Args:
         goal: High-level goal
         plan_context: Additional context for planning
-        complexity: Complexity level
         tool_context: Tool execution context with LLM client
 
     Returns:
         List of task dictionaries
+
+    Raises:
+        RuntimeError: If plan generation fails
     """
     import json
+
+    from ai_dev_agent.providers.llm.base import Message
 
     # Get LLM client - prefer injected client from context
     client = None
@@ -104,7 +189,7 @@ def _generate_tasks_from_goal(
         client = tool_context.extra["llm_client"]
         LOGGER.debug("Using injected LLM client from context")
 
-    # Fallback: create a new client if none was provided
+    # Create a new client if none was provided
     if client is None:
         try:
             from ai_dev_agent.core.utils.config import load_settings
@@ -119,162 +204,111 @@ def _generate_tasks_from_goal(
             )
             LOGGER.debug("Created new LLM client from settings")
         except Exception as e:
-            # Fallback to hardcoded if LLM unavailable
-            LOGGER.debug(f"LLM client unavailable, using fallback: {e}")
-            return _generate_tasks_fallback(goal, plan_context, complexity)
+            # Fail fast - no fallback
+            raise RuntimeError(f"Cannot create LLM client for plan generation: {e}")
 
-    # Determine target task count based on complexity
-    task_counts = {"simple": 2, "medium": 4, "complex": 6}
-    target_count = task_counts.get(complexity, 4)
+    # Simple, clear prompt - no complexity tiers, no rigid structure
+    planning_prompt = f"""Break down this task into logical steps if needed.
 
-    # Build prompt for LLM
-    planning_prompt = f"""Analyze this software development goal and create a work plan with {target_count} tasks.
-
-**Goal**: {goal}
+**Task**: {goal}
 {f"**Context**: {plan_context}" if plan_context else ""}
-**Complexity**: {complexity}
 
-Create {target_count} specific, actionable tasks to accomplish this goal. For each task:
-1. Assign it to the most appropriate agent:
-   - design_agent: Architecture, design documents, technical specs, API design
-   - test_agent: Writing tests, TDD, test suites, test coverage
-   - implementation_agent: Writing code, implementing features, bug fixes
-   - review_agent: Code review, security audit, quality checks
+Guidelines:
+- Use the RIGHT number of steps - as few or as many as actually needed
+- Simple tasks might need just 1-2 steps
+- Complex tasks might need several steps
+- Don't add unnecessary steps just to pad the plan
+- Don't force Design→Test→Implement→Review unless the task actually requires it
 
-2. Create a specific title (not generic like "Design and architecture")
-3. Write a detailed description of what needs to be done
-4. Specify dependencies (which tasks must complete first)
+Return a JSON array of tasks. Each task should have:
+- title: Clear, actionable title
+- description: What needs to be done
+- dependencies: Array of task IDs this depends on (or empty array)
 
-Return ONLY valid JSON in this exact format:
+Example format:
 {{
   "tasks": [
     {{
-      "title": "Specific task title here",
-      "description": "Detailed description of what to do",
-      "agent": "design_agent|test_agent|implementation_agent|review_agent",
+      "title": "Update authentication logic",
+      "description": "Modify the login function to support OAuth",
       "dependencies": []
+    }},
+    {{
+      "title": "Add OAuth configuration",
+      "description": "Set up OAuth provider settings",
+      "dependencies": ["task-1"]
     }}
   ]
 }}
 
-Rules:
-- Tasks should be specific to THIS goal, not generic
-- Use appropriate agents (not all tasks need all 4 agents)
-- First task usually has no dependencies: []
-- Later tasks depend on earlier ones: ["task-1"] or ["task-1", "task-2"]
-- Return exactly {target_count} tasks
-- Output ONLY the JSON, no explanations"""
+Return ONLY the JSON, no explanations."""
 
-    try:
-        # Call LLM to generate plan
-        from ai_dev_agent.providers.llm.base import Message
+    # Single attempt with optional retry
+    max_attempts = 2  # Simplified: one try, one retry
+    last_error = None
 
-        messages = [Message(role="user", content=planning_prompt)]
+    for attempt in range(max_attempts):
+        try:
+            messages = [Message(role="user", content=planning_prompt)]
 
-        response = client.complete(
-            messages=messages,
-            max_tokens=2000,
-            temperature=0.3,  # Lower temperature for consistent planning
-        )
-
-        # Parse LLM response (complete() returns string directly)
-        response_text = response.strip() if isinstance(response, str) else str(response).strip()
-
-        # Extract JSON from response (handle markdown code blocks)
-        if "```json" in response_text:
-            response_text = response_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in response_text:
-            response_text = response_text.split("```")[1].split("```")[0].strip()
-
-        plan_data = json.loads(response_text)
-
-        # Convert to task format with IDs
-        tasks = []
-        for i, task_spec in enumerate(plan_data["tasks"], 1):
-            task = {
-                "id": f"task-{i}",
-                "title": task_spec["title"],
-                "description": task_spec["description"],
-                "agent": task_spec["agent"],
-                "dependencies": task_spec.get("dependencies", []),
-            }
-            tasks.append(task)
-
-        # Validate we got the right number of tasks
-        if len(tasks) != target_count:
-            LOGGER.warning(
-                f"LLM returned {len(tasks)} tasks, expected {target_count}. Using fallback."
+            response = client.complete(
+                messages=messages,
+                max_tokens=2000,
+                temperature=0.3,
             )
-            return _generate_tasks_fallback(goal, plan_context, complexity)
 
-        return tasks
+            # Parse LLM response
+            response_text = response.strip() if isinstance(response, str) else str(response).strip()
 
-    except Exception as e:
-        LOGGER.warning(f"LLM plan generation failed: {e}. Using fallback.")
-        return _generate_tasks_fallback(goal, plan_context, complexity)
+            # Extract JSON from response (handle markdown code blocks)
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
 
+            plan_data = json.loads(response_text)
 
-def _generate_tasks_fallback(goal: str, plan_context: str, complexity: str) -> list[dict[str, Any]]:
-    """Fallback task generation when LLM is unavailable.
+            # Convert to task format with IDs
+            tasks = []
+            for i, task_spec in enumerate(plan_data["tasks"], 1):
+                task = {
+                    "id": f"task-{i}",
+                    "title": task_spec["title"],
+                    "description": task_spec["description"],
+                    "dependencies": task_spec.get("dependencies", []),
+                }
+                tasks.append(task)
 
-    Creates a standard workflow scaled to match the requested complexity.
-    """
-    task_counts = {"simple": 2, "medium": 4, "complex": 6}
-    num_tasks = task_counts.get(complexity, 4)
+            # Minimal validation - just check we got something
+            if not tasks:
+                raise ValueError("LLM returned empty task list")
 
-    goal_short = goal[:60].lower()
+            # Safety limit only - no strict counting
+            from ai_dev_agent.core.utils.config import load_settings
 
-    # Base 4-phase workflow
-    task_templates = [
-        {
-            "id": "task-1",
-            "title": f"Design {goal_short}",
-            "description": f"Design the architecture and approach for {goal}",
-            "agent": "design_agent",
-            "dependencies": [],
-        },
-        {
-            "id": "task-2",
-            "title": f"Write tests for {goal_short}",
-            "description": f"Create comprehensive test suite for {goal}",
-            "agent": "test_agent",
-            "dependencies": ["task-1"],
-        },
-        {
-            "id": "task-3",
-            "title": f"Implement {goal_short}",
-            "description": f"Implement the functionality for {goal}",
-            "agent": "implementation_agent",
-            "dependencies": ["task-2"],
-        },
-        {
-            "id": "task-4",
-            "title": f"Review {goal_short}",
-            "description": f"Review the implementation of {goal}",
-            "agent": "review_agent",
-            "dependencies": ["task-3"],
-        },
-    ]
+            settings = load_settings()
+            if len(tasks) > settings.plan_max_tasks:
+                LOGGER.warning(
+                    f"LLM returned {len(tasks)} tasks, exceeding limit of {settings.plan_max_tasks}. Truncating."
+                )
+                tasks = tasks[: settings.plan_max_tasks]
 
-    # For complex plans (6 tasks), add integration and documentation phases
-    if num_tasks > 4:
-        task_templates.extend(
-            [
-                {
-                    "id": "task-5",
-                    "title": f"Integration testing for {goal_short}",
-                    "description": f"Perform integration testing and validate the complete solution for {goal}",
-                    "agent": "test_agent",
-                    "dependencies": ["task-4"],
-                },
-                {
-                    "id": "task-6",
-                    "title": f"Documentation for {goal_short}",
-                    "description": f"Create comprehensive documentation for {goal}",
-                    "agent": "design_agent",
-                    "dependencies": ["task-5"],
-                },
-            ]
-        )
+            LOGGER.info(f"Generated plan with {len(tasks)} task(s)")
+            return tasks
 
-    return task_templates[:num_tasks]
+        except json.JSONDecodeError as e:
+            last_error = f"Invalid JSON response: {e}"
+            LOGGER.warning(f"Attempt {attempt + 1}/{max_attempts} failed: {last_error}")
+        except Exception as e:
+            last_error = str(e)
+            LOGGER.warning(f"Attempt {attempt + 1}/{max_attempts} failed: {last_error}")
+
+        if attempt < max_attempts - 1:
+            import time
+
+            time.sleep(1)  # Brief pause before retry
+
+    # All attempts failed - fail fast, no fallback
+    raise RuntimeError(
+        f"Failed to generate plan after {max_attempts} attempts. Last error: {last_error}"
+    )

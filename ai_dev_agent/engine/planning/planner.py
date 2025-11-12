@@ -234,24 +234,13 @@ class Planner:
                         LOGGER.info("Still waiting for planner response (%.1fs elapsed)", elapsed)
                         next_heartbeat = now + 10.0
         except LLMError as exc:
-            LOGGER.warning("LLM planning failed, generating fallback plan: %s", exc)
-            tasks = self._create_generic_fallback(goal)
-            summary = f"Fallback plan for: {goal}"[:80]
+            # Fail fast - no fallback
+            LOGGER.error("LLM planning failed: %s", exc)
             self._session_manager.add_system_message(
                 session_key,
-                f"Planner fallback invoked due to error: {exc}",
+                f"Planner failed: {exc}",
             )
-            return PlanResult(
-                goal=goal,
-                summary=summary,
-                tasks=tasks,
-                raw_response="",
-                fallback_reason=str(exc),
-                project_structure=project_structure,
-                context_snapshot=context_block,
-                complexity=None,
-                success_criteria=[],
-            )
+            raise LLMError(f"Failed to generate plan: {exc}") from exc
         self._session_manager.add_assistant_message(session_key, response_text)
         try:
             payload = self._extract_json(response_text)
@@ -320,31 +309,6 @@ class Planner:
             identifier=data.get("id") or data.get("identifier"),
             risk_mitigation=data.get("risk_mitigation"),
         )
-
-    def _create_generic_fallback(self, goal: str) -> list[PlanTask]:
-        """Create a simple fallback plan when the LLM is unavailable."""
-        return [
-            PlanTask(
-                step_number=1,
-                title="Understand Requirements",
-                description=f"Analyze and understand the requirements for: {goal}. "
-                "Identify what needs to be accomplished and gather necessary context.",
-            ),
-            PlanTask(
-                step_number=2,
-                title="Execute Task",
-                description="Implement the requested functionality based on the requirements. "
-                "This may involve code changes, analysis, or other operations.",
-                dependencies=[1],
-            ),
-            PlanTask(
-                step_number=3,
-                title="Verify Results",
-                description="Test and validate that the implementation meets the requirements. "
-                "Ensure the solution works correctly and document any findings.",
-                dependencies=[2],
-            ),
-        ]
 
 
 def _normalize_int_list(value: object) -> list[int]:

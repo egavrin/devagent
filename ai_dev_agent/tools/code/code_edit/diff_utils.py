@@ -87,6 +87,52 @@ class DiffProcessor:
 
         if validation.errors:
             raise DiffError(f"Diff validation failed: {'; '.join(validation.errors)}")
+
+        # Additional check for file creation/existence mismatch
+        lines = diff_text.splitlines()
+        creating_new_file = False
+        target_file = None
+
+        for line in lines:
+            if line.startswith("--- "):
+                if line[4:].strip() == "/dev/null":
+                    creating_new_file = True
+            elif line.startswith("+++ "):
+                new_file_raw = line[4:].strip()
+                if new_file_raw != "/dev/null":
+                    target_file = self._normalize_diff_path(new_file_raw)
+                break
+
+        if creating_new_file and target_file:
+            file_path = Path(target_file)
+            if not file_path.is_absolute():
+                file_path = self.repo_root / file_path
+
+            if file_path.exists():
+                raise DiffError(
+                    f"Cannot create new file '{target_file}': File already exists.\n"
+                    f"This patch is trying to create a new file (--- /dev/null), but the file already exists.\n"
+                    f"To modify an existing file, use:\n"
+                    f"  --- a/{target_file}\n"
+                    f"  +++ b/{target_file}\n"
+                    f"Or delete the existing file first if you want to recreate it from scratch."
+                )
+        elif not creating_new_file and target_file:
+            # Check if we're trying to modify a file that doesn't exist
+            file_path = Path(target_file)
+            if not file_path.is_absolute():
+                file_path = self.repo_root / file_path
+
+            if not file_path.exists():
+                raise DiffError(
+                    f"Cannot modify file '{target_file}': File does not exist.\n"
+                    f"This patch is trying to modify an existing file, but the file doesn't exist.\n"
+                    f"To create a new file, use:\n"
+                    f"  --- /dev/null\n"
+                    f"  +++ b/{target_file}\n"
+                    f"Or create the file first before trying to modify it."
+                )
+
         return self._apply_diff(diff_text)
 
     def _extract_diff(self, text: str) -> str:

@@ -60,8 +60,12 @@ class PlanTracker:
                 "failed": "[✗]",
             }.get(status, "[ ]")
 
-            agent_label = task["agent"].replace("_agent", "")
-            print(f"  {icon} {task['title']} ({agent_label})", flush=True)
+            # Agent field is optional in simplified system
+            if "agent" in task:
+                agent_label = task["agent"].replace("_agent", "")
+                print(f"  {icon} {task['title']} ({agent_label})", flush=True)
+            else:
+                print(f"  {icon} {task['title']}", flush=True)
 
             # Show description for in-progress or failed tasks
             if status in ("in_progress", "failed"):

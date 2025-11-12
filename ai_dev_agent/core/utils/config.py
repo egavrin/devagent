@@ -98,6 +98,9 @@ class Settings:
     response_headroom_tokens: int = 2_000
     max_tool_output_chars: int = 4_000
     max_tool_messages_kept: int = 10
+    # Simplified plan generation configuration
+    planning_enabled: bool = True  # Can disable planning entirely
+    plan_max_tasks: int = 20  # Safety limit only
     keep_last_assistant_messages: int = 4
     fs_read_default_max_lines: int = 200
     search_max_results: int = 100

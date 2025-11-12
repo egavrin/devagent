@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from ai_dev_agent.core.utils.context_budget import summarize_text
 from ai_dev_agent.prompts.loader import PromptLoader
 from ai_dev_agent.providers.llm.base import Message
-from ai_dev_agent.tool_names import FIND, GREP, READ, RUN, SYMBOLS, WRITE
+from ai_dev_agent.tool_names import EDIT, FIND, GREP, READ, RUN, SYMBOLS
 
 if TYPE_CHECKING:
     from ai_dev_agent.core.utils.config import Settings
@@ -170,12 +170,13 @@ def _system_prompt_context(
         "iteration_note": iteration_note,
         "language_hint": language_hint,
         "repository_language": repository_language or "",
+        "tool_edit": EDIT,
         "tool_find": FIND,
         "tool_grep": GREP,
         "tool_symbols": SYMBOLS,
         "tool_read": READ,
         "tool_run": RUN,
-        "tool_write": WRITE,
+        "tool_write": "edit",  # WRITE is disabled, redirect to edit
     }
 
 

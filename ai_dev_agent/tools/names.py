@@ -5,6 +5,7 @@ from __future__ import annotations
 from ai_dev_agent.tool_names import (
     ALL_TOOLS,
     DELEGATE,
+    EDIT,
     FIND,
     GET_TASK_STATUS,
     GREP,
@@ -18,6 +19,7 @@ from ai_dev_agent.tool_names import (
 __all__ = [
     "ALL_TOOLS",
     "DELEGATE",
+    "EDIT",
     "FIND",
     "GREP",
     "GET_TASK_STATUS",

@@ -380,7 +380,8 @@ def _handle_write_result(
     result: dict[str, Any],
     ___: dict[str, Any],
 ) -> None:
-    applied = bool(result.get("applied"))
+    # Check for both "applied" (old WRITE format) and "success" (EDIT/search_replace format)
+    applied = bool(result.get("applied") or result.get("success"))
     changed = result.get("changed_files") or []
     if applied:
         click.echo("Patch applied")

@@ -1,24 +1,25 @@
 """
-Plan-based query execution.
+Simplified plan-based query execution.
 
-When --plan flag is used, this module creates a structured work plan,
-breaks down the query into tasks, and executes them step by step.
+Uses the new simplified planning system without rigid templates.
 """
 
-import json
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any
 
 import click
 
-from ai_dev_agent.agents.work_planner import Priority, Task, TaskStatus, WorkPlanningAgent
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.tools.registry import ToolContext
+from ai_dev_agent.tools.workflow.plan import _needs_plan
+from ai_dev_agent.tools.workflow.plan import plan as create_plan
 
 
 def execute_with_planning(
     ctx: click.Context, client: Any, settings: Settings, user_prompt: str, **kwargs
 ) -> dict[str, Any]:
     """
-    Execute a query with LLM-driven approach selection.
+    Execute a query with simplified planning.
 
     Args:
         ctx: Click context
@@ -30,604 +31,120 @@ def execute_with_planning(
     Returns:
         Dict with execution results
     """
-    click.echo("🔍 Analyzing query complexity...")
-
-    # Use LLM to assess query complexity
-    assessment = _assess_query_with_llm(client, user_prompt)
-
-    approach = assessment.get("approach", "simple_plan")
-    reasoning = assessment.get("reasoning", "")
-    assessment.get("estimated_tasks", 2)
-
-    click.echo(f"📊 Assessment: {approach.upper().replace('_', ' ')}")
-    click.echo(f"💡 Reasoning: {reasoning}")
-    click.echo()
-
-    # Route based on assessment
-    if approach == "direct":
-        click.echo("⚡ Using direct execution (no planning overhead)\n")
+    # Check if planning is needed
+    if not _needs_plan(user_prompt):
+        click.echo(f"⚡ Simple task detected - executing directly: {user_prompt[:50]}...")
         from .executor import _execute_react_assistant
 
         return _execute_react_assistant(
             ctx, client, settings, user_prompt, use_planning=False, **kwargs
         )
 
-    # For simple_plan or complex_plan, create and execute plan
-    click.echo(f"🗺️  Creating work plan for: {user_prompt}")
-    click.echo("=" * 70)
+    click.echo("🗺️ Planning mode enabled - creating task breakdown...")
 
-    # Initialize Work Planning Agent
-    agent = WorkPlanningAgent()
+    # Create tool context with required parameters
+    repo_root = Path.cwd()
 
-    # Use LLM to break down the query into tasks (pass assessment for context)
-    plan = _create_plan_from_query(agent, client, user_prompt, assessment)
+    # Create a minimal ToolContext with required arguments
+    tool_context = ToolContext(
+        repo_root=repo_root,
+        settings=settings,
+        sandbox=None,  # Not needed for planning
+        extra={"llm_client": client},
+    )
 
-    if not plan or not plan.tasks:
-        click.echo("⚠️  Could not create a plan. Falling back to direct execution.")
-        # Fall back to direct execution
+    # Use simplified plan tool
+    plan_result = create_plan({"goal": user_prompt, "context": ""}, tool_context)
+
+    if not plan_result["success"]:
+        click.echo(f"⚠️ Planning failed: {plan_result.get('error', 'Unknown error')}")
+        click.echo("Falling back to direct execution...")
         from .executor import _execute_react_assistant
 
         return _execute_react_assistant(
             ctx, client, settings, user_prompt, use_planning=False, **kwargs
         )
 
-    click.echo(f"\n✓ Created plan with {len(plan.tasks)} task(s)\n")
+    plan_data = plan_result["plan"]
+
+    # If it's a simple task (no tasks generated), execute directly
+    if plan_data.get("simple") or not plan_data.get("tasks"):
+        click.echo("✓ Task is simple enough for direct execution")
+        from .executor import _execute_react_assistant
+
+        return _execute_react_assistant(
+            ctx, client, settings, user_prompt, use_planning=False, **kwargs
+        )
+
+    tasks = plan_data["tasks"]
+    click.echo(f"\n✓ Created dynamic plan with {len(tasks)} task(s)\n")
 
     # Display the plan
-    click.echo("📋 Work Plan:")
-    for i, task in enumerate(plan.tasks, 1):
-        priority_icon = {
-            Priority.CRITICAL: "🔴",
-            Priority.HIGH: "🟠",
-            Priority.MEDIUM: "🟡",
-            Priority.LOW: "🟢",
-        }.get(task.priority, "")
-        click.echo(f"  {i}. {priority_icon} {task.title}")
-        if task.description and task.description != task.title:
-            click.echo(f"     {task.description}")
+    click.echo("📋 Task Breakdown:")
+    for i, task in enumerate(tasks, 1):
+        click.echo(f"  {i}. {task['title']}")
+        if task.get("description") and task["description"] != task["title"]:
+            click.echo(f"     {task['description']}")
 
     click.echo("\n" + "=" * 70)
     click.echo("🚀 Executing tasks...\n")
 
-    # Execute each task
+    # Execute tasks sequentially
     results = []
-    early_termination = False
-    for i, task in enumerate(plan.tasks, 1):
-        click.echo(f"[Task {i}/{len(plan.tasks)}] {task.title}")
+    for i, task in enumerate(tasks, 1):
+        click.echo(f"[Task {i}/{len(tasks)}] {task['title']}")
         click.echo("-" * 70)
 
-        # Mark task as started
-        agent.mark_task_started(plan.id, task.id)
+        # Execute as a query with the task description
+        task_prompt = f"{task['title']}: {task['description']}"
 
-        # Execute the task
-        task_result = _execute_task(ctx, client, settings, task, user_prompt, **kwargs)
+        from .executor import _execute_react_assistant
+
+        # Remove conflicting parameters from kwargs
+        task_kwargs = kwargs.copy()
+        task_kwargs.pop("suppress_final_output", None)
+
+        task_result = _execute_react_assistant(
+            ctx,
+            client,
+            settings,
+            task_prompt,
+            use_planning=False,  # Don't plan individual tasks
+            suppress_final_output=True,  # Don't show final output for each task
+            **task_kwargs,
+        )
         results.append(task_result)
 
-        # Mark task as completed
-        agent.mark_task_complete(plan.id, task.id)
-
         # Show task result if available
-        result_data = task_result.get("result", {})
-        final_msg = result_data.get("final_message", "")
+        final_msg = task_result.get("final_message", "")
         if final_msg and final_msg.strip():
-            click.echo(f"\n📝 Result: {final_msg.strip()}\n")
-
-        # Show progress
-        updated_plan = agent.storage.load_plan(plan.id)
-        progress = updated_plan.get_completion_percentage()
-        click.echo(f"✓ Task completed. Overall progress: {progress:.0f}%\n")
-
-        # Check if we can stop early (only if there are remaining tasks)
-        remaining_tasks = plan.tasks[i:]
-        if remaining_tasks:
-            click.echo("🤔 Checking if query is fully answered...")
-
-            satisfaction = _check_if_query_satisfied(client, user_prompt, results, remaining_tasks)
-
-            is_satisfied = satisfaction.get("is_satisfied", False)
-            confidence = satisfaction.get("confidence", 0.0)
-            reasoning = satisfaction.get("reasoning", "")
-
-            if is_satisfied and confidence > 0.7:
-                click.echo(f"✅ Query fully answered! (confidence: {confidence:.0%})")
-                click.echo(f"💡 {reasoning}\n")
-                click.echo(f"⏭️  Skipping {len(remaining_tasks)} remaining task(s)\n")
-
-                # Mark remaining tasks as cancelled
-                for remaining_task in remaining_tasks:
-                    # Update task status in storage
-                    updated_plan = agent.storage.load_plan(plan.id)
-                    for t in updated_plan.tasks:
-                        if t.id == remaining_task.id:
-                            t.status = TaskStatus.CANCELLED
-                    agent.storage.save_plan(updated_plan)
-
-                early_termination = True
-                break  # Exit the loop early
-            else:
-                click.echo(f"⏩ Continuing with remaining tasks (confidence: {confidence:.0%})\n")
-
-    click.echo("=" * 70)
-    # Show accurate completion message
-    tasks_completed = len(results)
-    if early_termination:
-        tasks_cancelled = len(plan.tasks) - tasks_completed
-        click.echo(
-            f"✅ Completed {tasks_completed} of {len(plan.tasks)} tasks ({tasks_cancelled} cancelled due to early termination)"
-        )
-    else:
-        click.echo(f"✅ All {len(plan.tasks)} tasks completed!")
-
-    # Show final answer
-    final_answer = _synthesize_final_message(results)
-    if final_answer and final_answer.strip():
-        click.echo("\n" + "=" * 70)
-        click.echo("📋 FINAL ANSWER:")
-        click.echo("=" * 70)
-        click.echo(final_answer)
-        click.echo("=" * 70)
-
-    # Store plan ID in context for reference
-    if not isinstance(ctx.obj, dict):
-        ctx.obj = {}
-    ctx.obj["_last_plan_id"] = plan.id
-
-    # Return aggregated results with accurate count
-    return {
-        "plan_id": plan.id,
-        "tasks_completed": len(results),  # Actual tasks executed, not total planned
-        "tasks_total": len(plan.tasks),
-        "early_termination": early_termination,
-        "task_results": results,
-        "final_message": _synthesize_final_message(results),
-    }
-
-
-def _create_plan_from_query(
-    agent: WorkPlanningAgent, client: Any, query: str, assessment: Optional[dict[str, Any]] = None
-) -> Optional[Any]:
-    """
-    Use LLM to break down the query into structured tasks.
-
-    Args:
-        agent: Work Planning Agent
-        client: LLM client
-        query: User's query
-        assessment: Optional complexity assessment with task suggestions
-
-    Returns:
-        WorkPlan object or None
-    """
-    estimated_tasks = assessment.get("estimated_tasks", 3) if assessment else 3
-    task_suggestions = assessment.get("task_suggestions", []) if assessment else []
-
-    # Build prompt for LLM to generate task breakdown
-    breakdown_prompt = f"""Break down this query into a structured work plan with specific, actionable tasks:
-
-Query: "{query}"
-
-Constraints:
-- Target {estimated_tasks} task(s) (use fewer if possible, more only if truly necessary)
-- Each task must add UNIQUE value - no redundant verification steps
-- Combine related operations (e.g., "find and count" not "find" then "count")
-- Focus on actionable steps that produce concrete results
-
-{f"Suggested approach: {', '.join(task_suggestions)}" if task_suggestions else ""}
-
-For each task, provide:
-1. Clear, action-oriented title (verb + object)
-2. Brief description of what needs to be done
-3. Priority (critical/high/medium/low)
-
-Think step-by-step about the MINIMUM work needed to answer this query.
-
-Format your response as a numbered list of tasks."""
-
-    try:
-        # Get task breakdown from LLM
-        from ai_dev_agent.providers.llm.base import Message
-
-        messages = [Message(role="user", content=breakdown_prompt)]
-
-        response_text = client.complete(messages=messages, temperature=0.3)
-        task_descriptions = _parse_task_breakdown(response_text)
-
-        if not task_descriptions:
-            # Fallback: create a single task
-            task_descriptions = [(query, "medium", "Main task")]
-
-        # Create the plan
-        plan = agent.create_plan(
-            goal=query, context={"description": f"Automatically generated plan for: {query}"}
-        )
-
-        # Clear placeholder task and add parsed tasks
-        plan.tasks = []
-
-        for i, (title, priority_str, description) in enumerate(task_descriptions):
-            # Map priority string to Priority enum
-            priority_map = {
-                "critical": Priority.CRITICAL,
-                "high": Priority.HIGH,
-                "medium": Priority.MEDIUM,
-                "low": Priority.LOW,
-            }
-            priority = priority_map.get(priority_str.lower(), Priority.MEDIUM)
-
-            # Add dependency on previous task for sequential execution
-            dependencies = [plan.tasks[i - 1].id] if i > 0 and plan.tasks else []
-
-            task = Task(
-                title=title,
-                description=description,
-                priority=priority,
-                effort_estimate="5min",  # Default estimate
-                dependencies=dependencies,
+            click.echo(
+                f"\n📝 Result: {final_msg.strip()[:200]}{'...' if len(final_msg) > 200 else ''}\n"
             )
-            plan.tasks.append(task)
 
-        # Save the plan
-        agent.storage.save_plan(plan)
+        progress = (i / len(tasks)) * 100
+        click.echo(f"✓ Task completed. Progress: {progress:.0f}%\n")
 
-        return plan
+    # Summarize results
+    click.echo("=" * 70)
+    click.echo("✅ All tasks completed!\n")
 
-    except Exception as e:
-        click.echo(f"⚠️  Error creating plan: {e}", err=True)
-        return None
-
-
-def _parse_task_breakdown(response_text: str) -> list:
-    """
-    Parse LLM response into list of (title, priority, description) tuples.
-
-    Args:
-        response_text: LLM response with task breakdown
-
-    Returns:
-        List of (title, priority, description) tuples
-    """
-    tasks = []
-    lines = response_text.strip().split("\n")
-
-    current_task = None
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Look for numbered tasks (1., 2., etc.)
-        if line[0].isdigit() and "." in line[:3]:
-            # Extract task title
-            title = line.split(".", 1)[1].strip()
-            # Remove markdown bold/emphasis
-            title = title.replace("**", "").replace("*", "")
-            # Extract priority if mentioned
-            priority = "medium"
-            if "critical" in title.lower():
-                priority = "critical"
-            elif "high" in title.lower() or "important" in title.lower():
-                priority = "high"
-            elif "low" in title.lower():
-                priority = "low"
-
-            # Clean up title
-            title = title.split("(")[0].strip()  # Remove parenthetical notes
-            title = title.split("-")[0].strip()  # Remove dashes
-
-            current_task = [title, priority, title]
-            tasks.append(current_task)
-        elif current_task and line:
-            # Additional description for current task
-            current_task[2] = line
-
-    # Fallback: if no tasks parsed, create simple task breakdown
-    if not tasks:
-        # Try to extract any actionable phrases
-        simple_tasks = [
-            ("Analyze the query", "high", "Understand what needs to be done"),
-            ("Execute the task", "high", "Perform the requested operation"),
-            ("Verify the result", "medium", "Confirm the output is correct"),
-        ]
-        return simple_tasks
-
-    return [(t[0], t[1], t[2]) for t in tasks]
-
-
-def _execute_task(
-    ctx: click.Context, client: Any, settings: Settings, task: Task, original_query: str, **kwargs
-) -> dict[str, Any]:
-    """
-    Execute a single task from the work plan.
-
-    The manager agent will automatically select and delegate to specialized agents
-    as needed based on the task requirements.
-
-    Args:
-        ctx: Click context
-        client: LLM client
-        settings: Settings object
-        task: Task to execute
-        original_query: Original user query for context
-        **kwargs: Additional arguments
-
-    Returns:
-        Dict with task execution results
-    """
-    # Build task-specific prompt
-    # The manager agent will analyze this and delegate to appropriate specialized agents
-    task_prompt = f"""[Task: {task.title}]
-
-Original query: {original_query}
-
-Task description: {task.description}
-
-Available specialized agents:
-- design_agent: Creates technical designs and architecture
-- test_agent: Generates tests following TDD workflow
-- implementation_agent: Implements code from designs using TDD
-- review_agent: Reviews code for quality and security (read-only)
-
-Execute this task. If this requires specialized skills (design, testing, implementation, or review),
-consider delegating to the appropriate specialized agent. Otherwise, handle it directly."""
-
-    # Execute using the manager agent (it will delegate if needed)
-    from .executor import _execute_react_assistant
-
-    # Remove parameters we're explicitly setting to avoid conflicts
-    task_kwargs = {
-        k: v
-        for k, v in kwargs.items()
-        if k not in ["use_planning", "suppress_final_output", "agent_type"]
-    }
-
-    result = _execute_react_assistant(
-        ctx,
-        client,
-        settings,
-        task_prompt,
-        use_planning=False,  # Don't nest planning
-        suppress_final_output=False,  # Show task output
-        agent_type="manager",  # Use manager agent - it will delegate if needed
-        **task_kwargs,
-    )
-
+    # Return combined results
     return {
-        "task_id": task.id,
-        "task_title": task.title,
-        "result": result,
+        "final_message": f"Completed {len(tasks)} tasks for: {user_prompt}",
+        "result": {"tasks_completed": len(tasks), "results": results},
+        "printed_final": True,
     }
 
 
-def _synthesize_final_message(task_results: list) -> str:
+def _assess_query_complexity(user_prompt: str) -> str:
     """
-    Synthesize a final message from all task results.
-
-    Args:
-        task_results: List of task execution results
+    Simple heuristic to determine if we should use planning.
 
     Returns:
-        Combined message string
+        "simple" for direct execution
+        "complex" for planned execution
     """
-    messages = []
-    for _i, task_result in enumerate(task_results, 1):
-        result_data = task_result.get("result", {})
-        final_msg = result_data.get("final_message", "")
-
-        if final_msg and final_msg.strip():
-            # Only include substantive results (skip empty or error messages)
-            if not final_msg.startswith("ERROR:") and len(final_msg.strip()) > 10:
-                messages.append(final_msg.strip())
-
-    if messages:
-        # If we have results, combine them intelligently
-        if len(messages) == 1:
-            return messages[0]
-        else:
-            # Combine multiple results with the last one typically being the most complete
-            return messages[-1]  # Return the final task's result as the answer
-    else:
-        return "All tasks completed successfully. No detailed results were generated."
-
-
-def _assess_query_with_llm(client: Any, query: str) -> dict[str, Any]:
-    """
-    Use LLM to assess if query needs planning and how complex it should be.
-
-    Args:
-        client: LLM client
-        query: User's query to assess
-
-    Returns:
-        {
-            'approach': 'direct' | 'simple_plan' | 'complex_plan',
-            'reasoning': str,
-            'estimated_tasks': int,
-            'can_answer_immediately': bool,
-            'task_suggestions': List[str]
-        }
-    """
-
-    assessment_prompt = f"""Analyze this query and determine the best execution approach:
-
-Query: "{query}"
-
-Consider:
-1. Can this be answered in ONE direct action? (e.g., counting lines, simple calculation, finding a file)
-2. Does it require 2-3 sequential steps? (e.g., find then analyze, fetch then process)
-3. Does it require complex multi-step planning? (e.g., implement feature with tests, refactor with validation)
-
-Respond in JSON format:
-{{
-    "approach": "direct" | "simple_plan" | "complex_plan",
-    "reasoning": "Brief explanation of why",
-    "estimated_tasks": <number>,
-    "can_answer_immediately": true | false,
-    "task_suggestions": ["optional list of task titles if planning needed"]
-}}
-
-Examples:
-
-Query: "how many lines are in ai_dev_agent/cli/runtime/main.py"
-Response: {{"approach": "direct", "reasoning": "Single file operation, can count immediately", "estimated_tasks": 1, "can_answer_immediately": true}}
-
-Query: "find all TODO comments and count them"
-Response: {{"approach": "simple_plan", "reasoning": "Need to search codebase then aggregate results", "estimated_tasks": 1, "can_answer_immediately": false, "task_suggestions": ["Search for and count all TODO comments"]}}
-
-Query: "implement user authentication with JWT, add tests, update docs"
-Response: {{"approach": "complex_plan", "reasoning": "Multiple independent components requiring coordination", "estimated_tasks": 4, "can_answer_immediately": false, "task_suggestions": ["Implement JWT authentication logic", "Add authentication middleware", "Write comprehensive tests", "Update documentation"]}}
-
-Now analyze the given query. Prefer simpler approaches when possible - only use complex_plan for truly multi-faceted work."""
-
-    try:
-        from ai_dev_agent.providers.llm.base import Message
-
-        messages = [Message(role="user", content=assessment_prompt)]
-
-        response_text = client.complete(
-            messages=messages,
-            temperature=0.1,  # Low temperature for consistent decisions
-        )
-
-        # Try to parse JSON from response
-        # Handle potential JSON wrapped in markdown code blocks
-        response_text = response_text.strip()
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.startswith("```"):
-            response_text = response_text[3:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
-        response_text = response_text.strip()
-
-        assessment = json.loads(response_text)
-
-        # Validate required fields
-        if "approach" not in assessment:
-            assessment["approach"] = "simple_plan"
-        if "estimated_tasks" not in assessment:
-            assessment["estimated_tasks"] = 2
-        if "reasoning" not in assessment:
-            assessment["reasoning"] = "Default assessment"
-
-        return assessment
-
-    except Exception as e:
-        # Fallback to safe default (use simple planning)
-        click.echo(f"⚠️  Assessment error: {e}")
-        return {
-            "approach": "simple_plan",
-            "reasoning": "Fallback due to assessment error",
-            "estimated_tasks": 2,
-            "can_answer_immediately": False,
-            "task_suggestions": [],
-        }
-
-
-def _check_if_query_satisfied(
-    client: Any, original_query: str, completed_tasks: list[dict], remaining_tasks: list[Task]
-) -> dict[str, Any]:
-    """
-    Use LLM to determine if the original query has been fully answered.
-
-    Args:
-        client: LLM client
-        original_query: The original user query
-        completed_tasks: List of completed task results
-        remaining_tasks: List of tasks not yet executed
-
-    Returns:
-        {
-            'is_satisfied': bool,
-            'reasoning': str,
-            'confidence': float,
-            'missing_aspects': List[str]
-        }
-    """
-
-    # Build context of what's been done
-    completed_context = "\n\n".join(
-        [
-            f"Task: {t['task_title']}\nResult: {t.get('result', {}).get('final_message', 'No result')[:500]}"
-            for t in completed_tasks
-            if t.get("result", {}).get("final_message")
-        ]
-    )
-
-    if not completed_context:
-        completed_context = "No substantive results yet."
-
-    remaining_context = "\n".join(
-        [f"- {task.title}: {task.description}" for task in remaining_tasks]
-    )
-
-    if not remaining_context:
-        remaining_context = "No remaining tasks."
-
-    satisfaction_prompt = f"""Evaluate if the original query has been fully answered:
-
-Original Query: "{original_query}"
-
-Completed Work:
-{completed_context}
-
-Remaining Planned Tasks:
-{remaining_context}
-
-Questions to answer:
-1. Has the original query been completely answered by the completed work?
-2. Are the remaining tasks redundant or unnecessary?
-3. Is there critical information still missing?
-
-Respond in JSON:
-{{
-    "is_satisfied": true | false,
-    "reasoning": "Explanation of decision",
-    "confidence": 0.0-1.0,
-    "missing_aspects": ["list of what's still needed, if any"]
-}}
-
-Be practical: If the query is "how many lines are in ai_dev_agent/cli/runtime/main.py" and we found it contains 204 lines,
-we're done - no need to "verify" or "report" again. Similarly, if a task says "verify result" but
-the result has already been verified, that task is redundant."""
-
-    try:
-        from ai_dev_agent.providers.llm.base import Message
-
-        messages = [Message(role="user", content=satisfaction_prompt)]
-
-        response_text = client.complete(
-            messages=messages,
-            temperature=0.1,
-        )
-
-        # Parse JSON response
-        response_text = response_text.strip()
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.startswith("```"):
-            response_text = response_text[3:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
-        response_text = response_text.strip()
-
-        result = json.loads(response_text)
-
-        # Validate fields
-        if "is_satisfied" not in result:
-            result["is_satisfied"] = False
-        if "confidence" not in result:
-            result["confidence"] = 0.5
-        if "reasoning" not in result:
-            result["reasoning"] = "Unable to determine"
-
-        return result
-
-    except Exception as e:
-        # Fallback: continue with remaining tasks (safe default)
-        click.echo(f"⚠️  Satisfaction check error: {e}")
-        return {
-            "is_satisfied": False,
-            "reasoning": f"Assessment failed: {e}",
-            "confidence": 0.0,
-            "missing_aspects": ["Could not determine"],
-        }
+    if _needs_plan(user_prompt):
+        return "complex"
+    return "simple"

@@ -224,7 +224,7 @@ def test_cli_direct_flag_sets_pending_prompt(monkeypatch):
     assert captured["use_planning"] is False
     assert captured["force_plan"] is False
     assert captured["default_use_planning"] is False
-    assert captured["direct"] is False
+    assert captured["direct"] is True
 
 
 def test_cli_unknown_flag_surfaces_error():

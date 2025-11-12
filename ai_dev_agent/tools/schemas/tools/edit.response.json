@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "edit response",
+  "type": "object",
+  "required": ["success", "changes_applied"],
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "description": "Whether all changes were successfully applied"
+    },
+    "changes_applied": {
+      "type": "integer",
+      "description": "Number of SEARCH/REPLACE blocks successfully applied"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of error messages for failed blocks"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of warning messages"
+    }
+  },
+  "additionalProperties": false
+}

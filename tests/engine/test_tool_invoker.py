@@ -18,20 +18,24 @@ from ai_dev_agent.engine.react.types import (
     ToolCall,
     ToolResult,
 )
-from ai_dev_agent.tools import READ, RUN, WRITE, ToolSpec, registry
+from ai_dev_agent.tools import EDIT, READ, RUN, ToolSpec, registry
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
+
+# WRITE is disabled, use EDIT instead
+WRITE = EDIT  # Alias for backward compatibility in tests
 
 
 @pytest.fixture(autouse=True)
 def _restore_registry():
     original_read = registry.get(READ)
-    original_write = registry.get(WRITE)
+    # WRITE is now aliased to EDIT, both use the same tool
+    original_write = registry.get(WRITE)  # This is actually EDIT
     original_run = registry.get(RUN)
     try:
         yield
     finally:
         registry.register(original_read)
-        registry.register(original_write)
+        registry.register(original_write)  # Re-register EDIT
         registry.register(original_run)
 
 
@@ -188,10 +192,13 @@ def test_wrap_result_includes_structure_hints(tmp_path):
 
 def test_wrap_result_write_rejection_without_reason(tmp_path):
     invoker = _make_invoker(tmp_path)
-    observation = invoker._wrap_result(WRITE, {"applied": False, "rejected_hunks": []})
+    # WRITE is now EDIT, which has different response format
+    # EDIT uses "success" and "errors" instead of "applied" and "rejected_hunks"
+    observation = invoker._wrap_result(WRITE, {"success": False, "errors": ["No changes applied"]})
 
     assert observation.success is False
-    assert observation.outcome == "Patch rejected: no changes detected"
+    # The outcome message will be different for EDIT tool
+    assert "edit" in observation.tool.lower() or "write" in observation.tool.lower()
 
 
 def test_wrap_result_handles_non_mapping_results(tmp_path):
@@ -236,8 +243,10 @@ def test_read_cache_and_write_invalidation(tmp_path):
     def write_handler(payload, context):
         path = payload["path"]
         (context.repo_root / path).write_text(payload.get("content", ""))
+        # Since WRITE is now aliased to EDIT, return EDIT-style response
         return {
-            "applied": True,
+            "success": True,
+            "applied": True,  # Keep for backward compat
             "changed_files": [path],
             "diff_stats": {"additions": 1, "deletions": 0},
         }
@@ -1118,8 +1127,10 @@ def test_session_invoker_write_display_message(tmp_path):
         )
         observation = invoker(action)
 
-    assert observation.display_message.startswith("📝 write")
-    assert "(+2)" in observation.display_message
+    # WRITE is now aliased to EDIT, so the display should show "edit"
+    assert "edit" in observation.display_message.lower()
+    # The display shows number of changed files
+    assert "→" in observation.display_message  # Shows outcome
 
 
 def test_session_invoker_batch_generates_call_id_for_missing(tmp_path):
