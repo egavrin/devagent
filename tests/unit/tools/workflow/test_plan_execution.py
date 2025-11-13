@@ -426,3 +426,47 @@ class TestErrorHandling:
                     assert error_reported  # Error handling is now working!
                     assert result["result"]["error_occurred"] is True
                     assert result["result"]["tasks_completed"] == 0
+
+    def test_failure_log_includes_final_message(self):
+        """Failure logs should include the executor's final_message for debugging."""
+        tasks = [
+            {"id": "t1", "title": "Failing task", "description": "Will fail", "dependencies": []},
+        ]
+
+        with patch("ai_dev_agent.cli.react.plan_executor.create_plan") as mock_create:
+            mock_create.return_value = {"success": True, "plan": {"goal": "test", "tasks": tasks}}
+
+            with patch("ai_dev_agent.cli.react.executor._execute_react_assistant") as mock_exec:
+                failed_result = RunResult(
+                    task_id="t1",
+                    status="failure",
+                    steps=[],
+                    gates={},
+                    stop_reason="Timeout after 120s",
+                )
+                final_message = "Unit test suite timed out"
+                mock_exec.return_value = {"final_message": final_message, "result": failed_result}
+
+                with patch("click.echo") as mock_echo:
+                    from ai_dev_agent.cli.react.plan_executor import execute_with_planning
+                    from ai_dev_agent.core.utils.config import Settings
+
+                    settings = Settings()
+                    settings.always_use_planning = True
+                    ctx = Mock()
+                    client = Mock()
+
+                    result = execute_with_planning(ctx, client, settings, "failing task")
+                    assert result is not None
+
+                    failure_logs = [
+                        args[0]
+                        for args, _ in (
+                            (call.args, call.kwargs) for call in mock_echo.call_args_list
+                        )
+                        if args and isinstance(args[0], str) and "Task failed." in args[0]
+                    ]
+
+                    assert failure_logs, "Expected at least one failure log entry"
+                    assert any(final_message in log for log in failure_logs)
+                    assert result["result"]["error_occurred"] is True

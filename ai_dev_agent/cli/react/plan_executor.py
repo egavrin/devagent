@@ -16,6 +16,14 @@ from ai_dev_agent.tools.workflow.plan import plan as create_plan
 from ai_dev_agent.tools.workflow.plan_tracker import update_task_status
 
 
+def _format_summary_text(summary: str | None) -> str:
+    """Normalize final messages for log output."""
+    if not summary:
+        return ""
+    text = " ".join(summary.strip().splitlines())
+    return text[:197] + "..." if len(text) > 200 else text
+
+
 def _check_done_condition(done_when: str, task_result: Any, all_results: list) -> bool:
     """Check if the done_when condition is met."""
     # Simple implementation: check if condition text appears in the result
@@ -150,7 +158,7 @@ def execute_with_planning(
             settings,
             task_prompt,
             use_planning=False,  # Don't plan individual tasks
-            suppress_final_output=True,  # Don't show final output for each task
+            suppress_final_output=False,  # Show full output for each task
             **task_kwargs,
         )
         results.append(task_result)
@@ -165,11 +173,16 @@ def execute_with_planning(
                 and hasattr(run_result, "status")
                 and run_result.status == "failure"
             )
-            final_msg = task_result.get("final_message", "")
+            task_summary = task_result.get("final_message") or getattr(
+                run_result, "stop_reason", ""
+            )
         else:
             # In case it's a RunResult object directly
+            run_result = task_result
             task_failed = hasattr(task_result, "status") and task_result.status == "failure"
-            final_msg = getattr(task_result, "stop_reason", "")
+            task_summary = getattr(task_result, "stop_reason", "")
+
+        summary_text = _format_summary_text(task_summary)
 
         # Update status based on result
         if task_failed:
@@ -179,16 +192,14 @@ def execute_with_planning(
             update_task_status(task_id, "completed")
             tasks_completed += 1
 
-        # Show task result if available
-        if final_msg and final_msg.strip():
-            click.echo(
-                f"\n📝 Result: {final_msg.strip()[:200]}{'...' if len(final_msg) > 200 else ''}\n"
-            )
+        # Note: Task result is already displayed by executor when suppress_final_output=False
+        # No need to display it again here
 
         progress = (i / len(tasks)) * 100
 
         if task_failed:
-            click.echo(f"✗ Task failed. Progress: {progress:.0f}%\n")
+            detail = f" Details: {summary_text}" if summary_text else ""
+            click.echo(f"✗ Task failed. Progress: {progress:.0f}%{detail}\n")
 
             # Fail-fast: stop execution on error
             click.echo("⚠️ Stopping plan execution due to task failure\n")
@@ -199,7 +210,8 @@ def execute_with_planning(
                 update_task_status(remaining_task_id, "skipped")
             break
         else:
-            click.echo(f"✓ Task completed. Progress: {progress:.0f}%\n")
+            detail = f" Summary: {summary_text}" if summary_text else ""
+            click.echo(f"✓ Task completed. Progress: {progress:.0f}%{detail}\n")
 
             # Check early stopping condition
             if done_when and _check_done_condition(done_when, task_result, results):
