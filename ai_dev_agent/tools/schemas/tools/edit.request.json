@@ -2,15 +2,15 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "edit request",
   "type": "object",
-  "required": ["path", "changes"],
+  "required": ["changes"],
   "properties": {
     "path": {
       "type": "string",
-      "description": "Path to the file to edit"
+      "description": "Path to the file to edit (optional for unified diffs, required for SEARCH/REPLACE)"
     },
     "changes": {
       "type": "string",
-      "description": "SEARCH/REPLACE blocks in the format: <<<<<<< SEARCH\\n[content to find]\\n=======\\n[replacement]\\n>>>>>>> REPLACE"
+      "description": "Either SEARCH/REPLACE blocks (<<<<<<< SEARCH\\n...\\n=======\\n...\\n>>>>>>> REPLACE) or unified diff format (--- a/path\\n+++ b/path\\n@@...)"
     }
   },
   "additionalProperties": false

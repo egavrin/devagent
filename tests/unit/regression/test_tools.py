@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ai_dev_agent.tools import FIND, GREP, READ, RUN, SYMBOLS, WRITE
+from ai_dev_agent.tools import EDIT, FIND, GREP, READ, RUN, SYMBOLS
 from ai_dev_agent.tools.registry import ToolContext, registry
 
 
 def test_tool_registry_exposes_expected_tools():
     available = set(registry.available())
-    for tool in (FIND, GREP, READ, RUN, SYMBOLS, WRITE):
+    for tool in (FIND, GREP, READ, RUN, SYMBOLS, EDIT):
         assert tool in available
 
 

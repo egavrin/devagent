@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ai_dev_agent.tool_names import WRITE  # Kept for backward compatibility but not exported
 from ai_dev_agent.tool_names import (
     ALL_TOOLS,
     DELEGATE,
@@ -13,7 +14,6 @@ from ai_dev_agent.tool_names import (
     READ,
     RUN,
     SYMBOLS,
-    WRITE,
 )
 
 __all__ = [
@@ -27,5 +27,5 @@ __all__ = [
     "RUN",
     "PLAN",
     "SYMBOLS",
-    "WRITE",
+    # Note: WRITE is imported but not exported - it's been removed
 ]

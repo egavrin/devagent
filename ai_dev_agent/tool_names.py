@@ -37,5 +37,4 @@ __all__ = [
     "READ",
     "RUN",
     "SYMBOLS",
-    "WRITE",
 ]

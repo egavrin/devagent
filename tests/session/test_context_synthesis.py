@@ -2,7 +2,10 @@ from typing import Optional
 
 from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session.context_synthesis import ContextSynthesizer
-from ai_dev_agent.tools import READ, RUN, WRITE
+from ai_dev_agent.tools import EDIT, READ, RUN
+
+# WRITE has been replaced by EDIT - keeping this alias for test compatibility
+WRITE = EDIT
 
 
 def _tool_call(name: str, arguments: Optional[dict] = None) -> dict:

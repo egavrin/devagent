@@ -176,7 +176,6 @@ def _system_prompt_context(
         "tool_symbols": SYMBOLS,
         "tool_read": READ,
         "tool_run": RUN,
-        "tool_write": "edit",  # WRITE is disabled, redirect to edit
     }
 
 

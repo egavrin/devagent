@@ -13,7 +13,6 @@ from ai_dev_agent.tools.names import (
     READ,
     RUN,
     SYMBOLS,
-    WRITE,
 )
 from ai_dev_agent.tools.registry import registry
 
@@ -28,12 +27,10 @@ def test_constants_match_expected_strings() -> None:
     assert DELEGATE == "delegate"
     assert GET_TASK_STATUS == "get_task_status"
     assert PLAN == "plan"
-    assert WRITE == "write"
     assert EDIT == "edit"
-    # Note: WRITE is disabled but still defined as a constant
+    # WRITE has been removed - EDIT is now the universal file editing tool
     assert ALL_TOOLS == (
         READ,
-        # WRITE,  # Disabled in favor of EDIT
         EDIT,
         RUN,
         FIND,
@@ -46,11 +43,10 @@ def test_constants_match_expected_strings() -> None:
 
 
 def test_all_tools_are_registered() -> None:
-    """Every exported tool name should be available in the registry (except WRITE which is disabled)."""
+    """Every exported tool name should be available in the registry."""
     available = set(registry.available())
     for name in ALL_TOOLS:
-        # WRITE is intentionally disabled, skip it
-        if name == WRITE:
-            assert name not in available, f"{name} should be disabled but is still in registry"
-        else:
-            assert name in available, f"{name} is missing from the registry"
+        assert name in available, f"{name} is missing from the registry"
+
+    # Ensure WRITE is not registered (it's been removed)
+    assert "write" not in available, "write tool should be removed from registry"

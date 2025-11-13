@@ -15,7 +15,7 @@ from ai_dev_agent.cli.utils import build_system_context
 # Tool metadata is registered directly under canonical names
 from ai_dev_agent.providers.llm.base import LLMClient, LLMError, Message, ToolCall, ToolCallResult
 from ai_dev_agent.session import SessionManager, build_system_messages
-from ai_dev_agent.tools import FIND, GREP, READ, RUN, SYMBOLS, WRITE
+from ai_dev_agent.tools import EDIT, FIND, GREP, READ, RUN, SYMBOLS
 from ai_dev_agent.tools import registry as tool_registry
 
 if TYPE_CHECKING:
@@ -157,8 +157,8 @@ class IntentRouter:
         self, settings: Settings, agent_spec: AgentSpec, used_names: set[str]
     ) -> list[dict[str, Any]]:
         """Translate registry specs into LLM tool definitions filtered by agent's allowed tools."""
-        # Full safelist of all available tools
-        all_tools = [FIND, GREP, SYMBOLS, READ, RUN, WRITE]
+        # Full safelist of all available tools (WRITE removed - use EDIT)
+        all_tools = [FIND, GREP, SYMBOLS, READ, RUN, EDIT]
 
         # Add workflow tools (plan, delegate) only if not in a delegated context
         # This prevents nested planning attempts
@@ -191,10 +191,7 @@ class IntentRouter:
             description = spec.description or ""
             if name == RUN:
                 description = self._augment_run_description(description)
-            if name == WRITE and not getattr(settings, "auto_approve_code", False):
-                description = (
-                    description or "Apply a unified diff"
-                ) + " (auto_approve_code is recommended for automated edits)"
+            # WRITE has been removed - EDIT now handles both SEARCH/REPLACE and unified diffs
 
             tools.append(
                 {

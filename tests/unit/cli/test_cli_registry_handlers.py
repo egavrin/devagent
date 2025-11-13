@@ -12,12 +12,10 @@ from ai_dev_agent.cli.handlers.registry_handlers import (
     _build_grep_payload,
     _build_read_payload,
     _build_symbols_payload,
-    _build_write_payload,
     _handle_exec_result,
     _handle_read_result,
     _handle_simple_result,
     _handle_symbols_index_result,
-    _handle_write_result,
     _should_enable_regex,
 )
 from ai_dev_agent.core.utils.config import Settings
@@ -549,53 +547,5 @@ def test_handle_exec_result_prints_streams(capsys: pytest.CaptureFixture[str]) -
     assert "error" in output
 
 
-def test_build_write_payload_warns_when_not_auto_approved(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    ctx = _make_context("write")
-    ctx.obj["settings"].auto_approve_code = False
-
-    payload, meta = _build_write_payload(ctx, {"diff": "--- a\n+++ b\n"})
-
-    output = capsys.readouterr().out
-    assert "auto_approve_code is disabled" in output
-    assert payload == {"diff": "--- a\n+++ b\n"}
-    assert meta == {}
-
-
-def test_build_write_payload_requires_diff() -> None:
-    ctx = _make_context("write")
-
-    with pytest.raises(click.ClickException):
-        _build_write_payload(ctx, {"diff": ""})
-
-
-def test_handle_write_result_prints_status(capsys: pytest.CaptureFixture[str]) -> None:
-    ctx = _make_context("write")
-
-    _handle_write_result(
-        ctx,
-        {},
-        {
-            "applied": True,
-            "changed_files": ["a.py", "b.py"],
-        },
-        {},
-    )
-
-    _handle_write_result(
-        ctx,
-        {},
-        {
-            "applied": False,
-            "changed_files": ["c.py"],
-            "rejected_hunks": ["@@ -1 +1 @@"],
-        },
-        {},
-    )
-
-    output = capsys.readouterr().out
-    assert "Patch applied" in output
-    assert "- a.py" in output
-    assert "Patch failed to apply" in output
-    assert "Rejected hunks" in output
+# WRITE tool tests removed - WRITE has been deprecated in favor of EDIT
+# which supports both SEARCH/REPLACE blocks and unified diffs

@@ -11,7 +11,7 @@ import pytest
 
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.core.utils.constants import RUN_STDOUT_TAIL_CHARS
-from ai_dev_agent.tools import READ, RUN, WRITE, ToolContext
+from ai_dev_agent.tools import EDIT, READ, RUN, ToolContext
 from ai_dev_agent.tools import registry as tool_registry
 
 
@@ -45,19 +45,20 @@ def test_read_and_write(tmp_path: Path) -> None:
     read_result = tool_registry.invoke(READ, {"paths": ["hello.py"]}, ctx)
     assert read_result["files"][0]["content"].startswith("print"), read_result
 
-    diff = """diff --git a/hello.py b/hello.py
---- a/hello.py
+    diff = """--- a/hello.py
 +++ b/hello.py
 @@ -1 +1 @@
 -print('hello')
 +print('world')
 """
-    apply_result = tool_registry.invoke(WRITE, {"diff": diff}, ctx)
-    # Check for either 'applied' or 'success' field (different handlers may use different fields)
-    assert apply_result.get("applied", apply_result.get("success")) is True
-    # diff_stats might not always be present
+    # EDIT tool now supports unified diffs (auto-detected)
+    apply_result = tool_registry.invoke(EDIT, {"path": "hello.py", "changes": diff}, ctx)
+    # EDIT returns 'success' field
+    assert apply_result.get("success") is True
+    # diff_stats should be present for unified diffs
     if "diff_stats" in apply_result:
-        assert apply_result["diff_stats"]["lines"] == 2
+        assert apply_result["diff_stats"]["lines_added"] == 1
+        assert apply_result["diff_stats"]["lines_removed"] == 1
     assert (tmp_path / "hello.py").read_text(encoding="utf-8").strip() == "print('world')"
 
 

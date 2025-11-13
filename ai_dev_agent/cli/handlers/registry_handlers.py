@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import click
 
 from ai_dev_agent.core.utils.tool_utils import expand_tool_aliases
-from ai_dev_agent.tools import FIND, GREP, READ, RUN, SYMBOLS, WRITE
+from ai_dev_agent.tools import EDIT, FIND, GREP, READ, RUN, SYMBOLS
 
 from ..utils import _invoke_registry_tool, _normalize_argument_list, build_system_context
 
@@ -358,43 +358,36 @@ def _handle_exec_result(
         click.echo(result["stderr_tail"].rstrip())
 
 
-def _build_write_payload(
-    ctx: click.Context, arguments: dict[str, Any]
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    diff = arguments.get("diff")
-    if not isinstance(diff, str) or not diff.strip():
-        raise click.ClickException("write requires 'diff' content.")
-
-    settings: Settings = ctx.obj["settings"]
-    if not settings.auto_approve_code:
-        click.echo(
-            "Warning: auto_approve_code is disabled; applying patches may require manual review."
-        )
-
-    return {"diff": diff}, {}
+# WRITE tool has been removed - use EDIT instead which supports both
+# SEARCH/REPLACE blocks and unified diff formats
 
 
-def _handle_write_result(
+def _handle_edit_result(
     _: click.Context,
     __: dict[str, Any],
     result: dict[str, Any],
     ___: dict[str, Any],
 ) -> None:
-    # Check for both "applied" (old WRITE format) and "success" (EDIT/search_replace format)
-    applied = bool(result.get("applied") or result.get("success"))
-    changed = result.get("changed_files") or []
-    if applied:
+    """Handle EDIT tool results (both SEARCH/REPLACE and unified diff formats)."""
+    success = result.get("success", False)
+    changed = result.get("changed_files", [])
+    new = result.get("new_files", [])
+
+    if success:
         click.echo("Patch applied")
     else:
         click.echo("Patch failed to apply")
-        rejected = result.get("rejected_hunks") or []
-        if rejected:
-            click.echo("Rejected hunks:")
-            for hunk in rejected:
-                click.echo(f"- {hunk}")
-    if changed:
-        click.echo("Changed files:")
-        for filename in changed:
+        errors = result.get("errors", [])
+        if errors:
+            click.echo("Errors:")
+            for error in errors:
+                click.echo(f"- {error}")
+
+    all_files = list(set(changed + new))
+    if all_files:
+        label = "Changed files:" if changed else "New files:" if new else "Modified files:"
+        click.echo(label)
+        for filename in all_files:
             click.echo(f"- {filename}")
 
 
@@ -486,11 +479,12 @@ REGISTRY_INTENTS: dict[str, RegistryIntent] = {
         result_handler=_handle_exec_result,
         with_sandbox=False,
     ),
-    WRITE: RegistryIntent(
-        tool_name=WRITE,
-        payload_builder=_build_write_payload,
-        result_handler=_handle_write_result,
+    EDIT: RegistryIntent(
+        tool_name=EDIT,
+        payload_builder=lambda ctx, args: (args, {}),  # Pass through arguments
+        result_handler=_handle_edit_result,
     ),
+    # WRITE has been removed - EDIT now handles both SEARCH/REPLACE and unified diffs
 }
 
 INTENT_HANDLERS: dict[str, RegistryIntent] = expand_tool_aliases(REGISTRY_INTENTS)

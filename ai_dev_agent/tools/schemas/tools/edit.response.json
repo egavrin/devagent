@@ -10,7 +10,7 @@
     },
     "changes_applied": {
       "type": "integer",
-      "description": "Number of SEARCH/REPLACE blocks successfully applied"
+      "description": "Number of SEARCH/REPLACE blocks or files successfully applied"
     },
     "errors": {
       "type": "array",
@@ -25,6 +25,34 @@
         "type": "string"
       },
       "description": "List of warning messages"
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of files that were modified"
+    },
+    "new_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of new files that were created"
+    },
+    "diff_stats": {
+      "type": "object",
+      "description": "Statistics about changes (for unified diff format)",
+      "properties": {
+        "lines_added": {
+          "type": "integer",
+          "description": "Number of lines added"
+        },
+        "lines_removed": {
+          "type": "integer",
+          "description": "Number of lines removed"
+        }
+      }
     }
   },
   "additionalProperties": false

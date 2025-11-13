@@ -15,7 +15,7 @@ from ai_dev_agent.cli import cli
 from ai_dev_agent.cli.router import IntentDecision
 from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.providers.llm.base import ToolCall, ToolCallResult
-from ai_dev_agent.tools import FIND, RUN, WRITE
+from ai_dev_agent.tools import EDIT, FIND, RUN
 
 Predicate = Callable[[str], bool]
 Rule = tuple[Predicate, IntentDecision]
@@ -165,7 +165,7 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
     assist_harness.configure_router(
         (
             lambda prompt: "update greet" in prompt.lower(),
-            IntentDecision(tool=WRITE, arguments={"diff": diff_text}),
+            IntentDecision(tool=EDIT, arguments={"changes": diff_text}),
         ),
     )
 
@@ -198,7 +198,7 @@ def test_assist_can_create_and_run_script(assist_harness: AssistHarness) -> None
     assist_harness.configure_router(
         (
             lambda prompt: "create hello script" in prompt.lower(),
-            IntentDecision(tool=WRITE, arguments={"diff": diff_text}),
+            IntentDecision(tool=EDIT, arguments={"changes": diff_text}),
         ),
     )
 

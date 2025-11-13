@@ -251,7 +251,7 @@ Avoid leaving TODO/FIXME notes, unnecessary commentary, or placeholder implement
 - Finding symbols → `{tool_symbols}` (functions, classes, variables).
 - Reading specific files → `{tool_read}`.
 - Running commands → `{tool_run}`.
-- Making changes → `{tool_write}`.
+- Making changes → `{tool_edit}`.
 
 ## Detailed Tool Reference
 ### `{tool_find}`
@@ -282,17 +282,15 @@ Avoid leaving TODO/FIXME notes, unnecessary commentary, or placeholder implement
 - Use for git operations, running tests, or project scripts.
 - Parameters: `cmd` (string), optional `args` (list).
 
-### `{tool_write}` (DISABLED - Use `{tool_edit}` instead)
-- **This tool has been disabled** in favor of `{tool_edit}` which handles both file creation and editing more reliably.
-- The `edit` tool is simpler, more forgiving, and doesn't have the "file already exists" issues.
-- Please use `{tool_edit}` for all file operations.
-
-### `{tool_edit}` (Recommended for most file operations)
-- Purpose: create new files or edit existing files using a simple block format.
+### `{tool_edit}`
+- Purpose: create new files or edit existing files using SEARCH/REPLACE format or unified diffs.
 - **Tool name**: `edit` (when calling the tool, use `edit` not `write` or `search_replace`)
-- Parameters: `path` (file path), `changes` (string with SEARCH/REPLACE blocks).
-- **Why use this for everything?** Handles both new files and edits. More forgiving than diffs.
-- **Format**: The `edit` tool uses SEARCH/REPLACE blocks:
+- Parameters: `path` (file path), `changes` (string with SEARCH/REPLACE blocks or unified diff).
+- **Supported formats**:
+  1. **SEARCH/REPLACE blocks** (recommended - simpler and more reliable)
+  2. **Unified diffs** (auto-detected when diff markers are present)
+- **Why use this for everything?** Handles both new files and edits. More forgiving than raw diffs.
+- **SEARCH/REPLACE Format** (recommended):
   ```
   <<<<<<< SEARCH
   exact_text_to_find

@@ -92,7 +92,8 @@ def test_sanitize_artifact_list_skips_falsey_entries(tmp_path):
     assert "" not in sanitized
 
 
-def test_read_with_multiple_paths_bypasses_cache(tmp_path):
+def test_read_with_multiple_paths_uses_cache(tmp_path):
+    """Multi-file reads are now cached using composite cache keys."""
     read_calls = {"count": 0}
 
     def read_handler(payload, context):
@@ -116,8 +117,10 @@ def test_read_with_multiple_paths_bypasses_cache(tmp_path):
     invoker(action)
     invoker(action)
 
-    assert read_calls["count"] == 2
-    assert invoker._file_read_cache == {}
+    # Multi-file reads are now cached, so handler is only called once
+    assert read_calls["count"] == 1
+    # Cache should have one entry for the composite key
+    assert len(invoker._file_read_cache) == 1
 
 
 def test_read_cache_records_debug_logs(tmp_path, caplog):
@@ -313,14 +316,30 @@ def test_run_clears_cache(tmp_path, caplog):
     invoker(action_read)
     assert invoker._file_read_cache
 
+    # Test that echo (non-file-modifying) preserves cache
     run_action = ActionRequest(step_id="y", thought="run", tool=RUN, args={"command": "echo"})
     logger_name = tool_invoker_module.LOGGER.name
     caplog.clear()
     with caplog.at_level(logging.DEBUG, logger=logger_name):
         invoker(run_action)
+    # Cache should be preserved because echo doesn't modify files
+    assert len(invoker._file_read_cache) == 1
+    assert any(
+        "Preserving cache: RUN command unlikely to modify files" in record.getMessage()
+        for record in caplog.records
+    )
+
+    # Test that file-modifying command clears cache
+    write_action = ActionRequest(
+        step_id="z", thought="write", tool=RUN, args={"command": "echo 'test' > file.txt"}
+    )
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=logger_name):
+        invoker(write_action)
+    # Cache should be cleared because of file redirection
     assert invoker._file_read_cache == {}
     assert any(
-        "Clearing all file cache due to RUN operation" in record.getMessage()
+        "Clearing file cache: RUN command may modify files" in record.getMessage()
         for record in caplog.records
     )
 
@@ -680,22 +699,24 @@ def test_format_display_message_run_prefers_stderr_preview(tmp_path):
     assert "exit 1" in message
 
 
-def test_format_display_message_write_summarizes_targets(tmp_path):
+def test_format_display_message_edit_summarizes_targets(tmp_path):
+    """EDIT tool (which replaced WRITE) should summarize edited files."""
     session_manager = DummySessionManager()
     invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
 
-    action = ActionRequest(step_id="write", thought="apply", tool="write", args={})
+    action = ActionRequest(step_id="edit", thought="apply", tool="edit", args={})
     observation = Observation(
         success=True,
         outcome="",
         metrics={"artifacts": ["a.py", "b.py", "c.py", "d.py"]},
         artifacts=[],
-        tool="write",
+        tool="edit",
     )
 
-    message = invoker._format_display_message(action, observation, "write")
+    message = invoker._format_display_message(action, observation, "edit")
 
-    assert "a.py" in message and "+1" in message
+    # Should show first file and count of additional files
+    assert "a.py" in message and "+3" in message
 
 
 def test_format_display_message_fallback_for_unknown_tool(tmp_path):

@@ -17,7 +17,7 @@ from ai_dev_agent.core.utils.devagent_config import DevAgentConfig, load_devagen
 from ai_dev_agent.core.utils.logger import get_logger
 from ai_dev_agent.core.utils.tool_utils import canonical_tool_name
 from ai_dev_agent.session import SessionManager
-from ai_dev_agent.tools import EDIT, READ, RUN, WRITE, ToolContext, registry
+from ai_dev_agent.tools import EDIT, READ, RUN, ToolContext, registry
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
 
 # Pipeline module removed - functionality integrated into tool invoker
@@ -377,20 +377,32 @@ class RegistryToolInvoker:
                 LOGGER.debug(f"Cached READ result: {cache_key}")
 
         # Invalidate cache for WRITE/EDIT/RUN operations (they may not have "success" field either)
-        # For WRITE/EDIT/RUN, any non-exception result means success - they would have raised otherwise
-        if tool_name in (WRITE, EDIT, "edit", RUN) and isinstance(result, dict):
+        # For EDIT/RUN, any non-exception result means success - they would have raised otherwise
+        if tool_name in (EDIT, "edit", RUN) and isinstance(result, dict):
             self._invalidate_cache_for_write_or_run(tool_name, payload, result)
 
         return result
 
     def _get_read_cache_key(self, payload: Mapping[str, Any]) -> str | None:
-        """Generate cache key for READ operations."""
+        """Generate cache key for READ operations.
+
+        Supports both single and multiple file reads by creating composite keys.
+        """
+        import hashlib
+
         paths = payload.get("paths", [])
         if not paths:
             return None
-        # Use first path as key (most common case)
-        # For multiple paths, could use hash of sorted paths
-        return str(paths[0]) if len(paths) == 1 else None
+
+        # Single file - use path directly for readability
+        if len(paths) == 1:
+            return str(paths[0])
+
+        # Multiple files - create composite key using hash
+        sorted_paths = sorted(str(p) for p in paths)
+        composite = "|".join(sorted_paths)
+        # Use hash to keep key size manageable
+        return "multi_" + hashlib.md5(composite.encode()).hexdigest()
 
     def _get_from_cache(self, key: str) -> dict[str, Any] | None:
         """Get cached result if not expired."""
@@ -418,22 +430,41 @@ class RegistryToolInvoker:
     def _invalidate_cache_for_write_or_run(
         self, tool_name: str, payload: Mapping[str, Any], result: Mapping[str, Any]
     ) -> None:
-        """Invalidate cache entries that might be affected by WRITE or RUN operations."""
-        if tool_name in (WRITE, EDIT, "edit"):
-            # WRITE/EDIT returns changed_files and new_files - invalidate those
-            # Check both "applied" (for WRITE) and "success" (for EDIT)
-            if result.get("applied") or result.get("success"):
+        """Invalidate cache entries that might be affected by EDIT or RUN operations."""
+        if tool_name in (EDIT, "edit"):
+            # EDIT returns changed_files and new_files - invalidate those
+            if result.get("success"):
                 changed = result.get("changed_files", [])
                 new = result.get("new_files", [])
                 for file_path in set(changed + new):
                     self._invalidate_cache(file_path)
         elif tool_name == RUN:
-            # RUN might modify files indirectly - could be conservative and clear all cache
-            # or try to infer modified files from the command
-            # For now, be conservative and clear all cache when RUN is used
-            if self._file_read_cache:
-                LOGGER.debug("Clearing all file cache due to RUN operation")
+            # RUN might modify files - only clear cache if command likely modifies files
+            command = payload.get("command", "")
+            # Detect file-modifying commands
+            file_modifying_keywords = [
+                "write",
+                "mv",
+                "rm",
+                "cp",
+                "touch",
+                "sed",
+                "awk",
+                ">",
+                ">>",
+                "tee",
+                "dd",
+                "rsync",
+            ]
+            likely_modifies_files = any(keyword in command for keyword in file_modifying_keywords)
+
+            if likely_modifies_files:
+                LOGGER.debug(f"Clearing file cache: RUN command may modify files: {command[:50]}")
                 self._file_read_cache.clear()
+            else:
+                LOGGER.debug(
+                    f"Preserving cache: RUN command unlikely to modify files: {command[:50]}"
+                )
 
     def _wrap_result(self, tool_name: str, result: Mapping[str, Any]) -> Observation:
         success = True
@@ -462,36 +493,6 @@ class RegistryToolInvoker:
             metrics = {"files": len(sanitized_paths), "lines_read": total_lines}
             if sanitized_paths:
                 metrics["artifacts"] = sanitized_paths
-            raw_output = self._dump_json(result)
-        elif tool_name == WRITE:
-            applied = bool(result.get("applied"))
-            rejected = result.get("rejected_hunks") or []
-            success = applied and not rejected
-
-            if applied:
-                outcome = "Patch applied"
-                rejection_reason = None
-            else:
-                first_reason = next((msg for msg in rejected if msg), "")
-                if first_reason:
-                    # Keep the reason compact so the observation stays readable for the agent.
-                    first_line = first_reason.splitlines()[0][:200]
-                    rejection_reason = first_line
-                    outcome = f"Patch rejected: {first_line}"
-                else:
-                    rejection_reason = None
-                    outcome = "Patch rejected: no changes detected"
-
-            metrics = {
-                "applied": applied,
-                "rejected_hunks": len(rejected),
-                **(result.get("diff_stats") or {}),
-            }
-            if rejection_reason:
-                metrics["rejection_reason"] = rejection_reason
-            sanitized_changed = self._sanitize_artifact_list(result.get("changed_files"))
-            artifacts = sanitized_changed
-            metrics["artifacts"] = sanitized_changed
             raw_output = self._dump_json(result)
         elif tool_name == "find":
             sanitized_paths = self._sanitize_file_entries(result.get("files"))
@@ -867,7 +868,7 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             "symbols": "🧭",
             READ: "📖",
             RUN: "⚡",
-            "write": "📝",
+            EDIT: "📝",
             "submit_final_answer": "✅",
         }
         icon = base_icon_map.get(canonical_name, status_ok if success else status_fail)
@@ -968,15 +969,14 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
                 return f"{icon} run{quote(cmd)} → {status} ({preview_label}: {preview_value})"
             return f"{icon} run{quote(cmd)} → {status}"
 
-        if canonical_name == "write":
-            targets = observation.metrics.get("artifacts") or observation.artifacts
-            if isinstance(targets, list) and targets:
-                detail = ", ".join(str(item) for item in targets[:3])
-                if len(targets) > 3:
-                    detail += f" (+{len(targets) - 3})"
-            else:
-                detail = observation.outcome or ("changes applied" if success else "no changes")
-            return f"{icon} write → {detail}"
+        if canonical_name == EDIT:
+            # Show edited files summary
+            artifacts = observation.metrics.get("artifacts", observation.artifacts)
+            if artifacts and isinstance(artifacts, list) and len(artifacts) > 0:
+                first_file = artifacts[0]
+                count_suffix = f" +{len(artifacts) - 1}" if len(artifacts) > 1 else ""
+                return f"{icon} edit → {first_file}{count_suffix}"
+            return f"{icon} edit → {'applied' if success else 'failed'}"
 
         return f"{icon if success else status_fail} {action.tool}{' → ' + (observation.outcome or status_suffix) if observation.outcome else ''}"
 

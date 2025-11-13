@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Mapping, Optional, Tuple
 
 from ai_dev_agent.core.utils.logger import get_logger
+from ai_dev_agent.tools.code.code_edit.diff_utils import DiffProcessor
 
 if TYPE_CHECKING:
     from ai_dev_agent.tools.registry import ToolContext
@@ -265,6 +266,29 @@ def parse_search_replace_blocks(changes_text: str) -> List[SearchReplaceBlock]:
     return blocks
 
 
+def _is_unified_diff(text: str) -> bool:
+    """Detect if text is a unified diff format.
+
+    Args:
+        text: The text to check
+
+    Returns:
+        True if text appears to be a unified diff
+    """
+    # Check for unified diff markers
+    lines = text.splitlines()
+    has_file_headers = False
+    has_hunks = False
+
+    for line in lines:
+        if line.startswith("--- ") or line.startswith("+++ "):
+            has_file_headers = True
+        elif line.startswith("@@"):
+            has_hunks = True
+
+    return has_file_headers and has_hunks
+
+
 def apply_replacements(
     file_path: Path, blocks: List[SearchReplaceBlock]
 ) -> Tuple[str, List[str], List[str]]:
@@ -343,7 +367,7 @@ def apply_replacements(
 
 
 def _fs_edit(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, Any]:
-    """Handler for SEARCH/REPLACE format file editing.
+    """Handler for file editing supporting both SEARCH/REPLACE and unified diff formats.
 
     Args:
         payload: Request payload containing 'path' and 'changes'
@@ -357,92 +381,33 @@ def _fs_edit(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, A
         file_path = payload.get("path")
         changes = payload.get("changes")
 
-        if not file_path:
-            return {
-                "success": False,
-                "changes_applied": 0,
-                "errors": ["Missing required parameter: path"],
-                "warnings": [],
-            }
-
         if not changes:
             return {
                 "success": False,
                 "changes_applied": 0,
                 "errors": ["Missing required parameter: changes"],
                 "warnings": [],
+                "changed_files": [],
+                "new_files": [],
             }
 
-        # Resolve file path with security checks
-        try:
-            target_path = _resolve_path(context.repo_root, file_path)
-        except ValueError as e:
-            return {
-                "success": False,
-                "changes_applied": 0,
-                "errors": [str(e)],
-                "warnings": [],
-            }
-
-        # Check if file exists - if not, we'll create it
-        creating_new_file = not target_path.exists()
-        if creating_new_file:
-            LOGGER.info(f"File {file_path} doesn't exist, will create it")
-
-        # Parse SEARCH/REPLACE blocks
-        try:
-            blocks = parse_search_replace_blocks(changes)
-        except ValueError as e:
-            return {
-                "success": False,
-                "changes_applied": 0,
-                "errors": [f"Invalid SEARCH/REPLACE format: {e}"],
-                "warnings": [],
-            }
-
-        if not blocks:
-            return {
-                "success": False,
-                "changes_applied": 0,
-                "errors": ["No SEARCH/REPLACE blocks found in changes"],
-                "warnings": [],
-            }
-
-        # Apply replacements
-        new_content, applied, errors = apply_replacements(target_path, blocks)
-
-        # Write the modified content if any changes were applied
-        if applied:
-            # Ensure parent directory exists for new files
-            if creating_new_file:
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-
-            target_path.write_text(new_content, encoding="utf-8")
-
-            if creating_new_file:
-                LOGGER.info("Created new file: %s", file_path)
-            else:
-                LOGGER.info(
-                    "Applied %d/%d SEARCH/REPLACE blocks to %s",
-                    len(applied),
-                    len(blocks),
-                    file_path,
-                )
-
-        # Determine success based on whether all blocks were applied
-        success = len(errors) == 0 and len(applied) == len(blocks)
-
-        # Add warnings for partial success
-        warnings = []
-        if applied and errors:
-            warnings.append(f"Partially applied: {len(applied)}/{len(blocks)} blocks succeeded")
-
-        return {
-            "success": success,
-            "changes_applied": len(applied),
-            "errors": errors,
-            "warnings": warnings,
-        }
+        # Detect format and route to appropriate handler
+        if _is_unified_diff(changes):
+            LOGGER.debug("Detected unified diff format, using DiffProcessor")
+            return _apply_unified_diff(changes, file_path, context)
+        else:
+            # SEARCH/REPLACE format requires explicit file path
+            if not file_path:
+                return {
+                    "success": False,
+                    "changes_applied": 0,
+                    "errors": ["SEARCH/REPLACE format requires 'path' parameter"],
+                    "warnings": [],
+                    "changed_files": [],
+                    "new_files": [],
+                }
+            LOGGER.debug("Using SEARCH/REPLACE format")
+            return _apply_search_replace(file_path, changes, context)
 
     except Exception as e:
         LOGGER.exception("Unexpected error in _fs_edit")
@@ -451,4 +416,192 @@ def _fs_edit(payload: Mapping[str, Any], context: ToolContext) -> Mapping[str, A
             "changes_applied": 0,
             "errors": [f"Unexpected error: {type(e).__name__}: {e}"],
             "warnings": [],
+            "changed_files": [],
+            "new_files": [],
+        }
+
+
+def _apply_search_replace(file_path: str, changes: str, context: ToolContext) -> Mapping[str, Any]:
+    """Apply SEARCH/REPLACE format changes.
+
+    Args:
+        file_path: Path to the file to edit
+        changes: SEARCH/REPLACE formatted changes
+        context: Tool execution context
+
+    Returns:
+        Response dictionary with success status and details
+    """
+    # Resolve file path with security checks
+    try:
+        target_path = _resolve_path(context.repo_root, file_path)
+    except ValueError as e:
+        return {
+            "success": False,
+            "changes_applied": 0,
+            "errors": [str(e)],
+            "warnings": [],
+            "changed_files": [],
+            "new_files": [],
+        }
+
+    # Check if file exists - if not, we'll create it
+    creating_new_file = not target_path.exists()
+    if creating_new_file:
+        LOGGER.info(f"File {file_path} doesn't exist, will create it")
+
+    # Parse SEARCH/REPLACE blocks
+    try:
+        blocks = parse_search_replace_blocks(changes)
+    except ValueError as e:
+        return {
+            "success": False,
+            "changes_applied": 0,
+            "errors": [f"Invalid SEARCH/REPLACE format: {e}"],
+            "warnings": [],
+            "changed_files": [],
+            "new_files": [],
+        }
+
+    if not blocks:
+        return {
+            "success": False,
+            "changes_applied": 0,
+            "errors": ["No SEARCH/REPLACE blocks found in changes"],
+            "warnings": [],
+            "changed_files": [],
+            "new_files": [],
+        }
+
+    # Apply replacements
+    new_content, applied, errors = apply_replacements(target_path, blocks)
+
+    # Write the modified content if any changes were applied
+    if applied:
+        # Ensure parent directory exists for new files
+        if creating_new_file:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Atomic write using temporary file
+        temp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+        try:
+            temp_path.write_text(new_content, encoding="utf-8")
+            temp_path.replace(target_path)
+        except Exception:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise
+
+        if creating_new_file:
+            LOGGER.info("Created new file: %s", file_path)
+        else:
+            LOGGER.info(
+                "Applied %d/%d SEARCH/REPLACE blocks to %s",
+                len(applied),
+                len(blocks),
+                file_path,
+            )
+
+    # Determine success based on whether all blocks were applied
+    success = len(errors) == 0 and len(applied) == len(blocks)
+
+    # Add warnings for partial success
+    warnings = []
+    if applied and errors:
+        warnings.append(f"Partially applied: {len(applied)}/{len(blocks)} blocks succeeded")
+
+    return {
+        "success": success,
+        "changes_applied": len(applied),
+        "errors": errors,
+        "warnings": warnings,
+        "changed_files": [file_path] if applied and not creating_new_file else [],
+        "new_files": [file_path] if creating_new_file and applied else [],
+    }
+
+
+def _apply_unified_diff(diff_text: str, file_path: str, context: ToolContext) -> Mapping[str, Any]:
+    """Apply unified diff format changes.
+
+    Args:
+        diff_text: Unified diff text
+        file_path: Expected file path (for validation)
+        context: Tool execution context
+
+    Returns:
+        Response dictionary with success status and details
+    """
+    try:
+        processor = DiffProcessor(context.repo_root)
+
+        # Extract and validate the diff
+        extracted_diff, validation = processor.extract_and_validate_diff(diff_text)
+
+        if validation.errors:
+            return {
+                "success": False,
+                "changes_applied": 0,
+                "errors": validation.errors,
+                "warnings": validation.warnings,
+                "changed_files": [],
+                "new_files": [],
+            }
+
+        # Apply the diff
+        try:
+            applied = processor.apply_diff_safely(extracted_diff)
+            if applied:
+                LOGGER.info(
+                    "Applied unified diff: %d files changed, +%d -%d lines",
+                    len(validation.affected_files),
+                    validation.lines_added,
+                    validation.lines_removed,
+                )
+
+                return {
+                    "success": True,
+                    "changes_applied": len(validation.affected_files),
+                    "errors": [],
+                    "warnings": validation.warnings,
+                    "changed_files": validation.affected_files,
+                    "new_files": [],  # DiffProcessor doesn't distinguish new vs modified
+                    "diff_stats": {
+                        "lines_added": validation.lines_added,
+                        "lines_removed": validation.lines_removed,
+                    },
+                }
+            else:
+                return {
+                    "success": False,
+                    "changes_applied": 0,
+                    "errors": ["Failed to apply diff (no specific error reported)"],
+                    "warnings": validation.warnings,
+                    "changed_files": [],
+                    "new_files": [],
+                }
+
+        except Exception as e:
+            error_msg = str(e)
+            # Extract actionable error message
+            if "DiffError:" in error_msg:
+                error_msg = error_msg.split("DiffError:", 1)[1].strip()
+
+            return {
+                "success": False,
+                "changes_applied": 0,
+                "errors": [error_msg],
+                "warnings": validation.warnings,
+                "changed_files": [],
+                "new_files": [],
+            }
+
+    except Exception as e:
+        LOGGER.exception("Error applying unified diff")
+        return {
+            "success": False,
+            "changes_applied": 0,
+            "errors": [f"Failed to process unified diff: {type(e).__name__}: {e}"],
+            "warnings": [],
+            "changed_files": [],
+            "new_files": [],
         }
