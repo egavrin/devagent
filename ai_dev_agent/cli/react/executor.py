@@ -652,6 +652,7 @@ def _execute_react_assistant(
     format_schema: dict[str, Any] | None = None,
     agent_type: str = "manager",
     suppress_final_output: bool = False,
+    original_user_request: str | None = None,
 ) -> dict[str, Any]:
     """Execute the CLI ReAct loop using the shared engine primitives.
 
@@ -894,6 +895,9 @@ def _execute_react_assistant(
         metadata={
             "iteration_cap": iteration_cap,
             "repository_language": repository_language,
+            "original_user_request": (
+                original_user_request if original_user_request else user_prompt
+            ),
         },
     )
 
@@ -992,7 +996,8 @@ def _execute_react_assistant(
     def _update_system_prompt(phase: str, is_final: bool) -> None:
         session_manager.remove_system_messages(session_id, lambda _msg: True)
         session_local = session_manager.get_session(session_id)
-        user_query = user_prompt
+        # Use original user request if available, otherwise current prompt
+        user_query = original_user_request if original_user_request else user_prompt
         with session_local.lock:
             assistant_messages = [msg for msg in session_local.history if msg.role == "assistant"]
             context = synthesizer.synthesize_previous_steps(

@@ -38,6 +38,7 @@ def delegate(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str,
     agent_name = payload.get("agent")
     task_prompt = payload.get("task")
     extra_context = payload.get("context", {})
+    original_user_request = payload.get("original_request")  # New parameter
 
     if not agent_name:
         return {
@@ -58,6 +59,27 @@ def delegate(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str,
     cli_context = extra.get("cli_context")
     llm_client = extra.get("llm_client")
     session_id = extra.get("session_id")
+
+    # If we don't have original_user_request, try to get it from session metadata
+    if not original_user_request and session_id:
+        try:
+            from ai_dev_agent.session.manager import SessionManager
+
+            session_manager = SessionManager.get_instance()
+            session = session_manager.get_session(session_id)
+            if session and session.metadata:
+                original_user_request = session.metadata.get("original_user_request")
+        except (KeyError, AttributeError):
+            # Session doesn't exist or doesn't have metadata - that's okay
+            pass
+
+    # If we have original user request, include it in the task prompt
+    if original_user_request:
+        task_prompt = f"""Original User Request: {original_user_request}
+
+Delegated Task: {task_prompt}
+
+IMPORTANT: Honor all constraints and instructions from the original user request above."""
 
     if not cli_context:
         return {

@@ -220,8 +220,14 @@ def _generate_tasks_from_goal(
     # Simple, clear prompt - no complexity tiers, no rigid structure
     planning_prompt = f"""Break down this task into logical steps if needed.
 
-**Task**: {goal}
+**Original User Request**: {goal}
 {f"**Context**: {plan_context}" if plan_context else ""}
+
+CRITICAL INSTRUCTIONS:
+1. Preserve ALL user constraints and instructions in task descriptions
+2. If the user says "don't write code", "read-only", "just analyze", "only explain", etc.,
+   include these constraints EXPLICITLY in EVERY relevant task description
+3. Never create implementation tasks when the user asks for analysis only
 
 Guidelines:
 - Use the RIGHT number of steps - as few or as many as actually needed
@@ -229,27 +235,30 @@ Guidelines:
 - Complex tasks might need several steps
 - Don't add unnecessary steps just to pad the plan
 - Don't force Design→Test→Implement→Review unless the task actually requires it
+- ALWAYS preserve user constraints (e.g., "read-only", "no code changes") in task descriptions
 
 Return a JSON array of tasks. Each task should have:
 - title: Clear, actionable title
-- description: What needs to be done
+- description: What needs to be done (INCLUDING any user constraints from the original request)
 - dependencies: Array of task IDs this depends on (or empty array)
 
 Example format:
 {{
   "tasks": [
     {{
-      "title": "Update authentication logic",
-      "description": "Modify the login function to support OAuth",
+      "title": "Analyze authentication logic",
+      "description": "Review the login function to understand OAuth requirements (read-only, no code changes)",
       "dependencies": []
     }},
     {{
-      "title": "Add OAuth configuration",
-      "description": "Set up OAuth provider settings",
+      "title": "Document OAuth configuration needs",
+      "description": "Create documentation for OAuth provider settings (no implementation, documentation only)",
       "dependencies": ["task-1"]
     }}
   ]
 }}
+
+Note: If user said "don't write code", tasks should say things like "(read-only)", "(no code changes)", "(analysis only)" etc.
 
 Return ONLY the JSON, no explanations."""
 

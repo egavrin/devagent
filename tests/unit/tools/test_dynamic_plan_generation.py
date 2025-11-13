@@ -312,12 +312,15 @@ class TestPromptSimplification:
         if system_prompt_path.exists():
             content = system_prompt_path.read_text()
 
-            # Check for minimal guidance
-            assert len(content) < 500  # Should be very short
+            # Check for minimal guidance and constraint handling
+            # Note: Increased from 500 to accommodate constraint preservation instructions
+            assert len(content) < 1500  # Should be concise but include constraint guidance
             assert "no more, no less" in content.lower() or "right number" in content.lower()
             assert (
                 "never force templates" in content.lower() or "never add filler" in content.lower()
             )
+            # Verify constraint handling is included
+            assert "constraint" in content.lower(), "Should include constraint handling guidance"
 
     def test_planner_user_prompt_is_direct(self):
         """Test that user prompt is direct and simple."""

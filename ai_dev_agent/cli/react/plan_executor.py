@@ -69,6 +69,9 @@ def execute_with_planning(
     Returns:
         Dict with execution results
     """
+    # Store original user prompt for context preservation
+    original_user_prompt = user_prompt
+
     # Check if planning is needed
     # First check if always_use_planning is enabled in settings
     always_plan = getattr(settings, "always_use_planning", False)
@@ -147,8 +150,13 @@ def execute_with_planning(
         # Update status to in_progress
         update_task_status(task_id, "in_progress")
 
-        # Execute as a query with the task description
-        task_prompt = f"{task['title']}: {task['description']}"
+        # Execute as a query with the task description AND original context
+        task_prompt = f"""Original User Request: {original_user_prompt}
+
+Current Task: {task['title']}
+Task Description: {task['description']}
+
+IMPORTANT: Honor all constraints and instructions from the original user request above."""
 
         from .executor import _execute_react_assistant
 
@@ -163,6 +171,7 @@ def execute_with_planning(
             task_prompt,
             use_planning=False,  # Don't plan individual tasks
             suppress_final_output=False,  # Show full output for each task
+            original_user_request=original_user_prompt,  # Pass original context
             **task_kwargs,
         )
         results.append(task_result)
