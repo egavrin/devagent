@@ -14,7 +14,7 @@ class TestingAgent(StrategyAgentAdapter):
     def __init__(self):
         super().__init__(
             TestGenerationAgentStrategy(),
-            tools=["read", "write", "grep", "find", "run"],
+            tools=["read", "edit", "grep", "find", "run"],
             capabilities=[
                 "test_generation",
                 "tdd_workflow",

@@ -20,5 +20,5 @@ class ReviewAgent(StrategyAgentAdapter):
                 "best_practices",
             ],
             max_iterations=30,
-            permissions={"write": "deny", "run": "deny"},
+            permissions={"edit": "deny", "run": "deny"},
         )

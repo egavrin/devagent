@@ -12,7 +12,7 @@ class DesignAgent(StrategyAgentAdapter):
     def __init__(self):
         super().__init__(
             DesignAgentStrategy(),
-            tools=["read", "write", "grep", "find", "symbols"],
+            tools=["read", "edit", "grep", "find", "symbols"],
             capabilities=[
                 "technical_design",
                 "reference_analysis",

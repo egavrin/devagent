@@ -23,7 +23,7 @@ class LiveReviewAgent(BaseAgent):
                 "best_practices",
             ],
             tools=["read", "grep", "find", "symbols", "git"],
-            permissions={"read": "allow", "write": "deny", "run": "deny"},
+            permissions={"read": "allow", "edit": "deny", "run": "deny"},
         )
 
     def execute(self, prompt: str, context: AgentContext) -> AgentResult:
@@ -84,7 +84,7 @@ class LiveDesignAgent(BaseAgent):
             name="live_design_agent",
             description="Creates technical designs and architecture (LIVE)",
             capabilities=["technical_design", "architecture_design"],
-            tools=["read", "write", "grep", "find", "symbols"],
+            tools=["read", "edit", "grep", "find", "symbols"],
         )
 
     def execute(self, prompt: str, context: AgentContext) -> AgentResult:

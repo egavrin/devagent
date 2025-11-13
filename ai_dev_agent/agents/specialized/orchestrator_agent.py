@@ -24,7 +24,7 @@ class OrchestratorAgent(BaseAgent):
                 "workflow_management",
                 "parallel_execution",
             ],
-            tools=["read", "write", "grep", "find", "run"],
+            tools=["read", "edit", "grep", "find", "run"],
             max_iterations=50,  # Higher for complex coordination
         )
 
@@ -44,7 +44,7 @@ class OrchestratorAgent(BaseAgent):
                 name="coordination",
                 description="Coordinate multiple agents",
                 required_tools=[],
-                optional_tools=["read", "write"],
+                optional_tools=["read", "edit"],
             ),
             AgentCapability(
                 name="task_delegation",
@@ -56,7 +56,7 @@ class OrchestratorAgent(BaseAgent):
                 name="workflow_management",
                 description="Manage complex workflows",
                 required_tools=[],
-                optional_tools=["write"],
+                optional_tools=["edit"],
             ),
             AgentCapability(
                 name="parallel_execution",
