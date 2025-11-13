@@ -37,6 +37,16 @@ def plan(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str, Any
             "error": "Missing required parameter: goal",
         }
 
+    # Check if this is a delegated execution to prevent nested planning
+    if context.extra and context.extra.get("is_delegated"):
+        LOGGER.warning(
+            "Attempted nested planning in delegated context - blocking to prevent recursion"
+        )
+        return {
+            "success": False,
+            "error": "Nested planning is not allowed. This task is already part of an executing plan. Execute the task directly without creating a sub-plan.",
+        }
+
     # Check if planning is enabled
     from ai_dev_agent.core.utils.config import load_settings
 

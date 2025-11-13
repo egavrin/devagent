@@ -68,10 +68,12 @@ class IntentRouter:
         tools: list[dict[str, Any]] | None = None,
         project_profile: dict[str, Any] | None = None,
         tool_success_history: dict[str, Any] | None = None,
+        is_delegated: bool = False,
     ) -> None:
         self.client = client
         self.settings = settings
         self.agent_spec = AgentRegistry.get(agent_type)
+        self._is_delegated_context = is_delegated  # Track if this is a delegated execution
         try:
             system_context = build_system_context()
         except Exception:
@@ -157,6 +159,14 @@ class IntentRouter:
         """Translate registry specs into LLM tool definitions filtered by agent's allowed tools."""
         # Full safelist of all available tools
         all_tools = [FIND, GREP, SYMBOLS, READ, RUN, WRITE]
+
+        # Add workflow tools (plan, delegate) only if not in a delegated context
+        # This prevents nested planning attempts
+        is_delegated = getattr(self, "_is_delegated_context", False)
+        if not is_delegated:
+            # Workflow tools are only available at top level
+            workflow_tools = ["plan", "delegate"]
+            all_tools.extend(workflow_tools)
 
         # Filter to only include tools allowed for this agent
         safelist = [name for name in all_tools if name in agent_spec.tools]

@@ -351,6 +351,9 @@ class RegistryToolInvoker:
         # Pass cli_context and llm_client for agent delegation (set by SessionAwareToolInvoker)
         if hasattr(self, "cli_context") and self.cli_context is not None:
             extra["cli_context"] = self.cli_context
+            # Pass delegation flag from context to prevent nested planning
+            if hasattr(self.cli_context, "obj") and isinstance(self.cli_context.obj, dict):
+                extra["is_delegated"] = self.cli_context.obj.get("is_delegated", False)
         if hasattr(self, "llm_client") and self.llm_client is not None:
             extra["llm_client"] = self.llm_client
         if hasattr(self, "session_id") and self.session_id is not None:

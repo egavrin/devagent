@@ -146,6 +146,7 @@ class TestSimplifiedPlanning:
         mock_context.repo_root = Path.cwd()
         mock_context.settings = Mock()
         mock_context.sandbox = None
+        mock_context.extra = None  # Not a delegated context
 
         with patch("ai_dev_agent.core.utils.config.load_settings") as mock_settings:
             mock_settings.return_value = Settings(
@@ -368,5 +369,6 @@ class TestConfigurationSimplification:
             mock_context.repo_root = Path.cwd()
             mock_context.settings = Mock()
             mock_context.sandbox = None
+            mock_context.extra = None  # Not a delegated context
             result = plan({"goal": "any goal"}, mock_context)
             assert result["plan"].get("disabled") is True

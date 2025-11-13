@@ -139,6 +139,7 @@ class TestSimplifiedPlanning:
     def test_planning_disabled_returns_empty(self):
         """Test that disabled planning returns empty plan."""
         mock_context = Mock(spec=ToolContext)
+        mock_context.extra = None  # Not a delegated context
 
         with patch("ai_dev_agent.core.utils.config.load_settings") as mock_settings:
             mock_settings.return_value = Settings(
@@ -346,5 +347,6 @@ class TestConfigurationSimplification:
 
             # When used in plan function, should return disabled plan
             mock_context = Mock(spec=ToolContext)
+            mock_context.extra = None  # Not a delegated context
             result = plan({"goal": "any goal"}, mock_context)
             assert result["plan"].get("disabled") is True

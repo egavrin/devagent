@@ -766,12 +766,15 @@ def _execute_react_assistant(
     project_profile = {k: v for k, v in project_profile.items() if v}
 
     router_cls = _resolve_intent_router()
+    # Pass delegation flag to router to prevent nested planning
+    is_delegated = ctx_obj.get("is_delegated", False)
     router = router_cls(
         client,
         settings,
         agent_type=agent_type,
         project_profile=project_profile,
         tool_success_history=ctx_obj.get("_tool_success_history"),
+        is_delegated=is_delegated,
     )
     ctx_obj.setdefault("_router_state", {})["session_id"] = getattr(router, "session_id", None)
     available_tools = getattr(router, "tools", [])

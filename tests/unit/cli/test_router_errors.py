@@ -318,3 +318,54 @@ class TestIntentDecision:
 
         assert decision.tool is None
         assert "text" in decision.arguments
+
+
+class TestIntentRouterDelegationContext:
+    """Test IntentRouter with delegation context for preventing nested planning."""
+
+    def test_workflow_tools_excluded_when_delegated(self):
+        """Test that plan and delegate tools are excluded when is_delegated=True."""
+        settings = Settings()
+        mock_client = Mock()
+
+        # Create router with delegation flag
+        router = IntentRouter(
+            client=mock_client, settings=settings, agent_type="manager", is_delegated=True
+        )
+
+        # Check that workflow tools are not in the tools list
+        tool_names = [tool["function"]["name"] for tool in router.tools]
+        assert "plan" not in tool_names, "plan tool should not be available in delegated context"
+        assert (
+            "delegate" not in tool_names
+        ), "delegate tool should not be available in delegated context"
+
+        # Basic tools should still be present
+        assert "find" in tool_names or "grep" in tool_names, "Basic tools should be available"
+
+    def test_workflow_tools_included_when_not_delegated(self):
+        """Test that plan and delegate tools are included when is_delegated=False."""
+        settings = Settings()
+        mock_client = Mock()
+
+        # Create router without delegation flag
+        router = IntentRouter(
+            client=mock_client, settings=settings, agent_type="manager", is_delegated=False
+        )
+
+        # Check that workflow tools ARE in the tools list for manager agent
+        tool_names = [tool["function"]["name"] for tool in router.tools]
+        assert "plan" in tool_names, "plan tool should be available in top-level context"
+        assert "delegate" in tool_names, "delegate tool should be available in top-level context"
+
+    def test_default_is_not_delegated(self):
+        """Test that is_delegated defaults to False."""
+        settings = Settings()
+        mock_client = Mock()
+
+        # Create router without specifying is_delegated
+        router = IntentRouter(client=mock_client, settings=settings, agent_type="manager")
+
+        # Should default to not delegated (workflow tools available)
+        tool_names = [tool["function"]["name"] for tool in router.tools]
+        assert "plan" in tool_names, "plan tool should be available by default"

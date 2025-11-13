@@ -85,6 +85,11 @@ class AgentExecutor:
             # Build enhanced prompt with agent role
             enhanced_prompt = self._build_agent_prompt(agent, prompt, agent_spec)
 
+            # Mark this as a delegated execution to prevent nested planning
+            if not isinstance(ctx.obj, dict):
+                ctx.obj = {}
+            ctx.obj["is_delegated"] = True
+
             # Execute using ReAct workflow
             result_dict = _execute_react_assistant(
                 ctx=ctx,

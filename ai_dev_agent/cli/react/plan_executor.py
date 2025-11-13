@@ -4,16 +4,20 @@ Simplified plan-based query execution.
 Uses the new simplified planning system without rigid templates.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 
-from ai_dev_agent.core.utils.config import Settings
 from ai_dev_agent.tools.registry import ToolContext
 from ai_dev_agent.tools.workflow.plan import _needs_plan
 from ai_dev_agent.tools.workflow.plan import plan as create_plan
 from ai_dev_agent.tools.workflow.plan_tracker import update_task_status
+
+if TYPE_CHECKING:
+    from ai_dev_agent.core.utils.config import Settings
 
 
 def _format_summary_text(summary: str | None) -> str:
