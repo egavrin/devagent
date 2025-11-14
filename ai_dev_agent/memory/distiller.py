@@ -390,8 +390,8 @@ class MemoryDistiller:
                     # Map to standard tool names
                     if "read" in pattern:
                         tools.append("read")
-                    elif "write" in pattern:
-                        tools.append("write")
+                    elif "write" in pattern or "edit" in pattern:
+                        tools.append("edit")  # WRITE tool replaced by EDIT
                     elif "search" in pattern or "grep" in pattern or "find" in pattern:
                         tools.append("search")
                     elif "run" in pattern:

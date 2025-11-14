@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 _AGENT_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "design": {
-        "tools": ["read", "write", "grep", "find", "symbols"],
+        "tools": ["read", "edit", "grep", "find", "symbols"],
         "capabilities": [
             "technical_design",
             "reference_analysis",
@@ -22,7 +22,7 @@ _AGENT_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "max_iterations": 30,
     },
     "test": {
-        "tools": ["read", "write", "grep", "find", "run"],
+        "tools": ["read", "edit", "grep", "find", "run"],
         "capabilities": [
             "test_generation",
             "tdd_workflow",
@@ -32,7 +32,7 @@ _AGENT_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "max_iterations": 25,
     },
     "implementation": {
-        "tools": ["read", "write", "grep", "find", "run"],
+        "tools": ["read", "edit", "grep", "find", "run"],
         "capabilities": [
             "code_implementation",
             "incremental_development",
@@ -50,7 +50,7 @@ _AGENT_DEFAULTS: Dict[str, Dict[str, Any]] = {
             "best_practices",
         ],
         "max_iterations": 30,
-        "permissions": {"write": "deny", "run": "deny"},
+        "permissions": {"edit": "deny", "run": "deny"},
     },
 }
 

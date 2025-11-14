@@ -198,14 +198,14 @@ Create markdown design document with sections:
 **Process**:
 1. read("api/") to see existing patterns
 2. grep("API") to find similar endpoints
-3. write("docs/design/blog_api_design.md") with complete design including:
+3. edit("docs/design/blog_api_design.md") with complete design including:
    - Requirements: CRUD operations, auth, draft/published states
    - Architecture: BlogController → BlogService → BlogRepository
    - Data Models: BlogPost class with id, title, content, author_id, status, created_at
    - API Specs: GET/POST/PUT/DELETE /api/posts endpoints
    - Implementation Notes: Reuse auth middleware, follow repository pattern
 
-**Total tools: 3** (read → grep → write)
+**Total tools: 3** (read → grep → edit)
 
 ## Tools Available
 
@@ -213,7 +213,7 @@ Create markdown design document with sections:
 - `grep`: Search for patterns and implementations
 - `find`: Locate relevant files
 - `symbols`: Extract code structure
-- `write`: Create design documents
+- `edit`: Create/modify files (supports both SEARCH/REPLACE and unified diffs)
 
 ## Critical Rules
 
@@ -316,19 +316,19 @@ Example test file structure:
 **Process**:
 1. read("docs/design/blog_api_design.md") - understand requirements
 2. read("api/") - see existing test patterns
-3. write("tests/test_blog_api.py") with tests:
+3. edit("tests/test_blog_api.py") with tests:
     - test_create_post_success: Verify post creation works
     - test_create_post_missing_title: Verify validation (ValueError)
     - test_get_post_not_found: Verify 404 handling (NotFound exception)
 4. run("pytest tests/test_blog_api.py") - verify tests FAIL (RED)
 5. Result: "3 tests created, all fail as expected (TDD RED phase) ✓"
 
-**Total tools: 4** (read design → read code → write tests → run)
+**Total tools: 4** (read design → read code → edit tests → run)
 
 ## Tools Available
 
 - `read`: Read existing code and tests
-- `write`: Create test files
+- `edit`: Create/modify test files
 - `run`: Execute tests to verify they fail/pass
 - `grep`: Search for test patterns
 - `find`: Locate test files
@@ -432,20 +432,19 @@ Write clean, minimal Python code that:
 2. read("tests/test_blog_api.py") - see what tests expect
 3. run("pytest tests/test_blog_api.py") - verify RED (3 failures)
 4. read("api/users.py") - see existing controller pattern
-5. write("api/blog.py") - create BlogController class with:
+5. edit("api/blog.py") - create BlogController class with:
    - create_post(title, content, author_id) method that validates input and saves to database
    - get_post(id) method that retrieves from database or raises NotFound
    - Follow existing controller pattern from users.py
 6. run("pytest tests/test_blog_api.py") - verify GREEN (3 passing)
 7. Result: "Implementation complete. All 3 tests pass ✓"
 
-**Total tools: 6** (read design → read tests → run RED → read pattern → write code → run GREEN)
+**Total tools: 6** (read design → read tests → run RED → read pattern → edit code → run GREEN)
 
 ## Tools Available
 
 - `read`: Read designs, tests, and existing code
-- `write`: Create new code files
-- `edit`: Modify existing files
+- `edit`: Create new code files or modify existing ones
 - `run`: Execute tests to verify implementation
 - `grep`/`find`: Locate relevant code
 
@@ -634,12 +633,12 @@ def _register_default_agents() -> None:
     AgentRegistry.register(
         AgentSpec(
             name="manager",
-            tools=["find", "grep", "symbols", "read", "run", "write", "delegate", "plan"],
+            tools=["find", "grep", "symbols", "read", "run", "edit", "delegate", "plan"],
             max_iterations=40,  # Increased from 25 for complex queries
             system_prompt_suffix="""# Intelligent Task Router and Executor
 
 You are a general-purpose coding assistant with advanced capabilities:
-- Tools for file operations (find, grep, read, write, run)
+- Tools for file operations (find, grep, read, edit, run)
 - Code analysis (symbols)
 - Workflow management (plan, delegate)
 
@@ -720,10 +719,10 @@ You MUST use the `delegate` tool for specialized tasks. These agents have expert
 **Why**: Test agent follows TDD workflow and verifies RED phase. You don't.
 
 ### 4. Implementation → delegate(agent='implementation_agent', task='...')
-**Keywords**: implement, code, write, create, build, function, class, module
+**Keywords**: implement, code, create, build, function, class, module
 **Examples**:
 - "Implement user registration feature"
-- "Write function to validate email"
+- "Create function to validate email"
 - "Create database migration script"
 - "Build API endpoint handler"
 
@@ -778,7 +777,7 @@ You MUST use the `delegate` tool for specialized tasks. These agents have expert
 
 **Target tool calls:**
 - Questions: 2-5 calls (find → read → answer)
-- Simple tasks: 3-10 calls (read → edit/write → verify)
+- Simple tasks: 3-10 calls (read → edit → verify)
 - Complex tasks: 1-2 calls (plan → delegate)
 
 **NEVER exceed 15 tool calls** without providing substantive output.
@@ -854,7 +853,7 @@ Total tools: 1 + delegation ✓
     AgentRegistry.register(
         AgentSpec(
             name="design_agent",
-            tools=["read", "write", "grep", "find", "symbols"],
+            tools=["read", "edit", "grep", "find", "symbols"],
             max_iterations=30,
             system_prompt_suffix=DESIGN_AGENT_SYSTEM_PROMPT,
             description="Technical design specialist - creates architecture and designs",
@@ -865,7 +864,7 @@ Total tools: 1 + delegation ✓
     AgentRegistry.register(
         AgentSpec(
             name="test_agent",
-            tools=["read", "write", "run", "grep", "find"],
+            tools=["read", "edit", "run", "grep", "find"],
             max_iterations=30,
             system_prompt_suffix=TEST_AGENT_SYSTEM_PROMPT,
             description="Test generation specialist - follows TDD workflow",
@@ -876,7 +875,7 @@ Total tools: 1 + delegation ✓
     AgentRegistry.register(
         AgentSpec(
             name="implementation_agent",
-            tools=["read", "write", "edit", "run", "grep", "find"],
+            tools=["read", "edit", "run", "grep", "find"],
             max_iterations=35,
             system_prompt_suffix=IMPLEMENTATION_AGENT_SYSTEM_PROMPT,
             description="Code implementation specialist - implements from designs using TDD",

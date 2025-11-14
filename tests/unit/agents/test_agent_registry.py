@@ -17,7 +17,7 @@ def test_agent_registry_get_manager():
     manager = AgentRegistry.get("manager")
     assert manager.name == "manager"
     assert "read" in manager.tools
-    assert "write" in manager.tools
+    assert "edit" in manager.tools  # WRITE tool replaced by EDIT
     assert "run" in manager.tools
     assert manager.max_iterations == 40  # Updated from 25 for complex queries
     assert manager.system_prompt_suffix is not None  # Manager has enhanced prompt
@@ -31,7 +31,7 @@ def test_agent_registry_get_reviewer():
     assert reviewer.name == "reviewer"
     assert "read" in reviewer.tools
     assert "parse_patch" not in reviewer.tools
-    assert "write" not in reviewer.tools  # Reviewers can't write
+    assert "edit" not in reviewer.tools  # Reviewers can't edit files
     assert "run" not in reviewer.tools  # Reviewers can't execute
     assert reviewer.max_iterations == 30
     assert reviewer.system_prompt_suffix is not None
