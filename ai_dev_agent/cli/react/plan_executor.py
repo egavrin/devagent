@@ -24,8 +24,8 @@ def _format_summary_text(summary: str | None) -> str:
     """Normalize final messages for log output."""
     if not summary:
         return ""
-    text = " ".join(summary.strip().splitlines())
-    return text[:197] + "..." if len(text) > 200 else text
+    # Return full summary without truncation
+    return summary.strip()
 
 
 def _check_done_condition(done_when: str, task_result: Any, all_results: list) -> bool:
