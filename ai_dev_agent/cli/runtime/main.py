@@ -51,8 +51,12 @@ class NaturalLanguageGroup(click.Group):
         except click.UsageError as exc:
             if not filtered_args:
                 raise
-            if len(filtered_args) == 1 and "-" in filtered_args[0]:
-                raise exc
+            # Only reject single-arg if it looks like a flag or single-word hyphenated command
+            # Allow natural language phrases with hyphens like "step-by-step guide"
+            if len(filtered_args) == 1:
+                arg = filtered_args[0]
+                if arg.startswith("-") or (arg.count(" ") == 0 and "-" in arg):
+                    raise exc
             if any(arg.startswith("-") for arg in filtered_args):
                 raise
             query = " ".join(filtered_args).strip()

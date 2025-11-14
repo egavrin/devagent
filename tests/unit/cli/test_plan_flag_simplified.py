@@ -307,3 +307,133 @@ class TestPlanFlagSimplified:
 
                 assert mock_execute_query.called
                 assert result.exit_code == 0
+
+    def test_plan_with_hyphenated_natural_language(self):
+        """Test that natural language queries with hyphens work correctly."""
+        runner = CliRunner()
+
+        with patch(
+            "ai_dev_agent.cli.runtime.commands.query._resolve_pending_prompt"
+        ) as mock_resolve:
+            # Mock the prompt resolution to capture what we route
+            mock_resolve.return_value = "Create a step-by-step implementation guide"
+
+            with patch(
+                "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant"
+            ) as mock_exec:
+                mock_exec.return_value = {
+                    "final_message": "Done",
+                    "result": {},
+                    "printed_final": True,
+                }
+
+                with patch("ai_dev_agent.cli.runtime.main._initialise_state") as mock_init:
+                    mock_settings = Mock()
+                    mock_settings.api_key = "test_key"
+                    mock_settings.planning_enabled = False  # Disable planning for simpler test
+
+                    mock_state = Mock()
+                    mock_state.settings = mock_settings
+                    mock_init.return_value = (mock_settings, {}, mock_state)
+
+                    with patch("ai_dev_agent.cli.runtime.commands.query.get_llm_client"):
+                        # Test with hyphenated phrase in natural language
+                        result = runner.invoke(
+                            cli, ["--plan", "Create a step-by-step implementation guide"]
+                        )
+
+                        # Should have resolved the prompt with hyphens
+                        assert mock_resolve.called
+                        # Check the prompt was passed to resolve correctly
+                        call_args = mock_resolve.call_args
+                        # The context should have the pending NL prompt set
+                        ctx = call_args[0][0]
+                        assert "_pending_nl_prompt" in ctx.meta
+                        assert (
+                            ctx.meta["_pending_nl_prompt"]
+                            == "Create a step-by-step implementation guide"
+                        )
+                        assert result.exit_code == 0
+
+    def test_plan_rejects_single_word_hyphenated_command(self):
+        """Test that single-word hyphenated strings are rejected as invalid commands."""
+        runner = CliRunner()
+
+        with patch("ai_dev_agent.cli.runtime.main._initialise_state") as mock_init:
+            mock_settings = Mock()
+            mock_settings.api_key = "test_key"
+
+            mock_state = Mock()
+            mock_state.settings = mock_settings
+            mock_init.return_value = (mock_settings, {}, mock_state)
+
+            # Single-word hyphenated string should be treated as invalid command
+            result = runner.invoke(cli, ["--plan", "create-design"])
+
+            # Should fail with "No such command" error
+            assert result.exit_code != 0
+            assert "No such command" in result.output or "Usage:" in result.output
+
+    def test_plan_rejects_quoted_flag(self):
+        """Test that quoted flags are rejected and show help."""
+        runner = CliRunner()
+
+        with patch("ai_dev_agent.cli.runtime.main._initialise_state") as mock_init:
+            mock_settings = Mock()
+            mock_settings.api_key = "test_key"
+
+            mock_state = Mock()
+            mock_state.settings = mock_settings
+            mock_init.return_value = (mock_settings, {}, mock_state)
+
+            # Quoted flag should be rejected
+            result = runner.invoke(cli, ["--plan", "--help"])
+
+            # Should fail or show help
+            assert result.exit_code != 0 or "Usage:" in result.output
+
+    def test_natural_language_with_multiple_hyphens(self):
+        """Test natural language with multiple hyphenated words."""
+        runner = CliRunner()
+
+        with patch(
+            "ai_dev_agent.cli.runtime.commands.query._resolve_pending_prompt"
+        ) as mock_resolve:
+            # Mock the prompt resolution to capture what we route
+            expected_prompt = (
+                "Implement state-of-the-art end-to-end testing with before-after comparisons"
+            )
+            mock_resolve.return_value = expected_prompt
+
+            with patch(
+                "ai_dev_agent.cli.runtime.commands.query._execute_react_assistant"
+            ) as mock_exec:
+                mock_exec.return_value = {
+                    "final_message": "Done",
+                    "result": {},
+                    "printed_final": True,
+                }
+
+                with patch("ai_dev_agent.cli.runtime.main._initialise_state") as mock_init:
+                    mock_settings = Mock()
+                    mock_settings.api_key = "test_key"
+                    mock_settings.planning_enabled = False  # Disable planning for simpler test
+
+                    mock_state = Mock()
+                    mock_state.settings = mock_settings
+                    mock_init.return_value = (mock_settings, {}, mock_state)
+
+                    with patch("ai_dev_agent.cli.runtime.commands.query.get_llm_client"):
+                        # Complex query with multiple hyphenated words
+                        result = runner.invoke(
+                            cli,
+                            [expected_prompt],
+                        )
+
+                        # Should have resolved the prompt with all hyphens
+                        assert mock_resolve.called
+                        call_args = mock_resolve.call_args
+                        ctx = call_args[0][0]
+                        assert "_pending_nl_prompt" in ctx.meta
+                        assert ctx.meta["_pending_nl_prompt"] == expected_prompt
+                        assert result.exit_code == 0
