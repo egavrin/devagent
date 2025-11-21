@@ -377,11 +377,14 @@ modified3
 
     result = _fs_edit(payload, tool_context)
 
+    # With pre-validation, ALL blocks must be valid before ANY are applied
+    # This prevents partial file modifications
     assert result["success"] is False  # Not all blocks succeeded
-    assert result["changes_applied"] == 2  # 2 out of 3 succeeded
+    assert result["changes_applied"] == 0  # Pre-validation prevents ANY changes
     assert len(result["errors"]) == 1
-    assert len(result["warnings"]) == 1
-    assert "2/3 blocks succeeded" in result["warnings"][0]
+    assert "pre-validation failed" in result["errors"][0]
+    # File should not be modified
+    assert test_file.read_text(encoding="utf-8") == "line1\nline2\nline3"
 
 
 def test_out_of_order_replacements(git_repo: Path) -> None:

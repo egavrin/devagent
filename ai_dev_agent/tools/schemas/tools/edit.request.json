@@ -6,11 +6,11 @@
   "properties": {
     "path": {
       "type": "string",
-      "description": "Path to the file to edit (optional for unified diffs, required for SEARCH/REPLACE)"
+      "description": "Path to the file to edit (required for SEARCH/REPLACE format)"
     },
     "changes": {
       "type": "string",
-      "description": "Either SEARCH/REPLACE blocks (<<<<<<< SEARCH\\n...\\n=======\\n...\\n>>>>>>> REPLACE) or unified diff format (--- a/path\\n+++ b/path\\n@@...)"
+      "description": "SEARCH/REPLACE blocks in format: <<<<<<< SEARCH\\n[EXACT text from file - copy from READ tool output]\\n=======\\n[replacement text]\\n>>>>>>> REPLACE. CRITICAL: SEARCH text must match file EXACTLY (character-for-character, including all spaces/tabs/newlines). Always READ the file first and copy exact text. Pre-validation checks all blocks before applying any - if one fails, NO changes are applied. Never paraphrase or retype - copy exact text from READ output. For new files, use empty SEARCH blocks."
     }
   },
   "additionalProperties": false

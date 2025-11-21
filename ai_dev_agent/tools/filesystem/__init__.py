@@ -229,10 +229,13 @@ registry.register(
         request_schema_path=SCHEMA_DIR / "edit.request.json",
         response_schema_path=SCHEMA_DIR / "edit.response.json",
         description=(
-            "Edit or create files using SEARCH/REPLACE blocks. Easier than unified diff for targeted changes. "
-            "For new files, use an empty SEARCH block with your content in REPLACE. "
-            "For existing files, each SEARCH block must match EXACTLY (character-for-character). "
-            "Use multiple blocks for multiple changes. Preferred for most file operations."
+            "Edit or create files using SEARCH/REPLACE blocks. "
+            "WORKFLOW (MANDATORY): 1) READ file first, 2) Copy EXACT text from read output (character-for-character, "
+            "including ALL spaces/tabs/newlines) into SEARCH block, 3) Put new code in REPLACE block. "
+            "PRE-VALIDATION: ALL blocks checked before ANY changes applied - if even ONE character doesn't match exactly, "
+            "NO changes applied, file unchanged. NEVER paraphrase, retype, add comments, or 'clean up' code in SEARCH block - "
+            "it MUST be byte-for-byte identical to file. EXAMPLE: Read shows 'def f(x):\\n    return x' → SEARCH must be "
+            "EXACTLY 'def f(x):\\n    return x' (not 'def f(x):  # function' or 'def f(x): return x'). For new files, use empty SEARCH blocks."
         ),
         category="command",
     )

@@ -6,6 +6,7 @@ Based on successful implementations in Cline and Aider.
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,132 @@ if TYPE_CHECKING:
     from ai_dev_agent.tools.registry import ToolContext
 
 LOGGER = get_logger(__name__)
+
+
+def visualize_whitespace(text: str, max_length: int = 100) -> str:
+    """Visualize whitespace characters in text for better error messages.
+
+    Args:
+        text: The text to visualize
+        max_length: Maximum length of output before truncation
+
+    Returns:
+        Text with visible whitespace markers
+    """
+    # Replace whitespace with visible characters
+    visualized = text.replace(" ", "·").replace("\t", "→").replace("\n", "⏎\n")
+
+    # Truncate if too long
+    if len(visualized) > max_length:
+        visualized = visualized[:max_length] + "..."
+
+    return visualized
+
+
+def _find_closest_match(search_text: str, file_content: str, max_matches: int = 1) -> List[str]:
+    """Find closest matching text in file content using fuzzy matching.
+
+    Args:
+        search_text: The text we're trying to find
+        file_content: The content to search in
+        max_matches: Maximum number of close matches to return
+
+    Returns:
+        List of closest matching snippets from the file
+    """
+    if not search_text or not file_content:
+        return []
+
+    # Use first 150 chars of search text for matching (avoid huge comparisons)
+    search_sample = search_text.strip()[:150]
+
+    # Create sliding window of file content to compare against
+    # Use chunks roughly the size of search text
+    chunk_size = min(len(search_sample) + 50, 200)
+    step_size = max(chunk_size // 3, 20)  # Overlap chunks for better matching
+
+    candidates = []
+    for i in range(0, max(1, len(file_content) - chunk_size + 1), step_size):
+        chunk = file_content[i : i + chunk_size].strip()
+        if chunk:  # Skip empty chunks
+            candidates.append(chunk[:150])  # Limit chunk size for comparison
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_candidates = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            unique_candidates.append(c)
+
+    # Find closest matches using difflib
+    if unique_candidates:
+        matches = difflib.get_close_matches(
+            search_sample, unique_candidates, n=max_matches, cutoff=0.4
+        )
+        return matches
+
+    return []
+
+
+def _validate_search_blocks_exist(
+    target_path: Path, blocks: List["SearchReplaceBlock"]
+) -> Tuple[bool, List[str]]:
+    """Pre-validate that all SEARCH blocks can be found in the file.
+
+    This provides early error detection before attempting to apply changes,
+    which prevents partial file modifications and wasted test cycles.
+
+    Args:
+        target_path: Path to the file being edited
+        blocks: List of SEARCH/REPLACE blocks to validate
+
+    Returns:
+        Tuple of (all_valid, error_messages)
+    """
+    if not target_path.exists():
+        # New file creation - no validation needed
+        return True, []
+
+    content = target_path.read_text(encoding="utf-8")
+    matcher = SearchReplaceMatcher(content)
+
+    errors = []
+    for i, block in enumerate(blocks):
+        # Empty search is valid for full file replacement
+        if not block.search:
+            continue
+
+        # Try to find the search text
+        match_pos = matcher.find_match(block.search, 0)
+        if not match_pos:
+            # No match found - provide detailed error with closest match
+            search_preview = visualize_whitespace(block.search, max_length=200)
+
+            error_msg = (
+                f"Block {i+1}: SEARCH text not found in file (pre-validation failed).\n"
+                f"Searched for (·=space, →=tab, ⏎=newline):\n{search_preview}\n"
+            )
+
+            # Find closest match to help LLM self-correct
+            closest = _find_closest_match(block.search, content, max_matches=1)
+            if closest:
+                closest_preview = visualize_whitespace(closest[0], max_length=200)
+                error_msg += (
+                    f"\nDid you mean to match these lines from the file?\n{closest_preview}\n"
+                )
+                error_msg += "\nIf so, edit your SEARCH block to EXACTLY match those lines.\n"
+                error_msg += "Compare the two carefully for differences in whitespace or content.\n"
+
+            error_msg += (
+                "\nThe SEARCH section must exactly match an existing block of lines including "
+            )
+            error_msg += "all white space, comments, indentation, docstrings, etc.\n"
+            error_msg += "Tip: Read the file first with the READ tool and copy EXACT text, preserving all whitespace."
+
+            errors.append(error_msg)
+
+    return len(errors) == 0, errors
 
 
 def _resolve_path(repo_root: Path, relative: str) -> Path:
@@ -303,17 +430,24 @@ def apply_replacements(
     """
     # Handle new file creation
     if not file_path.exists():
-        # For new files, we only support empty search block (entire file replacement)
-        # or a single block with any content
-        if len(blocks) == 1:
-            if not blocks[0].search:
-                # Empty search = full file content
-                return blocks[0].replace, ["Created new file"], []
-            else:
-                # Non-empty search for new file - just use replace content
-                return blocks[0].replace, ["Created new file with initial content"], []
-        else:
-            return "", [], ["Cannot apply multiple SEARCH/REPLACE blocks to a non-existent file"]
+        # For new files, verify all blocks have empty search and concatenate replace content
+        new_content_parts = []
+        applied_msgs = []
+        for i, block in enumerate(blocks):
+            if block.search:
+                return (
+                    "",
+                    [],
+                    [
+                        f"Block {i+1}: Cannot use non-empty SEARCH for new file creation. "
+                        f"Use empty SEARCH (<<<<<<< SEARCH\\n=======) to add content to new files."
+                    ],
+                )
+            new_content_parts.append(block.replace)
+            applied_msgs.append(f"Block {i+1}: Added content to new file")
+
+        new_content = "".join(new_content_parts)
+        return new_content, applied_msgs, []
 
     content = file_path.read_text(encoding="utf-8")
     matcher = SearchReplaceMatcher(content)
@@ -343,9 +477,15 @@ def apply_replacements(
             # Try searching from the beginning (for out-of-order replacements)
             match_pos = matcher.find_match(block.search, 0)
             if not match_pos:
-                errors.append(
-                    f"Block {i+1}: SEARCH text not found in file:\n{block.search[:100]}..."
+                # Provide enhanced error message with whitespace visualization
+                search_preview = visualize_whitespace(block.search, max_length=200)
+                error_msg = (
+                    f"Block {i+1}: SEARCH text not found in file.\n"
+                    f"Searched for (whitespace shown as ·=space, →=tab, ⏎=newline):\n"
+                    f"{search_preview}\n"
+                    f"Tip: Ensure you copy the EXACT text from the file, including all whitespace."
                 )
+                errors.append(error_msg)
                 continue
 
         block.start_pos, block.end_pos = match_pos
@@ -468,6 +608,24 @@ def _apply_search_replace(file_path: str, changes: str, context: ToolContext) ->
             "success": False,
             "changes_applied": 0,
             "errors": ["No SEARCH/REPLACE blocks found in changes"],
+            "warnings": [],
+            "changed_files": [],
+            "new_files": [],
+        }
+
+    # Pre-validate that SEARCH blocks exist before attempting to apply
+    # This catches failures early and provides better error messages
+    all_valid, validation_errors = _validate_search_blocks_exist(target_path, blocks)
+    if not all_valid:
+        LOGGER.warning(
+            "Pre-validation failed for %s: %d block(s) not found",
+            file_path,
+            len(validation_errors),
+        )
+        return {
+            "success": False,
+            "changes_applied": 0,
+            "errors": validation_errors,
             "warnings": [],
             "changed_files": [],
             "new_files": [],
