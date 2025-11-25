@@ -144,20 +144,19 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
     before = assist_harness.read_text("examples/python_app.py")
     assert "Return a greeting" not in before
 
-    diff_text = (
+    patch_text = (
         textwrap.dedent(
-            '''
-        diff --git a/examples/python_app.py b/examples/python_app.py
-        index 1111111..2222222 100644
-        --- a/examples/python_app.py
-        +++ b/examples/python_app.py
-        @@ -1,2 +1,3 @@
+            """
+        *** Begin Patch
+        *** Update File: examples/python_app.py
+        @@
         -def greet(name):
         -    return f"Hello, {name}!"
         +def greet(name):
-        +    """Return a greeting for the given name."""
+        +    \"\"\"Return a greeting for the given name.\"\"\"
         +    return f"Hello, {name}!"
-        '''
+        *** End Patch
+        """
         ).strip()
         + "\n"
     )
@@ -165,13 +164,13 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
     assist_harness.configure_router(
         (
             lambda prompt: "update greet" in prompt.lower(),
-            IntentDecision(tool=EDIT, arguments={"changes": diff_text}),
+            IntentDecision(tool=EDIT, arguments={"patch": patch_text}),
         ),
     )
 
     result, duration = assist_harness.invoke("Update greet helper with documentation")
 
-    assert "Patch applied" in result.output
+    assert ("Executed edit" in result.output) or ("Patch applied" in result.output)
     assert "examples/python_app.py" in result.output
     updated = assist_harness.read_text("examples/python_app.py")
     assert "Return a greeting for the given name." in updated
@@ -179,17 +178,14 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
 
 
 def test_assist_can_create_and_run_script(assist_harness: AssistHarness) -> None:
-    diff_text = (
+    patch_text = (
         textwrap.dedent(
             """
-        diff --git a/scripts/hello.sh b/scripts/hello.sh
-        new file mode 100755
-        index 0000000..1111111
-        --- /dev/null
-        +++ b/scripts/hello.sh
-        @@ -0,0 +1,2 @@
+        *** Begin Patch
+        *** Add File: scripts/hello.sh
         +#!/usr/bin/env bash
         +echo "Hello from assist script"
+        *** End Patch
         """
         ).strip()
         + "\n"
@@ -198,13 +194,13 @@ def test_assist_can_create_and_run_script(assist_harness: AssistHarness) -> None
     assist_harness.configure_router(
         (
             lambda prompt: "create hello script" in prompt.lower(),
-            IntentDecision(tool=EDIT, arguments={"changes": diff_text}),
+            IntentDecision(tool=EDIT, arguments={"patch": patch_text}),
         ),
     )
 
     create_result, create_duration = assist_harness.invoke("Create hello script for demo")
 
-    assert "Patch applied" in create_result.output
+    assert ("Executed edit" in create_result.output) or ("Patch applied" in create_result.output)
     script_path = assist_harness.path("scripts/hello.sh")
     assert script_path.is_file(), create_result.output
     assert "Hello from assist script" in script_path.read_text(encoding="utf-8")

@@ -4,9 +4,6 @@ from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session.context_synthesis import ContextSynthesizer
 from ai_dev_agent.tools import EDIT, READ, RUN
 
-# WRITE has been replaced by EDIT - keeping this alias for test compatibility
-WRITE = EDIT
-
 
 def _tool_call(name: str, arguments: Optional[dict] = None) -> dict:
     return {
@@ -32,7 +29,13 @@ def test_synthesize_previous_steps_initial_step() -> None:
 
 
 def test_synthesize_previous_steps_merges_recent_activity() -> None:
-    diff = "--- a/ai_dev_agent/session/context_synthesis.py\n+++ b/ai_dev_agent/session/context_synthesis.py\n"
+    patch = """*** Begin Patch
+*** Update File: ai_dev_agent/session/context_synthesis.py
+@@
+-old
++new
+*** End Patch
+"""
     history = [
         Message(
             role="assistant",
@@ -46,8 +49,8 @@ def test_synthesize_previous_steps_merges_recent_activity() -> None:
         Message(
             role="assistant",
             tool_calls=[
-                _tool_call(WRITE, {"diff": diff}),
-                _tool_call(WRITE, {"content": "no diff provided"}),
+                _tool_call(EDIT, {"patch": patch}),
+                _tool_call(EDIT, {"content": "no diff provided"}),
                 _tool_call("symbols", {"name": "ContextSynthesizer"}),
                 _tool_call("ast_analyzer", {"path": "ai_dev_agent/session/context_synthesis.py"}),
             ],
@@ -77,13 +80,19 @@ def test_synthesize_previous_steps_merges_recent_activity() -> None:
 
 
 def test_synthesize_previous_steps_handles_partial_tool_data() -> None:
-    diff = "--- a\n+++ b\n"
+    patch = """*** Begin Patch
+*** Update File: docs/CHANGELOG.md
+@@
+-old
++new
+*** End Patch
+"""
     history = [
         Message(
             role="assistant",
             tool_calls=[
                 _tool_call(READ, {"file_path": "docs/CHANGELOG.md"}),
-                _tool_call(WRITE, {"diff": diff}),
+                _tool_call(EDIT, {"patch": patch}),
                 {"function": {"name": "search", "arguments": {"pattern": "fixme"}}},
                 {"function": {"name": "symbols", "arguments": {}}},
                 {"function": {"name": "ast", "arguments": {"path": ""}}},
@@ -96,7 +105,7 @@ def test_synthesize_previous_steps_handles_partial_tool_data() -> None:
     summary = synthesizer.synthesize_previous_steps(history, current_step=3)
 
     assert "Files examined: docs/CHANGELOG.md" in summary
-    assert "Files modified: " not in summary
+    assert "Files modified: docs/CHANGELOG.md" in summary
     assert "Searches performed: fixme" in summary
     assert "Key discoveries:" not in summary
 

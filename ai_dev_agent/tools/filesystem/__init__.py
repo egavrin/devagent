@@ -229,13 +229,12 @@ registry.register(
         request_schema_path=SCHEMA_DIR / "edit.request.json",
         response_schema_path=SCHEMA_DIR / "edit.response.json",
         description=(
-            "Edit or create files using SEARCH/REPLACE blocks. "
-            "WORKFLOW (MANDATORY): 1) READ file first, 2) Copy EXACT text from read output (character-for-character, "
-            "including ALL spaces/tabs/newlines) into SEARCH block, 3) Put new code in REPLACE block. "
-            "PRE-VALIDATION: ALL blocks checked before ANY changes applied - if even ONE character doesn't match exactly, "
-            "NO changes applied, file unchanged. NEVER paraphrase, retype, add comments, or 'clean up' code in SEARCH block - "
-            "it MUST be byte-for-byte identical to file. EXAMPLE: Read shows 'def f(x):\\n    return x' → SEARCH must be "
-            "EXACTLY 'def f(x):\\n    return x' (not 'def f(x):  # function' or 'def f(x): return x'). For new files, use empty SEARCH blocks."
+            "Apply edits using the canonical apply_patch format. Always send a single 'patch' string that includes "
+            "'*** Begin Patch'/'*** End Patch' sentinels and any number of actions: "
+            "'*** Update File', '*** Add File', or '*** Delete File'. Updates must contain @@ chunks with +/- hunks; "
+            "adds must prefix each new line with '+'. Read files first, copy the exact original text into '-' lines, and "
+            "only emit modifications you intend to make. The tool validates every chunk before writing and reports clear "
+            "errors (missing files, context mismatches, duplicate creations) without applying partial edits."
         ),
         category="command",
     )

@@ -213,7 +213,7 @@ Create markdown design document with sections:
 - `grep`: Search for patterns and implementations
 - `find`: Locate relevant files
 - `symbols`: Extract code structure
-- `edit`: Create/modify files (supports both SEARCH/REPLACE and unified diffs)
+- `edit`: Create/modify files (apply_patch format with add/update/delete/move)
 
 ## Critical Rules
 

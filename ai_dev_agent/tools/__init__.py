@@ -12,7 +12,6 @@ from . import find as _find
 from . import grep as _grep
 from . import symbols as _symbols
 from . import workflow as _workflow
-from .names import WRITE  # Kept for backward compatibility but not in ALL_TOOLS
 from .names import ALL_TOOLS, DELEGATE, EDIT, FIND, GET_TASK_STATUS, GREP, PLAN, READ, RUN, SYMBOLS
 from .registry import ToolContext, ToolSpec, registry
 
@@ -27,7 +26,6 @@ __all__ = [
     "READ",
     "RUN",
     "SYMBOLS",
-    "WRITE",  # Exported for backward compat, but NOT registered as a tool
     "ToolContext",
     "ToolSpec",
     "registry",

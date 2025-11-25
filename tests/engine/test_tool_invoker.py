@@ -21,21 +21,17 @@ from ai_dev_agent.engine.react.types import (
 from ai_dev_agent.tools import EDIT, READ, RUN, ToolSpec, registry
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
 
-# WRITE is disabled, use EDIT instead
-WRITE = EDIT  # Alias for backward compatibility in tests
-
 
 @pytest.fixture(autouse=True)
 def _restore_registry():
     original_read = registry.get(READ)
-    # WRITE is now aliased to EDIT, both use the same tool
-    original_write = registry.get(WRITE)  # This is actually EDIT
+    original_edit = registry.get(EDIT)
     original_run = registry.get(RUN)
     try:
         yield
     finally:
         registry.register(original_read)
-        registry.register(original_write)  # Re-register EDIT
+        registry.register(original_edit)
         registry.register(original_run)
 
 
@@ -80,6 +76,16 @@ class DummySessionManager:
 
     def add_tool_message(self, session_id, tool_call_id, content):
         self.messages.append((session_id, tool_call_id, content))
+
+
+def _patch_for_file(path: str, old: str, new: str) -> str:
+    return f"""*** Begin Patch
+*** Update File: {path}
+@@
+-{old}
++{new}
+*** End Patch
+"""
 
 
 def test_sanitize_artifact_list_skips_falsey_entries(tmp_path):
@@ -193,15 +199,15 @@ def test_wrap_result_includes_structure_hints(tmp_path):
     assert observation.structure_hints["symbols"] == ["Widget"]
 
 
-def test_wrap_result_write_rejection_without_reason(tmp_path):
+def test_wrap_result_edit_rejection_includes_error(tmp_path):
     invoker = _make_invoker(tmp_path)
-    # WRITE is now EDIT, which has different response format
-    # EDIT uses "success" and "errors" instead of "applied" and "rejected_hunks"
-    observation = invoker._wrap_result(WRITE, {"success": False, "errors": ["No changes applied"]})
+    observation = invoker._wrap_result(
+        EDIT, {"success": False, "errors": ["No changes applied"], "changed_files": []}
+    )
 
     assert observation.success is False
-    # The outcome message will be different for EDIT tool
-    assert "edit" in observation.tool.lower() or "write" in observation.tool.lower()
+    assert "Edit failed" in observation.outcome
+    assert observation.metrics["errors"] == ["No changes applied"]
 
 
 def test_wrap_result_handles_non_mapping_results(tmp_path):
@@ -210,6 +216,57 @@ def test_wrap_result_handles_non_mapping_results(tmp_path):
     observation = invoker._wrap_result("custom", ["unexpected"])
 
     assert observation.metrics["raw"] == ["unexpected"]
+
+
+def test_edit_preflight_auto_corrects_colonless_patch(tmp_path):
+    """Test that missing colon is auto-corrected with warning."""
+    invoker = _make_invoker(tmp_path)
+    target = tmp_path / "README.md"
+    target.write_text("old content\n", encoding="utf-8")
+
+    action = ActionRequest(
+        step_id="preflight",
+        thought="try edit with missing colon",
+        tool=EDIT,
+        args={
+            "patch": "*** Begin Patch\n*** Update File README.md\n@@\n-old content\n+new content\n*** End Patch"
+        },
+    )
+    observation = invoker(action)
+
+    # Should succeed - auto-correction fixes the missing colon
+    assert observation.success is True
+    # Warning should indicate auto-correction happened
+    warnings = observation.metrics.get("warnings", [])
+    assert any("Auto-corrected" in w for w in warnings)
+
+
+def test_edit_preflight_detects_context_mismatch(tmp_path):
+    invoker = _make_invoker(tmp_path)
+    target = tmp_path / "sample.py"
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+
+    def exploding_edit(payload, context):
+        raise AssertionError("Preflight should block invalid patch")
+
+    with _temporary_tool(EDIT, exploding_edit):
+        patch = """*** Begin Patch
+*** Update File: sample.py
+@@
+-VALUE = 2
++VALUE = 3
+*** End Patch
+"""
+        action = ActionRequest(
+            step_id="preflight",
+            thought="replace value",
+            tool=EDIT,
+            args={"patch": patch},
+        )
+        observation = invoker(action)
+
+    assert observation.success is False
+    assert any("context" in err.lower() for err in observation.metrics["errors"])
 
 
 @contextmanager
@@ -243,15 +300,20 @@ def test_read_cache_and_write_invalidation(tmp_path):
         file_on_disk = context.repo_root / path
         return {"files": [{"path": path, "content": file_on_disk.read_text()}]}
 
-    def write_handler(payload, context):
-        path = payload["path"]
-        (context.repo_root / path).write_text(payload.get("content", ""))
-        # Since WRITE is now aliased to EDIT, return EDIT-style response
+    def edit_handler(payload, context):
+        patch = payload["patch"]
+        lines = [line.strip() for line in patch.splitlines() if line.strip()]
+        header = next(line for line in lines if line.startswith("*** Update File:"))
+        path = header[len("*** Update File:") :].strip()
+        new_line = next(
+            line[1:] for line in lines if line.startswith("+") and not line.startswith("++")
+        )
+        (context.repo_root / path).write_text(new_line)
         return {
             "success": True,
-            "applied": True,  # Keep for backward compat
             "changed_files": [path],
-            "diff_stats": {"additions": 1, "deletions": 0},
+            "new_files": [],
+            "errors": [],
         }
 
     registry.register(
@@ -261,7 +323,7 @@ def test_read_cache_and_write_invalidation(tmp_path):
     )
     registry.register(
         ToolSpec(
-            name=WRITE, handler=write_handler, request_schema_path=None, response_schema_path=None
+            name=EDIT, handler=edit_handler, request_schema_path=None, response_schema_path=None
         )
     )
 
@@ -279,8 +341,8 @@ def test_read_cache_and_write_invalidation(tmp_path):
     write_action = ActionRequest(
         step_id="2",
         thought="write",
-        tool=WRITE,
-        args={"path": "foo.txt", "content": "two"},
+        tool=EDIT,
+        args={"patch": _patch_for_file("foo.txt", "one", "two")},
     )
     obs_write = invoker(write_action)
     assert obs_write.success
@@ -387,31 +449,38 @@ def test_tool_invoker_wrap_result_formats_misc_tools(tmp_path):
         assert "src/a.py" in obs_symbols.artifacts
 
 
-def test_tool_invoker_write_rejection_sets_reason(tmp_path):
-    def rejecting_write(payload, context):
+def test_tool_invoker_edit_rejection_sets_reason(tmp_path):
+    def rejecting_edit(payload, context):
         return {
-            "applied": False,
-            "rejected_hunks": ["Patch failure\nDetailed mismatch"],
-            "diff_stats": {"additions": 0, "deletions": 0},
+            "success": False,
+            "errors": ["Patch failure\nDetailed mismatch"],
+            "changed_files": [],
         }
 
     registry.register(
         ToolSpec(
-            name=WRITE,
-            handler=rejecting_write,
+            name=EDIT,
+            handler=rejecting_edit,
             request_schema_path=None,
             response_schema_path=None,
         )
     )
 
     invoker = _make_invoker(tmp_path)
-    action = ActionRequest(step_id="w", thought="write", tool=WRITE, args={"path": "file.txt"})
+    file_path = tmp_path / "file.txt"
+    file_path.write_text("old", encoding="utf-8")
+    patch = _patch_for_file("file.txt", "old", "new")
+    action = ActionRequest(
+        step_id="w",
+        thought="write",
+        tool=EDIT,
+        args={"path": "file.txt", "patch": patch},
+    )
     observation = invoker(action)
 
     assert observation.success is False
-    assert observation.metrics["rejected_hunks"] == 1
-    assert observation.metrics["rejection_reason"] == "Patch failure"
-    assert "Patch rejected" in observation.outcome
+    assert observation.metrics["errors"] == ["Patch failure\nDetailed mismatch"]
+    assert "Edit failed" in observation.outcome
 
 
 def test_tool_invoker_run_observation_formats_output(tmp_path):
@@ -719,6 +788,44 @@ def test_format_display_message_edit_summarizes_targets(tmp_path):
     assert "a.py" in message and "+3" in message
 
 
+def test_format_display_message_edit_failure_includes_error(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="edit", thought="apply", tool="edit", args={})
+    observation = Observation(
+        success=False,
+        outcome="Edit failed: Missing patch",
+        metrics={
+            "errors": ["EDIT tool requires a 'patch' string containing the canonical format."]
+        },
+        artifacts=[],
+        tool="edit",
+    )
+
+    message = invoker._format_display_message(action, observation, "edit")
+
+    assert "failed" in message
+    assert "requires a 'patch' string" in message
+
+
+def test_edit_without_patch_returns_clear_error(tmp_path):
+    """Calling EDIT without a patch payload should surface a precise error."""
+    invoker = _make_invoker(tmp_path)
+
+    action = ActionRequest(
+        step_id="nopatch",
+        thought="insert section",
+        tool=EDIT,
+        args={"path": "README.md"},  # Missing patch
+    )
+    observation = invoker(action)
+
+    assert observation.success is False
+    assert observation.metrics.get("errors")
+    assert "requires a 'patch' string" in observation.metrics["errors"][0]
+
+
 def test_format_display_message_fallback_for_unknown_tool(tmp_path):
     session_manager = DummySessionManager()
     invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
@@ -904,7 +1011,7 @@ def test_session_invoker_batch_records_each_result(tmp_path):
         return {"files": [{"path": payload["paths"][0], "content": "text"}]}
 
     def write_handler(payload, context):
-        return {"applied": True, "changed_files": [payload["path"]], "diff_stats": {}}
+        return {"success": True, "changed_files": [payload["path"]], "new_files": []}
 
     registry.register(
         ToolSpec(
@@ -913,13 +1020,13 @@ def test_session_invoker_batch_records_each_result(tmp_path):
     )
     registry.register(
         ToolSpec(
-            name=WRITE, handler=write_handler, request_schema_path=None, response_schema_path=None
+            name=EDIT, handler=write_handler, request_schema_path=None, response_schema_path=None
         )
     )
 
     tool_calls = [
         ToolCall(tool=READ, args={"paths": ["foo.txt"]}, call_id="read-1"),
-        ToolCall(tool=WRITE, args={"path": "bar.txt", "content": "v"}, call_id="write-1"),
+        ToolCall(tool=EDIT, args={"path": "bar.txt", "content": "v"}, call_id="write-1"),
     ]
 
     action = ActionRequest(
@@ -1063,6 +1170,36 @@ def test_session_invoker_records_stdout_from_raw_output(tmp_path):
     assert "(See .devagent/artifacts/run.txt" in content
 
 
+def test_session_invoker_edit_failure_records_errors(tmp_path):
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(
+        step_id="edit",
+        thought="apply",
+        tool=EDIT,
+        args={"patch": "*** Begin Patch\n*** Update File: foo.py\n*** End Patch"},
+        metadata={"tool_call_id": "edit-call"},
+    )
+    observation = CLIObservation(
+        success=False,
+        outcome="Edit failed: Missing context",
+        metrics={"errors": ["Chunk 1 mismatch", "Chunk 2 missing EOF"]},
+        artifacts=[],
+        tool=EDIT,
+        raw_output=None,
+        formatted_output=None,
+        display_message=None,
+    )
+
+    invoker._record_tool_message(action, observation)
+
+    assert session_manager.messages
+    _, _, content = session_manager.messages[-1]
+    assert "Chunk 1 mismatch" in content
+    assert "Chunk 2 missing EOF" in content
+
+
 def test_tool_invoker_handles_runtime_exception(tmp_path):
     invoker = _make_invoker(tmp_path)
 
@@ -1128,27 +1265,26 @@ def test_invoke_registry_passes_shell_context(tmp_path, monkeypatch):
     assert captured["extra"]["shell_session_id"] == "shell-123"
 
 
-def test_session_invoker_write_display_message(tmp_path):
+def test_session_invoker_edit_display_message(tmp_path):
     session_manager = DummySessionManager()
     invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
 
-    def write_handler(payload, context):
+    def edit_handler(payload, context):
         return {
-            "applied": True,
+            "success": True,
             "changed_files": [f"src/file_{i}.py" for i in range(5)],
-            "diff_stats": {},
+            "new_files": [],
         }
 
-    with _temporary_tool(WRITE, write_handler):
+    with _temporary_tool(EDIT, edit_handler):
         action = ActionRequest(
             step_id="w",
             thought="apply patch",
-            tool=WRITE,
+            tool=EDIT,
             args={"path": "src/file_0.py", "content": "new"},
         )
         observation = invoker(action)
 
-    # WRITE is now aliased to EDIT, so the display should show "edit"
     assert "edit" in observation.display_message.lower()
     # The display shows number of changed files
     assert "→" in observation.display_message  # Shows outcome
@@ -1262,9 +1398,9 @@ def test_tool_result_validation(tmp_path):
 
     def messy_write(payload, context):
         return {
-            "applied": True,
+            "success": True,
             "changed_files": ["src/a.py", None, 123],
-            "diff_stats": {"additions": 1, "deletions": 0},
+            "new_files": [],
         }
 
     def messy_run(payload, context):
@@ -1277,7 +1413,7 @@ def test_tool_result_validation(tmp_path):
 
     with ExitStack() as stack:
         stack.enter_context(_temporary_tool("find", messy_find))
-        stack.enter_context(_temporary_tool(WRITE, messy_write))
+        stack.enter_context(_temporary_tool(EDIT, messy_write))
         stack.enter_context(_temporary_tool(RUN, messy_run))
 
         find_action = ActionRequest(
@@ -1293,16 +1429,22 @@ def test_tool_result_validation(tmp_path):
         ]
         assert "42" not in find_observation.artifacts
 
+        target = tmp_path / "src" / "a.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("old", encoding="utf-8")
+
         write_action = ActionRequest(
             step_id="write",
             thought="apply",
-            tool=WRITE,
-            args={"path": "src/a.py", "content": "new"},
+            tool=EDIT,
+            args={
+                "patch": _patch_for_file("src/a.py", "old", "new"),
+            },
         )
         write_observation = invoker(write_action)
         assert write_observation.success is True
         assert write_observation.artifacts == ["src/a.py"]
-        assert write_observation.metrics["applied"] is True
+        assert write_observation.metrics["success"] is True
 
         run_action = ActionRequest(
             step_id="run",

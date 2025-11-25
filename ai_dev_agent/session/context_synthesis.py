@@ -8,6 +8,41 @@ from typing import TYPE_CHECKING
 
 from ai_dev_agent.tools import EDIT, READ, RUN
 
+
+def _extract_modified_paths(diff_text: str) -> set[str]:
+    """Extract file paths from apply_patch or unified diff strings."""
+    paths: set[str] = set()
+    if not diff_text:
+        return paths
+
+    for raw_line in diff_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if (
+            line.startswith("*** Update File:")
+            or line.startswith("*** Add File:")
+            or line.startswith("*** Delete File:")
+        ):
+            _, _, remainder = line.partition(":")
+            candidate = remainder.strip()
+            if candidate:
+                paths.add(candidate)
+            continue
+
+        if line.startswith("--- ") or line.startswith("+++ "):
+            candidate = line[4:].strip()
+            if candidate == "/dev/null":
+                continue
+            if candidate.startswith(("a/", "b/")):
+                candidate = candidate[2:]
+            if candidate:
+                paths.add(candidate)
+
+    return paths
+
+
 if TYPE_CHECKING:
     from ai_dev_agent.providers.llm.base import Message
 
@@ -54,25 +89,16 @@ class ContextSynthesizer:
                                 paths = args.get("paths") or [args.get("file_path")]
                                 files_examined.update(p for p in paths if p)
 
-                        # Track file modifications (EDIT or legacy WRITE)
-                        elif (
-                            tool_name == EDIT
-                            or "edit" in tool_name.lower()
-                            or "write" in tool_name.lower()
-                        ):
+                        # Track file modifications (EDIT tool invocations)
+                        elif tool_name == EDIT or "edit" in tool_name.lower():
                             if isinstance(args, dict):
                                 # Track path from edit operations
                                 path = args.get("path")
                                 if path:
                                     files_modified.add(path)
-                                # Also extract paths from diff content
-                                diff_or_changes = args.get("diff") or args.get("changes")
-                                if diff_or_changes and isinstance(diff_or_changes, str):
-                                    # Extract file paths from unified diff headers
-                                    for line in diff_or_changes.splitlines():
-                                        if line.startswith("--- a/") or line.startswith("+++ b/"):
-                                            file_path = line[6:].split()[0]
-                                            files_modified.add(file_path)
+                                diff_or_patch = args.get("patch") or args.get("diff")
+                                if isinstance(diff_or_patch, str):
+                                    files_modified.update(_extract_modified_paths(diff_or_patch))
 
                         # Track searches
                         elif "search" in tool_name.lower() or "grep" in tool_name.lower():

@@ -19,6 +19,7 @@ from ai_dev_agent.core.utils.tool_utils import canonical_tool_name
 from ai_dev_agent.session import SessionManager
 from ai_dev_agent.tools import EDIT, READ, RUN, ToolContext, registry
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
+from ai_dev_agent.tools.filesystem.search_replace import PatchApplier, PatchFormatError, PatchParser
 
 # Pipeline module removed - functionality integrated into tool invoker
 from .types import ActionRequest, CLIObservation, Observation, ToolCall, ToolResult
@@ -359,6 +360,15 @@ class RegistryToolInvoker:
         if hasattr(self, "session_id") and self.session_id is not None:
             extra["session_id"] = self.session_id
 
+        if tool_name in (EDIT, "edit"):
+            LOGGER.debug(
+                "EDIT payload received keys=%s",
+                list(payload.keys()),
+            )
+            checklist_failure = self._validate_edit_payload(payload)
+            if checklist_failure is not None:
+                return checklist_failure
+
         ctx = ToolContext(
             repo_root=self.workspace,
             settings=self.settings,
@@ -376,12 +386,69 @@ class RegistryToolInvoker:
                 self._add_to_cache(cache_key, result)
                 LOGGER.debug(f"Cached READ result: {cache_key}")
 
-        # Invalidate cache for WRITE/EDIT/RUN operations (they may not have "success" field either)
+        # Invalidate cache for EDIT/RUN operations (they may not have "success" field either)
         # For EDIT/RUN, any non-exception result means success - they would have raised otherwise
         if tool_name in (EDIT, "edit", RUN) and isinstance(result, dict):
             self._invalidate_cache_for_write_or_run(tool_name, payload, result)
 
         return result
+
+    def _validate_edit_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        """Run a pre-flight checklist for EDIT payloads before invoking registry tools.
+
+        Uses parse_with_warnings() to auto-correct minor format issues (like missing colons)
+        and layered fuzzy matching for whitespace tolerance.
+        """
+        patch_value = payload.get("patch")
+        if not isinstance(patch_value, str) or not patch_value.strip():
+            LOGGER.warning(
+                "EDIT invocation missing patch payload; received keys: %s", list(payload.keys())
+            )
+            return {
+                "success": False,
+                "errors": [
+                    "EDIT tool requires a 'patch' string containing the canonical "
+                    "*** Begin Patch ... *** End Patch payload."
+                ],
+                "warnings": [],
+                "changed_files": [],
+                "new_files": [],
+            }
+
+        all_warnings: list[str] = []
+
+        try:
+            parser = PatchParser(patch_value)
+            parse_result = parser.parse_with_warnings()
+            actions = parse_result.actions
+            all_warnings.extend(parse_result.warnings)
+        except PatchFormatError as exc:
+            return {
+                "success": False,
+                "errors": [str(exc)],
+                "warnings": [],
+                "changed_files": [],
+                "new_files": [],
+            }
+
+        validator = PatchApplier(self.workspace)
+        validation = validator.apply(actions, dry_run=True)
+        if not validation["success"]:
+            # Combine warnings and add recovery steps
+            all_warnings.extend(validation.get("warnings", []))
+            return {
+                "success": False,
+                "errors": validation["errors"],
+                "warnings": all_warnings,
+                "changed_files": [],
+                "new_files": [],
+            }
+
+        # If we got parser warnings (auto-corrections), log them
+        if all_warnings:
+            LOGGER.info("EDIT pre-validation passed with warnings: %s", all_warnings)
+
+        return None
 
     def _get_read_cache_key(self, payload: Mapping[str, Any]) -> str | None:
         """Generate cache key for READ operations.
@@ -536,58 +603,26 @@ class RegistryToolInvoker:
             ]
             raw_output = self._dump_json(symbols[:20])
         elif tool_name == "edit" or tool_name == EDIT:
-            # Handle EDIT tool results - support both new EDIT format and legacy WRITE format
-            # Check for WRITE-style response (has "applied" field)
-            if "applied" in result:
-                # Legacy WRITE format
-                applied = bool(result.get("applied"))
-                rejected = result.get("rejected_hunks") or []
-                success = applied and not rejected
+            success = bool(result.get("success", True))
+            errors = result.get("errors", [])
 
-                if applied:
-                    outcome = "Patch applied"
-                    rejection_reason = None
-                else:
-                    first_reason = next((msg for msg in rejected if msg), "")
-                    if first_reason:
-                        # Keep the reason compact so the observation stays readable for the agent.
-                        first_line = first_reason.splitlines()[0][:200]
-                        rejection_reason = first_line
-                        outcome = f"Patch rejected: {first_line}"
-                    else:
-                        rejection_reason = None
-                        outcome = "Patch rejected: no changes detected"
-
-                metrics = {
-                    "applied": applied,
-                    "rejected_hunks": len(rejected),
-                    **(result.get("diff_stats") or {}),
-                }
-                if rejection_reason:
-                    metrics["rejection_reason"] = rejection_reason
-                sanitized_changed = self._sanitize_artifact_list(result.get("changed_files"))
-                artifacts = sanitized_changed
-                metrics["artifacts"] = sanitized_changed
+            if success:
+                outcome = "Executed edit"
+                changed_files = self._sanitize_artifact_list(result.get("changed_files"))
+                new_files = self._sanitize_artifact_list(result.get("new_files"))
+                combined = self._sanitize_artifact_list(
+                    list(dict.fromkeys(changed_files + new_files))
+                )
+                if combined:
+                    artifacts = combined
             else:
-                # New EDIT format
-                success = bool(result.get("success", True))
-                errors = result.get("errors", [])
-
-                if success:
-                    outcome = "Executed edit"
-                    # Check for changed_files in successful edits
-                    changed_files = result.get("changed_files", [])
-                    if changed_files:
-                        artifacts = self._sanitize_artifact_list(changed_files)
+                if errors:
+                    first_error = errors[0] if isinstance(errors, list) else str(errors)
+                    outcome = f"Edit failed: {first_error[:200]}"
                 else:
-                    if errors:
-                        first_error = errors[0] if isinstance(errors, list) else str(errors)
-                        outcome = f"Edit failed: {first_error[:200]}"
-                    else:
-                        outcome = "Edit failed"
+                    outcome = "Edit failed"
 
-                metrics = dict(result)
-
+            metrics = dict(result)
             raw_output = self._dump_json(result)
         elif tool_name == RUN:
             exit_code = result.get("exit_code", 0)
@@ -970,13 +1005,22 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             return f"{icon} run{quote(cmd)} → {status}"
 
         if canonical_name == EDIT:
-            # Show edited files summary
             artifacts = observation.metrics.get("artifacts", observation.artifacts)
-            if artifacts and isinstance(artifacts, list) and len(artifacts) > 0:
-                first_file = artifacts[0]
-                count_suffix = f" +{len(artifacts) - 1}" if len(artifacts) > 1 else ""
-                return f"{icon} edit → {first_file}{count_suffix}"
-            return f"{icon} edit → {'applied' if success else 'failed'}"
+            if success:
+                if artifacts and isinstance(artifacts, list) and len(artifacts) > 0:
+                    first_file = artifacts[0]
+                    count_suffix = f" +{len(artifacts) - 1}" if len(artifacts) > 1 else ""
+                    return f"{icon} edit → {first_file}{count_suffix}"
+                return f"{icon} edit → applied"
+
+            errors = observation.metrics.get("errors")
+            if isinstance(errors, list) and errors:
+                first_error = str(errors[0]).strip()
+                first_line = first_error.splitlines()[0]
+                if len(first_line) > 120:
+                    first_line = first_line[:117] + "..."
+                return f"{icon} edit → failed ({first_line})"
+            return f"{icon} edit → failed"
 
         return f"{icon if success else status_fail} {action.tool}{' → ' + (observation.outcome or status_suffix) if observation.outcome else ''}"
 
@@ -1033,6 +1077,42 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
                     f"[DEBUG-{canonical.upper()}] Sending to LLM: {len(content_parts[-1])} chars",
                     flush=True,
                 )
+
+        # For EDIT failures, include detailed error information so LLM can fix the patch
+        if canonical == EDIT and not observation.success:
+            errors = observation.metrics.get("errors")
+            if isinstance(errors, list) and errors:
+                error_details = "\n".join(f"  - {err}" for err in errors)
+                content_parts.append(f"Error details:\n{error_details}")
+            elif observation.formatted_output:
+                content_parts.append(observation.formatted_output)
+            elif observation.raw_output:
+                import json
+
+                try:
+                    error_data = json.loads(observation.raw_output)
+                    raw_errors = error_data.get("errors", [])
+                    if raw_errors:
+                        error_details = "\n".join(f"  - {err}" for err in raw_errors)
+                        content_parts.append(f"Error details:\n{error_details}")
+                except (json.JSONDecodeError, AttributeError):
+                    content_parts.append(f"Raw error: {observation.raw_output[:500]}")
+
+            # Add recovery steps to help LLM self-correct
+            content_parts.append(
+                "\nRECOVERY STEPS:\n"
+                "1. Use READ to view the current file content\n"
+                "2. Ensure directive headers have colons (*** Update File: path)\n"
+                "3. Copy exact lines from READ output into your - lines\n"
+                "4. Rebuild the patch and retry"
+            )
+
+        # For EDIT successes with warnings (auto-corrections), surface them
+        if canonical == EDIT and observation.success:
+            warnings = observation.metrics.get("warnings")
+            if isinstance(warnings, list) and warnings:
+                warning_details = "\n".join(f"  - {w}" for w in warnings)
+                content_parts.append(f"Note (auto-corrected):\n{warning_details}")
 
         if canonical == RUN:
             stdout_preview = observation.metrics.get("stdout_tail")

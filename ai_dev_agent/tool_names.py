@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 READ = "read"
-WRITE = "write"
 EDIT = "edit"
 RUN = "run"
 FIND = "find"
@@ -15,7 +14,6 @@ PLAN = "plan"
 
 ALL_TOOLS = (
     READ,
-    # WRITE,  # Disabled in favor of EDIT
     EDIT,
     RUN,
     FIND,

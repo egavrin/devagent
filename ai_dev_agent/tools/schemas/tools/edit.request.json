@@ -2,15 +2,11 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "edit request",
   "type": "object",
-  "required": ["changes"],
+  "required": ["patch"],
   "properties": {
-    "path": {
+    "patch": {
       "type": "string",
-      "description": "Path to the file to edit (required for SEARCH/REPLACE format)"
-    },
-    "changes": {
-      "type": "string",
-      "description": "SEARCH/REPLACE blocks in format: <<<<<<< SEARCH\\n[EXACT text from file - copy from READ tool output]\\n=======\\n[replacement text]\\n>>>>>>> REPLACE. CRITICAL: SEARCH text must match file EXACTLY (character-for-character, including all spaces/tabs/newlines). Always READ the file first and copy exact text. Pre-validation checks all blocks before applying any - if one fails, NO changes are applied. Never paraphrase or retype - copy exact text from READ output. For new files, use empty SEARCH blocks."
+      "description": "Complete apply_patch payload. Must include '*** Begin Patch'/'*** End Patch' sentinels plus one or more actions: '*** Update File', '*** Add File', or '*** Delete File'. Updates contain @@ chunks with +/- lines exactly as they appear in the file. Adds must prefix every line with '+'. Always READ files first and copy the original text verbatim into '-' lines. The tool validates the entire patch before applying and reports precise errors when context or files do not match."
     }
   },
   "additionalProperties": false

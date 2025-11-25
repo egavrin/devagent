@@ -191,7 +191,7 @@ class IntentRouter:
             description = spec.description or ""
             if name == RUN:
                 description = self._augment_run_description(description)
-            # WRITE has been removed - EDIT now handles both SEARCH/REPLACE and unified diffs
+            # WRITE has been removed - EDIT now handles canonical apply_patch payloads
 
             tools.append(
                 {

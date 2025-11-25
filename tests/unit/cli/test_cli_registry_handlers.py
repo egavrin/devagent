@@ -548,4 +548,4 @@ def test_handle_exec_result_prints_streams(capsys: pytest.CaptureFixture[str]) -
 
 
 # WRITE tool tests removed - WRITE has been deprecated in favor of EDIT
-# which supports both SEARCH/REPLACE blocks and unified diffs
+# which now consumes canonical apply_patch payloads

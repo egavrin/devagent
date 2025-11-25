@@ -358,8 +358,7 @@ def _handle_exec_result(
         click.echo(result["stderr_tail"].rstrip())
 
 
-# WRITE tool has been removed - use EDIT instead which supports both
-# SEARCH/REPLACE blocks and unified diff formats
+# WRITE tool has been removed - EDIT now applies canonical apply_patch payloads
 
 
 def _handle_edit_result(
@@ -368,7 +367,7 @@ def _handle_edit_result(
     result: dict[str, Any],
     ___: dict[str, Any],
 ) -> None:
-    """Handle EDIT tool results (both SEARCH/REPLACE and unified diff formats)."""
+    """Handle EDIT tool results for apply_patch payloads."""
     success = result.get("success", False)
     changed = result.get("changed_files", [])
     new = result.get("new_files", [])
@@ -484,7 +483,7 @@ REGISTRY_INTENTS: dict[str, RegistryIntent] = {
         payload_builder=lambda ctx, args: (args, {}),  # Pass through arguments
         result_handler=_handle_edit_result,
     ),
-    # WRITE has been removed - EDIT now handles both SEARCH/REPLACE and unified diffs
+    # WRITE has been removed - EDIT now handles canonical apply_patch payloads
 }
 
 INTENT_HANDLERS: dict[str, RegistryIntent] = expand_tool_aliases(REGISTRY_INTENTS)

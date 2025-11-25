@@ -1,10 +1,5 @@
-"""Integration tests for EDIT tool failure modes.
+"""Integration tests for the patch-based EDIT tool."""
 
-These tests document and validate the common failure scenarios that users
-encounter when using the EDIT tool in real agent workflows.
-"""
-
-import tempfile
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -12,6 +7,14 @@ import pytest
 
 from ai_dev_agent.tools.filesystem.search_replace import _fs_edit
 from ai_dev_agent.tools.registry import ToolContext
+
+PATCH_HEADER = "*** Begin Patch"
+PATCH_FOOTER = "*** End Patch"
+
+
+def make_patch(body: str) -> str:
+    """Wrap patch body with begin/end sentinels."""
+    return f"{PATCH_HEADER}\n{body}\n{PATCH_FOOTER}"
 
 
 @pytest.fixture
@@ -22,583 +25,204 @@ def tool_context(tmp_path):
     )
 
 
-class TestEditFailureModes:
-    """Test suite for documenting EDIT tool failure modes."""
+class TestApplyPatchSuccess:
+    """Happy-path tests for the EDIT tool."""
 
-    def test_whitespace_mismatch_with_line_trimmed_matching(self, tool_context, tmp_path):
-        """Test that line-trimmed matching tolerates indentation differences.
+    def test_update_existing_file(self, tool_context, tmp_path):
+        target = tmp_path / "app.py"
+        target.write_text(
+            "def greet(name):\n" '    return f"Hello, {name}"\n',
+            encoding="utf-8",
+        )
 
-        This documents current behavior: the matcher falls back to line-trimmed
-        matching which normalizes whitespace, so indentation mismatches succeed.
-        """
-        test_file = tmp_path / "test.py"
-        test_file.write_text(
-            """def hello():
-    print("Hello")
-    return True
+        patch = make_patch(
+            """*** Update File: app.py
+@@
+-def greet(name):
+-    return f"Hello, {name}"
++def greet(name: str) -> str:
++    return f"Hi, {name}!"
 """
         )
 
-        # Try to edit with wrong indentation (2 spaces instead of 4)
-        changes = """<<<<<<< SEARCH
-def hello():
-  print("Hello")
-  return True
-=======
-def hello():
-    print("Hello, World!")
-    return True
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        # Currently succeeds due to line-trimmed matching
-        assert result["success"], "Line-trimmed matching should handle whitespace differences"
-        assert result["changes_applied"] == 1
-        assert "Hello, World!" in test_file.read_text()
-
-    def test_missing_path_parameter(self, tool_context):
-        """Test failure when path parameter is missing for SEARCH/REPLACE."""
-        changes = """<<<<<<< SEARCH
-old text
-=======
-new text
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"changes": changes}, tool_context)
-
-        assert not result["success"]
-        assert "path" in result["errors"][0].lower()
-
-    def test_file_changed_after_read(self, tool_context, tmp_path):
-        """Test failure when file content changed between READ and EDIT.
-
-        This is a common failure mode when:
-        - File is modified by another process
-        - Agent uses stale context from earlier in conversation
-        """
-        test_file = tmp_path / "test.py"
-
-        # Initial content that agent "reads"
-        initial_content = """def func():
-    return 42
-"""
-        test_file.write_text(initial_content)
-
-        # File changes (simulated concurrent modification)
-        test_file.write_text(
-            """def func():
-    return 43  # Changed!
-"""
-        )
-
-        # Agent tries to edit based on old content
-        changes = """<<<<<<< SEARCH
-def func():
-    return 42
-=======
-def func():
-    return 100
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        assert not result["success"]
-        assert "SEARCH text not found" in result["errors"][0]
-
-    def test_paraphrased_content(self, tool_context, tmp_path):
-        """Test failure when agent paraphrases instead of copying exact text.
-
-        This is the DOMINANT failure mode: LLMs paraphrase code instead of
-        copying the exact bytes from the READ output.
-        """
-        test_file = tmp_path / "test.py"
-
-        # Actual file content
-        test_file.write_text(
-            """# Calculate the sum of two numbers
-def add(a, b):
-    result = a + b
-    return result
-"""
-        )
-
-        # Agent paraphrases by adding a comment
-        changes = """<<<<<<< SEARCH
-def add(a, b):
-    result = a + b  # Agent added comment
-    return result
-=======
-def add(a, b):
-    return a + b
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        assert not result["success"]
-        assert "SEARCH text not found" in result["errors"][0]
-
-    def test_malformed_search_replace_missing_separator(self, tool_context, tmp_path):
-        """Test failure with malformed SEARCH/REPLACE blocks."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("content")
-
-        # Missing separator
-        changes = """<<<<<<< SEARCH
-old content
->>>>>>> REPLACE
-new content
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        assert not result["success"]
-        assert "format" in result["errors"][0].lower() or "separator" in result["errors"][0].lower()
-
-    def test_successful_edit_with_exact_match(self, tool_context, tmp_path):
-        """Test that EDIT tool works correctly when used properly.
-
-        This is the control case showing the tool works when:
-        - Agent reads file first
-        - Copies EXACT text from file
-        - Provides path parameter
-        """
-        test_file = tmp_path / "test.py"
-
-        # Write original content
-        original = """def greet(name):
-    print(f"Hello, {name}")
-"""
-        test_file.write_text(original)
-
-        # Copy EXACT text from file
-        changes = """<<<<<<< SEARCH
-def greet(name):
-    print(f"Hello, {name}")
-=======
-def greet(name):
-    print(f"Hi, {name}!")
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
+        result = _fs_edit({"patch": patch}, tool_context)
 
         assert result["success"]
         assert result["changes_applied"] == 1
-        assert "Hi, {name}!" in test_file.read_text()
+        assert target.read_text(encoding="utf-8") == (
+            "def greet(name: str) -> str:\n" '    return f"Hi, {name}!"\n'
+        )
 
-    def test_multiple_blocks_out_of_order(self, tool_context, tmp_path):
-        """Test that multiple SEARCH/REPLACE blocks work even when out of order."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text(
-            """def first():
-    pass
-
-def second():
-    pass
-
-def third():
-    pass
+    def test_add_new_file(self, tool_context, tmp_path):
+        patch = make_patch(
+            """*** Add File: src/new_module.py
++def added():
++    return "ok"
 """
         )
 
-        # Multiple blocks, out of order
-        changes = """<<<<<<< SEARCH
-def third():
-    pass
-=======
-def third():
-    return 3
->>>>>>> REPLACE
+        result = _fs_edit({"patch": patch}, tool_context)
 
-<<<<<<< SEARCH
-def first():
-    pass
-=======
-def first():
-    return 1
->>>>>>> REPLACE
-
-<<<<<<< SEARCH
-def second():
-    pass
-=======
-def second():
-    return 2
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
+        new_file = tmp_path / "src" / "new_module.py"
         assert result["success"]
-        assert result["changes_applied"] == 3
-        content = test_file.read_text()
-        assert "return 1" in content
-        assert "return 2" in content
-        assert "return 3" in content
+        assert new_file.exists()
+        assert 'return "ok"' in new_file.read_text()
+        assert result["new_files"] == ["src/new_module.py"]
 
-    def test_new_file_creation_with_multiple_blocks(self, tool_context, tmp_path):
-        """Test creating a new file with multiple SEARCH/REPLACE blocks.
+    def test_delete_file(self, tool_context, tmp_path):
+        target = tmp_path / "old.txt"
+        target.write_text("legacy", encoding="utf-8")
 
-        LLMs naturally scaffold new files with one block per function/method.
-        This should now work by concatenating all REPLACE blocks.
-        """
-        test_file = tmp_path / "new_file.py"
-
-        # LLM tries to create file with multiple blocks (one per function)
-        changes = """<<<<<<< SEARCH
-=======
-def func_one():
-    return 1
->>>>>>> REPLACE
-
-<<<<<<< SEARCH
-=======
-
-def func_two():
-    return 2
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        # Should now succeed with our fix
-        assert result["success"], f"Expected success but got: {result.get('errors')}"
-        assert test_file.exists()
-        content = test_file.read_text()
-        assert "func_one" in content
-        assert "func_two" in content
-        assert result["changes_applied"] == 2  # Both blocks applied
-        assert len(result["new_files"]) == 1  # One new file created
-
-    def test_new_file_creation_single_block(self, tool_context, tmp_path):
-        """Test creating a new file with a single SEARCH/REPLACE block.
-
-        This works correctly - only single-block creation is currently supported.
-        """
-        test_file = tmp_path / "new_file.py"
-
-        changes = """<<<<<<< SEARCH
-=======
-def hello():
-    print("Hello, World!")
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        assert result["success"]
-        assert test_file.exists()
-        assert "Hello, World!" in test_file.read_text()
-
-    def test_empty_search_for_deletion(self, tool_context, tmp_path):
-        """Test using empty REPLACE to delete content."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text(
-            """def to_delete():
-    pass
-
-def to_keep():
-    pass
+        patch = make_patch(
+            """*** Delete File: old.txt
 """
         )
 
-        changes = """<<<<<<< SEARCH
-def to_delete():
-    pass
-
-=======
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
+        result = _fs_edit({"patch": patch}, tool_context)
 
         assert result["success"]
-        content = test_file.read_text()
-        assert "to_delete" not in content
-        assert "to_keep" in content
+        assert not target.exists()
+        assert "old.txt" in result["changed_files"]
 
+    def test_move_file(self, tool_context, tmp_path):
+        target = tmp_path / "pkg" / "models" / "old_name.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("IDENTITY = 'old'\n", encoding="utf-8")
 
-class TestEditErrorMessages:
-    """Test suite for validating error message quality."""
-
-    def test_error_message_includes_block_number(self, tool_context, tmp_path):
-        """Test that error messages identify which block failed."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("actual content")
-
-        changes = """<<<<<<< SEARCH
-block 1 wrong
-=======
-replacement 1
->>>>>>> REPLACE
-
-<<<<<<< SEARCH
-block 2 wrong
-=======
-replacement 2
->>>>>>> REPLACE
+        patch = make_patch(
+            """*** Update File: pkg/models/old_name.py
+*** Move to: pkg/models/new_name.py
+@@
+-IDENTITY = 'old'
++IDENTITY = 'new'
 """
+        )
 
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
+        result = _fs_edit({"patch": patch}, tool_context)
+
+        assert result["success"]
+        new_path = tmp_path / "pkg" / "models" / "new_name.py"
+        assert new_path.exists()
+        assert "IDENTITY = 'new'\n" == new_path.read_text()
+
+
+class TestApplyPatchFailures:
+    """Failure scenarios with actionable diagnostics."""
+
+    def test_missing_patch_parameter(self, tool_context):
+        result = _fs_edit({}, tool_context)
 
         assert not result["success"]
-        # Both blocks should fail
-        assert len(result["errors"]) >= 1
-        assert "Block" in result["errors"][0]
+        assert "patch" in result["errors"][0].lower()
 
-    def test_error_message_shows_search_text_preview(self, tool_context, tmp_path):
-        """Test that error messages show preview of failed SEARCH text."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("actual content")
-
-        changes = """<<<<<<< SEARCH
-this is the search text that doesn't match
-=======
-replacement
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
+    def test_invalid_patch_structure(self, tool_context):
+        result = _fs_edit({"patch": "not a patch"}, tool_context)
 
         assert not result["success"]
-        # Error should include preview of search text
-        assert (
-            "this is the search text" in result["errors"][0]
-            or "this·is·the·search·text" in result["errors"][0]
-        )
+        assert "begin patch" in result["errors"][0].lower()
 
-    def test_error_message_visualizes_whitespace(self, tool_context, tmp_path):
-        """Test that error messages visualize whitespace characters."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("def func():\n    pass\n")
-
-        # Try to match with wrong indentation
-        changes = """<<<<<<< SEARCH
-def func():
-  pass
-=======
-def func():
-    return True
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        # Should succeed due to line-trimmed matching, but if it failed:
-        # Error message should visualize whitespace
-        if not result["success"]:
-            error_msg = result["errors"][0]
-            # Should contain whitespace visualization markers
-            assert "·" in error_msg or "→" in error_msg or "⏎" in error_msg
-            # Should contain helpful tip
-            assert "EXACT text" in error_msg or "exact text" in error_msg.lower()
-
-
-class TestEditPreValidation:
-    """Test suite for pre-validation of SEARCH blocks."""
-
-    def test_pre_validation_catches_missing_search_text(self, tool_context, tmp_path):
-        """Test that pre-validation catches SEARCH text that doesn't exist in file."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text(
-            """def actual_function():
-    return 42
+    def test_update_missing_file(self, tool_context):
+        patch = make_patch(
+            """*** Update File: no_such_file.py
+@@
+-print("hi")
++print("bye")
 """
         )
 
-        # Try to edit with wrong function name
-        changes = """<<<<<<< SEARCH
-def wrong_function():
-    return 42
-=======
-def wrong_function():
-    return 100
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
+        result = _fs_edit({"patch": patch}, tool_context)
 
         assert not result["success"]
-        assert len(result["errors"]) == 1
-        assert "pre-validation failed" in result["errors"][0]
-        assert "SEARCH text not found" in result["errors"][0]
-        # File should not be modified
-        assert test_file.read_text() == "def actual_function():\n    return 42\n"
+        assert "missing file" in result["errors"][0].lower()
 
-    def test_pre_validation_provides_closest_match(self, tool_context, tmp_path):
-        """Test that pre-validation suggests closest match when SEARCH fails."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text(
-            """def calculate_sum(a, b):
-    result = a + b
-    return result
+    def test_chunk_context_not_found(self, tool_context, tmp_path):
+        target = tmp_path / "service.py"
+        target.write_text("def run():\n    return 1\n", encoding="utf-8")
+
+        patch = make_patch(
+            """*** Update File: service.py
+@@
+-def run():
+-    return 2
++def run():
++    return 3
 """
         )
 
-        # Try to edit with slightly wrong text (missing comment)
-        changes = """<<<<<<< SEARCH
-def calculate_sum(a, b):  # This comment doesn't exist
-    result = a + b
-    return result
-=======
-def calculate_sum(a, b):
-    return a + b
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
+        result = _fs_edit({"patch": patch}, tool_context)
 
         assert not result["success"]
-        assert "Did you mean to match these lines from the file?" in result["errors"][0]
-        # Should show whitespace visualization
-        assert "·" in result["errors"][0] or "def·calculate_sum" in result["errors"][0]
+        assert "context" in result["errors"][0].lower()
+        assert target.read_text(encoding="utf-8") == "def run():\n    return 1\n"
 
-    def test_pre_validation_skipped_for_new_files(self, tool_context, tmp_path):
-        """Test that pre-validation is skipped when creating new files."""
-        test_file = tmp_path / "new_file.py"
+    def test_add_file_that_exists(self, tool_context, tmp_path):
+        existing = tmp_path / "dup.py"
+        existing.write_text("print('original')\n", encoding="utf-8")
 
-        changes = """<<<<<<< SEARCH
-=======
-def new_function():
-    return 1
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        # Should succeed - validation skipped for new files
-        assert result["success"]
-        assert test_file.exists()
-        assert "new_function" in test_file.read_text()
-
-    def test_pre_validation_with_multiple_blocks_some_invalid(self, tool_context, tmp_path):
-        """Test pre-validation when some blocks are valid and some aren't."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text(
-            """def func_one():
-    pass
-
-def func_two():
-    pass
+        patch = make_patch(
+            """*** Add File: dup.py
++print("new")
 """
         )
 
-        # First block is valid, second is not
-        changes = """<<<<<<< SEARCH
-def func_one():
-    pass
-=======
-def func_one():
-    return 1
->>>>>>> REPLACE
-
-<<<<<<< SEARCH
-def func_three():
-    pass
-=======
-def func_three():
-    return 3
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
+        result = _fs_edit({"patch": patch}, tool_context)
 
         assert not result["success"]
-        # Should report error for block 2
-        assert "Block 2:" in result["errors"][0]
-        assert "pre-validation failed" in result["errors"][0]
-        # File should NOT be modified (no partial application)
-        original = test_file.read_text()
-        assert "return 1" not in original  # First block should not have been applied
+        assert "already exists" in result["errors"][0]
 
-    def test_pre_validation_with_all_valid_blocks(self, tool_context, tmp_path):
-        """Test that pre-validation passes when all blocks are valid."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text(
-            """def func_one():
-    pass
-
-def func_two():
-    pass
+    def test_delete_missing_file(self, tool_context):
+        patch = make_patch(
+            """*** Delete File: nope.py
 """
         )
 
-        changes = """<<<<<<< SEARCH
-def func_one():
-    pass
-=======
-def func_one():
-    return 1
->>>>>>> REPLACE
+        result = _fs_edit({"patch": patch}, tool_context)
 
-<<<<<<< SEARCH
-def func_two():
-    pass
-=======
-def func_two():
-    return 2
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        # Should succeed - all blocks validated and applied
-        assert result["success"]
-        assert result["changes_applied"] == 2
-        content = test_file.read_text()
-        assert "return 1" in content
-        assert "return 2" in content
-
-    def test_pre_validation_with_empty_search_blocks(self, tool_context, tmp_path):
-        """Test that pre-validation handles empty SEARCH blocks correctly."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("old content\n")
-
-        # Empty SEARCH = full file replacement
-        changes = """<<<<<<< SEARCH
-=======
-new content
->>>>>>> REPLACE
-"""
-
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
-
-        # Should succeed - empty SEARCH is valid for full replacement
-        assert result["success"]
-        assert test_file.read_text() == "new content"
+        assert not result["success"]
+        assert "missing file" in result["errors"][0].lower()
 
 
-class TestEditWithDiffFormat:
-    """Test suite for unified diff format support."""
+class TestDiagnostics:
+    """Ensure the tool provides actionable diagnostics back to the agent."""
 
-    def test_unified_diff_format_detection(self, tool_context, tmp_path):
-        """Test that unified diff format is correctly detected and applied."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text(
-            """def hello():
-    print("Hello")
+    def test_reports_multiple_errors(self, tool_context, tmp_path):
+        target = tmp_path / "file.py"
+        target.write_text("def func():\n    return 1\n", encoding="utf-8")
+
+        patch = make_patch(
+            """*** Update File: file.py
+@@
+-def func():
+-    return 2
++def func():
++    return 3
+*** Delete File: missing.py
 """
         )
 
-        # Unified diff format
-        changes = """--- a/test.py
-+++ b/test.py
-@@ -1,2 +1,2 @@
- def hello():
--    print("Hello")
-+    print("Hi")
+        result = _fs_edit({"patch": patch}, tool_context)
+
+        assert not result["success"]
+        assert len(result["errors"]) >= 2
+        assert "context" in result["errors"][0].lower()
+        assert "missing" in result["errors"][1].lower()
+
+    def test_returns_changed_files_on_partial_success(self, tool_context, tmp_path):
+        target = tmp_path / "file.py"
+        target.write_text("flag = False\n", encoding="utf-8")
+
+        patch = make_patch(
+            """*** Update File: file.py
+@@
+-flag = False
++flag = True
+*** Add File: file.py
++print("duplicate")
 """
+        )
 
-        result = _fs_edit({"path": str(test_file), "changes": changes}, tool_context)
+        result = _fs_edit({"patch": patch}, tool_context)
 
-        # Should be detected as unified diff and applied
-        assert result["success"] or "diff" in str(result).lower()
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        assert not result["success"]
+        assert "file.py" in result["changed_files"]
+        assert "already exists" in result["errors"][-1]

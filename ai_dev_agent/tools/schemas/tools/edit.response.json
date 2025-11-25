@@ -10,7 +10,7 @@
     },
     "changes_applied": {
       "type": "integer",
-      "description": "Number of SEARCH/REPLACE blocks or files successfully applied"
+      "description": "Number of patch actions (add/update/delete/move) successfully applied"
     },
     "errors": {
       "type": "array",

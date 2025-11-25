@@ -45,20 +45,15 @@ def test_read_and_write(tmp_path: Path) -> None:
     read_result = tool_registry.invoke(READ, {"paths": ["hello.py"]}, ctx)
     assert read_result["files"][0]["content"].startswith("print"), read_result
 
-    diff = """--- a/hello.py
-+++ b/hello.py
-@@ -1 +1 @@
+    patch = """*** Begin Patch
+*** Update File: hello.py
+@@
 -print('hello')
 +print('world')
+*** End Patch
 """
-    # EDIT tool now supports unified diffs (auto-detected)
-    apply_result = tool_registry.invoke(EDIT, {"path": "hello.py", "changes": diff}, ctx)
-    # EDIT returns 'success' field
+    apply_result = tool_registry.invoke(EDIT, {"patch": patch}, ctx)
     assert apply_result.get("success") is True
-    # diff_stats should be present for unified diffs
-    if "diff_stats" in apply_result:
-        assert apply_result["diff_stats"]["lines_added"] == 1
-        assert apply_result["diff_stats"]["lines_removed"] == 1
     assert (tmp_path / "hello.py").read_text(encoding="utf-8").strip() == "print('world')"
 
 

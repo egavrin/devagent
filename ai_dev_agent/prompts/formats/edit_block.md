@@ -1,126 +1,175 @@
-# Edit Block Format
+# Apply Patch Format
 
-When editing code, use this SEARCH/REPLACE format for precise, reliable edits:
+All edits must use the canonical `apply_patch` structure. Every payload starts with `*** Begin Patch`, contains one or more actions, and ends with `*** End Patch`.
 
 ```
-<<<<<<< SEARCH
-[exact code to be replaced - copy verbatim from file]
-=======
-[new code to replace it with]
->>>>>>> REPLACE
+*** Begin Patch
+*** Update File: relative/path.py
+*** Move to: optional/new/path.py
+@@
+-old line copied verbatim
++replacement line
+*** End Patch
 ```
+
+## Action Types
+
+1. **Update File**
+   ```
+   *** Update File: src/app.py
+   @@
+   -def ping():
+   -    return "pong"
+   +def ping() -> str:
+   +    return "pong!"
+   ```
+   - Optional `*** Move to: ...` immediately after the header renames the file.
+   - Each `@@` chunk must include the exact `-` lines that currently exist plus the new `+` lines.
+
+2. **Add File**
+   ```
+   *** Add File: src/new_helper.py
+   +def helper():
+   +    return "ok"
+   ```
+   - Prefix every line with `+`. Include blank `+` lines for spacing.
+
+3. **Delete File**
+   ```
+   *** Delete File: scripts/old_task.sh
+   ```
 
 ## Critical Rules
 
-**MOST IMPORTANT:** The SEARCH block must match the file content **EXACTLY**:
-- ✅ Copy the exact text from the file using READ tool first
-- ✅ Preserve all whitespace: spaces, tabs, blank lines
-- ✅ Include the exact indentation (don't convert tabs↔spaces)
-- ✅ Copy complete lines - don't truncate or paraphrase
-- ❌ Do NOT modify, clean up, or "fix" the search text
-- ❌ Do NOT add comments that aren't in the original
+- **Headers always use colons**: `*** Update File: path`, `*** Add File: path`, `*** Delete File: path`, and `*** Move to: target`. Missing the colon makes the entire patch invalid.
+- **Exact matches only**: Copy every removed line (`-`) exactly, including whitespace, punctuation, and comments.
+- **Preflight validation**: DevAgent runs a dry-run before applying patches; if your `-` lines don’t match current files, the entire edit is rejected so re-read the file and rebuild the patch.
+- **Read before editing**: Use the READ tool immediately before creating the patch to avoid stale context.
+- **One chunk per region**: Use multiple `@@` sections if you edit distant parts of the same file.
+- **Maintain order**: Actions execute sequentially; list updates before deletes if they depend on earlier context.
+- **EOF handling**: Append `*** End of File` within a chunk if you modify the file footer or final newline.
 
-**Why this matters:** The tool validates ALL blocks before applying ANY changes. If even one SEARCH block doesn't match exactly, NO changes are applied. This prevents partial file modifications.
-
-## Guidelines
-
-1. **Always READ first**: Use the READ tool to see current file content before editing
-2. **Copy exact text**: Select and copy the exact text you want to replace
-3. **Include context**: Add 1-2 surrounding lines for unique matching
-4. **One logical change per block**: Each block should make one cohesive change
-5. **Multiple blocks OK**: You can include multiple SEARCH/REPLACE blocks in one edit
-
-## Creating New Files
-
-To create a new file with multiple sections, use empty SEARCH blocks:
-
-```python
-<<<<<<< SEARCH
-=======
-def first_function():
-    pass
->>>>>>> REPLACE
-
-<<<<<<< SEARCH
-=======
-
-def second_function():
-    pass
->>>>>>> REPLACE
-```
+## Before Sending a Patch
+1. Re-run `{tool_read}` on every file you plan to edit so the patch uses fresh context.
+2. Build a **single** `patch` string that wraps all actions between `*** Begin Patch` and `*** End Patch`.
+3. Confirm every header includes the colon (`*** Update File: path`, etc.) and optional `*** Move to: target`.
+4. Double-check each `@@` chunk: the `-` lines must match the file exactly and the `+` lines contain the intended changes.
+5. If validation fails (missing colon, context mismatch, move conflict), re-read the file, rebuild the chunk, and resend.
 
 ## Examples
 
-### ✅ CORRECT - Exact match
-```python
-# File contains:
-#   def calculate(x):
-#       return x * 2
-
-<<<<<<< SEARCH
-def calculate(x):
-    return x * 2
-=======
-def calculate(x):
-    """Double the input value."""
-    return x * 2
->>>>>>> REPLACE
+### Update + Move
+```
+*** Begin Patch
+*** Update File: pkg/old_name.py
+*** Move to: pkg/new_name.py
+@@
+-IDENTITY = "old"
++IDENTITY = "new"
+*** End Patch
 ```
 
-### ❌ WRONG - Modified whitespace
-```python
-# File has 4 spaces, but you wrote 2 spaces:
-<<<<<<< SEARCH
-def calculate(x):
-  return x * 2  # ❌ Wrong indentation!
-=======
-def calculate(x):
-    return x * 2
->>>>>>> REPLACE
+### Multiple Updates
+```
+*** Begin Patch
+*** Update File: config.py
+@@
+-DEBUG = False
++DEBUG = True
+@@
+-TIMEOUT = 30
++TIMEOUT = 60
+*** End Patch
 ```
 
-### ❌ WRONG - Added comment not in file
-```python
-<<<<<<< SEARCH
-def calculate(x):  # ❌ This comment doesn't exist in file!
-    return x * 2
-=======
-def calculate(x):
-    return x * 2
->>>>>>> REPLACE
+### Add + Delete Together
 ```
-
-### ✅ CORRECT - Multiple blocks
-```python
-<<<<<<< SEARCH
-def func_one():
-    pass
-=======
-def func_one():
-    return 1
->>>>>>> REPLACE
-
-<<<<<<< SEARCH
-def func_two():
-    pass
-=======
-def func_two():
-    return 2
->>>>>>> REPLACE
+*** Begin Patch
+*** Add File: scripts/hello.sh
++#!/usr/bin/env bash
++echo "Hello"
+*** Delete File: scripts/legacy.sh
+*** End Patch
 ```
 
 ## Error Recovery
 
-If you get "SEARCH text not found" error:
-1. **Check the error message** - it shows what you searched for with visible whitespace (·=space, →=tab, ⏎=newline)
-2. **Look at "Closest match found"** - compare it with your search to spot differences
-3. **READ the file again** - ensure you have current content
-4. **Copy exact text** - don't type it from memory or paraphrase
+If the tool reports context or file errors:
+1. **Re-read the file** and rebuild the chunk from current content.
+2. **Verify paths** are workspace-relative and case-sensitive.
+3. **Check move targets** – the destination must not already exist.
+4. **Ensure every action is enclosed** between `*** Begin Patch` and `*** End Patch`.
 
-## Common Mistakes
+## Common Errors and Fixes
 
-1. **Paraphrasing code**: Don't clean up or rephrase - copy exactly as-is
-2. **Wrong whitespace**: Tabs vs spaces, wrong indentation level
-3. **Missing lines**: Include all lines in the section you want to match
-4. **Stale content**: File changed since you last read it - READ again
-5. **Multiple similar blocks**: Add more context lines to make match unique
+### Error: "Missing colon in directive"
+**Cause**: Directive header is missing the required colon.
+
+**Wrong**:
+```
+*** Update File README.md
+```
+
+**Correct**:
+```
+*** Update File: README.md
+```
+
+Note: DevAgent will auto-correct minor colon omissions, but always include them for reliability.
+
+### Error: "context not found in 'file.py'"
+**Cause**: The `-` lines in your patch don't match the actual file content.
+
+**Fix steps**:
+1. Use `{tool_read}` to view current file content
+2. Copy the exact lines (including whitespace) into your `-` lines
+3. Never guess or paraphrase – whitespace and punctuation must be exact
+
+**Wrong** (guessed content):
+```
+*** Update File: config.py
+@@
+-debug = false
++debug = true
+```
+
+**Correct** (after reading file shows `DEBUG = False`):
+```
+*** Update File: config.py
+@@
+-DEBUG = False
++DEBUG = True
+```
+
+Note: DevAgent has whitespace tolerance for trailing spaces and uniform indentation differences, but exact matches are most reliable.
+
+## Insertion Operations
+
+For pure insertions (adding new content without replacing existing lines):
+
+### Append to End of File
+Use `@@ EOF` or the `*** End of File` marker:
+```
+*** Begin Patch
+*** Update File: README.md
+@@
++
++## New Section
++Content appended at end.
+*** End of File
+*** End Patch
+```
+
+### Insert Near Existing Content
+Include a small anchor of existing lines:
+```
+*** Begin Patch
+*** Update File: README.md
+@@
+-## Existing Section
++## Existing Section
++
++## New Section (inserted after)
++New content here.
+*** End Patch
+```
