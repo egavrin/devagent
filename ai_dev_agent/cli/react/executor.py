@@ -238,14 +238,18 @@ class BudgetAwareExecutor(ReactiveExecutor):
                     integration = getattr(action_provider, "budget_integration", None)
                     client = getattr(action_provider, "client", None)
                     complete_fn = getattr(client, "complete", None) if client else None
+                    # Get temperature from settings via action_provider's context
+                    ctx_obj = getattr(action_provider, "_ctx_obj", {})
+                    settings = ctx_obj.get("settings") if ctx_obj else None
+                    temperature = settings.temperature if settings else 0.0
 
                     if complete_fn:
                         if integration:
                             final_text = integration.execute_with_retry(
-                                complete_fn, conversation, temperature=0.1
+                                complete_fn, conversation, temperature=temperature
                             )
                         else:
-                            final_text = complete_fn(conversation, temperature=0.1)
+                            final_text = complete_fn(conversation, temperature=temperature)
                     else:
                         # Fallback: try with invoke_tools with empty tools
                         from ai_dev_agent.providers.llm import ToolCallResult
@@ -255,10 +259,10 @@ class BudgetAwareExecutor(ReactiveExecutor):
                             raise AttributeError("LLM client does not support forced synthesis.")
                         if integration:
                             result = integration.execute_with_retry(
-                                invoke_fn, conversation, tools=[], temperature=0.1
+                                invoke_fn, conversation, tools=[], temperature=temperature
                             )
                         else:
-                            result = invoke_fn(conversation, tools=[], temperature=0.1)
+                            result = invoke_fn(conversation, tools=[], temperature=temperature)
                         final_text = (
                             result.message_content
                             if isinstance(result, ToolCallResult)
@@ -400,14 +404,18 @@ class BudgetAwareExecutor(ReactiveExecutor):
                 integration = getattr(action_provider, "budget_integration", None)
                 client = getattr(action_provider, "client", None)
                 complete_fn = getattr(client, "complete", None) if client else None
+                # Get temperature from settings via action_provider's context
+                ctx_obj = getattr(action_provider, "_ctx_obj", {})
+                settings = ctx_obj.get("settings") if ctx_obj else None
+                temperature = settings.temperature if settings else 0.0
 
                 if complete_fn:
                     if integration:
                         final_text = integration.execute_with_retry(
-                            complete_fn, enhanced_conversation, temperature=0.1
+                            complete_fn, enhanced_conversation, temperature=temperature
                         )
                     else:
-                        final_text = complete_fn(enhanced_conversation, temperature=0.1)
+                        final_text = complete_fn(enhanced_conversation, temperature=temperature)
                 else:
                     from ai_dev_agent.providers.llm import ToolCallResult
 
@@ -416,10 +424,10 @@ class BudgetAwareExecutor(ReactiveExecutor):
                         raise AttributeError("LLM client does not support forced synthesis.")
                     if integration:
                         result = integration.execute_with_retry(
-                            invoke_fn, enhanced_conversation, tools=[], temperature=0.1
+                            invoke_fn, enhanced_conversation, tools=[], temperature=temperature
                         )
                     else:
-                        result = invoke_fn(enhanced_conversation, tools=[], temperature=0.1)
+                        result = invoke_fn(enhanced_conversation, tools=[], temperature=temperature)
                     final_text = (
                         result.message_content
                         if isinstance(result, ToolCallResult)

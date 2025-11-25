@@ -5,7 +5,7 @@ from __future__ import annotations
 import random  # - used for monkeypatch compatibility in tests
 from typing import TYPE_CHECKING, Any
 
-from .base import HTTPChatLLMClient, Message, RetryConfig
+from .base import HTTPChatLLMClient, Message, RetryConfig, supports_temperature
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -54,8 +54,11 @@ class DeepSeekClient(HTTPChatLLMClient):
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [message.to_payload() for message in messages],
-            "temperature": temperature,
         }
+        # Only include temperature if the model supports it
+        # (e.g., deepseek-r1/reasoner models don't support temperature)
+        if supports_temperature(self.model):
+            payload["temperature"] = temperature
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         return payload

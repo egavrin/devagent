@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .base import HTTPChatLLMClient, Message, RetryConfig
+from .base import HTTPChatLLMClient, Message, RetryConfig, supports_temperature
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -71,8 +71,11 @@ class OpenRouterClient(HTTPChatLLMClient):
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [message.to_payload() for message in messages],
-            "temperature": temperature,
         }
+        # Only include temperature if the model supports it
+        # (e.g., o1/o3 reasoning models don't support temperature)
+        if supports_temperature(self.model):
+            payload["temperature"] = temperature
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if self._provider_config:

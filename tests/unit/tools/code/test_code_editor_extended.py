@@ -445,7 +445,7 @@ def test_propose_diff_uses_fix_template_for_follow_up_attempts(tmp_path):
     assert "Previous Attempt Diff" in prompt
     assert "Test Results" in prompt
     assert proposal.diff.endswith("\n")
-    assert llm_client.complete.call_args.kwargs["temperature"] == 0.3
+    # Temperature now uses centralized default (0.0) - not passed explicitly
 
 
 def test_apply_diff_with_fixes_stops_on_fallback(tmp_path):

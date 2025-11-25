@@ -45,13 +45,15 @@ def test_read_and_write(tmp_path: Path) -> None:
     read_result = tool_registry.invoke(READ, {"paths": ["hello.py"]}, ctx)
     assert read_result["files"][0]["content"].startswith("print"), read_result
 
-    patch = """*** Begin Patch
-*** Update File: hello.py
-@@
--print('hello')
-+print('world')
-*** End Patch
-"""
+    # Use SEARCH/REPLACE format
+    patch = """hello.py
+```python
+<<<<<<< SEARCH
+print('hello')
+=======
+print('world')
+>>>>>>> REPLACE
+```"""
     apply_result = tool_registry.invoke(EDIT, {"patch": patch}, ctx)
     assert apply_result.get("success") is True
     assert (tmp_path / "hello.py").read_text(encoding="utf-8").strip() == "print('world')"

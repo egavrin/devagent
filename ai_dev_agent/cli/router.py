@@ -290,7 +290,7 @@ class IntentRouter:
         raise IntentRoutingError("Could not determine a tool from the model response.")
 
     def _invoke_model(self, messages: Sequence[Message], prefer_generate: bool):
-        kwargs = {"tools": self.tools, "temperature": 0.1}
+        kwargs = {"tools": self.tools, "temperature": self.settings.temperature}
         if prefer_generate and hasattr(self.client, "generate_with_tools"):
             return self.client.generate_with_tools(messages, **kwargs)
         if hasattr(self.client, "invoke_tools"):

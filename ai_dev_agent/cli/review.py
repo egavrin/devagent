@@ -951,17 +951,20 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
             raise click.ClickException(f"Failed to create LLM client: {exc}") from exc
 
         class _DeterministicClient:
-            def __init__(self, inner):
+            """Wrapper that enforces settings.temperature for reproducible reviews."""
+
+            def __init__(self, inner, temperature: float):
                 self._inner = inner
+                self._temperature = temperature
 
             def complete(self, messages, *args, **kwargs):
                 kwargs.pop("temperature", None)
-                kwargs["temperature"] = 0.0
+                kwargs["temperature"] = self._temperature
                 kwargs.setdefault("extra_headers", None)
                 return self._inner.complete(messages, **kwargs)
 
             def invoke_tools(self, messages, tools, *, temperature=0.0, **kwargs):
-                kwargs["temperature"] = 0.0
+                kwargs["temperature"] = self._temperature
                 if "top_p" in kwargs:
                     kwargs["top_p"] = 0.0
                 return self._inner.invoke_tools(messages, tools, **kwargs)
@@ -969,7 +972,7 @@ Follow the workflow in the user prompt to analyze the patch against this rule.""
             def __getattr__(self, name):
                 return getattr(self._inner, name)
 
-        client = _DeterministicClient(client)
+        client = _DeterministicClient(client, settings.temperature)
 
         original_session_id = ctx.obj.get("_session_id")
         review_session_id = f"review-{uuid4()}"

@@ -1,6 +1,5 @@
-"""Integration tests for the patch-based EDIT tool."""
+"""Integration tests for the SEARCH/REPLACE EDIT tool."""
 
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -8,13 +7,15 @@ import pytest
 from ai_dev_agent.tools.filesystem.search_replace import _fs_edit
 from ai_dev_agent.tools.registry import ToolContext
 
-PATCH_HEADER = "*** Begin Patch"
-PATCH_FOOTER = "*** End Patch"
 
-
-def make_patch(body: str) -> str:
-    """Wrap patch body with begin/end sentinels."""
-    return f"{PATCH_HEADER}\n{body}\n{PATCH_FOOTER}"
+def make_search_replace(path: str, search: str, replace: str) -> str:
+    """Create a SEARCH/REPLACE block."""
+    return f"""{path}
+```
+<<<<<<< SEARCH
+{search}=======
+{replace}>>>>>>> REPLACE
+```"""
 
 
 @pytest.fixture
@@ -25,8 +26,8 @@ def tool_context(tmp_path):
     )
 
 
-class TestApplyPatchSuccess:
-    """Happy-path tests for the EDIT tool."""
+class TestSearchReplaceSuccess:
+    """Happy-path tests for the EDIT tool with SEARCH/REPLACE format."""
 
     def test_update_existing_file(self, tool_context, tmp_path):
         target = tmp_path / "app.py"
@@ -35,30 +36,25 @@ class TestApplyPatchSuccess:
             encoding="utf-8",
         )
 
-        patch = make_patch(
-            """*** Update File: app.py
-@@
--def greet(name):
--    return f"Hello, {name}"
-+def greet(name: str) -> str:
-+    return f"Hi, {name}!"
-"""
+        patch = make_search_replace(
+            "app.py",
+            'def greet(name):\n    return f"Hello, {name}"\n',
+            'def greet(name: str) -> str:\n    return f"Hi, {name}!"\n',
         )
 
         result = _fs_edit({"patch": patch}, tool_context)
 
         assert result["success"]
-        assert result["changes_applied"] == 1
         assert target.read_text(encoding="utf-8") == (
             "def greet(name: str) -> str:\n" '    return f"Hi, {name}!"\n'
         )
 
-    def test_add_new_file(self, tool_context, tmp_path):
-        patch = make_patch(
-            """*** Add File: src/new_module.py
-+def added():
-+    return "ok"
-"""
+    def test_add_new_file_with_empty_search(self, tool_context, tmp_path):
+        """Empty SEARCH creates new file."""
+        patch = make_search_replace(
+            "src/new_module.py",
+            "",  # Empty SEARCH = create/append
+            'def added():\n    return "ok"\n',
         )
 
         result = _fs_edit({"patch": patch}, tool_context)
@@ -67,162 +63,78 @@ class TestApplyPatchSuccess:
         assert result["success"]
         assert new_file.exists()
         assert 'return "ok"' in new_file.read_text()
-        assert result["new_files"] == ["src/new_module.py"]
 
-    def test_delete_file(self, tool_context, tmp_path):
-        target = tmp_path / "old.txt"
-        target.write_text("legacy", encoding="utf-8")
+    def test_delete_content_with_empty_replace(self, tool_context, tmp_path):
+        """Empty REPLACE deletes the matched content."""
+        target = tmp_path / "file.py"
+        target.write_text("line1\ndelete_me\nline3\n", encoding="utf-8")
 
-        patch = make_patch(
-            """*** Delete File: old.txt
-"""
+        patch = make_search_replace(
+            "file.py",
+            "delete_me\n",
+            "",  # Empty REPLACE = delete
         )
 
         result = _fs_edit({"patch": patch}, tool_context)
 
         assert result["success"]
-        assert not target.exists()
-        assert "old.txt" in result["changed_files"]
-
-    def test_move_file(self, tool_context, tmp_path):
-        target = tmp_path / "pkg" / "models" / "old_name.py"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("IDENTITY = 'old'\n", encoding="utf-8")
-
-        patch = make_patch(
-            """*** Update File: pkg/models/old_name.py
-*** Move to: pkg/models/new_name.py
-@@
--IDENTITY = 'old'
-+IDENTITY = 'new'
-"""
-        )
-
-        result = _fs_edit({"patch": patch}, tool_context)
-
-        assert result["success"]
-        new_path = tmp_path / "pkg" / "models" / "new_name.py"
-        assert new_path.exists()
-        assert "IDENTITY = 'new'\n" == new_path.read_text()
+        # The deleted line is replaced with empty, leaving an empty line
+        assert target.read_text(encoding="utf-8") == "line1\n\nline3\n"
 
 
-class TestApplyPatchFailures:
+class TestSearchReplaceFailures:
     """Failure scenarios with actionable diagnostics."""
 
     def test_missing_patch_parameter(self, tool_context):
         result = _fs_edit({}, tool_context)
 
         assert not result["success"]
-        assert "patch" in result["errors"][0].lower()
+        assert any("patch" in err.lower() for err in result["errors"])
 
     def test_invalid_patch_structure(self, tool_context):
         result = _fs_edit({"patch": "not a patch"}, tool_context)
 
         assert not result["success"]
-        assert "begin patch" in result["errors"][0].lower()
+        # Should fail to find any SEARCH/REPLACE blocks
+        assert len(result["errors"]) > 0
 
-    def test_update_missing_file(self, tool_context):
-        patch = make_patch(
-            """*** Update File: no_such_file.py
-@@
--print("hi")
-+print("bye")
-"""
-        )
-
-        result = _fs_edit({"patch": patch}, tool_context)
-
-        assert not result["success"]
-        assert "missing file" in result["errors"][0].lower()
-
-    def test_chunk_context_not_found(self, tool_context, tmp_path):
+    def test_search_content_not_found(self, tool_context, tmp_path):
         target = tmp_path / "service.py"
         target.write_text("def run():\n    return 1\n", encoding="utf-8")
 
-        patch = make_patch(
-            """*** Update File: service.py
-@@
--def run():
--    return 2
-+def run():
-+    return 3
-"""
+        # Search for content that doesn't exist
+        patch = make_search_replace(
+            "service.py",
+            "def run():\n    return 2\n",  # Wrong - file has return 1
+            "def run():\n    return 3\n",
         )
 
         result = _fs_edit({"patch": patch}, tool_context)
 
         assert not result["success"]
-        assert "context" in result["errors"][0].lower()
+        assert any(
+            "not found" in err.lower() or "search" in err.lower() for err in result["errors"]
+        )
+        # File should be unchanged
         assert target.read_text(encoding="utf-8") == "def run():\n    return 1\n"
-
-    def test_add_file_that_exists(self, tool_context, tmp_path):
-        existing = tmp_path / "dup.py"
-        existing.write_text("print('original')\n", encoding="utf-8")
-
-        patch = make_patch(
-            """*** Add File: dup.py
-+print("new")
-"""
-        )
-
-        result = _fs_edit({"patch": patch}, tool_context)
-
-        assert not result["success"]
-        assert "already exists" in result["errors"][0]
-
-    def test_delete_missing_file(self, tool_context):
-        patch = make_patch(
-            """*** Delete File: nope.py
-"""
-        )
-
-        result = _fs_edit({"patch": patch}, tool_context)
-
-        assert not result["success"]
-        assert "missing file" in result["errors"][0].lower()
 
 
 class TestDiagnostics:
     """Ensure the tool provides actionable diagnostics back to the agent."""
 
-    def test_reports_multiple_errors(self, tool_context, tmp_path):
+    def test_provides_helpful_error_on_mismatch(self, tool_context, tmp_path):
         target = tmp_path / "file.py"
-        target.write_text("def func():\n    return 1\n", encoding="utf-8")
+        target.write_text("VALUE = 1\n", encoding="utf-8")
 
-        patch = make_patch(
-            """*** Update File: file.py
-@@
--def func():
--    return 2
-+def func():
-+    return 3
-*** Delete File: missing.py
-"""
+        patch = make_search_replace(
+            "file.py",
+            "VALUE = 2\n",  # Doesn't match
+            "VALUE = 3\n",
         )
 
         result = _fs_edit({"patch": patch}, tool_context)
 
         assert not result["success"]
-        assert len(result["errors"]) >= 2
-        assert "context" in result["errors"][0].lower()
-        assert "missing" in result["errors"][1].lower()
-
-    def test_returns_changed_files_on_partial_success(self, tool_context, tmp_path):
-        target = tmp_path / "file.py"
-        target.write_text("flag = False\n", encoding="utf-8")
-
-        patch = make_patch(
-            """*** Update File: file.py
-@@
--flag = False
-+flag = True
-*** Add File: file.py
-+print("duplicate")
-"""
-        )
-
-        result = _fs_edit({"patch": patch}, tool_context)
-
-        assert not result["success"]
-        assert "file.py" in result["changed_files"]
-        assert "already exists" in result["errors"][-1]
+        # Should suggest using empty SEARCH for insertions
+        error_text = " ".join(result["errors"])
+        assert "SEARCH" in error_text or "not found" in error_text.lower()

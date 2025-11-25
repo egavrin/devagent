@@ -229,12 +229,11 @@ registry.register(
         request_schema_path=SCHEMA_DIR / "edit.request.json",
         response_schema_path=SCHEMA_DIR / "edit.response.json",
         description=(
-            "Apply edits using the canonical apply_patch format. Always send a single 'patch' string that includes "
-            "'*** Begin Patch'/'*** End Patch' sentinels and any number of actions: "
-            "'*** Update File', '*** Add File', or '*** Delete File'. Updates must contain @@ chunks with +/- hunks; "
-            "adds must prefix each new line with '+'. Read files first, copy the exact original text into '-' lines, and "
-            "only emit modifications you intend to make. The tool validates every chunk before writing and reports clear "
-            "errors (missing files, context mismatches, duplicate creations) without applying partial edits."
+            "Apply file edits using SEARCH/REPLACE blocks. REQUIREMENT: READ the target file first "
+            "and COPY exact content into your SEARCH section. Format: file path on its own line, "
+            "then fenced code block with '<<<<<<< SEARCH', '=======', '>>>>>>> REPLACE' markers. "
+            "For INSERTIONS use empty SEARCH (appends to file). For DELETIONS use empty REPLACE. "
+            "For NEW FILES use empty SEARCH with non-existent path. SEARCH must match file exactly."
         ),
         category="command",
     )

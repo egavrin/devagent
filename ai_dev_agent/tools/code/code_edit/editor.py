@@ -250,9 +250,9 @@ class CodeEditor:
         self._session_manager.add_user_message(self._session_id, prompt)
 
         try:
+            # Use default temperature (0.0) for reproducible code generation
             response = self.llm_client.complete(
                 self._session_manager.compose(self._session_id),
-                temperature=0.2 if not previous_attempts else 0.3,  # Slightly higher temp for fixes
             )
             self._session_manager.add_assistant_message(self._session_id, response)
         except LLMError as exc:

@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.prompts.loader import PromptLoader
 from ai_dev_agent.providers.llm.base import Message
 
@@ -49,8 +50,8 @@ class SummarizationConfig:
     # Token limit for individual summaries
     summary_max_tokens: int = 500
 
-    # Temperature for summarization requests
-    summary_temperature: float = 0.0
+    # Temperature for summarization requests (default: 0.0 for reproducibility)
+    summary_temperature: float = LLM_DEFAULT_TEMPERATURE
 
     # Whether to use async summarization
     async_summarization: bool = False

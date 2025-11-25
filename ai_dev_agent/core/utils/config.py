@@ -118,6 +118,8 @@ class Settings:
     # Summarization settings
     enable_summarization: bool = True
     summarization_model: str | None = None  # Use cheaper model if specified
+    # LLM temperature setting (0.0 = maximum reproducibility)
+    temperature: float = 0.0
     # Adaptive budget settings
     adaptive_budget_scaling: bool = True
     enable_two_tier_pruning: bool = True
@@ -238,6 +240,7 @@ def _load_from_env(prefix: str = "DEVAGENT_") -> dict[str, Any]:
                 "context_pruner_trigger_ratio",
                 "memory_similarity_threshold",
                 "memory_prune_threshold",
+                "temperature",
             }
             or field == "shell_session_timeout"
         ):

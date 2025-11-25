@@ -1,175 +1,183 @@
-# Apply Patch Format
+# SEARCH/REPLACE Edit Format
 
-All edits must use the canonical `apply_patch` structure. Every payload starts with `*** Begin Patch`, contains one or more actions, and ends with `*** End Patch`.
+All file edits MUST use the **SEARCH/REPLACE block** format (git merge conflict style markers).
+
+## Format
 
 ```
-*** Begin Patch
-*** Update File: relative/path.py
-*** Move to: optional/new/path.py
-@@
--old line copied verbatim
-+replacement line
-*** End Patch
+path/to/file.py
+```python
+<<<<<<< SEARCH
+exact content to find
+=======
+replacement content
+>>>>>>> REPLACE
 ```
 
-## Action Types
+## Format Rules (8 Steps)
 
-1. **Update File**
-   ```
-   *** Update File: src/app.py
-   @@
-   -def ping():
-   -    return "pong"
-   +def ping() -> str:
-   +    return "pong!"
-   ```
-   - Optional `*** Move to: ...` immediately after the header renames the file.
-   - Each `@@` chunk must include the exact `-` lines that currently exist plus the new `+` lines.
+Every SEARCH/REPLACE block **MUST** follow this exact format:
 
-2. **Add File**
-   ```
-   *** Add File: src/new_helper.py
-   +def helper():
-   +    return "ok"
-   ```
-   - Prefix every line with `+`. Include blank `+` lines for spacing.
-
-3. **Delete File**
-   ```
-   *** Delete File: scripts/old_task.sh
-   ```
+1. **File path** alone on a line (no decorations, no backticks)
+2. **Opening fence** with language: ` ```python ` or ` ```markdown ` etc.
+3. **SEARCH marker**: `<<<<<<< SEARCH`
+4. **Content to find** (EXACT match from READ output, or **empty for insertions**)
+5. **Divider**: `=======`
+6. **Replacement content** (what to put in place of SEARCH content)
+7. **REPLACE marker**: `>>>>>>> REPLACE`
+8. **Closing fence**: ` ``` `
 
 ## Critical Rules
 
-- **Headers always use colons**: `*** Update File: path`, `*** Add File: path`, `*** Delete File: path`, and `*** Move to: target`. Missing the colon makes the entire patch invalid.
-- **Exact matches only**: Copy every removed line (`-`) exactly, including whitespace, punctuation, and comments.
-- **Preflight validation**: DevAgent runs a dry-run before applying patches; if your `-` lines don’t match current files, the entire edit is rejected so re-read the file and rebuild the patch.
-- **Read before editing**: Use the READ tool immediately before creating the patch to avoid stale context.
-- **One chunk per region**: Use multiple `@@` sections if you edit distant parts of the same file.
-- **Maintain order**: Actions execute sequentially; list updates before deletes if they depend on earlier context.
-- **EOF handling**: Append `*** End of File` within a chunk if you modify the file footer or final newline.
+- **ALWAYS READ the file first** before editing (use `{tool_read}`)
+- **SEARCH content MUST be copied EXACTLY** from READ output
+- **NEVER invent or guess** what the file contains
+- **For insertions, use EMPTY SEARCH** (appends to file — always works)
+- **For new files, use EMPTY SEARCH** with non-existent path
+- **For deletions, use EMPTY REPLACE** to remove matched content
 
-## Before Sending a Patch
-1. Re-run `{tool_read}` on every file you plan to edit so the patch uses fresh context.
-2. Build a **single** `patch` string that wraps all actions between `*** Begin Patch` and `*** End Patch`.
-3. Confirm every header includes the colon (`*** Update File: path`, etc.) and optional `*** Move to: target`.
-4. Double-check each `@@` chunk: the `-` lines must match the file exactly and the `+` lines contain the intended changes.
-5. If validation fails (missing colon, context mismatch, move conflict), re-read the file, rebuild the chunk, and resend.
+## Operations
 
-## Examples
+### 1. Replace Existing Content
 
-### Update + Move
 ```
-*** Begin Patch
-*** Update File: pkg/old_name.py
-*** Move to: pkg/new_name.py
-@@
--IDENTITY = "old"
-+IDENTITY = "new"
-*** End Patch
+config.py
+```python
+<<<<<<< SEARCH
+DEBUG = False
+=======
+DEBUG = True
+>>>>>>> REPLACE
 ```
 
-### Multiple Updates
+### 2. Insert New Content (append at end)
+
+Use **empty SEARCH** to append content:
+
 ```
-*** Begin Patch
-*** Update File: config.py
-@@
--DEBUG = False
-+DEBUG = True
-@@
--TIMEOUT = 30
-+TIMEOUT = 60
-*** End Patch
+README.md
+```markdown
+<<<<<<< SEARCH
+=======
+
+## New Section
+Content appended at end.
+>>>>>>> REPLACE
 ```
 
-### Add + Delete Together
+**Empty SEARCH = append at end of file. ALWAYS works. No context matching needed.**
+
+### 3. Delete Content
+
+Use **empty REPLACE** to delete content:
+
 ```
-*** Begin Patch
-*** Add File: scripts/hello.sh
-+#!/usr/bin/env bash
-+echo "Hello"
-*** Delete File: scripts/legacy.sh
-*** End Patch
+src/debug.py
+```python
+<<<<<<< SEARCH
+print("DEBUG:", value)
+=======
+>>>>>>> REPLACE
 ```
 
-## Error Recovery
+### 4. Create New File
 
-If the tool reports context or file errors:
-1. **Re-read the file** and rebuild the chunk from current content.
-2. **Verify paths** are workspace-relative and case-sensitive.
-3. **Check move targets** – the destination must not already exist.
-4. **Ensure every action is enclosed** between `*** Begin Patch` and `*** End Patch`.
+Use **empty SEARCH** with non-existent path:
+
+```
+src/new_helper.py
+```python
+<<<<<<< SEARCH
+=======
+def helper():
+    return "ok"
+>>>>>>> REPLACE
+```
+
+### 5. Multiple Changes to Same File
+
+Use multiple SEARCH/REPLACE blocks:
+
+```
+config.py
+```python
+<<<<<<< SEARCH
+DEBUG = False
+=======
+DEBUG = True
+>>>>>>> REPLACE
+```
+
+config.py
+```python
+<<<<<<< SEARCH
+TIMEOUT = 30
+=======
+TIMEOUT = 60
+>>>>>>> REPLACE
+```
 
 ## Common Errors and Fixes
 
-### Error: "Missing colon in directive"
-**Cause**: Directive header is missing the required colon.
+### Error: "SEARCH content not found"
 
-**Wrong**:
-```
-*** Update File README.md
-```
+**Cause**: The SEARCH content doesn't match the actual file content.
 
-**Correct**:
-```
-*** Update File: README.md
-```
-
-Note: DevAgent will auto-correct minor colon omissions, but always include them for reliability.
-
-### Error: "context not found in 'file.py'"
-**Cause**: The `-` lines in your patch don't match the actual file content.
-
-**Fix steps**:
+**Fix**:
 1. Use `{tool_read}` to view current file content
-2. Copy the exact lines (including whitespace) into your `-` lines
-3. Never guess or paraphrase – whitespace and punctuation must be exact
+2. Copy the **exact lines** (including whitespace) into SEARCH
+3. Never guess or paraphrase
 
-**Wrong** (guessed content):
+### Error: "No SEARCH/REPLACE blocks found"
+
+**Cause**: Missing fence markers or wrong format.
+
+**Fix**: Ensure format includes:
+- File path on its own line
+- Opening fence with language (` ```python `)
+- `<<<<<<< SEARCH` marker
+- `=======` divider
+- `>>>>>>> REPLACE` marker
+- Closing fence (` ``` `)
+
+## The #1 Cause of Failures: Invented SEARCH Content
+
+**WRONG** — Inventing anchor content:
 ```
-*** Update File: config.py
-@@
--debug = false
-+debug = true
-```
+README.md
+```markdown
+<<<<<<< SEARCH
+## License
+MIT License
+=======
+## License
+MIT License
 
-**Correct** (after reading file shows `DEBUG = False`):
-```
-*** Update File: config.py
-@@
--DEBUG = False
-+DEBUG = True
-```
-
-Note: DevAgent has whitespace tolerance for trailing spaces and uniform indentation differences, but exact matches are most reliable.
-
-## Insertion Operations
-
-For pure insertions (adding new content without replacing existing lines):
-
-### Append to End of File
-Use `@@ EOF` or the `*** End of File` marker:
-```
-*** Begin Patch
-*** Update File: README.md
-@@
-+
-+## New Section
-+Content appended at end.
-*** End of File
-*** End Patch
+## New Section
+>>>>>>> REPLACE
 ```
 
-### Insert Near Existing Content
-Include a small anchor of existing lines:
+**Why it fails**: The SEARCH content was guessed, not copied from READ output.
+
+**RIGHT** — Empty SEARCH for insertions:
 ```
-*** Begin Patch
-*** Update File: README.md
-@@
--## Existing Section
-+## Existing Section
-+
-+## New Section (inserted after)
-+New content here.
-*** End Patch
+README.md
+```markdown
+<<<<<<< SEARCH
+=======
+
+## New Section
+Content here.
+>>>>>>> REPLACE
 ```
+
+**Why it works**: Empty SEARCH = append. Always succeeds.
+
+## Error Recovery Protocol
+
+When EDIT fails:
+1. **First failure**: RE-READ the file, COPY exact content, retry
+2. **Second failure**: Try different approach — use **empty SEARCH** for insertions
+3. **Third failure**: STOP and explain what's blocking you
+
+**NEVER retry with the same SEARCH content that already failed.**

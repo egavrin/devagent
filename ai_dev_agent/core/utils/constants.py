@@ -30,3 +30,23 @@ DEFAULT_MAX_CONTEXT_TOKENS = 100_000
 DEFAULT_RESPONSE_HEADROOM = 2_000
 DEFAULT_MAX_TOOL_MESSAGES = 10
 DEFAULT_KEEP_LAST_ASSISTANT = 4
+
+# LLM temperature configuration
+# Temperature=0 provides maximum reproducibility (same input -> same output)
+LLM_DEFAULT_TEMPERATURE = 0.0
+
+# Models that don't support the temperature parameter (reasoning models)
+# These models use internal reasoning and ignore/reject temperature
+MODELS_WITHOUT_TEMPERATURE_SUPPORT = frozenset(
+    {
+        # OpenAI reasoning models
+        "o1",
+        "o1-mini",
+        "o1-preview",
+        "o3",
+        "o3-mini",
+        # DeepSeek reasoning models
+        "deepseek-r1",
+        "deepseek-reasoner",
+    }
+)

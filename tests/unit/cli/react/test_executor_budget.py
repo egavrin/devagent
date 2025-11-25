@@ -66,9 +66,10 @@ class _ForcedSynthesisProvider:
     def last_response_text(self) -> str:
         return ""
 
-    def _complete(self, conversation, temperature: float = 0.1) -> str:
+    def _complete(self, conversation, temperature: float = 0.0) -> str:
         self._complete_calls += 1
-        assert temperature == 0.1
+        # Temperature now uses centralized default (0.0)
+        assert temperature == 0.0
         assert all(isinstance(msg, Message) for msg in conversation)
         return "Forced answer."
 

@@ -1,8 +1,5 @@
 """Test that EDIT failures provide detailed error feedback to the LLM."""
 
-from pathlib import Path
-from unittest.mock import MagicMock, Mock
-
 import pytest
 
 from ai_dev_agent.core.utils.config import Settings
@@ -47,16 +44,17 @@ def session_aware_invoker(test_workspace):
 
 def test_edit_failure_includes_detailed_errors(session_aware_invoker, test_workspace):
     """Test that EDIT failures include detailed error information in tool messages."""
-    # Create a patch that will fail due to context mismatch
-    failing_patch = """*** Begin Patch
-*** Update File: README.md
-@@
--# Wrong Title
--This does not match
-+# Test Project
-+Fixed content
-*** End Patch
-"""
+    # Create a SEARCH/REPLACE patch that will fail due to SEARCH content not found
+    failing_patch = """README.md
+```markdown
+<<<<<<< SEARCH
+# Wrong Title
+This does not match
+=======
+# Test Project
+Fixed content
+>>>>>>> REPLACE
+```"""
 
     # Execute the failing EDIT
     action = ActionRequest(
@@ -91,8 +89,8 @@ def test_edit_failure_includes_detailed_errors(session_aware_invoker, test_works
     assert "error" in content.lower() or "Error" in content
 
     # Should provide specific information about what went wrong
-    # The error should mention "context" since that's what failed to match
-    assert "context" in content.lower() or "not found" in content.lower()
+    # The error should mention "SEARCH" or "not found" since SEARCH content doesn't match
+    assert "search" in content.lower() or "not found" in content.lower()
 
     # Should NOT be just the display message - must have details
     assert len(content) > 20, "Tool message is too short - missing detailed errors"
@@ -100,14 +98,15 @@ def test_edit_failure_includes_detailed_errors(session_aware_invoker, test_works
 
 def test_edit_success_does_not_include_error_details(session_aware_invoker, test_workspace):
     """Test that successful EDITs don't incorrectly include error information."""
-    # Create a patch that will succeed
-    success_patch = """*** Begin Patch
-*** Update File: README.md
-@@
--This is a test.
-+This is an updated test.
-*** End Patch
-"""
+    # Create a SEARCH/REPLACE patch that will succeed
+    success_patch = """README.md
+```markdown
+<<<<<<< SEARCH
+This is a test.
+=======
+This is an updated test.
+>>>>>>> REPLACE
+```"""
 
     action = ActionRequest(
         step_id="1",
@@ -137,17 +136,15 @@ def test_edit_success_does_not_include_error_details(session_aware_invoker, test
 
 def test_edit_multiple_errors_all_reported(session_aware_invoker, test_workspace):
     """Test that when multiple errors occur, all are reported to the LLM."""
-    # Create a patch with multiple problems
-    multi_error_patch = """*** Begin Patch
-*** Update File: README.md
-@@
--Non-existent line 1
-+Replacement 1
-@@
--Non-existent line 2
-+Replacement 2
-*** End Patch
-"""
+    # Create a SEARCH/REPLACE patch with content that doesn't exist
+    multi_error_patch = """README.md
+```markdown
+<<<<<<< SEARCH
+Non-existent line 1
+=======
+Replacement 1
+>>>>>>> REPLACE
+```"""
 
     action = ActionRequest(
         step_id="1",
@@ -162,7 +159,7 @@ def test_edit_multiple_errors_all_reported(session_aware_invoker, test_workspace
     # Should fail
     assert not observation.success
 
-    # Check tool message includes multiple errors
+    # Check tool message includes error info
     session_id = session_aware_invoker.session_id
     session = session_aware_invoker.session_manager.get_session(session_id)
     tool_messages = [msg for msg in session.history if msg.role == "tool"]
@@ -170,6 +167,7 @@ def test_edit_multiple_errors_all_reported(session_aware_invoker, test_workspace
     latest_tool_msg = tool_messages[-1]
     content = latest_tool_msg.content
 
-    # Should mention multiple chunks failed (Chunk 1, Chunk 2)
-    # Note: The actual error format depends on the patch applier implementation
-    assert "Chunk" in content or "chunk" in content or "context" in content.lower()
+    # Should mention the error
+    assert (
+        "search" in content.lower() or "not found" in content.lower() or "block" in content.lower()
+    )

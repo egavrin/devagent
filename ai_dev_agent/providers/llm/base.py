@@ -11,8 +11,29 @@ from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 import requests
 
+from ai_dev_agent.core.utils.constants import (
+    LLM_DEFAULT_TEMPERATURE,
+    MODELS_WITHOUT_TEMPERATURE_SUPPORT,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
+
+
+def supports_temperature(model_name: str) -> bool:
+    """Check if a model supports the temperature parameter.
+
+    Some models (like OpenAI's o1/o3 reasoning models and DeepSeek-R1)
+    don't support temperature and will reject requests that include it.
+
+    Args:
+        model_name: The model identifier (e.g., "gpt-4", "o1-mini", "deepseek-r1")
+
+    Returns:
+        True if the model supports temperature, False otherwise.
+    """
+    model_lower = model_name.lower()
+    return all(unsupported not in model_lower for unsupported in MODELS_WITHOUT_TEMPERATURE_SUPPORT)
 
 
 @dataclass(frozen=True)
@@ -171,7 +192,7 @@ class LLMClient(Protocol):
     def complete(
         self,
         messages: Sequence[Message],
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         extra_headers: dict[str, str] | None = None,
         response_format: dict[str, Any] | None = None,
@@ -182,7 +203,7 @@ class LLMClient(Protocol):
     def stream(
         self,
         messages: Sequence[Message],
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         extra_headers: dict[str, str] | None = None,
         hooks: StreamHooks | None = None,
@@ -203,7 +224,7 @@ class LLMClient(Protocol):
         messages: Sequence[Message],
         tools: list[dict[str, Any]],
         *,
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         tool_choice: str | dict[str, Any] | None = "auto",
         extra_headers: dict[str, str] | None = None,
@@ -395,7 +416,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
     def complete(
         self,
         messages: Sequence[Message],
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         extra_headers: dict[str, str] | None = None,
         response_format: dict[str, Any] | None = None,
@@ -415,7 +436,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
     def stream(
         self,
         messages: Sequence[Message],
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         extra_headers: dict[str, str] | None = None,
         hooks: StreamHooks | None = None,
@@ -470,7 +491,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
         messages: Sequence[Message],
         tools: list[dict[str, Any]],
         *,
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         tool_choice: str | dict[str, Any] | None = "auto",
         extra_headers: dict[str, str] | None = None,
@@ -545,6 +566,7 @@ class HTTPChatLLMClient(LLMClient, ABC):
 
 __all__ = [
     "HTTPChatLLMClient",
+    "LLM_DEFAULT_TEMPERATURE",
     "LLMClient",
     "LLMConnectionError",
     "LLMError",
@@ -557,4 +579,5 @@ __all__ = [
     "StreamHooks",
     "ToolCall",
     "ToolCallResult",
+    "supports_temperature",
 ]

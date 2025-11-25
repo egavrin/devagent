@@ -217,7 +217,8 @@ class Planner:
             while True:
                 try:
                     conversation = self._session_manager.compose(session_key)
-                    response_text = self.client.complete(conversation, temperature=0.1)
+                    # Use default temperature (0.0) for reproducible planning
+                    response_text = self.client.complete(conversation)
                     break
                 except LLMTimeoutError:
                     now = time.time()

@@ -294,7 +294,7 @@ def mock_config():
         Dictionary with test configuration.
     """
     return {
-        "llm": {"model": "gpt-4", "temperature": 0.7, "max_tokens": 2000},
+        "llm": {"model": "gpt-4", "temperature": 0.0, "max_tokens": 2000},
         "testing": {"coverage_threshold": 95.0, "parallel": True, "timeout": 60},
         "paths": {"workspace": "/test/workspace", "cache": "/test/.cache", "logs": "/test/logs"},
         "features": {"auto_test": True, "memory_system": True, "multi_agent": True},

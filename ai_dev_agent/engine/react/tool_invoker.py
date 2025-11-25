@@ -19,7 +19,11 @@ from ai_dev_agent.core.utils.tool_utils import canonical_tool_name
 from ai_dev_agent.session import SessionManager
 from ai_dev_agent.tools import EDIT, READ, RUN, ToolContext, registry
 from ai_dev_agent.tools.execution.shell_session import ShellSessionManager
-from ai_dev_agent.tools.filesystem.search_replace import PatchApplier, PatchFormatError, PatchParser
+from ai_dev_agent.tools.filesystem.search_replace import (
+    EditBlockApplier,
+    PatchFormatError,
+    SearchReplaceParser,
+)
 
 # Pipeline module removed - functionality integrated into tool invoker
 from .types import ActionRequest, CLIObservation, Observation, ToolCall, ToolResult
@@ -396,8 +400,7 @@ class RegistryToolInvoker:
     def _validate_edit_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
         """Run a pre-flight checklist for EDIT payloads before invoking registry tools.
 
-        Uses parse_with_warnings() to auto-correct minor format issues (like missing colons)
-        and layered fuzzy matching for whitespace tolerance.
+        Uses SEARCH/REPLACE format parser with layered fuzzy matching for whitespace tolerance.
         """
         patch_value = payload.get("patch")
         if not isinstance(patch_value, str) or not patch_value.strip():
@@ -407,8 +410,8 @@ class RegistryToolInvoker:
             return {
                 "success": False,
                 "errors": [
-                    "EDIT tool requires a 'patch' string containing the canonical "
-                    "*** Begin Patch ... *** End Patch payload."
+                    "EDIT tool requires a 'patch' string containing SEARCH/REPLACE blocks. "
+                    "Format: file path, then fenced code block with <<<<<<< SEARCH, =======, >>>>>>> REPLACE markers."
                 ],
                 "warnings": [],
                 "changed_files": [],
@@ -418,9 +421,9 @@ class RegistryToolInvoker:
         all_warnings: list[str] = []
 
         try:
-            parser = PatchParser(patch_value)
+            parser = SearchReplaceParser(patch_value)
             parse_result = parser.parse_with_warnings()
-            actions = parse_result.actions
+            blocks = parse_result.blocks
             all_warnings.extend(parse_result.warnings)
         except PatchFormatError as exc:
             return {
@@ -431,14 +434,25 @@ class RegistryToolInvoker:
                 "new_files": [],
             }
 
-        validator = PatchApplier(self.workspace)
-        validation = validator.apply(actions, dry_run=True)
+        # Check for unread files and warn (only for blocks with non-empty SEARCH)
+        files_to_edit = [block.path for block in blocks if block.search]
+        for file_path in files_to_edit:
+            if file_path not in self._file_read_cache:
+                all_warnings.append(
+                    f"WARNING: You are editing '{file_path}' without recently reading it. "
+                    f"Use READ first to ensure your SEARCH content matches the file exactly."
+                )
+
+        validator = EditBlockApplier(self.workspace)
+        validation = validator.apply(blocks, dry_run=True)
         if not validation["success"]:
             # Combine warnings and add recovery steps
             all_warnings.extend(validation.get("warnings", []))
+            # Enrich errors with actual file content for context mismatches
+            enriched_errors = self._enrich_edit_errors(validation["errors"], blocks)
             return {
                 "success": False,
-                "errors": validation["errors"],
+                "errors": enriched_errors,
                 "warnings": all_warnings,
                 "changed_files": [],
                 "new_files": [],
@@ -449,6 +463,65 @@ class RegistryToolInvoker:
             LOGGER.info("EDIT pre-validation passed with warnings: %s", all_warnings)
 
         return None
+
+    def _enrich_edit_errors(self, errors: list[str], blocks: list[Any]) -> list[str]:
+        """Enrich edit errors with actual file content when SEARCH matching fails.
+
+        When an error mentions 'not found', inject the actual file content
+        so the LLM can see exactly what lines exist and copy them correctly.
+        """
+        enriched = []
+        for error in errors:
+            enriched_error = error
+
+            # Detect search-not-found errors and inject file content
+            if "not found" in error.lower():
+                # Extract file path from error message (format: "... in 'path'" or "... '{path}'")
+                import re
+
+                match = re.search(r"['\"]([^'\"]+\.\w+)['\"]", error)
+                if match:
+                    file_path = match.group(1)
+                    try:
+                        full_path = self.workspace / file_path
+                        if full_path.exists():
+                            content = full_path.read_text(encoding="utf-8")
+                            lines = content.splitlines()
+
+                            # Show numbered lines for easy reference
+                            if len(lines) <= 60:
+                                file_preview = "\n".join(
+                                    f"{i+1:4d} | {line}" for i, line in enumerate(lines)
+                                )
+                            else:
+                                # Show first 30 and last 20 lines for larger files
+                                top = "\n".join(
+                                    f"{i+1:4d} | {line}" for i, line in enumerate(lines[:30])
+                                )
+                                bottom = "\n".join(
+                                    f"{i+1:4d} | {line}"
+                                    for i, line in enumerate(lines[-20:], start=len(lines) - 20)
+                                )
+                                file_preview = (
+                                    f"{top}\n"
+                                    f"     ... ({len(lines) - 50} lines omitted) ...\n"
+                                    f"{bottom}"
+                                )
+
+                            enriched_error = (
+                                f"{error}\n\n"
+                                f"=== ACTUAL FILE CONTENT ({file_path}) ===\n"
+                                f"{file_preview}\n"
+                                f"=== END FILE CONTENT ===\n\n"
+                                f"INSTRUCTION: Copy the EXACT lines from above into your SEARCH section. "
+                                f"For insertions (adding new content), use an empty SEARCH section to append."
+                            )
+                    except Exception as exc:
+                        LOGGER.debug(f"Could not read file for error enrichment: {exc}")
+
+            enriched.append(enriched_error)
+
+        return enriched
 
     def _get_read_cache_key(self, payload: Mapping[str, Any]) -> str | None:
         """Generate cache key for READ operations.
@@ -1102,8 +1175,15 @@ class SessionAwareToolInvoker(RegistryToolInvoker):
             content_parts.append(
                 "\nRECOVERY STEPS:\n"
                 "1. Use READ to view the current file content\n"
-                "2. Ensure directive headers have colons (*** Update File: path)\n"
-                "3. Copy exact lines from READ output into your - lines\n"
+                "2. For INSERTIONS (adding new content), use EMPTY SEARCH block:\n"
+                "   file.md\n"
+                "   ```markdown\n"
+                "   <<<<<<< SEARCH\n"
+                "   =======\n"
+                "   ## Your New Section\n"
+                "   >>>>>>> REPLACE\n"
+                "   ```\n"
+                "3. For REPLACEMENTS, copy exact lines from READ output into SEARCH\n"
                 "4. Rebuild the patch and retry"
             )
 

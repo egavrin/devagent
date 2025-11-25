@@ -29,13 +29,14 @@ def test_synthesize_previous_steps_initial_step() -> None:
 
 
 def test_synthesize_previous_steps_merges_recent_activity() -> None:
-    patch = """*** Begin Patch
-*** Update File: ai_dev_agent/session/context_synthesis.py
-@@
--old
-+new
-*** End Patch
-"""
+    patch = """ai_dev_agent/session/context_synthesis.py
+```python
+<<<<<<< SEARCH
+old
+=======
+new
+>>>>>>> REPLACE
+```"""
     history = [
         Message(
             role="assistant",
@@ -80,13 +81,14 @@ def test_synthesize_previous_steps_merges_recent_activity() -> None:
 
 
 def test_synthesize_previous_steps_handles_partial_tool_data() -> None:
-    patch = """*** Begin Patch
-*** Update File: docs/CHANGELOG.md
-@@
--old
-+new
-*** End Patch
-"""
+    patch = """docs/CHANGELOG.md
+```markdown
+<<<<<<< SEARCH
+old
+=======
+new
+>>>>>>> REPLACE
+```"""
     history = [
         Message(
             role="assistant",

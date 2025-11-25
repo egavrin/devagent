@@ -6,7 +6,7 @@
   "properties": {
     "patch": {
       "type": "string",
-      "description": "Complete apply_patch payload. Must include '*** Begin Patch'/'*** End Patch' sentinels plus one or more actions: '*** Update File', '*** Add File', or '*** Delete File'. Updates contain @@ chunks with +/- lines exactly as they appear in the file. Adds must prefix every line with '+'. Always READ files first and copy the original text verbatim into '-' lines. The tool validates the entire patch before applying and reports precise errors when context or files do not match."
+      "description": "SEARCH/REPLACE blocks for file edits. Format: file path on its own line, then fenced code block with <<<<<<< SEARCH, =======, >>>>>>> REPLACE markers. For INSERTIONS use empty SEARCH (appends to file). For DELETIONS use empty REPLACE. For NEW FILES use empty SEARCH with non-existent path. SEARCH content must match file exactly - always READ first and COPY exact content."
     }
   },
   "additionalProperties": false

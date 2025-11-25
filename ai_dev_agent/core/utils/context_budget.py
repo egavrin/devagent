@@ -19,6 +19,7 @@ from .constants import (
     DEFAULT_MAX_TOOL_MESSAGES,
     DEFAULT_MAX_TOOL_OUTPUT_CHARS,
     DEFAULT_RESPONSE_HEADROOM,
+    LLM_DEFAULT_TEMPERATURE,
 )
 
 if TYPE_CHECKING:
@@ -434,7 +435,7 @@ class BudgetedLLMClient:
     def complete(
         self,
         messages: Sequence[Message],
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         extra_headers: dict | None = None,
         response_format: dict | None = None,
@@ -450,7 +451,7 @@ class BudgetedLLMClient:
     def stream(
         self,
         messages: Sequence[Message],
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         extra_headers: dict | None = None,
         hooks=None,
@@ -468,7 +469,7 @@ class BudgetedLLMClient:
         messages: Sequence[Message],
         tools: list[dict],
         *,
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         tool_choice: str | dict | None = "auto",
         extra_headers: dict | None = None,

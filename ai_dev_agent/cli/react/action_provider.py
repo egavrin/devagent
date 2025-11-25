@@ -155,9 +155,11 @@ class LLMActionProvider:
 
         tools = self._get_tools_for_phase(history)
 
-        # Build kwargs for LLM call
+        # Build kwargs for LLM call - use temperature from settings if available
+        settings = self._ctx_obj.get("settings")
+        temperature = settings.temperature if settings else 0.0
         llm_kwargs = {
-            "temperature": 0.1,
+            "temperature": temperature,
         }
 
         # When format_schema present, set response_format on all iterations

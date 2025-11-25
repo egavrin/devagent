@@ -144,22 +144,17 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
     before = assist_harness.read_text("examples/python_app.py")
     assert "Return a greeting" not in before
 
-    patch_text = (
-        textwrap.dedent(
-            """
-        *** Begin Patch
-        *** Update File: examples/python_app.py
-        @@
-        -def greet(name):
-        -    return f"Hello, {name}!"
-        +def greet(name):
-        +    \"\"\"Return a greeting for the given name.\"\"\"
-        +    return f"Hello, {name}!"
-        *** End Patch
-        """
-        ).strip()
-        + "\n"
-    )
+    patch_text = """examples/python_app.py
+```python
+<<<<<<< SEARCH
+def greet(name):
+    return f"Hello, {name}!"
+=======
+def greet(name):
+    \"\"\"Return a greeting for the given name.\"\"\"
+    return f"Hello, {name}!"
+>>>>>>> REPLACE
+```"""
 
     assist_harness.configure_router(
         (
@@ -170,7 +165,12 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
 
     result, duration = assist_harness.invoke("Update greet helper with documentation")
 
-    assert ("Executed edit" in result.output) or ("Patch applied" in result.output)
+    # Check for success indicators in output
+    assert (
+        ("Executed edit" in result.output)
+        or ("Patch applied" in result.output)
+        or ("edit →" in result.output and "failed" not in result.output.lower())
+    )
     assert "examples/python_app.py" in result.output
     updated = assist_harness.read_text("examples/python_app.py")
     assert "Return a greeting for the given name." in updated
@@ -178,18 +178,15 @@ def test_assist_can_patch_existing_file(assist_harness: AssistHarness) -> None:
 
 
 def test_assist_can_create_and_run_script(assist_harness: AssistHarness) -> None:
-    patch_text = (
-        textwrap.dedent(
-            """
-        *** Begin Patch
-        *** Add File: scripts/hello.sh
-        +#!/usr/bin/env bash
-        +echo "Hello from assist script"
-        *** End Patch
-        """
-        ).strip()
-        + "\n"
-    )
+    # Use SEARCH/REPLACE format with empty SEARCH to create new file
+    patch_text = """scripts/hello.sh
+```bash
+<<<<<<< SEARCH
+=======
+#!/usr/bin/env bash
+echo "Hello from assist script"
+>>>>>>> REPLACE
+```"""
 
     assist_harness.configure_router(
         (
@@ -200,7 +197,12 @@ def test_assist_can_create_and_run_script(assist_harness: AssistHarness) -> None
 
     create_result, create_duration = assist_harness.invoke("Create hello script for demo")
 
-    assert ("Executed edit" in create_result.output) or ("Patch applied" in create_result.output)
+    # Check for success indicators in output
+    assert (
+        ("Executed edit" in create_result.output)
+        or ("Patch applied" in create_result.output)
+        or ("edit →" in create_result.output and "failed" not in create_result.output.lower())
+    )
     script_path = assist_harness.path("scripts/hello.sh")
     assert script_path.is_file(), create_result.output
     assert "Hello from assist script" in script_path.read_text(encoding="utf-8")

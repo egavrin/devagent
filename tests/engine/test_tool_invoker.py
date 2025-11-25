@@ -79,13 +79,15 @@ class DummySessionManager:
 
 
 def _patch_for_file(path: str, old: str, new: str) -> str:
-    return f"""*** Begin Patch
-*** Update File: {path}
-@@
--{old}
-+{new}
-*** End Patch
-"""
+    """Generate a SEARCH/REPLACE patch for testing."""
+    return f"""{path}
+```
+<<<<<<< SEARCH
+{old}
+=======
+{new}
+>>>>>>> REPLACE
+```"""
 
 
 def test_sanitize_artifact_list_skips_falsey_entries(tmp_path):
@@ -218,27 +220,25 @@ def test_wrap_result_handles_non_mapping_results(tmp_path):
     assert observation.metrics["raw"] == ["unexpected"]
 
 
-def test_edit_preflight_auto_corrects_colonless_patch(tmp_path):
-    """Test that missing colon is auto-corrected with warning."""
+def test_edit_preflight_search_replace_format(tmp_path):
+    """Test that SEARCH/REPLACE format works correctly."""
     invoker = _make_invoker(tmp_path)
     target = tmp_path / "README.md"
     target.write_text("old content\n", encoding="utf-8")
 
     action = ActionRequest(
         step_id="preflight",
-        thought="try edit with missing colon",
+        thought="try edit with SEARCH/REPLACE format",
         tool=EDIT,
         args={
-            "patch": "*** Begin Patch\n*** Update File README.md\n@@\n-old content\n+new content\n*** End Patch"
+            "patch": "README.md\n```\n<<<<<<< SEARCH\nold content\n=======\nnew content\n>>>>>>> REPLACE\n```"
         },
     )
     observation = invoker(action)
 
-    # Should succeed - auto-correction fixes the missing colon
+    # Should succeed with SEARCH/REPLACE format
     assert observation.success is True
-    # Warning should indicate auto-correction happened
-    warnings = observation.metrics.get("warnings", [])
-    assert any("Auto-corrected" in w for w in warnings)
+    assert target.read_text() == "new content\n"
 
 
 def test_edit_preflight_detects_context_mismatch(tmp_path):
@@ -250,13 +250,15 @@ def test_edit_preflight_detects_context_mismatch(tmp_path):
         raise AssertionError("Preflight should block invalid patch")
 
     with _temporary_tool(EDIT, exploding_edit):
-        patch = """*** Begin Patch
-*** Update File: sample.py
-@@
--VALUE = 2
-+VALUE = 3
-*** End Patch
-"""
+        # Use SEARCH/REPLACE format with mismatched SEARCH content
+        patch = """sample.py
+```python
+<<<<<<< SEARCH
+VALUE = 2
+=======
+VALUE = 3
+>>>>>>> REPLACE
+```"""
         action = ActionRequest(
             step_id="preflight",
             thought="replace value",
@@ -266,7 +268,11 @@ def test_edit_preflight_detects_context_mismatch(tmp_path):
         observation = invoker(action)
 
     assert observation.success is False
-    assert any("context" in err.lower() for err in observation.metrics["errors"])
+    # Error should indicate SEARCH content not found
+    assert any(
+        "search" in err.lower() or "not found" in err.lower()
+        for err in observation.metrics["errors"]
+    )
 
 
 @contextmanager
@@ -302,13 +308,21 @@ def test_read_cache_and_write_invalidation(tmp_path):
 
     def edit_handler(payload, context):
         patch = payload["patch"]
-        lines = [line.strip() for line in patch.splitlines() if line.strip()]
-        header = next(line for line in lines if line.startswith("*** Update File:"))
-        path = header[len("*** Update File:") :].strip()
-        new_line = next(
-            line[1:] for line in lines if line.startswith("+") and not line.startswith("++")
-        )
-        (context.repo_root / path).write_text(new_line)
+        lines = patch.splitlines()
+        # SEARCH/REPLACE format: first line is path
+        path = lines[0].strip()
+        # Find REPLACE content (between ======= and >>>>>>> REPLACE)
+        in_replace = False
+        new_content = []
+        for line in lines:
+            if "=======" in line:
+                in_replace = True
+                continue
+            if ">>>>>>> REPLACE" in line:
+                break
+            if in_replace:
+                new_content.append(line)
+        (context.repo_root / path).write_text("\n".join(new_content))
         return {
             "success": True,
             "changed_files": [path],
@@ -1178,7 +1192,7 @@ def test_session_invoker_edit_failure_records_errors(tmp_path):
         step_id="edit",
         thought="apply",
         tool=EDIT,
-        args={"patch": "*** Begin Patch\n*** Update File: foo.py\n*** End Patch"},
+        args={"patch": "foo.py\n```\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n```"},
         metadata={"tool_call_id": "edit-call"},
     )
     observation = CLIObservation(

@@ -8,6 +8,8 @@ import asyncio
 from typing import Any, Optional, Union
 from unittest.mock import Mock
 
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
+
 
 class MockLLM:
     """Mock LLM implementation for testing without API calls."""
@@ -27,7 +29,11 @@ class MockLLM:
         self.history = []
 
     def complete(
-        self, prompt: str, temperature: float = 0.7, max_tokens: int = 2000, **kwargs
+        self,
+        prompt: str,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
+        max_tokens: int = 2000,
+        **kwargs,
     ) -> dict:
         """Mock completion endpoint.
 

@@ -194,6 +194,11 @@ def _generate_tasks_from_goal(
     # Get LLM client - prefer injected client from context
     client = None
 
+    # Always load settings for temperature configuration
+    from ai_dev_agent.core.utils.config import load_settings
+
+    settings = load_settings()
+
     # First, try to get the already-active LLM client from tool context
     if tool_context.extra and "llm_client" in tool_context.extra:
         client = tool_context.extra["llm_client"]
@@ -202,10 +207,8 @@ def _generate_tasks_from_goal(
     # Create a new client if none was provided
     if client is None:
         try:
-            from ai_dev_agent.core.utils.config import load_settings
             from ai_dev_agent.providers.llm import create_client
 
-            settings = load_settings()
             client = create_client(
                 provider=settings.provider,
                 api_key=settings.api_key,
@@ -270,10 +273,11 @@ Return ONLY the JSON, no explanations."""
         try:
             messages = [Message(role="user", content=planning_prompt)]
 
+            # Use settings.temperature for reproducibility (default 0.0)
             response = client.complete(
                 messages=messages,
                 max_tokens=2000,
-                temperature=0.3,
+                temperature=settings.temperature,
             )
 
             # Parse LLM response

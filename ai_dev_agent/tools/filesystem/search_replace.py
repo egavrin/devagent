@@ -1,7 +1,22 @@
-"""Patch-based EDIT tool implementation using apply_patch style directives."""
+"""SEARCH/REPLACE block EDIT tool implementation (Aider-style format).
+
+This module implements the SEARCH/REPLACE edit format used by Aider, which is
+more familiar to LLMs due to its similarity to git merge conflict markers.
+
+Format:
+    path/to/file.py
+    ```python
+    <<<<<<< SEARCH
+    exact content to find
+    =======
+    replacement content
+    >>>>>>> REPLACE
+    ```
+"""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -13,6 +28,15 @@ if TYPE_CHECKING:
     from ai_dev_agent.tools.registry import ToolContext
 
 LOGGER = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# SEARCH/REPLACE format markers
+# ---------------------------------------------------------------------------
+
+SEARCH_MARKER = "<<<<<<< SEARCH"
+DIVIDER_MARKER = "======="
+REPLACE_MARKER = ">>>>>>> REPLACE"
 
 
 # ---------------------------------------------------------------------------
@@ -61,17 +85,8 @@ def find_similar_lines(search_text: str, content: str, threshold: float = 0.6) -
     return "\n".join(content_lines[start:end])
 
 
-PATCH_BEGIN = "*** Begin Patch"
-PATCH_END = "*** End Patch"
-UPDATE_MARKER = "*** Update File:"
-ADD_MARKER = "*** Add File:"
-DELETE_MARKER = "*** Delete File:"
-MOVE_MARKER = "*** Move to:"
-EOF_MARKER = "*** End of File"
-
-
 class PatchFormatError(ValueError):
-    """Raised when the patch body is malformed."""
+    """Raised when the edit block is malformed."""
 
 
 class PatchApplyError(RuntimeError):
@@ -79,446 +94,288 @@ class PatchApplyError(RuntimeError):
 
 
 @dataclass
-class PatchChunk:
-    """Represents a single @@ chunk in an update action."""
+class EditBlock:
+    """Represents a single SEARCH/REPLACE block."""
 
-    context: str | None
-    old_lines: list[str]
-    new_lines: list[str]
-    is_end_of_file: bool = False
-    operations: list[tuple[str, str]] = field(default_factory=list)
-
-
-@dataclass
-class PatchAction:
-    """Represents a single action (add/update/delete)."""
-
-    type: str
     path: str
-    move_path: str | None = None
-    content: str | None = None
-    chunks: list[PatchChunk] = field(default_factory=list)
+    search: str  # Text to find (empty = new file)
+    replace: str  # Text to replace with (empty = delete)
 
 
 @dataclass
 class ParseResult:
-    """Result of parsing a patch, including any auto-correction warnings."""
+    """Result of parsing edit blocks."""
 
-    actions: list[PatchAction]
+    blocks: list[EditBlock]
     warnings: list[str]
 
 
-class PatchParser:
-    """Parse apply_patch formatted text into structured actions."""
+class SearchReplaceParser:
+    """Parse SEARCH/REPLACE formatted text into structured edit blocks.
+
+    Parses the Aider-style format:
+        path/to/file.py
+        ```python
+        <<<<<<< SEARCH
+        content to find
+        =======
+        replacement content
+        >>>>>>> REPLACE
+        ```
+
+    For new files, SEARCH section is empty:
+        new_file.py
+        ```python
+        <<<<<<< SEARCH
+        =======
+        new content
+        >>>>>>> REPLACE
+        ```
+    """
+
+    # Regex to extract file path before a fenced code block
+    # Matches: "path/to/file.ext" or "path/to/file.ext" followed by newline and ```
+    PATH_PATTERN = re.compile(
+        r"^([^\s`][^\n`]*?\.[\w]+)\s*\n```",
+        re.MULTILINE,
+    )
 
     def __init__(self, text: str):
-        self.original_text = text or ""
-        self.lines = list(text.splitlines())  # Make mutable copy
-        self.index = 0
+        self.text = text or ""
         self.warnings: list[str] = []
 
-    def parse(self) -> list[PatchAction]:
-        """Parse the patch text to actions.
-
-        Note: Use parse_with_warnings() to also get auto-correction warnings.
-        """
-        result = self.parse_with_warnings()
-        return result.actions
+    def parse(self) -> list[EditBlock]:
+        """Parse the text to edit blocks."""
+        return self.parse_with_warnings().blocks
 
     def parse_with_warnings(self) -> ParseResult:
-        """Parse the patch text to actions, returning any auto-correction warnings."""
-        actions: list[PatchAction] = []
+        """Parse edit blocks, returning any warnings."""
+        blocks: list[EditBlock] = []
         self.warnings = []
 
-        if not self.lines:
-            raise PatchFormatError("Patch is empty.")
+        if not self.text.strip():
+            raise PatchFormatError("Edit input is empty.")
 
-        # Skip empty lines until begin sentinel
-        while self.index < len(self.lines) and not self.lines[self.index].strip():
-            self.index += 1
-
-        if self.index >= len(self.lines) or not self.lines[self.index].startswith(PATCH_BEGIN):
-            raise PatchFormatError("Patch must start with '*** Begin Patch'.")
-        self.index += 1
-
-        while self.index < len(self.lines):
-            line = self.lines[self.index]
-            if line.startswith(PATCH_END):
-                break
-            if not line.strip():
-                self.index += 1
-                continue
-
-            # Try to auto-correct missing colons before rejecting
-            if self._missing_colon(line):
-                corrected, warning = self._auto_correct_marker(line)
-                if corrected:
-                    self.lines[self.index] = corrected
-                    line = corrected
-                    self.warnings.append(warning)
-                    LOGGER.info("Auto-corrected marker: %s", warning)
-                else:
-                    # Can't auto-correct, raise helpful error
-                    expected = self._expected_directive(line)
-                    raise PatchFormatError(
-                        f"Format error: Missing colon in directive.\n"
-                        f"Your line:   {line}\n"
-                        f"Required:    {expected} <path>\n"
-                        f"             {'~' * (len(expected) - 1)}^ add colon here"
-                    )
-
-            if line.startswith(UPDATE_MARKER):
-                actions.append(self._parse_update(line))
-            elif line.startswith(ADD_MARKER):
-                actions.append(self._parse_add(line))
-            elif line.startswith(DELETE_MARKER):
-                actions.append(self._parse_delete(line))
-            else:
-                raise PatchFormatError(f"Unknown directive: {line}")
-
-        if not actions:
-            raise PatchFormatError("Patch does not contain any actions.")
-
-        return ParseResult(actions=actions, warnings=self.warnings)
-
-    def _auto_correct_marker(self, line: str) -> tuple[str | None, str]:
-        """Attempt to auto-correct a marker missing its colon.
-
-        Returns:
-            (corrected_line, warning_message) or (None, "") if can't correct
-        """
-        # Define marker variants without colon and their corrections
-        corrections = [
-            ("*** Update File ", UPDATE_MARKER),
-            ("*** Add File ", ADD_MARKER),
-            ("*** Delete File ", DELETE_MARKER),
-            ("*** Move to ", MOVE_MARKER),
-            # Also handle no space after "File"
-            ("*** Update File", UPDATE_MARKER),
-            ("*** Add File", ADD_MARKER),
-            ("*** Delete File", DELETE_MARKER),
-            ("*** Move to", MOVE_MARKER),
-        ]
-
-        for wrong_prefix, correct_marker in corrections:
-            if line.startswith(wrong_prefix) and not line.startswith(correct_marker):
-                # Extract the path part
-                path_part = line[len(wrong_prefix) :].strip()
-                corrected = f"{correct_marker} {path_part}"
-                warning = f"Auto-corrected '{wrong_prefix.strip()}' to '{correct_marker}' for path '{path_part}'"
-                return corrected, warning
-
-        return None, ""
-
-    def _parse_path(self, line: str, marker: str) -> str:
-        path = line[len(marker) :].strip()
-        if not path:
-            raise PatchFormatError(f"{marker} directive missing path.")
-        return path
-
-    def _parse_update(self, line: str) -> PatchAction:
-        path = self._parse_path(line, UPDATE_MARKER)
-        self.index += 1
-        move_path: str | None = None
-        if self.index < len(self.lines):
-            move_line = self.lines[self.index]
-            if move_line.startswith(MOVE_MARKER):
-                move_path = self._parse_path(move_line, MOVE_MARKER)
-                self.index += 1
-            elif self._looks_like_missing_colon(move_line, MOVE_MARKER):
-                # Try to auto-correct the Move to directive
-                corrected, warning = self._auto_correct_marker(move_line)
-                if corrected:
-                    self.lines[self.index] = corrected
-                    move_path = self._parse_path(corrected, MOVE_MARKER)
-                    self.warnings.append(warning)
-                    LOGGER.info("Auto-corrected marker: %s", warning)
-                    self.index += 1
-                else:
-                    raise PatchFormatError(
-                        f"Expected '{MOVE_MARKER}' prefix with a colon. Received: {move_line}"
-                    )
-
-        chunks: list[PatchChunk] = []
-        while self.index < len(self.lines):
-            current = self.lines[self.index]
-            if current.startswith("***"):
-                break
-            if not current.strip():
-                self.index += 1
-                continue
-            if not current.startswith("@@"):
-                raise PatchFormatError(f"Expected '@@' chunk header, got: {current}")
-            chunks.append(self._parse_chunk(current))
-
-        if not chunks:
-            raise PatchFormatError(f"Update action for '{path}' is missing @@ chunks.")
-
-        return PatchAction(type="update", path=path, move_path=move_path, chunks=chunks)
-
-    def _parse_chunk(self, header: str) -> PatchChunk:
-        context = header[2:].strip() or None
-        self.index += 1
-        old_lines: list[str] = []
-        new_lines: list[str] = []
-        operations: list[tuple[str, str]] = []
-        is_end_of_file = False
-
-        while self.index < len(self.lines):
-            line = self.lines[self.index]
-            # Check for EOF marker first (before generic *** check)
-            if line == EOF_MARKER:
-                is_end_of_file = True
-                self.index += 1
-                break
-            if line.startswith("@@") or line.startswith("***"):
-                break
-
-            if not line:
-                self.index += 1
-                continue
-
-            prefix = line[0]
-            content = line[1:] if len(line) > 1 else ""
-            if prefix not in (" ", "+", "-"):
-                raise PatchFormatError(f"Invalid chunk line: {line}")
-
-            operations.append((prefix, content))
-            if prefix == " ":
-                old_lines.append(content)
-                new_lines.append(content)
-            elif prefix == "-":
-                old_lines.append(content)
-            elif prefix == "+":
-                new_lines.append(content)
-
-            self.index += 1
-
-        return PatchChunk(
-            context=context,
-            old_lines=old_lines,
-            new_lines=new_lines,
-            is_end_of_file=is_end_of_file,
-            operations=operations,
+        # Find all SEARCH/REPLACE blocks
+        # Pattern: path, then fenced block containing SEARCH/REPLACE markers
+        block_pattern = re.compile(
+            r"^([^\s`\n][^\n`]*?)\s*\n"  # File path on its own line
+            r"```[\w]*\s*\n"  # Opening fence with optional language
+            r"<<<<<<< SEARCH\s*\n"  # SEARCH marker
+            r"(.*?)"  # SEARCH content (can be empty)
+            r"=======\s*\n"  # Divider
+            r"(.*?)"  # REPLACE content (can be empty)
+            r">>>>>>> REPLACE\s*\n?"  # REPLACE marker
+            r"```",  # Closing fence
+            re.MULTILINE | re.DOTALL,
         )
 
-    def _parse_add(self, line: str) -> PatchAction:
-        path = self._parse_path(line, ADD_MARKER)
-        self.index += 1
-        lines: list[str] = []
-        while self.index < len(self.lines):
-            current = self.lines[self.index]
-            if current.startswith("***"):
-                break
-            if current.startswith("+"):
-                lines.append(current[1:])
-                self.index += 1
-            elif not current.strip():
-                lines.append("")
-                self.index += 1
-            else:
-                raise PatchFormatError(f"Invalid line in add block for '{path}': {current}")
+        matches = list(block_pattern.finditer(self.text))
 
-        content = ("\n".join(lines) + "\n") if lines else ""
-        return PatchAction(type="add", path=path, content=content)
+        if not matches:
+            # Try without fences (some LLMs omit them)
+            unfenced_pattern = re.compile(
+                r"^([^\s<\n][^\n<]*?)\s*\n"  # File path
+                r"<<<<<<< SEARCH\s*\n"  # SEARCH marker
+                r"(.*?)"  # SEARCH content
+                r"=======\s*\n"  # Divider
+                r"(.*?)"  # REPLACE content
+                r">>>>>>> REPLACE",  # REPLACE marker
+                re.MULTILINE | re.DOTALL,
+            )
+            matches = list(unfenced_pattern.finditer(self.text))
+            if matches:
+                self.warnings.append("Parsed SEARCH/REPLACE blocks without fence markers")
 
-    def _parse_delete(self, line: str) -> PatchAction:
-        path = self._parse_path(line, DELETE_MARKER)
-        self.index += 1
-        return PatchAction(type="delete", path=path)
+        if not matches:
+            raise PatchFormatError(
+                "No SEARCH/REPLACE blocks found.\n\n"
+                "Expected format:\n"
+                "path/to/file.py\n"
+                "```python\n"
+                "<<<<<<< SEARCH\n"
+                "content to find\n"
+                "=======\n"
+                "replacement content\n"
+                ">>>>>>> REPLACE\n"
+                "```"
+            )
 
-    def _missing_colon(self, line: str) -> bool:
-        """Detect directives that omit the required colon."""
-        return any(
-            self._looks_like_missing_colon(line, marker)
-            for marker in (UPDATE_MARKER, ADD_MARKER, DELETE_MARKER)
-        )
+        for match in matches:
+            path = match.group(1).strip()
+            search = match.group(2)
+            replace = match.group(3)
 
-    @staticmethod
-    def _looks_like_missing_colon(line: str, marker: str) -> bool:
-        if not marker.endswith(":"):
-            return False
-        prefix = marker[:-1]
-        return line.startswith(prefix) and not line.startswith(marker)
+            # Normalize: remove trailing newline from search/replace if present
+            # but preserve internal content
+            if search.endswith("\n"):
+                search = search[:-1]
+            if replace.endswith("\n"):
+                replace = replace[:-1]
 
-    @staticmethod
-    def _expected_directive(line: str) -> str:
-        if line.startswith(UPDATE_MARKER[:-1]):
-            return UPDATE_MARKER
-        if line.startswith(ADD_MARKER[:-1]):
-            return ADD_MARKER
-        if line.startswith(DELETE_MARKER[:-1]):
-            return DELETE_MARKER
-        return "***"
+            blocks.append(EditBlock(path=path, search=search, replace=replace))
+
+        return ParseResult(blocks=blocks, warnings=self.warnings)
 
 
-class PatchApplier:
-    """Apply parsed actions to the filesystem."""
+class EditBlockApplier:
+    """Apply parsed SEARCH/REPLACE blocks to the filesystem."""
 
     def __init__(self, repo_root: Path):
         self.repo_root = Path(repo_root)
         self._warnings: list[str] = []
 
-    def apply(self, actions: Sequence[PatchAction], dry_run: bool = False) -> dict[str, Any]:
+    def apply(self, blocks: Sequence[EditBlock], dry_run: bool = False) -> dict[str, Any]:
+        """Apply edit blocks to files.
+
+        Args:
+            blocks: List of EditBlock instances
+            dry_run: If True, validate without writing
+
+        Returns:
+            Dict with success status, errors, warnings, and file lists
+        """
         errors: list[str] = []
         changed_files: set[str] = set()
         new_files: set[str] = set()
         applied_count = 0
-        self._warnings = []  # Reset warnings for each apply call
+        self._warnings = []
 
-        for idx, action in enumerate(actions, start=1):
+        for idx, block in enumerate(blocks, start=1):
             try:
-                if action.type == "add":
-                    self._apply_add(action, new_files, dry_run)
-                elif action.type == "delete":
-                    self._apply_delete(action, changed_files, dry_run)
-                elif action.type == "update":
-                    self._apply_update(action, changed_files, dry_run)
+                is_new = self._apply_block(block, changed_files, new_files, dry_run, idx)
+                if is_new:
+                    new_files.add(block.path)
                 else:
-                    raise PatchApplyError(f"Unsupported action type: {action.type}")
+                    changed_files.add(block.path)
                 applied_count += 1
             except PatchApplyError as exc:
                 errors.append(str(exc))
-                LOGGER.warning("Failed to apply action %d: %s", idx, exc)
+                LOGGER.warning("Failed to apply block %d: %s", idx, exc)
 
         success = not errors
         return {
             "success": success,
-            "changes_applied": applied_count if not success else (0 if dry_run else len(actions)),
+            "changes_applied": applied_count if success else 0,
             "errors": errors,
             "warnings": self._warnings,
-            "changed_files": sorted(changed_files),
+            "changed_files": sorted(changed_files - new_files),
             "new_files": sorted(new_files),
         }
 
-    def _apply_add(self, action: PatchAction, new_files: set[str], dry_run: bool) -> None:
-        target = self._resolve_path(action.path)
-        if target.exists():
-            raise PatchApplyError(f"Cannot create new file '{action.path}': File already exists.")
-        if not dry_run:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(action.content or "", encoding="utf-8")
-        new_files.add(action.path)
-        if not dry_run:
-            LOGGER.info("Created file %s", action.path)
-
-    def _apply_delete(self, action: PatchAction, changed_files: set[str], dry_run: bool) -> None:
-        target = self._resolve_path(action.path)
-        if not target.exists():
-            raise PatchApplyError(f"Delete File Error - missing file: {action.path}")
-        if target.is_dir():
-            raise PatchApplyError(f"Delete File Error - '{action.path}' is a directory.")
-        if not dry_run:
-            target.unlink()
-        changed_files.add(action.path)
-        if not dry_run:
-            LOGGER.info("Deleted file %s", action.path)
-
-    def _apply_update(self, action: PatchAction, changed_files: set[str], dry_run: bool) -> None:
-        source = self._resolve_path(action.path)
-        if not source.exists():
-            raise PatchApplyError(f"Update File Error - missing file: {action.path}")
-        if source.is_dir():
-            raise PatchApplyError(f"Update File Error - '{action.path}' is a directory.")
-
-        content = source.read_text(encoding="utf-8")
-        updated_content = content
-        last_position = 0
-
-        for chunk_index, chunk in enumerate(action.chunks, start=1):
-            updated_content, last_position = self._apply_chunk(
-                updated_content, chunk, action.path, chunk_index, last_position
-            )
-
-        destination_path = action.move_path or action.path
-        dest = self._resolve_path(destination_path)
-        if action.move_path and dest.exists():
-            raise PatchApplyError(f"Move target '{action.move_path}' already exists.")
-
-        if not dry_run:
-            if action.move_path:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                source.unlink()
-                dest.write_text(updated_content, encoding="utf-8")
-            else:
-                source.write_text(updated_content, encoding="utf-8")
-
-        changed_files.add(destination_path)
-        if action.move_path:
-            changed_files.add(action.path)
-        if not dry_run:
-            if action.move_path:
-                LOGGER.info("Renamed %s -> %s", action.path, action.move_path)
-            else:
-                LOGGER.info("Updated file %s", action.path)
-
-    def _apply_chunk(
+    def _apply_block(
         self,
-        content: str,
-        chunk: PatchChunk,
-        path: str,
-        chunk_index: int,
-        last_position: int,
-    ) -> tuple[str, int]:
-        old_text = "\n".join(chunk.old_lines)
-        new_text = "\n".join(chunk.new_lines)
-
-        if old_text:
-            # Use layered fuzzy matching (inspired by Aider)
-            match_result = self._find_context_fuzzy(
-                content, old_text, chunk.old_lines, last_position, path, chunk_index
-            )
-            if match_result is None:
-                # Build a helpful error message with similar lines suggestion
-                self._raise_context_not_found(old_text, content, path, chunk_index)
-
-            pos, end, actual_old_text, warning = match_result
-            if warning:
-                self._warnings.append(f"Chunk {chunk_index} in '{path}': {warning}")
-                LOGGER.info("Fuzzy match in chunk %d of '%s': %s", chunk_index, path, warning)
-
-            replaced = content[:pos] + new_text + content[end:]
-            return replaced, pos + len(new_text)
-
-        insert_at = self._locate_insertion_point(content, chunk, last_position)
-        replaced = content[:insert_at] + new_text + content[insert_at:]
-        return replaced, insert_at + len(new_text)
-
-    def _find_context_fuzzy(
-        self,
-        content: str,
-        old_text: str,
-        old_lines: list[str],
-        start_pos: int,
-        path: str,
-        chunk_index: int,
-    ) -> tuple[int, int, str, str | None] | None:
-        """Find old_text in content using layered fuzzy matching.
-
-        Tries matching strategies in order of strictness:
-        1. Exact match (current behavior)
-        2. Trailing whitespace tolerance (rstrip each line)
-        3. Leading whitespace tolerance (uniform indent differences)
+        block: EditBlock,
+        changed_files: set[str],
+        new_files: set[str],
+        dry_run: bool,
+        block_idx: int,
+    ) -> bool:
+        """Apply a single edit block.
 
         Returns:
-            (start_pos, end_pos, matched_text, warning) or None if no match found
+            True if this created a new file, False if it modified existing
         """
-        # Layer 1: Exact match (try from last_position first, then from start)
-        pos = content.find(old_text, start_pos)
+        target = self._resolve_path(block.path)
+
+        # Empty SEARCH = new file creation
+        if not block.search:
+            if target.exists():
+                # File exists - treat as append to end of file
+                content = target.read_text(encoding="utf-8")
+                # Ensure proper newline separation
+                if content and not content.endswith("\n"):
+                    content += "\n"
+                new_content = content + block.replace
+                if not new_content.endswith("\n"):
+                    new_content += "\n"
+                if not dry_run:
+                    target.write_text(new_content, encoding="utf-8")
+                    LOGGER.info("Appended to file %s", block.path)
+                return False
+            else:
+                # Create new file
+                if not dry_run:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    content = block.replace
+                    if content and not content.endswith("\n"):
+                        content += "\n"
+                    target.write_text(content, encoding="utf-8")
+                    LOGGER.info("Created file %s", block.path)
+                return True
+
+        # Empty REPLACE = delete content (or whole file if SEARCH matches all)
+        if not block.replace and block.search:
+            if not target.exists():
+                raise PatchApplyError(f"Block {block_idx}: Cannot edit missing file: {block.path}")
+            content = target.read_text(encoding="utf-8")
+
+            # Find and remove the search content
+            match_result = self._find_content_fuzzy(content, block.search, block.path, block_idx)
+            if match_result is None:
+                self._raise_search_not_found(block.search, content, block.path, block_idx)
+
+            pos, end, _, warning = match_result
+            if warning:
+                self._warnings.append(f"Block {block_idx} in '{block.path}': {warning}")
+
+            new_content = content[:pos] + content[end:]
+            if not dry_run:
+                target.write_text(new_content, encoding="utf-8")
+                LOGGER.info("Removed content from file %s", block.path)
+            return False
+
+        # Normal replacement
+        if not target.exists():
+            raise PatchApplyError(f"Block {block_idx}: Cannot edit missing file: {block.path}")
+
+        content = target.read_text(encoding="utf-8")
+        match_result = self._find_content_fuzzy(content, block.search, block.path, block_idx)
+        if match_result is None:
+            self._raise_search_not_found(block.search, content, block.path, block_idx)
+
+        pos, end, _, warning = match_result
+        if warning:
+            self._warnings.append(f"Block {block_idx} in '{block.path}': {warning}")
+
+        new_content = content[:pos] + block.replace + content[end:]
+        if not dry_run:
+            target.write_text(new_content, encoding="utf-8")
+            LOGGER.info("Updated file %s", block.path)
+        return False
+
+    def _find_content_fuzzy(
+        self,
+        content: str,
+        search: str,
+        path: str,
+        block_idx: int,
+    ) -> tuple[int, int, str, str | None] | None:
+        """Find search text in content using layered fuzzy matching.
+
+        Tries matching strategies in order of strictness:
+        1. Exact match
+        2. Trailing whitespace tolerance
+        3. Leading whitespace tolerance
+
+        Returns:
+            (start_pos, end_pos, matched_text, warning) or None if no match
+        """
+        # Layer 1: Exact match
+        pos = content.find(search)
         if pos != -1:
-            return pos, pos + len(old_text), old_text, None
-        pos = content.find(old_text)
-        if pos != -1:
-            return pos, pos + len(old_text), old_text, None
+            return pos, pos + len(search), search, None
+
+        search_lines = search.splitlines()
 
         # Layer 2: Trailing whitespace tolerance
-        match = self._find_with_trailing_ws_tolerance(content, old_lines, start_pos)
+        match = self._find_with_trailing_ws_tolerance(content, search_lines)
         if match:
             pos, end, matched = match
             return pos, end, matched, "Matched after stripping trailing whitespace"
 
-        # Layer 3: Leading whitespace tolerance (Aider's key insight)
-        match = self._find_with_leading_ws_tolerance(content, old_lines, start_pos)
+        # Layer 3: Leading whitespace tolerance
+        match = self._find_with_leading_ws_tolerance(content, search_lines)
         if match:
             pos, end, matched = match
             return pos, end, matched, "Matched after adjusting indentation"
@@ -526,18 +383,17 @@ class PatchApplier:
         return None
 
     def _find_with_trailing_ws_tolerance(
-        self, content: str, old_lines: list[str], start_pos: int
+        self, content: str, search_lines: list[str]
     ) -> tuple[int, int, str] | None:
         """Find match with trailing whitespace stripped from each line."""
         content_lines = content.splitlines(keepends=True)
-        stripped_old = [line.rstrip() for line in old_lines]
+        stripped_search = [line.rstrip() for line in search_lines]
 
-        for i in range(len(content_lines) - len(old_lines) + 1):
-            chunk = content_lines[i : i + len(old_lines)]
+        for i in range(max(1, len(content_lines) - len(search_lines) + 1)):
+            chunk = content_lines[i : i + len(search_lines)]
             chunk_stripped = [line.rstrip() for line in chunk]
 
-            if stripped_old == chunk_stripped:
-                # Calculate character positions
+            if stripped_search == chunk_stripped:
                 char_pos = sum(len(content_lines[j]) for j in range(i))
                 char_end = char_pos + sum(len(line) for line in chunk)
                 matched_text = "".join(chunk).rstrip("\n")
@@ -546,36 +402,26 @@ class PatchApplier:
         return None
 
     def _find_with_leading_ws_tolerance(
-        self, content: str, old_lines: list[str], start_pos: int
+        self, content: str, search_lines: list[str]
     ) -> tuple[int, int, str] | None:
-        """Find match ignoring uniform leading whitespace differences.
-
-        This handles the common case where LLMs get indentation wrong uniformly
-        across all lines (e.g., missing 4 spaces from every line).
-        """
+        """Find match ignoring uniform leading whitespace differences."""
         content_lines = content.splitlines(keepends=True)
 
-        # Calculate minimum leading whitespace in old_lines (non-empty lines only)
-        leading = [len(line) - len(line.lstrip()) for line in old_lines if line.strip()]
+        leading = [len(line) - len(line.lstrip()) for line in search_lines if line.strip()]
         if not leading:
             return None
         min_leading = min(leading)
 
-        # Strip that minimum from old_lines for comparison
-        stripped_old = [
-            line[min_leading:].rstrip() if line.strip() else line.rstrip() for line in old_lines
+        stripped_search = [
+            line[min_leading:].rstrip() if line.strip() else line.rstrip() for line in search_lines
         ]
 
-        # Search for match ignoring leading whitespace
-        for i in range(len(content_lines) - len(old_lines) + 1):
-            chunk = content_lines[i : i + len(old_lines)]
-
-            # Check if non-whitespace content matches (after stripping leading ws)
+        for i in range(max(1, len(content_lines) - len(search_lines) + 1)):
+            chunk = content_lines[i : i + len(search_lines)]
             chunk_stripped = [line.lstrip().rstrip() for line in chunk]
-            old_stripped_content = [line.lstrip().rstrip() for line in stripped_old]
+            search_stripped_content = [line.lstrip().rstrip() for line in stripped_search]
 
-            if chunk_stripped == old_stripped_content:
-                # Found a match - calculate positions
+            if chunk_stripped == search_stripped_content:
                 char_pos = sum(len(content_lines[j]) for j in range(i))
                 char_end = char_pos + sum(len(line) for line in chunk)
                 matched_text = "".join(chunk).rstrip("\n")
@@ -583,97 +429,56 @@ class PatchApplier:
 
         return None
 
-    def _raise_context_not_found(
-        self, old_text: str, content: str, path: str, chunk_index: int
-    ) -> None:
-        """Raise a helpful error with similar-line suggestions."""
-        # Try to find similar content for diagnostic purposes
-        similar = find_similar_lines(old_text, content, threshold=0.5)
+    def _raise_search_not_found(self, search: str, content: str, path: str, block_idx: int) -> None:
+        """Raise a helpful error when SEARCH content not found."""
+        similar = find_similar_lines(search, content, threshold=0.5)
 
-        # Detect if this looks like an insertion attempt with invented anchors
-        old_lines = old_text.strip().splitlines()
-        looks_like_insertion = self._looks_like_invented_anchor(old_lines, content)
+        search_preview = search[:200] + "..." if len(search) > 200 else search
+        error_parts = [f"Block {block_idx}: SEARCH content not found in '{path}'."]
+        error_parts.append(f"\n\nYour SEARCH block contains:\n```\n{search_preview}\n```")
 
-        # Build the error message
-        old_preview = old_text[:200] + "..." if len(old_text) > 200 else old_text
-        error_parts = [f"Chunk {chunk_index}: context not found in '{path}'."]
-        error_parts.append(f"\nYour patch expects:\n{old_preview}")
-
-        if looks_like_insertion:
-            # Provide specific guidance for insertion tasks
-            error_parts.append(
-                "\n\n⚠️ INSERTION DETECTED: Your - lines don't exist in the file."
-                "\n\nTo INSERT new content, use one of these approaches:"
-                "\n\n1. APPEND AT END (recommended for new sections):"
-                "\n   *** Update File: " + path + "\n   @@"
-                "\n   +"
-                "\n   +## Your New Section"
-                "\n   +Your content here."
-                "\n   *** End of File"
-                "\n\n2. INSERT AFTER EXISTING LINE (copy an ACTUAL line from the file):"
-                "\n   @@"
-                "\n   -## Existing Section  <-- must be EXACT text from file"
-                "\n   +## Existing Section"
-                "\n   +"
-                "\n   +## Your New Section"
-            )
-            # Show actual section headers in the file
-            headers = [line for line in content.splitlines() if line.startswith("## ")]
-            if headers:
-                error_parts.append(f"\n\nActual section headers in '{path}':")
-                for h in headers[:10]:
-                    error_parts.append(f"\n  {h}")
-        elif similar:
-            error_parts.append(f"\n\nDid you mean to match these lines?\n{similar}")
+        if similar:
+            error_parts.append(f"\n\nDid you mean to match this?\n```\n{similar}\n```")
         else:
-            # Show first N lines of file content
-            content_preview = "\n".join(content.splitlines()[:15])
-            if len(content.splitlines()) > 15:
+            content_preview = "\n".join(content.splitlines()[:20])
+            if len(content.splitlines()) > 20:
                 content_preview += "\n..."
-            error_parts.append(f"\n\nActual file content (first 15 lines):\n{content_preview}")
+            error_parts.append(
+                f"\n\nActual file content (first 20 lines):\n```\n{content_preview}\n```"
+            )
 
-        error_parts.append("\n\nTIP: Use READ tool to get exact file content before editing.")
+        # Detect insertion attempt with invented content
+        if self._looks_like_invented_content(search, content):
+            error_parts.append(
+                "\n\n**TIP: For INSERTIONS (adding new content), use an empty SEARCH block:**\n"
+                f"```\n{path}\n```\n"
+                "<<<<<<< SEARCH\n"
+                "=======\n"
+                "your new content here\n"
+                ">>>>>>> REPLACE\n"
+                "```\n"
+            )
+
+        error_parts.append(
+            "\n\n**IMPORTANT:** The SEARCH content must EXACTLY match the file. "
+            "Use READ tool first to see the actual content."
+        )
         raise PatchApplyError("".join(error_parts))
 
-    def _looks_like_invented_anchor(self, old_lines: list[str], content: str) -> bool:
-        """Detect if old_lines look like invented section headers for an insertion.
-
-        Returns True if the - lines appear to be section headers or anchor text
-        that the LLM invented rather than copied from the actual file.
-        """
-        if not old_lines:
+    def _looks_like_invented_content(self, search: str, content: str) -> bool:
+        """Detect if SEARCH content looks invented (not from the file)."""
+        search_lines = search.strip().splitlines()
+        if not search_lines:
             return False
 
-        # Check if any line looks like a markdown header
-        has_header_like = any(
-            line.strip().startswith("#")
-            or line.strip().startswith("##")
-            or line.strip().lower().startswith("contributing")
-            or line.strip().lower().startswith("license")
-            for line in old_lines
-        )
-
-        if not has_header_like:
-            return False
-
-        # Check if these headers actually exist in the file
-        content_lower = content.lower()
-        for line in old_lines:
+        # Check if any search line actually exists in the file
+        for line in search_lines:
             stripped = line.strip()
-            if stripped and stripped.lower() in content_lower:
-                return False  # Found at least one matching line
+            if stripped and stripped in content:
+                return False
 
-        # Headers present but none match - likely invented
+        # No lines match - likely invented
         return True
-
-    def _locate_insertion_point(self, content: str, chunk: PatchChunk, start_pos: int) -> int:
-        if chunk.context:
-            context_pos = content.find(chunk.context)
-            if context_pos != -1:
-                return context_pos + len(chunk.context)
-        if chunk.is_end_of_file:
-            return len(content)
-        return min(start_pos, len(content))
 
     def _resolve_path(self, relative: str) -> Path:
         candidate = (self.repo_root / relative).resolve()
@@ -686,7 +491,21 @@ class PatchApplier:
 
 
 def _fs_edit(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str, Any]:
-    """Filesystem edit handler that consumes apply_patch format."""
+    """Filesystem edit handler that consumes SEARCH/REPLACE format.
+
+    Expected payload:
+        {"patch": "<SEARCH/REPLACE blocks>"}
+
+    Format:
+        path/to/file.py
+        ```python
+        <<<<<<< SEARCH
+        content to find
+        =======
+        replacement content
+        >>>>>>> REPLACE
+        ```
+    """
     patch_text = payload.get("patch")
     if not patch_text or not isinstance(patch_text, str):
         return {
@@ -701,9 +520,9 @@ def _fs_edit(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str,
     all_warnings: list[str] = []
 
     try:
-        parser = PatchParser(patch_text)
+        parser = SearchReplaceParser(patch_text)
         parse_result = parser.parse_with_warnings()
-        actions = parse_result.actions
+        blocks = parse_result.blocks
         all_warnings.extend(parse_result.warnings)
     except PatchFormatError as exc:
         return {
@@ -715,26 +534,24 @@ def _fs_edit(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str,
             "new_files": [],
         }
 
-    applier = PatchApplier(context.repo_root)
-    validation = applier.apply(actions, dry_run=True)
+    applier = EditBlockApplier(context.repo_root)
+    validation = applier.apply(blocks, dry_run=True)
     if not validation["success"]:
-        # Include parser warnings even on validation failure
         validation["warnings"] = all_warnings + validation.get("warnings", [])
         return validation
 
-    result = applier.apply(actions, dry_run=False)
-    # Combine all warnings
+    result = applier.apply(blocks, dry_run=False)
     result["warnings"] = all_warnings + result.get("warnings", [])
     return result
 
 
 __all__ = [
+    "EditBlock",
+    "EditBlockApplier",
     "ParseResult",
-    "PatchAction",
     "PatchApplyError",
-    "PatchChunk",
     "PatchFormatError",
-    "PatchParser",
+    "SearchReplaceParser",
     "_fs_edit",
     "find_similar_lines",
 ]

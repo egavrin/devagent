@@ -10,16 +10,31 @@ from ai_dev_agent.tools import EDIT, READ, RUN
 
 
 def _extract_modified_paths(diff_text: str) -> set[str]:
-    """Extract file paths from apply_patch or unified diff strings."""
+    """Extract file paths from SEARCH/REPLACE blocks, apply_patch, or unified diff strings."""
     paths: set[str] = set()
     if not diff_text:
         return paths
 
-    for raw_line in diff_text.splitlines():
+    lines = diff_text.splitlines()
+    for i, raw_line in enumerate(lines):
         line = raw_line.strip()
         if not line:
             continue
 
+        # SEARCH/REPLACE format: file path on its own line before ```
+        # Pattern: "path/to/file.ext" followed by "```" on next line
+        if (
+            not line.startswith(("```", "<<<", "===", ">>>", "***", "---", "+++"))
+            and "." in line
+            and "/" in line
+            or line.endswith((".py", ".md", ".js", ".ts", ".json", ".txt", ".yaml", ".toml"))
+        ):
+            # Check if next line starts a code fence (SEARCH/REPLACE format)
+            if i + 1 < len(lines) and lines[i + 1].strip().startswith("```"):
+                paths.add(line)
+                continue
+
+        # Old apply_patch format (still supported for backwards compatibility)
         if (
             line.startswith("*** Update File:")
             or line.startswith("*** Add File:")
@@ -31,6 +46,7 @@ def _extract_modified_paths(diff_text: str) -> set[str]:
                 paths.add(candidate)
             continue
 
+        # Unified diff format
         if line.startswith("--- ") or line.startswith("+++ "):
             candidate = line[4:].strip()
             if candidate == "/dev/null":
