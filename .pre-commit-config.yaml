@@ -53,9 +53,9 @@ repos:
     hooks:
       - id: pytest
         name: pytest (quick run)
-        entry: pytest
+        entry: bash
         language: system
         pass_filenames: false
         args:
-          - --maxfail=1
-          - --disable-warnings
+          - -c
+          - COVERAGE_FILE=/tmp/devagent_precommit.coverage pytest --maxfail=1 --disable-warnings

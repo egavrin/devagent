@@ -136,6 +136,22 @@ new
         assert result.blocks[0].search == "old"
         assert "without fence markers" in result.warnings[0]
 
+    def test_parse_anchor_directive(self):
+        text = """README.md
+```markdown
+<<<<<<< SEARCH
+@@BEFORE: ## Target
+=======
+## Patch
+>>>>>>> REPLACE
+```"""
+        parser = SearchReplaceParser(text)
+        blocks = parser.parse()
+
+        assert blocks[0].anchor_mode == "before"
+        assert blocks[0].anchor == "## Target"
+        assert blocks[0].search == ""
+
     def test_invalid_format_raises(self):
         parser = SearchReplaceParser("no markers here")
         with pytest.raises(PatchFormatError):
@@ -171,6 +187,25 @@ class TestEditBlockApplier:
         content = target.read_text()
         assert "line1" in content
         assert "line2" in content
+
+    def test_insert_before_anchor_directive(self, git_repo: Path):
+        target = git_repo / "doc.md"
+        target.write_text("# Title\nIntro\n## Target\nBody\n", encoding="utf-8")
+
+        applier = EditBlockApplier(git_repo)
+        blocks = [
+            EditBlock(
+                path="doc.md",
+                search="@@BEFORE: ## Target",
+                replace="## Patch\nContent\n",
+            )
+        ]
+        result = applier.apply(blocks, dry_run=False)
+
+        assert result["success"]
+        content = target.read_text(encoding="utf-8")
+        assert "## Patch" in content
+        assert content.index("## Patch") < content.index("## Target")
 
     def test_apply_deletion(self, git_repo: Path):
         target = git_repo / "test.py"
@@ -311,6 +346,56 @@ Appended at end.
         assert "Existing content." in content
         assert "## New Section" in content
         assert "Appended at end." in content
+        # Preview should describe the append operation
+        preview = result.get("preview") or []
+        assert preview
+        assert preview[0]["operation"] in {"append", "create"}
+        assert preview[0]["path"] == "README.md"
+
+    def test_preview_only_does_not_write(self, tool_context: ToolContext, git_repo: Path):
+        target = git_repo / "file.py"
+        target.write_text("value = 1\n", encoding="utf-8")
+
+        patch = """file.py
+```python
+<<<<<<< SEARCH
+value = 1
+=======
+value = 2
+>>>>>>> REPLACE
+```"""
+
+        result = _fs_edit({"patch": patch, "preview_only": True}, tool_context)
+
+        assert result["success"]
+        assert result.get("preview")
+        # Under preview-only mode, file should remain unchanged
+        assert target.read_text(encoding="utf-8") == "value = 1\n"
+
+    def test_anchor_insertion_via_patch(self, tool_context: ToolContext, git_repo: Path):
+        target = git_repo / "README.md"
+        target.write_text("# Title\n\n## Existing\nText\n", encoding="utf-8")
+
+        patch = """README.md
+```markdown
+<<<<<<< SEARCH
+@@AFTER: # Title
+=======
+
+## Patch Workflow
+Content here.
+>>>>>>> REPLACE
+```"""
+
+        result = _fs_edit({"patch": patch}, tool_context)
+
+        assert result["success"]
+        content = target.read_text(encoding="utf-8")
+        assert "## Patch Workflow" in content
+        assert content.index("## Patch Workflow") < content.index("## Existing")
+        preview = result.get("preview") or []
+        assert preview and preview[0]["operation"] == "insert_after"
+        assert preview[0]["anchor"] == "# Title"
 
 
 class TestFuzzyMatching:

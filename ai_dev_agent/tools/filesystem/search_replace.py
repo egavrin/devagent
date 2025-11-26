@@ -37,6 +37,9 @@ LOGGER = get_logger(__name__)
 SEARCH_MARKER = "<<<<<<< SEARCH"
 DIVIDER_MARKER = "======="
 REPLACE_MARKER = ">>>>>>> REPLACE"
+ANCHOR_PREFIX = "@@"
+ANCHOR_BEFORE = "before"
+ANCHOR_AFTER = "after"
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +103,8 @@ class EditBlock:
     path: str
     search: str  # Text to find (empty = new file)
     replace: str  # Text to replace with (empty = delete)
+    anchor: str | None = None  # Optional anchor directive (for insertions)
+    anchor_mode: str | None = None  # 'before' or 'after' when anchor is set
 
 
 @dataclass
@@ -213,7 +218,25 @@ class SearchReplaceParser:
             if replace.endswith("\n"):
                 replace = replace[:-1]
 
-            blocks.append(EditBlock(path=path, search=search, replace=replace))
+            anchor_mode = None
+            anchor = None
+            anchor_match = re.match(
+                rf"^{ANCHOR_PREFIX}(BEFORE|AFTER):\s*(.+)$", search.strip(), re.IGNORECASE
+            )
+            if anchor_match:
+                anchor_mode = anchor_match.group(1).lower()
+                anchor = anchor_match.group(2).strip()
+                search = ""
+
+            blocks.append(
+                EditBlock(
+                    path=path,
+                    search=search,
+                    replace=replace,
+                    anchor=anchor,
+                    anchor_mode=anchor_mode,
+                )
+            )
 
         return ParseResult(blocks=blocks, warnings=self.warnings)
 
@@ -240,10 +263,15 @@ class EditBlockApplier:
         new_files: set[str] = set()
         applied_count = 0
         self._warnings = []
+        previews: list[dict[str, Any]] = []
 
         for idx, block in enumerate(blocks, start=1):
             try:
-                is_new = self._apply_block(block, changed_files, new_files, dry_run, idx)
+                is_new, preview_entry = self._apply_block(
+                    block, changed_files, new_files, dry_run, idx
+                )
+                if preview_entry:
+                    previews.append(preview_entry)
                 if is_new:
                     new_files.add(block.path)
                 else:
@@ -261,6 +289,7 @@ class EditBlockApplier:
             "warnings": self._warnings,
             "changed_files": sorted(changed_files - new_files),
             "new_files": sorted(new_files),
+            "preview": previews,
         }
 
     def _apply_block(
@@ -270,13 +299,55 @@ class EditBlockApplier:
         new_files: set[str],
         dry_run: bool,
         block_idx: int,
-    ) -> bool:
+    ) -> tuple[bool, dict[str, Any] | None]:
         """Apply a single edit block.
 
         Returns:
-            True if this created a new file, False if it modified existing
+            Tuple[created_new_file, preview_entry]
         """
         target = self._resolve_path(block.path)
+        preview_entry: dict[str, Any] | None = None
+
+        # Allow anchor directives even if EditBlock constructed manually with search text
+        anchor_hint = (block.search or "").strip()
+        if not block.anchor_mode and anchor_hint.startswith(ANCHOR_PREFIX):
+            anchor_match = re.match(
+                rf"^{ANCHOR_PREFIX}(BEFORE|AFTER):\s*(.+)$", anchor_hint, re.IGNORECASE
+            )
+            if anchor_match:
+                block.anchor_mode = anchor_match.group(1).lower()
+                block.anchor = anchor_match.group(2).strip()
+                block.search = ""
+
+        # Anchor insertions (before/after a matched anchor)
+        if block.anchor_mode and block.anchor:
+            if not target.exists():
+                raise PatchApplyError(f"Block {block_idx}: Cannot edit missing file: {block.path}")
+            content = target.read_text(encoding="utf-8")
+            match_result = self._find_anchor_match(content, block, block_idx)
+            if match_result is None:
+                self._raise_anchor_not_found(block.anchor, content, block.path, block_idx)
+
+            pos, end, matched_text, warning = match_result
+            if warning:
+                self._warnings.append(f"Block {block_idx} in '{block.path}': {warning}")
+
+            insert_at = pos if block.anchor_mode == ANCHOR_BEFORE else end
+            insertion_text = self._prepare_insertion_text(
+                block.replace, before_text=content[:insert_at], after_text=content[insert_at:]
+            )
+            new_content = content[:insert_at] + insertion_text + content[insert_at:]
+            if not dry_run:
+                target.write_text(new_content, encoding="utf-8")
+                LOGGER.info("Inserted content %s anchor in %s", block.anchor_mode, block.path)
+
+            preview_entry = self._make_preview(
+                block=block,
+                operation=f"insert_{block.anchor_mode}",
+                matched=matched_text,
+                note=warning,
+            )
+            return False, preview_entry
 
         # Empty SEARCH = new file creation
         if not block.search:
@@ -292,7 +363,12 @@ class EditBlockApplier:
                 if not dry_run:
                     target.write_text(new_content, encoding="utf-8")
                     LOGGER.info("Appended to file %s", block.path)
-                return False
+                preview_entry = self._make_preview(
+                    block=block,
+                    operation="append",
+                    matched=None,
+                )
+                return False, preview_entry
             else:
                 # Create new file
                 if not dry_run:
@@ -302,7 +378,12 @@ class EditBlockApplier:
                         content += "\n"
                     target.write_text(content, encoding="utf-8")
                     LOGGER.info("Created file %s", block.path)
-                return True
+                preview_entry = self._make_preview(
+                    block=block,
+                    operation="create",
+                    matched=None,
+                )
+                return True, preview_entry
 
         # Empty REPLACE = delete content (or whole file if SEARCH matches all)
         if not block.replace and block.search:
@@ -315,7 +396,7 @@ class EditBlockApplier:
             if match_result is None:
                 self._raise_search_not_found(block.search, content, block.path, block_idx)
 
-            pos, end, _, warning = match_result
+            pos, end, matched_text, warning = match_result
             if warning:
                 self._warnings.append(f"Block {block_idx} in '{block.path}': {warning}")
 
@@ -323,7 +404,10 @@ class EditBlockApplier:
             if not dry_run:
                 target.write_text(new_content, encoding="utf-8")
                 LOGGER.info("Removed content from file %s", block.path)
-            return False
+            preview_entry = self._make_preview(
+                block=block, operation="delete", matched=matched_text, note=warning
+            )
+            return False, preview_entry
 
         # Normal replacement
         if not target.exists():
@@ -334,7 +418,7 @@ class EditBlockApplier:
         if match_result is None:
             self._raise_search_not_found(block.search, content, block.path, block_idx)
 
-        pos, end, _, warning = match_result
+        pos, end, matched_text, warning = match_result
         if warning:
             self._warnings.append(f"Block {block_idx} in '{block.path}': {warning}")
 
@@ -342,7 +426,10 @@ class EditBlockApplier:
         if not dry_run:
             target.write_text(new_content, encoding="utf-8")
             LOGGER.info("Updated file %s", block.path)
-        return False
+        preview_entry = self._make_preview(
+            block=block, operation="replace", matched=matched_text, note=warning
+        )
+        return False, preview_entry
 
     def _find_content_fuzzy(
         self,
@@ -382,6 +469,17 @@ class EditBlockApplier:
 
         return None
 
+    def _find_anchor_match(
+        self, content: str, block: EditBlock, block_idx: int
+    ) -> tuple[int, int, str, str | None] | None:
+        """Find anchor text using the same tolerance as SEARCH matching."""
+
+        if not block.anchor:
+            return None
+
+        match = self._find_content_fuzzy(content, block.anchor, block.path, block_idx)
+        return match
+
     def _find_with_trailing_ws_tolerance(
         self, content: str, search_lines: list[str]
     ) -> tuple[int, int, str] | None:
@@ -400,6 +498,26 @@ class EditBlockApplier:
                 return char_pos, char_end, matched_text
 
         return None
+
+    def _prepare_insertion_text(self, text: str, *, before_text: str, after_text: str) -> str:
+        """Normalize insertion text and ensure newline separation."""
+        insertion = text or ""
+        if insertion and not insertion.endswith("\n"):
+            insertion += "\n"
+
+        # If the preceding content has no trailing newline, add one
+        if before_text and not before_text.endswith("\n"):
+            insertion = "\n" + insertion
+
+        # If following content starts immediately, ensure separation
+        if (
+            after_text
+            and insertion
+            and not insertion.endswith("\n")
+            and not after_text.startswith("\n")
+        ):
+            insertion += "\n"
+        return insertion
 
     def _find_with_leading_ws_tolerance(
         self, content: str, search_lines: list[str]
@@ -465,6 +583,22 @@ class EditBlockApplier:
         )
         raise PatchApplyError("".join(error_parts))
 
+    def _raise_anchor_not_found(self, anchor: str, content: str, path: str, block_idx: int) -> None:
+        """Raise a helpful error when anchor directives cannot be matched."""
+
+        anchor_preview = anchor[:200] + "..." if len(anchor) > 200 else anchor
+        content_preview = "\n".join(content.splitlines()[:20])
+        if len(content.splitlines()) > 20:
+            content_preview += "\n..."
+
+        error_parts = [
+            f"Block {block_idx}: Anchor '{anchor_preview}' not found in '{path}'.",
+            "\n\nAnchored insertions require matching the anchor text exactly.",
+            f"\n\nActual file content (first 20 lines):\n```\n{content_preview}\n```",
+            "\n\nTIP: Copy the exact anchor text from the file or use an empty SEARCH block to append.",
+        ]
+        raise PatchApplyError("".join(error_parts))
+
     def _looks_like_invented_content(self, search: str, content: str) -> bool:
         """Detect if SEARCH content looks invented (not from the file)."""
         search_lines = search.strip().splitlines()
@@ -479,6 +613,26 @@ class EditBlockApplier:
 
         # No lines match - likely invented
         return True
+
+    def _make_preview(
+        self,
+        *,
+        block: EditBlock,
+        operation: str,
+        matched: str | None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Build a lightweight preview entry for dry-run and result payloads."""
+        entry: dict[str, Any] = {
+            "path": block.path,
+            "operation": operation,
+            "anchor": block.anchor,
+            "matched": matched,
+            "replacement": block.replace,
+        }
+        if note:
+            entry["note"] = note
+        return entry
 
     def _resolve_path(self, relative: str) -> Path:
         candidate = (self.repo_root / relative).resolve()
@@ -517,6 +671,7 @@ def _fs_edit(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str,
             "new_files": [],
         }
 
+    preview_only = bool(payload.get("preview_only") or payload.get("dry_run_only"))
     all_warnings: list[str] = []
 
     try:
@@ -536,12 +691,15 @@ def _fs_edit(payload: Mapping[str, Any], context: "ToolContext") -> Mapping[str,
 
     applier = EditBlockApplier(context.repo_root)
     validation = applier.apply(blocks, dry_run=True)
-    if not validation["success"]:
-        validation["warnings"] = all_warnings + validation.get("warnings", [])
+    validation["warnings"] = all_warnings + validation.get("warnings", [])
+    if not validation["success"] or preview_only:
         return validation
 
+    dry_run_preview = validation.get("preview", [])
     result = applier.apply(blocks, dry_run=False)
     result["warnings"] = all_warnings + result.get("warnings", [])
+    if dry_run_preview and not result.get("preview"):
+        result["preview"] = dry_run_preview
     return result
 
 

@@ -107,6 +107,24 @@ Your new content here.
 
 **NEVER try to "insert after" a section by inventing anchor content.** Just use empty SEARCH.
 
+**If you MUST place content relative to an existing line, use explicit anchors after READING the file:**
+- Add `@@BEFORE: <exact anchor text>` or `@@AFTER: <exact anchor text>` as the first line in the SEARCH section.
+- Copy the anchor text exactly from READ output (headings, sentences, etc.).
+- Example:
+```
+file.md
+```markdown
+<<<<<<< SEARCH
+@@BEFORE: ## Existing Heading
+=======
+
+## New Section
+Content here.
+>>>>>>> REPLACE
+```
+```
+The tool will insert before/after that anchor and return a preview. If the anchor is wrong, the edit will fail fast with actual file content shown—copy it exactly and retry.
+
 **For DELETIONS:**
 Use an **empty REPLACE** section:
 ```

@@ -138,3 +138,20 @@ class TestDiagnostics:
         # Should suggest using empty SEARCH for insertions
         error_text = " ".join(result["errors"])
         assert "SEARCH" in error_text or "not found" in error_text.lower()
+
+    def test_anchor_not_found_shows_actual_content(self, tool_context, tmp_path):
+        target = tmp_path / "doc.md"
+        target.write_text("# Title\n\n## Existing\nBody\n", encoding="utf-8")
+
+        patch = make_search_replace(
+            "doc.md",
+            "@@BEFORE: ## Missing",
+            "\n## Patch Workflow\nContent\n",
+        )
+
+        result = _fs_edit({"patch": patch}, tool_context)
+
+        assert not result["success"]
+        error_text = " ".join(result["errors"])
+        assert "anchor" in error_text.lower() or "missing" in error_text.lower()
+        assert "Actual file content" in error_text

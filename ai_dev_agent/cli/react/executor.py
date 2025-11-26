@@ -46,6 +46,7 @@ from ai_dev_agent.providers.llm import LLMError
 from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session import SessionManager
 from ai_dev_agent.session.context_synthesis import ContextSynthesizer
+from ai_dev_agent.tools import EDIT, FIND, GREP, READ, RUN, SYMBOLS
 
 # Model registry for context-aware budgeting
 try:
@@ -1032,6 +1033,20 @@ def _execute_react_assistant(
     synthesizer = ContextSynthesizer()
     files_discovered: set[str] = set()
     search_queries: set[str] = set()
+    base_context_prompt = _get_prompt_loader().render_prompt(
+        "system/base_context.md",
+        context={
+            "ITERATION_NOTE": "",
+            "LANGUAGE_HINT": "",
+            "TOOL_FIND": FIND,
+            "TOOL_GREP": GREP,
+            "TOOL_READ": READ,
+            "TOOL_RUN": RUN,
+            "TOOL_EDIT": EDIT,
+            "TOOL_SYMBOLS": SYMBOLS,
+        },
+        strict=True,
+    )
 
     def _update_system_prompt(phase: str, is_final: bool) -> None:
         session_manager.remove_system_messages(session_id, lambda _msg: True)
@@ -1062,6 +1077,11 @@ def _execute_react_assistant(
                 workspace=str(repo_root),
                 repository_language=repository_language,
             )
+
+        # Prepend base context so tool guardrails (READ-before-EDIT, empty SEARCH for insertions, anchors)
+        # are always active regardless of user-provided system prompts.
+        if base_context_prompt:
+            prompt = f"{base_context_prompt}\n\n{prompt}"
 
         # Append custom system extension if provided
         if system_extension:

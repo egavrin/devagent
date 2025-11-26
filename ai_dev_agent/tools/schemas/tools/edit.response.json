@@ -40,6 +40,23 @@
       },
       "description": "List of new files that were created"
     },
+    "preview": {
+      "type": "array",
+      "description": "Dry-run previews of each block (matched context and replacement)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "operation": {"type": "string"},
+          "anchor": {"type": ["string", "null"]},
+          "matched": {"type": ["string", "null"]},
+          "replacement": {"type": ["string", "null"]},
+          "note": {"type": "string"}
+        },
+        "required": ["path", "operation"],
+        "additionalProperties": false
+      }
+    },
     "diff_stats": {
       "type": "object",
       "description": "Statistics about changes (for unified diff format)",
