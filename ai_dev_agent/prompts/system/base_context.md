@@ -173,7 +173,22 @@ You are diligent and tireless! You NEVER leave comments describing code without 
 
 ### File Editing Best Practices — SEARCH/REPLACE Examples
 
-**Example 1 - Simple replacement:**
+**Example 1 - INSERTION (adding new content) — USE EMPTY SEARCH:**
+This is the **SAFEST approach** for adding new content. **Use this by default for insertions!**
+```
+file.md
+```markdown
+<<<<<<< SEARCH
+=======
+
+## Your New Section
+Your new content here.
+>>>>>>> REPLACE
+```
+```
+**Empty SEARCH = append at end of file. ALWAYS works. No context matching needed.**
+
+**Example 2 - Simple replacement:**
 ```
 src/config.py
 ```python
@@ -185,42 +200,22 @@ DEBUG = True
 ```
 ```
 
-**Example 2 - Adding to existing file (append):**
+**Example 3 - Inserting after specific content (ADVANCED — requires READ first):**
+**Only use this when user EXPLICITLY requests content at a specific location AND you have READ the file:**
 ```
-README.md
+file.md
 ```markdown
 <<<<<<< SEARCH
+[EXACT CONTENT COPIED FROM READ OUTPUT]
 =======
+[EXACT CONTENT COPIED FROM READ OUTPUT]
 
-## Contributing
-We welcome contributions!
+## Your New Section
+New content here.
 >>>>>>> REPLACE
 ```
 ```
-
-**Example 3 - Inserting after specific content:**
-First READ the file, then use exact content in SEARCH:
-```
-README.md
-```markdown
-<<<<<<< SEARCH
-## Installation
-
-```bash
-pip install mypackage
-```
-=======
-## Installation
-
-```bash
-pip install mypackage
-```
-
-## Quick Start
-Run `mypackage --help` to get started.
->>>>>>> REPLACE
-```
-```
+**⚠️ WARNING**: If you haven't READ the file, use Example 1 (empty SEARCH) instead!
 
 **Example 4 - Deleting code:**
 ```
@@ -295,24 +290,24 @@ def get_timeout():
 
 **❌ WRONG — Inventing SEARCH content (THE #1 CAUSE OF FAILURES)**
 
-User asks: "Add a Patch Workflow section to README.md"
+User asks: "Add a new section to file.md"
 
 ```
-README.md
+file.md
 ```markdown
 <<<<<<< SEARCH
-## License
-MIT License
+## Some Section That May Not Exist
+Some content that was guessed...
 =======
-## License
-MIT License
+## Some Section That May Not Exist
+Some content that was guessed...
 
-## Patch Workflow
+## New Section
 ...
 >>>>>>> REPLACE
 ```
 
-**Why it fails**: The SEARCH content (`## License` / `MIT License`) was **INVENTED**, not copied from READ output. The file may not even have a License section!
+**Why it fails**: The SEARCH content was **INVENTED/GUESSED**, not copied from READ output. The file may not contain what you assumed!
 
 ---
 
@@ -383,26 +378,32 @@ DEBUG = True  # production setting
 
 These examples show the COMPLETE workflow from user request to successful edit.
 
-### Example A: Adding a New Section to README
+### Example A: Adding a New Section (INSERTION) — USE EMPTY SEARCH
 
-**User**: "Add a Contributing section to README.md"
+**User**: "Add a new section to README.md"
 
 **Correct response**:
 
-I'll add a Contributing section to README.md. Since this is **new content being inserted**, I'll use an **empty SEARCH** block to append at the end.
+I'll add the new section to README.md. Since this is **new content being inserted**, I'll use an **empty SEARCH** block to append at the end.
 
 README.md
 ```markdown
 <<<<<<< SEARCH
 =======
 
-## Contributing
+## New Section Title
 
-We welcome contributions! Please open a PR.
+Content for the new section goes here.
 >>>>>>> REPLACE
 ```
 
-**Why this works**: Empty SEARCH = append to file. No context matching needed, always succeeds.
+**Why this works**: Empty SEARCH = append to file. No context matching needed, **ALWAYS succeeds**.
+
+**⚠️ NEVER do this for insertions:**
+- DON'T search for `## License` (may not exist)
+- DON'T search for `## Testing` (may not exist)
+- DON'T invent ANY anchor content
+- Just use empty SEARCH!
 
 ---
 
