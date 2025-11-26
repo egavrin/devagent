@@ -2,18 +2,36 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from .base import HTTPChatLLMClient, Message, RetryConfig, supports_temperature
 
+# Import model registry for model-aware context limits
+try:
+    from ai_dev_agent.core.models.registry import get_model_spec
+except ImportError:
+    get_model_spec = None  # type: ignore[assignment, misc]
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Default context limit for unknown models (conservative)
+DEFAULT_CONTEXT_LIMIT = 100_000
 
 
 class OpenRouterClient(HTTPChatLLMClient):
     """Chat-completions client for the OpenRouter API with retry and tool support."""
+
+    # Context limit - will be set per-model from registry
+    _MAX_CONTEXT_TOKENS = DEFAULT_CONTEXT_LIMIT
+
+    # Most OpenRouter models support parallel tool calls
+    _SUPPORTS_PARALLEL_TOOL_CALLS = True
 
     def __init__(
         self,
@@ -37,6 +55,20 @@ class OpenRouterClient(HTTPChatLLMClient):
         )
         self._default_headers = dict(default_headers or {})
         self._provider_config = self._merge_provider_config(provider_only, provider_config)
+
+        # Get model-specific context limit from registry
+        if get_model_spec is not None:
+            try:
+                spec = get_model_spec(model, strict=False)
+                self._MAX_CONTEXT_TOKENS = spec.effective_context
+                self._SUPPORTS_PARALLEL_TOOL_CALLS = spec.supports_parallel_tools
+                logger.debug(
+                    f"OpenRouter client using model registry for {model}: "
+                    f"context={spec.context_window}, headroom={spec.response_headroom}, "
+                    f"parallel_tools={spec.supports_parallel_tools}"
+                )
+            except Exception:
+                pass  # Use default values
 
     @staticmethod
     def _merge_provider_config(

@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import random  # - used for monkeypatch compatibility in tests
 from typing import TYPE_CHECKING, Any
 
 from .base import HTTPChatLLMClient, Message, RetryConfig, supports_temperature
 
+# Import model registry for model-aware context limits
+try:
+    from ai_dev_agent.core.models.registry import get_model_spec
+except ImportError:
+    get_model_spec = None  # type: ignore[assignment, misc]
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 
@@ -24,7 +33,7 @@ class DeepSeekClient(HTTPChatLLMClient):
     # DeepSeek does not support parallel_tool_calls parameter (as of 2025-01)
     _SUPPORTS_PARALLEL_TOOL_CALLS = False
 
-    # DeepSeek's effective context limit (with safety margin)
+    # DeepSeek's effective context limit (with safety margin) - default fallback
     _MAX_CONTEXT_TOKENS = DEEPSEEK_SAFE_CONTEXT_LIMIT
 
     def __init__(
@@ -44,6 +53,18 @@ class DeepSeekClient(HTTPChatLLMClient):
             timeout=timeout,
             retry_config=retry_config,
         )
+        # Get model-specific context limit from registry
+        if get_model_spec is not None:
+            try:
+                spec = get_model_spec(model, strict=False)
+                self._MAX_CONTEXT_TOKENS = spec.effective_context
+                self._SUPPORTS_PARALLEL_TOOL_CALLS = spec.supports_parallel_tools
+                logger.debug(
+                    f"DeepSeek client using model registry: "
+                    f"context={spec.context_window}, parallel_tools={spec.supports_parallel_tools}"
+                )
+            except Exception:
+                pass  # Use default values
 
     def _prepare_payload(
         self,

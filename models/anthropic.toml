@@ -1,0 +1,67 @@
+# Anthropic Direct API models (without provider prefix)
+provider = "anthropic"
+base_url = "https://api.anthropic.com/v1"
+
+[claude-3-5-sonnet-20241022]
+context_window = 200000
+response_headroom = 8192
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+[claude-3-5-sonnet-latest]
+context_window = 200000
+response_headroom = 8192
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+[claude-3-opus-20240229]
+context_window = 200000
+response_headroom = 4096
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+[claude-3-opus-latest]
+context_window = 200000
+response_headroom = 4096
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+[claude-3-sonnet-20240229]
+context_window = 200000
+response_headroom = 4096
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+[claude-3-haiku-20240307]
+context_window = 200000
+response_headroom = 4096
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+[claude-2.1]
+context_window = 200000
+response_headroom = 4096
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+[claude-2.0]
+context_window = 100000
+response_headroom = 4096
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true

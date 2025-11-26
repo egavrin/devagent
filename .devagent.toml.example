@@ -1,8 +1,74 @@
-# Minimal DevAgent user configuration
+# DevAgent Configuration
 # Copy this file to .devagent.toml and fill in your credentials.
+
+# Active provider and model
 provider = "deepseek"
 model = "deepseek-chat"
-api_key = "sk-your-api-key"
-# base_url is optional if you use the provider default.
-# base_url = "https://api.deepseek.com/v1"
+
+# General settings
 auto_approve_code = false
+
+# =============================================================================
+# Provider API Keys
+# =============================================================================
+# Configure API keys for each provider you want to use.
+# The base_url is optional - defaults are loaded from models/*.toml files.
+
+[providers.deepseek]
+api_key = "sk-your-deepseek-api-key"
+# base_url = "https://api.deepseek.com/v1"  # optional, uses default
+
+[providers.openai]
+api_key = "sk-your-openai-api-key"
+# base_url = "https://api.openai.com/v1"  # optional, uses default
+
+[providers.anthropic]
+api_key = "sk-ant-your-anthropic-api-key"
+# base_url = "https://api.anthropic.com/v1"  # optional, uses default
+
+[providers.openrouter]
+api_key = "sk-or-your-openrouter-api-key"
+# base_url = "https://openrouter.ai/api/v1"  # optional, uses default
+
+# =============================================================================
+# Example Configurations
+# =============================================================================
+# Uncomment and modify the provider/model lines above to use different LLMs:
+
+# DeepSeek (cost-effective, good for coding)
+# provider = "deepseek"
+# model = "deepseek-chat"        # General purpose
+# model = "deepseek-coder"       # Code-focused
+# model = "deepseek-reasoner"    # Complex reasoning
+
+# OpenAI Direct API
+# provider = "openai"
+# model = "gpt-4o"               # Latest GPT-4
+# model = "gpt-4o-mini"          # Faster, cheaper
+# model = "o1"                   # Reasoning model
+
+# Anthropic Direct API
+# provider = "anthropic"
+# model = "claude-3-5-sonnet-20241022"  # Latest Claude
+# model = "claude-3-opus-20240229"      # Most capable
+
+# OpenRouter (access multiple providers with one API key)
+# provider = "openrouter"
+# model = "anthropic/claude-3.5-sonnet"     # Claude via OpenRouter
+# model = "openai/gpt-4o"                   # GPT-4 via OpenRouter
+# model = "meta-llama/llama-3.3-70b-instruct"  # Llama via OpenRouter
+# model = "google/gemini-pro-1.5"           # Gemini via OpenRouter
+
+# =============================================================================
+# Custom Models (optional)
+# =============================================================================
+# Define custom models not in the built-in registry.
+# You can also add model TOML files to the models/ directory.
+
+# [models.my-custom-model]
+# context_window = 128000
+# response_headroom = 4000
+# tokenizer = "cl100k_base"
+# supports_tools = true
+# supports_parallel_tools = true
+# supports_temperature = true

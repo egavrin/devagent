@@ -340,6 +340,20 @@ def load_settings(explicit_path: Path | None = None) -> Settings:
             continue
         merged[key] = dict(value)
 
+    # Handle provider-aware API key configuration
+    # If api_key is not set at top level, look in [providers.<provider>] section
+    if not merged.get("api_key"):
+        providers_section = merged.get("providers", {})
+        provider_name = merged.get("provider", "deepseek")
+        if isinstance(providers_section, dict):
+            provider_config = providers_section.get(provider_name, {})
+            if isinstance(provider_config, dict):
+                if "api_key" in provider_config:
+                    merged["api_key"] = provider_config["api_key"]
+                # Also get base_url from provider config if not set
+                if not merged.get("base_url") and "base_url" in provider_config:
+                    merged["base_url"] = provider_config["base_url"]
+
     # Only pass known fields to the dataclass constructor; attach extras afterward so
     # advanced/toggle flags (e.g., experimental features) remain available as attributes.
     known_fields = set(Settings.__dataclass_fields__)

@@ -22,6 +22,12 @@ from .constants import (
     LLM_DEFAULT_TEMPERATURE,
 )
 
+# Import model registry for model-aware token counting
+try:
+    from ai_dev_agent.core.models.registry import get_model_spec
+except ImportError:
+    get_model_spec = None  # type: ignore[assignment, misc]
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
@@ -91,6 +97,8 @@ def estimate_tokens(messages: Sequence[Message], model: str | None = None) -> in
 def _accurate_token_count(messages: Sequence[Message], model: str) -> int:
     """Attempt accurate token counting using tiktoken or litellm.
 
+    Uses the model registry to determine the correct tokenizer for each model.
+
     Args:
         messages: Messages to count
         model: Model name for encoding
@@ -101,25 +109,42 @@ def _accurate_token_count(messages: Sequence[Message], model: str) -> int:
     Raises:
         Exception: If accurate counting not available
     """
-    # Try tiktoken first (for OpenAI models)
-    try:
-        import tiktoken
+    # Get tokenizer from model registry if available
+    encoding_name = None
+    if get_model_spec is not None:
+        try:
+            spec = get_model_spec(model, strict=False)
+            tokenizer = spec.tokenizer
+            # Map registry tokenizer names to tiktoken encodings
+            if tokenizer in ("o200k_base", "cl100k_base"):
+                encoding_name = tokenizer
+            elif tokenizer in ("claude", "anthropic"):
+                # Claude uses cl100k_base approximation
+                encoding_name = "cl100k_base"
+            elif tokenizer in ("deepseek", "qwen", "mistral", "llama", "gemini", "cohere"):
+                # These models use similar tokenization to cl100k_base
+                encoding_name = "cl100k_base"
+        except Exception:
+            pass
 
-        # Map model to encoding
+    # Fallback to hardcoded map if registry lookup failed
+    if encoding_name is None:
         encoding_map = {
             "gpt-4": "cl100k_base",
             "gpt-3.5-turbo": "cl100k_base",
             "gpt-4o": "o200k_base",
             "gpt-4o-mini": "o200k_base",
         }
-
-        encoding_name = None
         for model_prefix, enc_name in encoding_map.items():
             if model.startswith(model_prefix):
                 encoding_name = enc_name
                 break
 
-        if encoding_name:
+    # Try tiktoken with the determined encoding
+    if encoding_name:
+        try:
+            import tiktoken
+
             encoding = tiktoken.get_encoding(encoding_name)
             total = 0
             for msg in messages:
@@ -130,10 +155,10 @@ def _accurate_token_count(messages: Sequence[Message], model: str) -> int:
                 if msg.tool_calls:
                     total += 20 * len(msg.tool_calls)  # rough estimate for tool call structure
             return total
-    except ImportError:
-        pass
-    except Exception:
-        pass
+        except ImportError:
+            pass
+        except Exception:
+            pass
 
     # Try litellm as fallback
     try:
@@ -394,6 +419,67 @@ def config_from_settings(settings) -> ContextBudgetConfig:
     )
 
 
+def config_from_model(model: str, settings=None) -> ContextBudgetConfig:
+    """Build a ContextBudgetConfig using model registry specs.
+
+    This provides model-aware context budgeting, using the actual context window
+    and response headroom for each model instead of static defaults.
+
+    Args:
+        model: Model identifier (e.g., "gpt-4o", "anthropic/claude-3.5-sonnet")
+        settings: Optional settings object for non-model-specific config
+
+    Returns:
+        ContextBudgetConfig with model-appropriate limits
+    """
+    # Get model spec from registry
+    if get_model_spec is not None:
+        try:
+            spec = get_model_spec(model, strict=False)
+            max_tokens = spec.context_window
+            headroom = spec.response_headroom
+        except Exception:
+            max_tokens = DEFAULT_MAX_CONTEXT_TOKENS
+            headroom = DEFAULT_RESPONSE_HEADROOM
+    else:
+        max_tokens = DEFAULT_MAX_CONTEXT_TOKENS
+        headroom = DEFAULT_RESPONSE_HEADROOM
+
+    # Get other settings from settings object or defaults
+    return ContextBudgetConfig(
+        max_tokens=max_tokens,
+        headroom_tokens=headroom,
+        max_tool_messages=(
+            getattr(settings, "max_tool_messages_kept", DEFAULT_MAX_TOOL_MESSAGES)
+            if settings
+            else DEFAULT_MAX_TOOL_MESSAGES
+        ),
+        max_tool_output_chars=(
+            getattr(settings, "max_tool_output_chars", DEFAULT_MAX_TOOL_OUTPUT_CHARS)
+            if settings
+            else DEFAULT_MAX_TOOL_OUTPUT_CHARS
+        ),
+        keep_last_assistant=(
+            getattr(settings, "keep_last_assistant_messages", DEFAULT_KEEP_LAST_ASSISTANT)
+            if settings
+            else DEFAULT_KEEP_LAST_ASSISTANT
+        ),
+        enable_two_tier=getattr(settings, "enable_two_tier_pruning", True) if settings else True,
+        prune_protect_tokens=(
+            getattr(settings, "prune_protect_tokens", PRUNE_PROTECT_TOKENS)
+            if settings
+            else PRUNE_PROTECT_TOKENS
+        ),
+        prune_minimum_savings=(
+            getattr(settings, "prune_minimum_savings", PRUNE_MINIMUM_SAVINGS)
+            if settings
+            else PRUNE_MINIMUM_SAVINGS
+        ),
+        enable_summarization=getattr(settings, "enable_summarization", True) if settings else True,
+        summarization_model=getattr(settings, "summarization_model", None) if settings else None,
+    )
+
+
 class BudgetedLLMClient:
     """LLM client wrapper that enforces context budgets before each call."""
 
@@ -510,6 +596,7 @@ __all__ = [
     "DEFAULT_RESPONSE_HEADROOM",
     "BudgetedLLMClient",
     "ContextBudgetConfig",
+    "config_from_model",
     "config_from_settings",
     "ensure_context_budget",
     "estimate_tokens",

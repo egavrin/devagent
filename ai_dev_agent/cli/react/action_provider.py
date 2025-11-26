@@ -10,11 +10,23 @@ from uuid import uuid4
 from ai_dev_agent.engine.react.types import ActionRequest, StepRecord, TaskSpec, ToolCall
 from ai_dev_agent.providers.llm.base import LLMClient, Message, ToolCallResult
 
+# Import model registry for model-aware validation
+try:
+    from ai_dev_agent.core.models.registry import get_model_spec
+except ImportError:
+    get_model_spec = None  # type: ignore[assignment, misc]
+
 if TYPE_CHECKING:
     from ai_dev_agent.core.utils.budget_integration import BudgetIntegration
     from ai_dev_agent.session import SessionManager
 
 logger = logging.getLogger(__name__)
+
+
+class ContextOverflowError(Exception):
+    """Raised when conversation exceeds model's context limit."""
+
+    pass
 
 
 class LLMActionProvider:
@@ -112,27 +124,51 @@ class LLMActionProvider:
         # This prevents "context length exceeded" API errors
         from ai_dev_agent.core.utils.context_budget import estimate_tokens
 
-        estimated_tokens = estimate_tokens(conversation, model=getattr(self.client, "model", None))
+        model_name = getattr(self.client, "model", None)
+        estimated_tokens = estimate_tokens(conversation, model=model_name)
 
-        # Get model-specific context limit if available
-        model_limit = getattr(self.client, "_MAX_CONTEXT_TOKENS", None)
-        limit_value: int | None
-        if isinstance(model_limit, (int, float)):
-            limit_value = int(model_limit)
-        else:
+        # Get model-specific context limit from registry or client attribute
+        limit_value: int | None = None
+        headroom_value: int = 4000  # Default headroom
+
+        if model_name and get_model_spec is not None:
             try:
+                spec = get_model_spec(model_name, strict=False)
+                limit_value = spec.effective_context
+                headroom_value = spec.response_headroom
+            except Exception:
+                pass
+
+        # Fall back to client attribute if registry lookup failed
+        if limit_value is None:
+            model_limit = getattr(self.client, "_MAX_CONTEXT_TOKENS", None)
+            if isinstance(model_limit, (int, float)):
                 limit_value = int(model_limit)
-            except (TypeError, ValueError):
-                limit_value = None
+            else:
+                try:
+                    limit_value = int(model_limit) if model_limit else None
+                except (TypeError, ValueError):
+                    limit_value = None
+
         if limit_value and limit_value > 0 and estimated_tokens > limit_value:
-            logger.warning(
-                "Conversation exceeds model context limit: %d tokens (limit: %d). "
-                "Consider enabling aggressive context pruning or reducing iteration cap.",
-                estimated_tokens,
-                model_limit,
+            # Check if strict mode is enabled (fail-fast)
+            settings = self._ctx_obj.get("settings")
+            strict_context = (
+                getattr(settings, "strict_context_validation", False) if settings else False
             )
-            # Note: We don't raise an error here because context pruning may have already
-            # been applied in the session manager. The LLM client will handle the error
+
+            error_msg = (
+                f"Conversation ({estimated_tokens:,} tokens) exceeds {model_name or 'model'} "
+                f"context limit ({limit_value:,} usable tokens). "
+                f"Model context: {limit_value + headroom_value:,}, headroom reserved: {headroom_value:,}. "
+                f"Consider enabling aggressive context pruning or using a larger model."
+            )
+
+            if strict_context:
+                raise ContextOverflowError(error_msg)
+            else:
+                logger.warning(error_msg)
+            # Note: In non-strict mode, we continue and let the LLM client handle the error
             # if it's still too large after any additional pruning.
 
         # In final iteration, add synthesis instructions to the conversation

@@ -1,0 +1,211 @@
+# OpenRouter with other popular models
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+
+# Meta Llama 3.1
+["meta-llama/llama-3.1-405b-instruct"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "llama"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["meta-llama/llama-3.1-70b-instruct"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "llama"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["meta-llama/llama-3.1-8b-instruct"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "llama"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+# Meta Llama 3.2
+["meta-llama/llama-3.2-90b-vision-instruct"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "llama"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["meta-llama/llama-3.2-11b-vision-instruct"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "llama"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+# Meta Llama 3.3
+["meta-llama/llama-3.3-70b-instruct"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "llama"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+# Mistral
+["mistralai/mistral-large"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "mistral"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["mistralai/mistral-large-latest"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "mistral"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["mistralai/mistral-medium"]
+context_window = 32000
+response_headroom = 4000
+tokenizer = "mistral"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["mistralai/mistral-small"]
+context_window = 32000
+response_headroom = 4000
+tokenizer = "mistral"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["mistralai/codestral-latest"]
+context_window = 32000
+response_headroom = 4000
+tokenizer = "mistral"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["mistralai/mixtral-8x22b-instruct"]
+context_window = 65536
+response_headroom = 4000
+tokenizer = "mistral"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["mistralai/mixtral-8x7b-instruct"]
+context_window = 32768
+response_headroom = 4000
+tokenizer = "mistral"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+# Google Gemini
+["google/gemini-2.0-flash-exp"]
+context_window = 1000000
+response_headroom = 8000
+tokenizer = "gemini"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["google/gemini-pro-1.5"]
+context_window = 1000000
+response_headroom = 8000
+tokenizer = "gemini"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["google/gemini-flash-1.5"]
+context_window = 1000000
+response_headroom = 8000
+tokenizer = "gemini"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["google/gemini-pro"]
+context_window = 32000
+response_headroom = 4000
+tokenizer = "gemini"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+# DeepSeek via OpenRouter
+["deepseek/deepseek-chat"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "deepseek"
+supports_tools = true
+supports_parallel_tools = false
+supports_temperature = true
+
+["deepseek/deepseek-coder"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "deepseek"
+supports_tools = true
+supports_parallel_tools = false
+supports_temperature = true
+
+["deepseek/deepseek-r1"]
+context_window = 64000
+response_headroom = 8000
+tokenizer = "deepseek"
+supports_tools = true
+supports_parallel_tools = false
+supports_temperature = false
+
+# Qwen
+["qwen/qwen-2.5-72b-instruct"]
+context_window = 131072
+response_headroom = 8000
+tokenizer = "qwen"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["qwen/qwen-2.5-coder-32b-instruct"]
+context_window = 131072
+response_headroom = 8000
+tokenizer = "qwen"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["qwen/qwen-2-72b-instruct"]
+context_window = 131072
+response_headroom = 8000
+tokenizer = "qwen"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+# Cohere
+["cohere/command-r-plus"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "cohere"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+
+["cohere/command-r"]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "cohere"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true

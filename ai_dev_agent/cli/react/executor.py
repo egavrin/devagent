@@ -47,6 +47,12 @@ from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session import SessionManager
 from ai_dev_agent.session.context_synthesis import ContextSynthesizer
 
+# Model registry for context-aware budgeting
+try:
+    from ai_dev_agent.core.models.registry import get_model_spec
+except ImportError:
+    get_model_spec = None  # type: ignore[assignment, misc]
+
 from ..router import IntentDecision
 from ..router import IntentRouter as _DEFAULT_INTENT_ROUTER
 from .action_provider import LLMActionProvider
@@ -874,7 +880,18 @@ def _execute_react_assistant(
     synthesis_settings = budget_settings.get("synthesis") or {}
     bool(synthesis_settings.get("auto_summary_on_failure", True))
 
+    # Get model context window from registry if available, otherwise fall back to settings
     model_context_window = getattr(settings, "model_context_window", 100_000)
+    model_name = getattr(client, "model", None)
+    if model_name and get_model_spec is not None:
+        try:
+            spec = get_model_spec(model_name, strict=False)
+            model_context_window = spec.context_window
+            LOGGER.debug(
+                f"Using model registry context window for {model_name}: {model_context_window}"
+            )
+        except Exception:
+            pass  # Fall back to settings value
 
     use_adaptive = getattr(settings, "enable_reflection", True) or getattr(
         settings, "adaptive_budget_scaling", True

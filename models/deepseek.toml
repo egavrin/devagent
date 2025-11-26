@@ -1,0 +1,27 @@
+# DeepSeek Native API (api.deepseek.com)
+provider = "deepseek"
+base_url = "https://api.deepseek.com/v1"
+
+[deepseek-chat]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "deepseek"
+supports_tools = true
+supports_parallel_tools = false
+supports_temperature = true
+
+[deepseek-coder]
+context_window = 128000
+response_headroom = 4000
+tokenizer = "deepseek"
+supports_tools = true
+supports_parallel_tools = false
+supports_temperature = true
+
+[deepseek-reasoner]
+context_window = 64000
+response_headroom = 8000
+tokenizer = "deepseek"
+supports_tools = true
+supports_parallel_tools = false
+supports_temperature = false
