@@ -924,22 +924,45 @@ def test_format_display_message_run_joins_args(tmp_path):
     assert "stdout: done" in message
 
 
-def test_format_display_message_write_uses_outcome(tmp_path):
+def test_format_display_message_edit_shows_error(tmp_path):
+    """Test edit tool displays first error line when failed."""
     session_manager = DummySessionManager()
     invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
 
-    action = ActionRequest(step_id="write2", thought="apply", tool="write", args={})
+    action = ActionRequest(step_id="edit2", thought="apply", tool="edit", args={})
     observation = Observation(
         success=False,
         outcome="no changes detected",
-        metrics={},
+        metrics={"errors": ["no changes detected"]},
         artifacts=[],
-        tool="write",
+        tool="edit",
     )
 
-    message = invoker._format_display_message(action, observation, "write")
+    message = invoker._format_display_message(action, observation, "edit")
 
     assert "no changes detected" in message
+    assert "edit" in message
+    assert "failed" in message
+
+
+def test_format_display_message_edit_fallback_on_failure(tmp_path):
+    """Test edit tool shows 'failed' when no error details available."""
+    session_manager = DummySessionManager()
+    invoker = _make_session_invoker(tmp_path, session_manager=session_manager)
+
+    action = ActionRequest(step_id="edit3", thought="apply", tool="edit", args={})
+    observation = Observation(
+        success=False,
+        outcome="ignored outcome",
+        metrics={},
+        artifacts=[],
+        tool="edit",
+    )
+
+    message = invoker._format_display_message(action, observation, "edit")
+
+    assert "edit" in message
+    assert "failed" in message
 
 
 def test_format_display_message_grep_defaults_to_outcome(tmp_path):

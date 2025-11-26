@@ -75,11 +75,11 @@ class TestUpdateFromStep:
 
         assert "src/utils.py" in tracker.mentioned_files
 
-    def test_extracts_file_from_write_action(self, tracker):
-        """Test extracting file from write tool action."""
+    def test_extracts_file_from_edit_action_with_path_param(self, tracker):
+        """Test extracting file from edit tool action using path parameter."""
         step_record = MagicMock()
         step_record.action = MagicMock()
-        step_record.action.tool = "write"
+        step_record.action.tool = "edit"
         step_record.action.parameters = {"path": "docs/README.md"}
         step_record.observation = None
 

@@ -36,7 +36,7 @@ class TestEnhancedAgentRegistry:
         """Create a mock agent spec."""
         return AgentSpec(
             name="test_spec",
-            tools=["grep", "read", "write"],
+            tools=["grep", "read", "edit"],
             max_iterations=10,
             description="Test spec",
             system_prompt_suffix="Test suffix",
@@ -59,7 +59,7 @@ class TestEnhancedAgentRegistry:
     def test_import_default_agents(self, mock_agent_registry):
         """Test importing default agents from original registry."""
         mock_manager = AgentSpec(
-            name="manager", tools=["read", "write"], max_iterations=10, description="Manager"
+            name="manager", tools=["read", "edit"], max_iterations=10, description="Manager"
         )
         mock_reviewer = AgentSpec(
             name="reviewer", tools=["read"], max_iterations=5, description="Reviewer"
@@ -251,7 +251,7 @@ class CustomAgent(BaseAgent):
             "specs": {
                 "test": {
                     "name": "test",
-                    "tools": ["read", "write"],
+                    "tools": ["read", "edit"],
                     "max_iterations": 10,
                     "description": "Test spec",
                 }
@@ -313,7 +313,7 @@ class CustomAgent(BaseAgent):
         """Test finding agents with required tools."""
         agent1 = MagicMock(spec=BaseAgent)
         agent1.name = "agent1"
-        agent1.tools = ["read", "write", "grep"]
+        agent1.tools = ["read", "edit", "grep"]
 
         agent2 = MagicMock(spec=BaseAgent)
         agent2.name = "agent2"
@@ -323,9 +323,9 @@ class CustomAgent(BaseAgent):
         registry.register_agent(agent2)
 
         # Find agents with all required tools
-        agents_with_write = registry.find_agents_with_tools(["read", "write"])
-        assert "agent1" in agents_with_write
-        assert "agent2" not in agents_with_write
+        agents_with_edit = registry.find_agents_with_tools(["read", "edit"])
+        assert "agent1" in agents_with_edit
+        assert "agent2" not in agents_with_edit
 
         # Both have read and grep
         agents_with_read_grep = registry.find_agents_with_tools(["read", "grep"])

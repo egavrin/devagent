@@ -204,6 +204,15 @@ def _load_from_env(prefix: str = "DEVAGENT_") -> dict[str, Any]:
             "always_use_planning",
             "agent_context_synthesis",
             "enable_memory_bank",
+            "repomap_debug_stdout",
+            "planning_enabled",
+            "enable_cost_tracking",
+            "enable_cache_management",
+            "enable_reflection",
+            "enable_summarization",
+            "adaptive_budget_scaling",
+            "enable_two_tier_pruning",
+            "enable_retry",
         }:
             env[field] = _cast_bool(value)
         elif field in {

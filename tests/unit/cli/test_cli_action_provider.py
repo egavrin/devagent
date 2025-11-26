@@ -3,6 +3,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from ai_dev_agent.cli.react.action_provider import LLMActionProvider
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.engine.react.types import TaskSpec
 from ai_dev_agent.providers.llm.base import ToolCall, ToolCallResult
 from ai_dev_agent.session import SessionManager
@@ -13,7 +14,9 @@ class StubLLMClient:
     model: str = "stub-model"
     last_tools: Optional[list[dict[str, Any]]] = None
 
-    def invoke_tools(self, messages, *, tools, temperature: float = 0.1, **kwargs):
+    def invoke_tools(
+        self, messages, *, tools, temperature: float = LLM_DEFAULT_TEMPERATURE, **kwargs
+    ):
         self.last_tools = list(tools)
         call = ToolCall(name="run", arguments={"cmd": "echo hi"}, call_id="call-1")
         return ToolCallResult(
@@ -55,7 +58,9 @@ def test_llm_action_provider_returns_action():
 
 def test_llm_action_provider_stop_iteration():
     class EmptyLLM(StubLLMClient):
-        def invoke_tools(self, messages, *, tools, temperature: float = 0.1, **kwargs):
+        def invoke_tools(
+            self, messages, *, tools, temperature: float = LLM_DEFAULT_TEMPERATURE, **kwargs
+        ):
             return ToolCallResult(
                 calls=[],
                 message_content="Done",

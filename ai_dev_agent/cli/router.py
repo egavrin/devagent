@@ -289,14 +289,10 @@ class IntentRouter:
 
         raise IntentRoutingError("Could not determine a tool from the model response.")
 
-    def _invoke_model(self, messages: Sequence[Message], prefer_generate: bool):
+    def _invoke_model(self, messages: Sequence[Message], prefer_generate: bool = False):
         kwargs = {"tools": self.tools, "temperature": self.settings.temperature}
-        if prefer_generate and hasattr(self.client, "generate_with_tools"):
-            return self.client.generate_with_tools(messages, **kwargs)
         if hasattr(self.client, "invoke_tools"):
             return self.client.invoke_tools(messages, **kwargs)
-        if hasattr(self.client, "generate_with_tools"):
-            return self.client.generate_with_tools(messages, **kwargs)
         raise IntentRoutingError("LLM client does not support tool routing.")
 
     def _coerce_tool_call_result(self, data: Any) -> ToolCallResult:

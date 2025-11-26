@@ -26,6 +26,7 @@ from ai_dev_agent.cli.react.executor import (
 )
 from ai_dev_agent.cli.router import IntentDecision
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.engine.react.types import (
     ActionRequest,
     EvaluationResult,
@@ -404,7 +405,7 @@ def test_executor_forces_synthesis_via_invoke_tools(mock_synth, mock_session_man
     integration = DummyIntegration()
 
     class InvokeToolsClient:
-        def invoke_tools(self, messages, tools, temperature=0.0):
+        def invoke_tools(self, messages, tools, *, temperature=LLM_DEFAULT_TEMPERATURE):
             assert tools == []
             return ToolCallResult(message_content='{"answer": "forced"}')
 
@@ -629,7 +630,7 @@ def test_executor_post_loop_synthesis_with_invoke_tools(mock_synth):
             self.client = SimpleNamespace(invoke_tools=self._invoke)
             self.budget_integration = DummyIntegration()
 
-        def _invoke(self, messages, tools, temperature=0.0):
+        def _invoke(self, messages, tools, temperature=LLM_DEFAULT_TEMPERATURE):
             assert tools == []
             return ToolCallResult(message_content="Synthesized via tools")
 
@@ -1301,7 +1302,7 @@ def test_executor_forced_synthesis_invoke_tools_handles_string_result(
     action_provider = StubActionProviderWithStopIteration("")
 
     class InvokeToolsClient:
-        def invoke_tools(self, messages, tools, temperature=0.1):
+        def invoke_tools(self, messages, tools, *, temperature=LLM_DEFAULT_TEMPERATURE):
             return "forced-string"
 
     action_provider.client = InvokeToolsClient()

@@ -7,6 +7,7 @@ from typing import List
 
 import pytest
 
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.providers.llm.base import Message
 from ai_dev_agent.session.summarizer import LLMConversationSummarizer, SummarizationConfig
 
@@ -21,7 +22,7 @@ class StubLLM:
     def complete(
         self,
         messages: list[Message],
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
     ) -> str:
         self.calls.append(messages)

@@ -20,7 +20,7 @@ class TestEnhancedAgentRegistry:
         """Test registering a BaseAgent instance."""
         registry = EnhancedAgentRegistry()
 
-        agent = BaseAgent(name="test_agent", description="Test agent", tools=["read", "write"])
+        agent = BaseAgent(name="test_agent", description="Test agent", tools=["read", "edit"])
 
         registry.register_agent(agent)
 
@@ -110,7 +110,7 @@ class TestEnhancedAgentRegistry:
         """Test finding agents by required tools."""
         registry = EnhancedAgentRegistry()
 
-        agent1 = BaseAgent(name="agent1", tools=["read", "write"])
+        agent1 = BaseAgent(name="agent1", tools=["read", "edit"])
         agent2 = BaseAgent(name="agent2", tools=["read", "grep", "find"])
         agent3 = BaseAgent(name="agent3", tools=["read"])
 
@@ -118,8 +118,8 @@ class TestEnhancedAgentRegistry:
         registry.register_agent(agent2)
         registry.register_agent(agent3)
 
-        # Find agents that have both read and write
-        agents = registry.find_agents_with_tools(["read", "write"])
+        # Find agents that have both read and edit
+        agents = registry.find_agents_with_tools(["read", "edit"])
         assert len(agents) == 1
         assert "agent1" in agents
 
@@ -158,13 +158,13 @@ class TestEnhancedAgentRegistry:
         clone = registry.create_agent(
             "template",
             description="Cloned agent",
-            permissions={"scopes": ["read", "write"]},
+            permissions={"scopes": ["read", "edit"]},
             metadata={"origin": "clone", "extra": "yes"},
         )
 
         assert clone.name == "template"
         assert clone.capabilities == ["plan"]
-        assert clone.permissions["scopes"] == ["read", "write"]
+        assert clone.permissions["scopes"] == ["read", "edit"]
         assert clone.metadata["extra"] == "yes"
         assert base.metadata["origin"] == "template"
 
@@ -184,7 +184,7 @@ class TestEnhancedAgentRegistry:
 
             # Add some agents
             spec1 = AgentSpec(name="persist1", tools=["read"], max_iterations=10)
-            spec2 = AgentSpec(name="persist2", tools=["write"], max_iterations=10)
+            spec2 = AgentSpec(name="persist2", tools=["edit"], max_iterations=10)
             registry.register_spec(spec1)
             registry.register_spec(spec2)
 
@@ -246,7 +246,7 @@ class TestAgentLoader:
             config = {
                 "name": "config_agent",
                 "type": "BaseAgent",
-                "tools": ["read", "write"],
+                "tools": ["read", "edit"],
                 "max_iterations": 25,
                 "description": "Loaded from config",
                 "capabilities": ["analysis"],
@@ -259,7 +259,7 @@ class TestAgentLoader:
             agent = loader.load_from_config(temp_file)
 
             assert agent.name == "config_agent"
-            assert agent.tools == ["read", "write"]
+            assert agent.tools == ["read", "edit"]
             assert agent.max_iterations == 25
             assert "analysis" in agent.capabilities
 
@@ -344,7 +344,7 @@ from ai_dev_agent.agents.base import BaseAgent
 
 class CustomAgent2(BaseAgent):
     def __init__(self):
-        super().__init__(name="custom2", tools=["write"])
+        super().__init__(name="custom2", tools=["edit"])
 """
             with (Path(tmpdir) / "agent1.py").open("w") as f:
                 f.write(agent1_code)

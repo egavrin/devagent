@@ -71,7 +71,7 @@ class RetryHandler:
         result = handler.execute_with_retry(
             llm_client.complete,
             messages,
-            temperature=0.2
+            temperature=0.0
         )
         ```
     """

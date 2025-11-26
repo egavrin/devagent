@@ -65,7 +65,7 @@ class TestMemoryDistiller:
             description="Check for null values in auth handler",
             context="When dealing with TypeErrors in authentication",
             steps=["Locate auth handler", "Add null check", "Test login flow"],
-            tools_used=["read", "write", "run"],
+            tools_used=["read", "edit", "run"],
         )
 
         assert strategy.description == "Check for null values in auth handler"
@@ -896,7 +896,7 @@ class TestMemoryIntegration:
                             description="Check for null user objects",
                             context="Authentication middleware",
                             steps=["Check user exists", "Add null guard"],
-                            tools_used=["read", "write"],
+                            tools_used=["read", "edit"],
                         )
                     ],
                     lessons=[

@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List
 
 import pytest
 
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.engine.planning.planner import (
     Planner,
     PlanningContext,
@@ -97,7 +98,9 @@ class FakeLLM:
         self.responses = responses
         self.calls: list[list[Message]] = []
 
-    def complete(self, messages: list[Message], temperature: float = 0.1) -> str:
+    def complete(
+        self, messages: list[Message], temperature: float = LLM_DEFAULT_TEMPERATURE
+    ) -> str:
         self.calls.append(messages)
         if not self.responses:
             raise LLMError("no responses configured")
@@ -193,7 +196,9 @@ def test_planner_generate_fallback_on_llm_error(
     """Planner should fail fast when the LLM fails (no fallback)."""
 
     class FailingLLM(FakeLLM):
-        def complete(self, messages: list[Message], temperature: float = 0.1) -> str:
+        def complete(
+            self, messages: list[Message], temperature: float = LLM_DEFAULT_TEMPERATURE
+        ) -> str:
             raise LLMError("timeout")
 
     planner = Planner(FailingLLM([]))

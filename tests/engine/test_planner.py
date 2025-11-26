@@ -1,5 +1,6 @@
 import pytest
 
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.engine.planning.planner import (
     Planner,
     PlanningContext,
@@ -16,7 +17,7 @@ class StubLLM:
         self.responses = list(responses)
         self.calls = 0
 
-    def complete(self, conversation, temperature=0.1):
+    def complete(self, conversation, temperature=LLM_DEFAULT_TEMPERATURE):
         response = self.responses[self.calls]
         self.calls += 1
         if isinstance(response, Exception):

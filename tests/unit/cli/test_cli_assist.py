@@ -14,6 +14,7 @@ import ai_dev_agent.cli as cli_module
 from ai_dev_agent.cli import cli
 from ai_dev_agent.cli.router import IntentDecision
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.providers.llm.base import ToolCall, ToolCallResult
 from ai_dev_agent.tools import EDIT, FIND, RUN
 
@@ -244,7 +245,7 @@ def test_assist_react_flow_executes_tool_sequence(assist_harness: AssistHarness)
         def __init__(self) -> None:
             self.invocations: list[list[str | None]] = []
 
-        def invoke_tools(self, messages, tools, temperature=0.1, **_kwargs):
+        def invoke_tools(self, messages, tools, *, temperature=LLM_DEFAULT_TEMPERATURE, **_kwargs):
             transcript = [getattr(m, "content", None) for m in messages]
             self.invocations.append(transcript)
             if len(self.invocations) == 1:

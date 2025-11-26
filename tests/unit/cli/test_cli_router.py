@@ -59,7 +59,7 @@ class TestIntentRouter:
         # Create a mock AgentSpec
         self.mock_agent_spec = AgentSpec(
             name="test_agent",
-            tools=["find", "grep", "read", "write", "run", "symbols"],
+            tools=["find", "grep", "read", "edit", "run", "symbols"],
             max_iterations=10,
             system_prompt_suffix="Test suffix",
             description="Test agent description",
@@ -207,7 +207,7 @@ class TestIntentRouter:
 
         # Mock successful tool call
         tool_result = ToolCallResult(call_id="test_id", name="find", content='{"success": true}')
-        self.mock_client.generate_with_tools.return_value = ("Test response", [tool_result])
+        self.mock_client.invoke_tools.return_value = ("Test response", [tool_result])
 
         router = IntentRouter(client=self.mock_client, settings=self.settings)
 
@@ -215,7 +215,7 @@ class TestIntentRouter:
 
         assert isinstance(decision, IntentDecision)
         assert decision.tool == "find"
-        self.mock_client.generate_with_tools.assert_called_once()
+        self.mock_client.invoke_tools.assert_called_once()
 
     @patch("ai_dev_agent.cli.router.build_system_messages")
     def test_route_prompt_no_tool_calls(self, mock_build_messages):
@@ -223,7 +223,7 @@ class TestIntentRouter:
         mock_build_messages.return_value = []
 
         # Mock response with no tool calls
-        self.mock_client.generate_with_tools.return_value = ("No action needed", [])
+        self.mock_client.invoke_tools.return_value = ("No action needed", [])
 
         router = IntentRouter(client=self.mock_client, settings=self.settings)
 
@@ -237,7 +237,7 @@ class TestIntentRouter:
 
         # Mock tool call with invalid JSON
         tool_result = ToolCallResult(call_id="test_id", name="find", content="invalid json")
-        self.mock_client.generate_with_tools.return_value = ("Test response", [tool_result])
+        self.mock_client.invoke_tools.return_value = ("Test response", [tool_result])
 
         router = IntentRouter(client=self.mock_client, settings=self.settings)
 
@@ -254,7 +254,7 @@ class TestIntentRouter:
         mock_build_messages.return_value = []
 
         # Mock LLM error
-        self.mock_client.generate_with_tools.side_effect = LLMError("API error")
+        self.mock_client.invoke_tools.side_effect = LLMError("API error")
 
         router = IntentRouter(client=self.mock_client, settings=self.settings)
 
@@ -267,7 +267,7 @@ class TestIntentRouter:
         mock_build_messages.return_value = []
 
         # Mock general exception
-        self.mock_client.generate_with_tools.side_effect = Exception("Unexpected error")
+        self.mock_client.invoke_tools.side_effect = Exception("Unexpected error")
 
         router = IntentRouter(client=self.mock_client, settings=self.settings)
 
@@ -286,7 +286,7 @@ class TestIntentRouter:
         tool_result = ToolCallResult(
             call_id="test_id", name="read", content='{"file": "models.py"}'
         )
-        self.mock_client.generate_with_tools.return_value = ("Reading Django models", [tool_result])
+        self.mock_client.invoke_tools.return_value = ("Reading Django models", [tool_result])
 
         with patch("ai_dev_agent.cli.router.build_system_messages") as mock_build:
             mock_build.return_value = []
@@ -294,7 +294,7 @@ class TestIntentRouter:
 
             assert decision.tool == "read"
             # Verify project profile was included in messages
-            call_args = self.mock_client.generate_with_tools.call_args
+            call_args = self.mock_client.invoke_tools.call_args
             messages = call_args[0][0]
             # Check if project context appears in any message
             assert any("Django" in str(msg) or "Python" in str(msg) for msg in messages if msg)
@@ -309,7 +309,7 @@ class TestIntentRouter:
 
         # Mock response preferring high-success tool
         tool_result = ToolCallResult(call_id="test_id", name="find", content='{"pattern": "*.py"}')
-        self.mock_client.generate_with_tools.return_value = (
+        self.mock_client.invoke_tools.return_value = (
             "Using find due to high success rate",
             [tool_result],
         )
@@ -344,7 +344,7 @@ class TestIntentRouter:
         assert router.tools == []
 
         # Should still work but with no tools available
-        self.mock_client.generate_with_tools.return_value = ("No tools", [])
+        self.mock_client.invoke_tools.return_value = ("No tools", [])
 
         with patch("ai_dev_agent.cli.router.build_system_messages") as mock_build:
             mock_build.return_value = []
@@ -393,7 +393,7 @@ class TestIntentRouter:
         history = {
             "read": {"success": 8, "failure": 2, "avg_duration": 2.5},
             "find": {"success": 15, "failure": 5, "avg_duration": 1.2},
-            "write": {"success": 1, "failure": 0, "avg_duration": 0.0},
+            "edit": {"success": 1, "failure": 0, "avg_duration": 0.0},
         }
         router = IntentRouter(
             client=self.mock_client, settings=self.settings, tool_success_history=history

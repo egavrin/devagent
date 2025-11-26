@@ -11,6 +11,7 @@ import pytest
 from ai_dev_agent.cli.handlers import registry_handlers
 from ai_dev_agent.cli.react.executor import _execute_react_assistant
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.providers.llm.base import Message, ToolCall, ToolCallResult
 from ai_dev_agent.session import SessionManager
 
@@ -28,7 +29,7 @@ class FakeClient:
         messages: Iterable[Message],
         *,
         tools: list[dict] | None = None,
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         tool_choice: str | dict | None = "auto",
         extra_headers: dict | None = None,
@@ -45,7 +46,7 @@ class FakeClient:
         self,
         messages: Iterable[Message],
         *,
-        temperature: float = 0.2,
+        temperature: float = LLM_DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         extra_headers: dict | None = None,
     ) -> str:

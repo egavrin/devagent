@@ -2,6 +2,7 @@ import pytest
 
 from ai_dev_agent.cli.router import IntentDecision, IntentRouter, IntentRoutingError
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.providers.llm.base import ToolCall, ToolCallResult
 from ai_dev_agent.tools import RUN
 
@@ -16,7 +17,7 @@ class DummyClient:
         self,
         messages,
         tools,
-        temperature=0.2,
+        temperature=LLM_DEFAULT_TEMPERATURE,
         max_tokens=None,
         tool_choice="auto",
         extra_headers=None,

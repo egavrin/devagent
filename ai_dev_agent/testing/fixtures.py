@@ -286,21 +286,6 @@ def mock_file_system(temp_workspace):
     return {"read": read_file, "write": write_file, "list": list_files, "workspace": temp_workspace}
 
 
-@pytest.fixture
-def mock_config():
-    """Provide mock configuration for testing.
-
-    Returns:
-        Dictionary with test configuration.
-    """
-    return {
-        "llm": {"model": "gpt-4", "temperature": 0.0, "max_tokens": 2000},
-        "testing": {"coverage_threshold": 95.0, "parallel": True, "timeout": 60},
-        "paths": {"workspace": "/test/workspace", "cache": "/test/.cache", "logs": "/test/logs"},
-        "features": {"auto_test": True, "memory_system": True, "multi_agent": True},
-    }
-
-
 # Parametrized fixtures for different test scenarios
 @pytest.fixture(params=["small", "medium", "large"])
 def project_size(request):

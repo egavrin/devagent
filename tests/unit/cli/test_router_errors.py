@@ -271,7 +271,7 @@ class TestIntentRouterInitialization:
         """Test router accepts tool success history."""
         settings = Settings()
         mock_client = Mock()
-        history = {"read": 0.95, "write": 0.87}
+        history = {"read": 0.95, "edit": 0.87}
 
         router = IntentRouter(client=mock_client, settings=settings, tool_success_history=history)
 
@@ -307,9 +307,9 @@ class TestIntentDecision:
 
     def test_intent_decision_optional_rationale(self):
         """Test IntentDecision with no rationale."""
-        decision = IntentDecision(tool="write", arguments={"content": "test"})
+        decision = IntentDecision(tool="edit", arguments={"content": "test"})
 
-        assert decision.tool == "write"
+        assert decision.tool == "edit"
         assert decision.rationale is None
 
     def test_intent_decision_no_tool(self):

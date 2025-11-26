@@ -5,6 +5,7 @@ import pytest
 
 from ai_dev_agent.core.approval.approvals import ApprovalManager
 from ai_dev_agent.core.approval.policy import ApprovalPolicy
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.providers.llm.base import LLMError
 from ai_dev_agent.tools.code.code_edit.editor import CodeEditor, IterativeFixConfig
 
@@ -13,12 +14,12 @@ class DiffClient:
     def __init__(self, diff_text: str) -> None:
         self.diff_text = diff_text
 
-    def complete(self, messages, temperature=0.2, max_tokens=None):
+    def complete(self, messages, temperature=LLM_DEFAULT_TEMPERATURE, max_tokens=None):
         return self.diff_text
 
 
 class FailingClient:
-    def complete(self, messages, temperature=0.2, max_tokens=None):
+    def complete(self, messages, temperature=LLM_DEFAULT_TEMPERATURE, max_tokens=None):
         raise LLMError("LLM offline")
 
 

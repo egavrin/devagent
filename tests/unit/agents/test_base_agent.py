@@ -35,16 +35,16 @@ class TestAgentCapability:
     def test_capability_validation(self):
         """Test capability validates tool availability."""
         capability = AgentCapability(
-            name="test", required_tools=["read", "write"], optional_tools=["run"]
+            name="test", required_tools=["read", "edit"], optional_tools=["run"]
         )
 
         # All required tools present
-        assert capability.is_available(["read", "write", "run"])
-        assert capability.is_available(["read", "write"])
+        assert capability.is_available(["read", "edit", "run"])
+        assert capability.is_available(["read", "edit"])
 
         # Missing required tool
         assert not capability.is_available(["read"])
-        assert not capability.is_available(["write"])
+        assert not capability.is_available(["edit"])
         assert not capability.is_available([])
 
 
@@ -87,7 +87,7 @@ class TestAgentResult:
             success=True,
             output="Task completed",
             metadata={"lines_changed": 10},
-            tool_calls=[{"tool": "write", "file": "test.py"}],
+            tool_calls=[{"tool": "edit", "file": "test.py"}],
         )
 
         assert result.success is True
@@ -126,10 +126,10 @@ class TestBaseAgent:
 
     def test_agent_with_tools(self):
         """Test agent with tool permissions."""
-        agent = BaseAgent(name="test", tools=["read", "write", "grep"], max_iterations=10)
+        agent = BaseAgent(name="test", tools=["read", "edit", "grep"], max_iterations=10)
 
         assert agent.has_tool("read")
-        assert agent.has_tool("write")
+        assert agent.has_tool("edit")
         assert not agent.has_tool("run")
         assert agent.max_iterations == 10
 

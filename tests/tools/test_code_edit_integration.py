@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.tools.code.code_edit.context import ContextGatherer, ContextGatheringOptions
 from ai_dev_agent.tools.code.code_edit.diff_utils import DiffProcessor
 from ai_dev_agent.tools.code.code_edit.editor import CodeEditor, IterativeFixConfig
@@ -29,7 +30,7 @@ class StubLLM:
         self.response = response
         self.calls: list[list] = []
 
-    def complete(self, messages, temperature: float = 0.2):
+    def complete(self, messages, temperature: float = LLM_DEFAULT_TEMPERATURE):
         self.calls.append(messages)
         return self.response
 

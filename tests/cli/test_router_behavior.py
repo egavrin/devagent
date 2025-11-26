@@ -4,6 +4,7 @@ import pytest
 
 from ai_dev_agent.cli.router import IntentRouter, IntentRoutingError
 from ai_dev_agent.core.utils.config import Settings
+from ai_dev_agent.core.utils.constants import LLM_DEFAULT_TEMPERATURE
 from ai_dev_agent.providers.llm.base import ToolCall, ToolCallResult
 from ai_dev_agent.session.manager import SessionManager
 
@@ -13,12 +14,8 @@ class DummyLLM:
         self.response = response
         self.calls = []
 
-    def invoke_tools(self, messages, tools, temperature=0.1):
+    def invoke_tools(self, messages, tools, *, temperature=LLM_DEFAULT_TEMPERATURE):
         self.calls.append(("invoke_tools", messages, tools))
-        return self.response
-
-    def generate_with_tools(self, messages, tools, temperature=0.1):
-        self.calls.append(("generate_with_tools", messages, tools))
         return self.response
 
 
