@@ -629,19 +629,8 @@ def validate_review_response(
             continue
 
         if change_type == "removed":
-            removed_for_file = (removed_lines or {}).get(file_path)
-            if removed_for_file is None:
-                discarded_entries.append(f"{file_path}:{line_number} (removed line not in patch)")
-                continue
-            actual_line = removed_for_file.get(line_number)
-            if actual_line is None:
-                discarded_entries.append(f"{file_path}:{line_number} (line not removed)")
-                continue
-            if isinstance(snippet, str) and snippet.strip() != actual_line.strip():
-                discarded_entries.append(f"{file_path}:{line_number} (content mismatch)")
-            else:
-                sanitized.setdefault("severity", "warning")
-                valid_violations.append(sanitized)
+            # Skip violations on removed lines - we only review added code
+            discarded_entries.append(f"{file_path}:{line_number} (skipped: removed line)")
             continue
 
         added_for_file = added_lines.get(file_path)

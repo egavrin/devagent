@@ -93,7 +93,8 @@ def test_validate_review_response_rejects_wrong_line_numbers() -> None:
     assert summary.get("discarded_violations") == 1
 
 
-def test_validate_review_response_allows_removed_line_reference() -> None:
+def test_validate_review_response_discards_removed_line_violations() -> None:
+    """Violations on removed lines should be discarded (we only review added code)."""
     response = {
         "violations": [
             {
@@ -118,10 +119,10 @@ def test_validate_review_response_allows_removed_line_reference() -> None:
         parsed_files=parsed_files,
     )
 
-    assert normalized["summary"]["total_violations"] == 1
-    violation = normalized["violations"][0]
-    assert violation["change_type"] == "removed"
-    assert violation["severity"] == "warning"
+    # Removed violations should be discarded
+    assert normalized["violations"] == []
+    assert normalized["summary"]["total_violations"] == 0
+    assert normalized["summary"].get("discarded_violations") == 1
 
 
 def test_validate_review_response_allows_matching_violation() -> None:
