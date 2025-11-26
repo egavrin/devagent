@@ -29,7 +29,7 @@ Every SEARCH/REPLACE block **MUST** follow this exact format:
 
 ## Critical Rules
 
-- **ALWAYS READ the file first** before editing (use `{tool_read}`)
+- **ALWAYS READ the file first** before editing (use `{{TOOL_READ}}`)
 - **SEARCH content MUST be copied EXACTLY** from READ output
 - **NEVER invent or guess** what the file contains
 - **For insertions, use EMPTY SEARCH** (appends to file — always works)
@@ -124,7 +124,7 @@ TIMEOUT = 60
 **Cause**: The SEARCH content doesn't match the actual file content.
 
 **Fix**:
-1. Use `{tool_read}` to view current file content
+1. Use `{{TOOL_READ}}` to view current file content
 2. Copy the **exact lines** (including whitespace) into SEARCH
 3. Never guess or paraphrase
 

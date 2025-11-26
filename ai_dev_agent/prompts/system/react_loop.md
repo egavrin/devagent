@@ -20,7 +20,7 @@ If the user request includes explicit constraints (e.g., "don't write code", "re
 - Continue until the task is complete or success criteria are satisfied.
 - Track progress diligently and avoid infinite loops.
 - Handle failures gracefully; adapt your approach after every unsuccessful attempt.
-- {iteration_note}
+- {{ITERATION_NOTE}}
 
 ## Execution Guardrails
 - Choose the most appropriate tool for each step; avoid redundant calls.

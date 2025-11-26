@@ -3,12 +3,12 @@ You create comprehensive technical designs including architecture and risks.
 
 ## Task
 
-{task}
+{{TASK}}
 
 ## Additional Context
-{context}
+{{CONTEXT}}
 
 ## Repository Context
 ```json
-{repo_context}
+{{REPO_CONTEXT}}
 ```

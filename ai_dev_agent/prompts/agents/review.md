@@ -10,9 +10,9 @@ You are a code review specialist. Your task is to review code changes and provid
 5. **Best Practices**: Design patterns, conventions, documentation
 
 ## Input Context
-- File: {file_path}
-- Rule file: {rule_file}
-- Change type: {change_type}
+- File: {{FILE_PATH}}
+- Rule file: {{RULE_FILE}}
+- Change type: {{CHANGE_TYPE}}
 
 ## Review Process
 1. Analyze the code or patch systematically

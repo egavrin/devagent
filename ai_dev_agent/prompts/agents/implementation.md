@@ -3,12 +3,12 @@ Implement the requested feature following tests and existing patterns.
 
 ## Task
 
-{task}
+{{TASK}}
 
 ## Additional Context
-{context}
+{{CONTEXT}}
 
 ## Repository Context
 ```json
-{repo_context}
+{{REPO_CONTEXT}}
 ```

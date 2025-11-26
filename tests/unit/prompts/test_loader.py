@@ -19,11 +19,11 @@ def temp_prompts_dir():
     # Create test prompt files
     agents_dir = prompts_dir / "agents"
     agents_dir.mkdir()
-    (agents_dir / "test_agent.md").write_text("# Test Agent\nTask: {task}")
+    (agents_dir / "test_agent.md").write_text("# Test Agent\nTask: {{TASK}}")
 
     system_dir = prompts_dir / "system"
     system_dir.mkdir()
-    (system_dir / "base_context.md").write_text("System context: {workspace}")
+    (system_dir / "base_context.md").write_text("System context: {{WORKSPACE}}")
 
     formats_dir = prompts_dir / "formats"
     formats_dir.mkdir()
@@ -54,7 +54,7 @@ class TestPromptLoader:
         loader = PromptLoader(prompts_dir=temp_prompts_dir)
         content = loader.load_prompt("agents/test_agent.md")
         assert "# Test Agent" in content
-        assert "Task: {task}" in content
+        assert "Task: {{TASK}}" in content
 
     def test_load_prompt_without_extension(self, temp_prompts_dir):
         """Test loading prompt without .md extension."""
@@ -72,29 +72,29 @@ class TestPromptLoader:
         """Test rendering prompt with context."""
         loader = PromptLoader(prompts_dir=temp_prompts_dir)
         content = loader.render_prompt(
-            "agents/test_agent.md", context={"task": "implement feature X"}
+            "agents/test_agent.md", context={"TASK": "implement feature X"}
         )
         assert "# Test Agent" in content
         assert "Task: implement feature X" in content
-        assert "{task}" not in content
+        assert "{{TASK}}" not in content
 
     def test_render_prompt_no_context(self, temp_prompts_dir):
         """Test rendering without context returns template as-is."""
         loader = PromptLoader(prompts_dir=temp_prompts_dir)
         content = loader.render_prompt("agents/test_agent.md")
-        assert "Task: {task}" in content
+        assert "Task: {{TASK}}" in content
 
     def test_load_agent_prompt(self, temp_prompts_dir):
         """Test loading agent-specific prompt."""
         loader = PromptLoader(prompts_dir=temp_prompts_dir)
-        content = loader.load_agent_prompt("test_agent", context={"task": "write tests"})
+        content = loader.load_agent_prompt("test_agent", context={"TASK": "write tests"})
         assert "Task: write tests" in content
 
     def test_load_system_prompt(self, temp_prompts_dir):
         """Test loading system prompt."""
         loader = PromptLoader(prompts_dir=temp_prompts_dir)
         content = loader.load_system_prompt(
-            "base_context", context={"workspace": "/home/user/project"}
+            "base_context", context={"WORKSPACE": "/home/user/project"}
         )
         assert "System context: /home/user/project" in content
 
@@ -108,9 +108,9 @@ class TestPromptLoader:
         """Test composing multiple prompts."""
         loader = PromptLoader(prompts_dir=temp_prompts_dir)
         composed = loader.compose_prompt(
-            ["system/base_context.md", ("agents/test_agent.md", {"task": "test task"})]
+            ["system/base_context.md", ("agents/test_agent.md", {"TASK": "test task"})]
         )
-        assert "System context: {workspace}" in composed
+        assert "System context: {{WORKSPACE}}" in composed
         assert "Task: test task" in composed
         assert "---" in composed  # Separator
 
@@ -130,8 +130,13 @@ class TestPromptLoader:
         assert "system/base_context.md" not in agent_prompts
 
     def test_caching(self, temp_prompts_dir):
-        """Test that prompts are cached."""
+        """Test that prompts are cached via lru_cache."""
+        from ai_dev_agent.prompts.loader import _read_prompt_file
+
         loader = PromptLoader(prompts_dir=temp_prompts_dir)
+
+        # Clear any existing cache
+        _read_prompt_file.cache_clear()
 
         # Load prompt twice
         content1 = loader.load_prompt("agents/test_agent.md")
@@ -140,18 +145,22 @@ class TestPromptLoader:
         # Should return same content
         assert content1 == content2
 
-        # Check cache
-        cached_path = str((temp_prompts_dir / "agents/test_agent.md").resolve())
-        assert cached_path in loader._cache
+        # Check cache info - second call should hit cache
+        cache_info = _read_prompt_file.cache_info()
+        assert cache_info.hits >= 1
 
     def test_clear_cache(self, temp_prompts_dir):
         """Test clearing the cache."""
+        from ai_dev_agent.prompts.loader import _read_prompt_file
+
         loader = PromptLoader(prompts_dir=temp_prompts_dir)
 
         # Load and cache a prompt
         loader.load_prompt("agents/test_agent.md")
-        assert len(loader._cache) > 0
+        cache_info_before = _read_prompt_file.cache_info()
+        assert cache_info_before.currsize > 0
 
         # Clear cache
         loader.clear_cache()
-        assert len(loader._cache) == 0
+        cache_info_after = _read_prompt_file.cache_info()
+        assert cache_info_after.currsize == 0

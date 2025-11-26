@@ -1,7 +1,7 @@
 You MUST respond ONLY with valid JSON matching this exact schema:
 
 ```json
-{format_schema}
+{{FORMAT_SCHEMA}}
 ```
 
 CRITICAL RULES:
@@ -13,9 +13,9 @@ CRITICAL RULES:
 
 Example valid response format:
 ```json
-{{
+{
   "field1": "value",
   "field2": 123,
   "field3": true
-}}
+}
 ```

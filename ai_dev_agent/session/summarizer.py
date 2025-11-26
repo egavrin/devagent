@@ -61,10 +61,20 @@ class SummarizationConfig:
     protect_recent: int = 40000  # Recent tokens to protect from pruning
 
 
-_PROMPT_LOADER = PromptLoader()
+# Lazy-loaded prompts - avoids import-time failures if prompt files are missing
+_PROMPT_LOADER: PromptLoader | None = None
+_DEFAULT_SYSTEM_PROMPT: str | None = None
+_DEFAULT_USER_TEMPLATE: str | None = None
 
-DEFAULT_SYSTEM_PROMPT = _PROMPT_LOADER.load_system_prompt("conversation_summary_system")
-DEFAULT_USER_TEMPLATE = _PROMPT_LOADER.load_system_prompt("conversation_summary_user")
+
+def _get_prompts() -> tuple[str, str]:
+    """Lazily load summarizer prompts on first use."""
+    global _PROMPT_LOADER, _DEFAULT_SYSTEM_PROMPT, _DEFAULT_USER_TEMPLATE
+    if _DEFAULT_SYSTEM_PROMPT is None:
+        _PROMPT_LOADER = PromptLoader()
+        _DEFAULT_SYSTEM_PROMPT = _PROMPT_LOADER.load_system_prompt("conversation_summary_system")
+        _DEFAULT_USER_TEMPLATE = _PROMPT_LOADER.load_system_prompt("conversation_summary_user")
+    return _DEFAULT_SYSTEM_PROMPT, _DEFAULT_USER_TEMPLATE
 
 
 class LLMConversationSummarizer:
@@ -98,8 +108,9 @@ class LLMConversationSummarizer:
         """
         self._client = client
         self._config = config or SummarizationConfig()
-        self._system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
-        self._user_template = user_template or DEFAULT_USER_TEMPLATE
+        default_system, default_user = _get_prompts()
+        self._system_prompt = system_prompt or default_system
+        self._user_template = user_template or default_user
         self._max_tokens = max_tokens
         self._summary_cache: dict[str, str] = {}
 

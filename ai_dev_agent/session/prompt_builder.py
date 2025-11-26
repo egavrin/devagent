@@ -50,6 +50,8 @@ _GLOBAL_INSTRUCTION_CANDIDATES: Sequence[Path] = (
 
 _PROMPT_LOADER: PromptLoader | None = None
 
+_SYSTEM_FALLBACK_MESSAGE = "You are a helpful software development assistant."
+
 
 def _get_prompt_loader() -> PromptLoader:
     global _PROMPT_LOADER
@@ -161,21 +163,23 @@ def _system_prompt_context(
     repository_language: str | None,
     settings: Settings | None,
 ) -> dict[str, str]:
+    """Build context dict with UPPERCASE keys for {{PLACEHOLDER}} substitution."""
     language_hint = _language_hint_block(repository_language)
     iteration_note = _iteration_note(iteration_cap, settings)
     iteration_cap_value = str(iteration_cap) if iteration_cap is not None else ""
 
+    # Keys are UPPERCASE to match {{PLACEHOLDER}} syntax in prompts
     return {
-        "iteration_cap": iteration_cap_value,
-        "iteration_note": iteration_note,
-        "language_hint": language_hint,
-        "repository_language": repository_language or "",
-        "tool_edit": EDIT,
-        "tool_find": FIND,
-        "tool_grep": GREP,
-        "tool_symbols": SYMBOLS,
-        "tool_read": READ,
-        "tool_run": RUN,
+        "ITERATION_CAP": iteration_cap_value,
+        "ITERATION_NOTE": iteration_note,
+        "LANGUAGE_HINT": language_hint,
+        "REPOSITORY_LANGUAGE": repository_language or "",
+        "TOOL_EDIT": EDIT,
+        "TOOL_FIND": FIND,
+        "TOOL_GREP": GREP,
+        "TOOL_SYMBOLS": SYMBOLS,
+        "TOOL_READ": READ,
+        "TOOL_RUN": RUN,
     }
 
 

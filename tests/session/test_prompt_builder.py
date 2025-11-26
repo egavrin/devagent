@@ -113,5 +113,6 @@ def test_build_system_messages_uses_markdown_templates(monkeypatch, tmp_workspac
     system_name, context = call_log["system"][0]
     assert system_name == "base_context"
     assert context is not None
-    assert context.get("iteration_cap") == "3"
-    assert "python" in (context.get("language_hint") or "").lower()
+    # Context keys are now UPPERCASE to match {{PLACEHOLDER}} syntax
+    assert context.get("ITERATION_CAP") == "3"
+    assert "python" in (context.get("LANGUAGE_HINT") or "").lower()

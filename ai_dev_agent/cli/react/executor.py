@@ -53,15 +53,30 @@ from .action_provider import LLMActionProvider
 from .budget_control import PHASE_PROMPTS, AdaptiveBudgetManager, BudgetManager
 
 logger = logging.getLogger(__name__)
-_PROMPT_LOADER = PromptLoader()
-_JSON_ENFORCEMENT_TEMPLATE = _PROMPT_LOADER.load_system_prompt("json_enforcement")
+
+# Lazy-loaded prompt loader
+_PROMPT_LOADER: PromptLoader | None = None
+
+
+def _get_prompt_loader() -> PromptLoader:
+    """Get or create the prompt loader lazily."""
+    global _PROMPT_LOADER
+    if _PROMPT_LOADER is None:
+        _PROMPT_LOADER = PromptLoader()
+    return _PROMPT_LOADER
+
 
 __all__ = ["_execute_react_assistant"]
 
 
 def _build_json_enforcement_instructions(format_schema: dict[str, Any]) -> str:
     """Build strict JSON-only instructions for forced synthesis paths."""
-    return _JSON_ENFORCEMENT_TEMPLATE.format(format_schema=json.dumps(format_schema, indent=2))
+    loader = _get_prompt_loader()
+    return loader.render_prompt(
+        "system/json_enforcement.md",
+        context={"FORMAT_SCHEMA": json.dumps(format_schema, indent=2)},
+        strict=True,
+    )
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:

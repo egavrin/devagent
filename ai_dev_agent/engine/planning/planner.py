@@ -16,9 +16,21 @@ from ai_dev_agent.session import SessionManager, build_system_messages
 
 LOGGER = get_logger(__name__)
 
-_PROMPT_LOADER = PromptLoader()
-SYSTEM_PROMPT = _PROMPT_LOADER.load_system_prompt("planner_system")
-USER_TEMPLATE = _PROMPT_LOADER.load_system_prompt("planner_user")
+# Lazy-loaded prompts - avoids import-time failures if prompt files are missing
+_PROMPT_LOADER: PromptLoader | None = None
+_SYSTEM_PROMPT: str | None = None
+_USER_TEMPLATE: str | None = None
+
+
+def _get_prompts() -> tuple[str, str]:
+    """Lazily load planner prompts on first use."""
+    global _PROMPT_LOADER, _SYSTEM_PROMPT, _USER_TEMPLATE
+    if _SYSTEM_PROMPT is None:
+        _PROMPT_LOADER = PromptLoader()
+        _SYSTEM_PROMPT = _PROMPT_LOADER.load_system_prompt("planner_system")
+        _USER_TEMPLATE = _PROMPT_LOADER.load_system_prompt("planner_user")
+    return _SYSTEM_PROMPT, _USER_TEMPLATE
+
 
 JSON_PATTERN = re.compile(r"```json\s*(?P<json>{.*?})\s*```", re.DOTALL)
 
@@ -186,7 +198,8 @@ class Planner:
             plan_context.dominant_language = "Unknown"
 
         context_block = plan_context.as_prompt_block()
-        user_prompt = USER_TEMPLATE.format(
+        system_prompt, user_template = _get_prompts()
+        user_prompt = user_template.format(
             goal=goal.strip(),
             context_block=context_block,
         )
@@ -194,7 +207,7 @@ class Planner:
         session_key = session_id or f"planner-{uuid4()}"
         system_messages = build_system_messages(
             include_react_guidance=False,
-            extra_messages=[SYSTEM_PROMPT],
+            extra_messages=[system_prompt],
             workspace_root=Path.cwd(),
         )
         session = self._session_manager.ensure_session(

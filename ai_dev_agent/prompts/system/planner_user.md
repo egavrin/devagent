@@ -1,6 +1,6 @@
-Task: {goal}
+Task: {{GOAL}}
 
-{context_block}
+{{CONTEXT_BLOCK}}
 
 If this task needs multiple steps, break it down.
 If it's simple, just describe what to do.

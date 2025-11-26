@@ -3,12 +3,12 @@ Create thorough tests following TDD and report coverage gaps.
 
 ## Task
 
-{task}
+{{TASK}}
 
 ## Additional Context
-{context}
+{{CONTEXT}}
 
 ## Repository Context
 ```json
-{repo_context}
+{{REPO_CONTEXT}}
 ```

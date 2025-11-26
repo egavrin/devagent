@@ -1,9 +1,15 @@
-"""Loader for markdown-based prompt templates."""
+"""Loader for markdown-based prompt templates.
+
+Uses {{PLACEHOLDER}} syntax via TemplateEngine to avoid conflicts with
+Python code examples containing single braces.
+"""
 
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
+from ai_dev_agent.prompts.templates.template_engine import TemplateEngine
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +25,20 @@ def _read_prompt_file(path: str) -> str:
 
 
 class PromptLoader:
-    """Loads and manages markdown-based prompt templates."""
+    """Loads and manages markdown-based prompt templates.
+
+    Uses {{PLACEHOLDER}} syntax for variable substitution, which avoids
+    conflicts with Python dicts, f-strings, and JSON in code examples.
+
+    Placeholder names should use SCREAMING_SNAKE_CASE by convention.
+    """
 
     SENTINEL = Path("system") / "base_context.md"
 
     def __init__(self, prompts_dir: Optional[Path] = None):
         """Initialise the prompt loader using well-defined prompt directories."""
         self.prompts_dir = self._resolve_prompts_dir(prompts_dir)
-        self._cache: Dict[str, str] = {}
+        self._engine = TemplateEngine()
         logger.debug("PromptLoader initialised with directory: %s", self.prompts_dir)
 
     @classmethod
@@ -74,45 +86,50 @@ class PromptLoader:
             if not full_path.exists():
                 raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
 
-        cache_key = str(full_path)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
         try:
-            content = _read_prompt_file(cache_key)
+            return _read_prompt_file(str(full_path))
         except Exception as e:
             logger.error(f"Error loading prompt {prompt_path}: {e}")
             raise
 
-        self._cache[cache_key] = content
-        return content
-
-    def render_prompt(self, prompt_path: str, context: Optional[Dict[str, Any]] = None) -> str:
+    def render_prompt(
+        self,
+        prompt_path: str,
+        context: Optional[Dict[str, Any]] = None,
+        *,
+        strict: bool = True,
+    ) -> str:
         """Load and render a prompt with context variables.
+
+        Uses {{PLACEHOLDER}} syntax for substitution. Context keys should be
+        UPPERCASE to match placeholder names.
 
         Args:
             prompt_path: Path to prompt file relative to prompts_dir
-            context: Dictionary of variables to substitute in the prompt
+            context: Dictionary of variables to substitute (keys should be UPPERCASE)
+            strict: If True, raise on missing placeholders (default: True)
 
         Returns:
             The rendered prompt with variables substituted.
+
+        Raises:
+            ValueError: If strict=True and placeholders are missing from context
         """
         template = self.load_prompt(prompt_path)
 
         if context is None:
             return template
 
-        # Simple variable substitution using {variable} syntax
-        rendered = template
-        for key, value in context.items():
-            placeholder = f"{{{key}}}"
-            if placeholder in rendered:
-                rendered = rendered.replace(placeholder, str(value))
-                logger.debug(f"Replaced {placeholder} in prompt")
+        # Normalize context keys to uppercase
+        normalized_context = {k.upper(): v for k, v in context.items()}
 
-        return rendered
+        return self._engine.resolve(template, normalized_context, strict=strict)
 
-    def load_agent_prompt(self, agent_name: str, context: Optional[Dict[str, Any]] = None) -> str:
+    def load_agent_prompt(
+        self,
+        agent_name: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Load a prompt for a specific agent.
 
         Args:
@@ -123,10 +140,12 @@ class PromptLoader:
             The agent's prompt, rendered with context if provided.
         """
         prompt_path = f"agents/{agent_name}.md"
-        return self.render_prompt(prompt_path, context)
+        return self.render_prompt(prompt_path, context, strict=False)
 
     def load_system_prompt(
-        self, system_name: str = "base_context", context: Optional[Dict[str, Any]] = None
+        self,
+        system_name: str = "base_context",
+        context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Load a system prompt.
 
@@ -138,7 +157,7 @@ class PromptLoader:
             The system prompt, rendered with context if provided.
         """
         prompt_path = f"system/{system_name}.md"
-        return self.render_prompt(prompt_path, context)
+        return self.render_prompt(prompt_path, context, strict=False)
 
     def load_format_prompt(self, format_name: str) -> str:
         """Load a format specification prompt.
@@ -152,7 +171,11 @@ class PromptLoader:
         prompt_path = f"formats/{format_name}.md"
         return self.load_prompt(prompt_path)
 
-    def compose_prompt(self, components: list, separator: str = "\n\n---\n\n") -> str:
+    def compose_prompt(
+        self,
+        components: List[Union[str, Tuple[str, Dict[str, Any]]]],
+        separator: str = "\n\n---\n\n",
+    ) -> str:
         """Compose multiple prompt components into a single prompt.
 
         Args:
@@ -167,13 +190,13 @@ class PromptLoader:
         for component in components:
             if isinstance(component, tuple):
                 path, context = component
-                parts.append(self.render_prompt(path, context))
+                parts.append(self.render_prompt(path, context, strict=False))
             else:
                 parts.append(self.load_prompt(component))
 
         return separator.join(parts)
 
-    def list_prompts(self, category: Optional[str] = None) -> list:
+    def list_prompts(self, category: Optional[str] = None) -> List[str]:
         """List available prompts.
 
         Args:
@@ -198,8 +221,38 @@ class PromptLoader:
 
         return sorted(prompts)
 
-    def clear_cache(self):
+    def clear_cache(self) -> None:
         """Clear the prompt cache."""
-        self._cache.clear()
         _read_prompt_file.cache_clear()
         logger.debug("Prompt cache cleared")
+
+    def extract_placeholders(self, prompt_path: str) -> Set[str]:
+        """Extract all placeholder names from a prompt.
+
+        Args:
+            prompt_path: Path to prompt file relative to prompts_dir
+
+        Returns:
+            Set of placeholder names (without braces)
+        """
+        template = self.load_prompt(prompt_path)
+        return self._engine.extract_placeholders(template)
+
+    def validate_context(
+        self,
+        prompt_path: str,
+        context: Dict[str, Any],
+    ) -> Tuple[bool, Set[str], Set[str]]:
+        """Validate that context provides all required placeholders.
+
+        Args:
+            prompt_path: Path to prompt file relative to prompts_dir
+            context: Values to substitute
+
+        Returns:
+            Tuple of (is_valid, missing_placeholders, unused_context_keys)
+        """
+        template = self.load_prompt(prompt_path)
+        normalized_context = {k.upper(): v for k, v in context.items()}
+        result = self._engine.validate(template, normalized_context)
+        return result.is_valid, result.missing, result.unused

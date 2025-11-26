@@ -31,5 +31,5 @@
     {"required": ["query"]},
     {"required": ["pattern"]}
   ],
-  "additionalProperties": true
+  "additionalProperties": false
 }

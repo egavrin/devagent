@@ -20,11 +20,11 @@ def _patch_shared_context(monkeypatch):
 def _patch_prompt_loader(monkeypatch):
     original_render = ai_dev_agent.cli.runtime.main.PromptLoader.render_prompt
 
-    def fake_render(self, prompt_path, context=None):
+    def fake_render(self, prompt_path, context=None, *, strict=True):
         if prompt_path.startswith("agents/"):
             name = prompt_path.split("/")[-1].split(".")[0].upper()
             return f"{name} TEMPLATE"
-        return original_render(self, prompt_path, context)
+        return original_render(self, prompt_path, context, strict=strict)
 
     monkeypatch.setattr(
         "ai_dev_agent.cli.runtime.main.PromptLoader.render_prompt",

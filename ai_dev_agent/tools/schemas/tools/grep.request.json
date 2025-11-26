@@ -26,11 +26,17 @@
       "minimum": 1,
       "maximum": 1000,
       "default": 200
+    },
+    "max_files": {
+      "type": "integer",
+      "description": "Maximum number of files to return",
+      "minimum": 1,
+      "default": 20
     }
   },
   "anyOf": [
     {"required": ["pattern"]},
     {"required": ["query"]}
   ],
-  "additionalProperties": true
+  "additionalProperties": false
 }
