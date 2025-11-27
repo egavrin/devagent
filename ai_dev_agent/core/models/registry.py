@@ -74,7 +74,7 @@ class ModelSpec:
 PROVIDER_REGISTRY: dict[str, ProviderConfig] = {
     "deepseek": ProviderConfig(base_url="https://api.deepseek.com/v1"),
     "openai": ProviderConfig(base_url="https://api.openai.com/v1"),
-    "anthropic": ProviderConfig(base_url="https://api.anthropic.com/v1"),
+    "anthropic": ProviderConfig(base_url="https://api.anthropic.com"),
     "openrouter": ProviderConfig(base_url="https://openrouter.ai/api/v1"),
 }
 

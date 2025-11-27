@@ -638,6 +638,10 @@ def get_llm_client(ctx: click.Context):
     base_url_override: str | None = settings.base_url or None
     provider_kwargs: dict[str, Any] = {}
 
+    # Avoid leaking the DeepSeek default base URL into other providers when none is configured.
+    if base_url_override == DEEPSEEK_DEFAULT_BASE_URL and provider_key != "deepseek":
+        base_url_override = None
+
     if provider_key in {"openrouter", "cerebras"}:
         if settings.provider_only:
             provider_kwargs["provider_only"] = tuple(settings.provider_only)

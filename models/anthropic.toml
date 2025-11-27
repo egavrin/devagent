@@ -1,6 +1,6 @@
 # Anthropic Direct API models (without provider prefix)
 provider = "anthropic"
-base_url = "https://api.anthropic.com/v1"
+base_url = "https://api.anthropic.com"
 
 [claude-3-5-sonnet-20241022]
 context_window = 200000

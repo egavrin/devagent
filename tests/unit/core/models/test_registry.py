@@ -657,7 +657,7 @@ class TestProviderRegistry:
     def test_anthropic_provider_config(self):
         """Test Anthropic provider configuration."""
         config = PROVIDER_REGISTRY["anthropic"]
-        assert config.base_url == "https://api.anthropic.com/v1"
+        assert config.base_url == "https://api.anthropic.com"
 
     def test_openrouter_provider_config(self):
         """Test OpenRouter provider configuration."""

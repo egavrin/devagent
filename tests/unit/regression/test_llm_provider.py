@@ -1,6 +1,7 @@
 import pytest
 
 from ai_dev_agent.providers.llm import create_client
+from ai_dev_agent.providers.llm.anthropic import AnthropicClient
 from ai_dev_agent.providers.llm.base import (
     LLMRateLimitError,
     LLMResponseError,
@@ -8,6 +9,7 @@ from ai_dev_agent.providers.llm.base import (
     RetryConfig,
 )
 from ai_dev_agent.providers.llm.deepseek import DeepSeekClient
+from ai_dev_agent.providers.llm.openai import OpenAIClient
 from ai_dev_agent.providers.llm.openrouter import OpenRouterClient
 
 
@@ -156,3 +158,15 @@ def test_create_client_openrouter_aliases():
 def test_create_client_rejects_unknown_provider():
     with pytest.raises(ValueError, match="Unsupported LLM provider"):
         create_client(provider="unknown", api_key="k", model="m")
+
+
+def test_create_client_openai_and_anthropic():
+    openai_client = create_client(provider="openai", api_key="k", model="gpt-4o")
+    assert isinstance(openai_client, OpenAIClient)
+    assert openai_client.base_url.endswith("api.openai.com/v1")
+
+    anthropic_client = create_client(
+        provider="anthropic", api_key="k", model="claude-3-5-sonnet-20241022"
+    )
+    assert isinstance(anthropic_client, AnthropicClient)
+    assert anthropic_client.base_url.endswith("api.anthropic.com")

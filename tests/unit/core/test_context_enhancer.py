@@ -414,6 +414,36 @@ class TestContextEnhancer:
         assert "repomap_messages" not in context
         assert "memory" not in context
 
+    def test_build_enhanced_context_includes_memory_when_available(
+        self, temp_workspace, mock_settings
+    ):
+        """Memory context should be included when the provider has a store."""
+
+        class DummyMemoryProvider:
+            def __init__(self):
+                self.calls: list[tuple[str, str | None, int]] = []
+                self.has_store = True
+
+            def retrieve_relevant_memories(self, query, task_type=None, limit=5):
+                self.calls.append((query, task_type, limit))
+                return [{"id": "mem-1", "content": "Memory item", "metadata": {}}]
+
+            def format_memories_for_context(self, memories):
+                return "## Relevant\n1. Memory item"
+
+        mock_settings.enable_memory_bank = True
+        enhancer = ContextEnhancer(workspace=temp_workspace, settings=mock_settings)
+        enhancer._memory_provider = DummyMemoryProvider()
+
+        context = enhancer.build_enhanced_context(
+            include_repomap=False, include_memory=True, query="optimize query", max_files=3
+        )
+
+        assert "memory" in context
+        assert context["memory"]["messages"][0]["role"] == "system"
+        assert context["memory"]["memory_ids"] == ["mem-1"]
+        assert enhancer._memory_provider.calls == [("optimize query", None, 5)]
+
     def test_build_enhanced_context_inherits_from_context_builder(
         self, temp_workspace, mock_settings
     ):

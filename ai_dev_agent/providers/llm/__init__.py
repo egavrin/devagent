@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .anthropic import DEFAULT_BASE_URL as ANTHROPIC_DEFAULT_BASE_URL
+from .anthropic import AnthropicClient
 from .base import (
     HTTPChatLLMClient,
     LLMClient,
@@ -19,6 +21,8 @@ from .base import (
 )
 from .deepseek import DEFAULT_BASE_URL as DEEPSEEK_DEFAULT_BASE_URL
 from .deepseek import DeepSeekClient
+from .openai import DEFAULT_BASE_URL as OPENAI_DEFAULT_BASE_URL
+from .openai import OpenAIClient
 from .openrouter import DEFAULT_BASE_URL as OPENROUTER_DEFAULT_BASE_URL
 from .openrouter import OpenRouterClient
 
@@ -26,6 +30,14 @@ _PROVIDER_MAP = {
     "deepseek": {
         "client": DeepSeekClient,
         "default_base_url": DEEPSEEK_DEFAULT_BASE_URL,
+    },
+    "openai": {
+        "client": OpenAIClient,
+        "default_base_url": OPENAI_DEFAULT_BASE_URL,
+    },
+    "anthropic": {
+        "client": AnthropicClient,
+        "default_base_url": ANTHROPIC_DEFAULT_BASE_URL,
     },
     "openrouter": {
         "client": OpenRouterClient,
@@ -73,8 +85,11 @@ def create_client(
 
 __all__ = [
     "DEEPSEEK_DEFAULT_BASE_URL",
+    "ANTHROPIC_DEFAULT_BASE_URL",
+    "OPENAI_DEFAULT_BASE_URL",
     "OPENROUTER_DEFAULT_BASE_URL",
     "HTTPChatLLMClient",
+    "AnthropicClient",
     "LLMClient",
     "LLMConnectionError",
     "LLMError",
@@ -88,4 +103,7 @@ __all__ = [
     "ToolCall",
     "ToolCallResult",
     "create_client",
+    "OpenAIClient",
+    "DeepSeekClient",
+    "OpenRouterClient",
 ]

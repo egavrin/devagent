@@ -1160,14 +1160,21 @@ class ContextEnhancer(ContextBuilder):
         # Add Memory context if requested
         if include_memory:
             try:
-                memory_context = self.get_memory_context(
-                    query=query or "", max_memories=5, min_relevance=0.5
+                retrieval_limit = getattr(self.settings, "memory_retrieval_limit", 5)
+                similarity_threshold = getattr(self.settings, "memory_similarity_threshold", 0.3)
+                memory_messages, memory_ids = self.get_memory_context(
+                    query=query or "",
+                    task_type=None,
+                    limit=retrieval_limit,
+                    threshold=similarity_threshold,
                 )
-                if memory_context and memory_context.get("memories"):
-                    context["memory"] = memory_context
+                if memory_messages:
+                    context["memory"] = {
+                        "messages": memory_messages,
+                        "memory_ids": memory_ids or [],
+                    }
             except Exception as e:
                 logger.warning(f"Failed to build Memory context: {e}")
-                context["memory"] = None
 
         return context
 

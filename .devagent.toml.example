@@ -24,7 +24,7 @@ api_key = "sk-your-openai-api-key"
 
 [providers.anthropic]
 api_key = "sk-ant-your-anthropic-api-key"
-# base_url = "https://api.anthropic.com/v1"  # optional, uses default
+# base_url = "https://api.anthropic.com"  # optional, uses default
 
 [providers.openrouter]
 api_key = "sk-or-your-openrouter-api-key"

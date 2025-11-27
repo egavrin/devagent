@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from . import llm
 from .llm import (
+    ANTHROPIC_DEFAULT_BASE_URL,
     DEEPSEEK_DEFAULT_BASE_URL,
+    OPENAI_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_BASE_URL,
     LLMClient,
     LLMConnectionError,
@@ -21,6 +23,8 @@ from .llm import (
 
 __all__ = [
     "DEEPSEEK_DEFAULT_BASE_URL",
+    "OPENAI_DEFAULT_BASE_URL",
+    "ANTHROPIC_DEFAULT_BASE_URL",
     "OPENROUTER_DEFAULT_BASE_URL",
     "LLMClient",
     "LLMConnectionError",
