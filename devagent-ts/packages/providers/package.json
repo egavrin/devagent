@@ -1,0 +1,33 @@
+{
+  "name": "@devagent/providers",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "lint:arkts": "eslint --config eslint.arkts.cjs src/",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@devagent/core": "workspace:*",
+    "ai": "^4.0.0",
+    "@ai-sdk/anthropic": "^1.0.0",
+    "@ai-sdk/openai": "^1.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0"
+  }
+}

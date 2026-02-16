@@ -1,0 +1,28 @@
+{
+  "name": "@devagent/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "devagent": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@devagent/core": "workspace:*",
+    "@devagent/engine": "workspace:*",
+    "@devagent/providers": "workspace:*",
+    "@devagent/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0"
+  }
+}
