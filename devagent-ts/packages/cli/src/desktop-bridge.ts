@@ -9,8 +9,22 @@
  *   {"type":"set_mode","mode":"plan"}
  *   {"type":"set_provider","provider":"anthropic","model":"claude-sonnet-4-20250514","apiKey":"sk-..."}
  *   {"type":"set_approval","mode":"suggest"}
+ *   {"type":"approval_response","id":"...","approved":true}
  *   {"type":"abort"}
  *   {"type":"exit"}
+ *   {"type":"list_skills"}
+ *   {"type":"load_skill","name":"..."}
+ *   {"type":"list_mcp_servers"}
+ *   {"type":"restart_mcp_server","name":"..."}
+ *   {"type":"toggle_mcp_server","name":"...","enabled":true}
+ *   {"type":"search_memories","query":"...","category":"pattern"}
+ *   {"type":"get_memory_summary"}
+ *   {"type":"delete_memory","id":"..."}
+ *   {"type":"list_commands"}
+ *   {"type":"execute_command","command":"...","args":"..."}
+ *   {"type":"get_working_dir"}
+ *   {"type":"set_working_dir","dir":"..."}
+ *   {"type":"get_config"}
  *
  * Outgoing (stdout):
  *   {"type":"text","content":"partial text..."}
@@ -20,15 +34,29 @@
  *   {"type":"done","iterations":3}
  *   {"type":"error","message":"...","fatal":false}
  *   {"type":"ready"}
+ *   {"type":"skills_list","skills":[...]}
+ *   {"type":"skill_loaded","name":"...","instructions":"..."}
+ *   {"type":"mcp_servers","servers":[...]}
+ *   {"type":"memories","entries":[...]}
+ *   {"type":"memory_summary","summary":{...}}
+ *   {"type":"memory_deleted","id":"..."}
+ *   {"type":"commands_list","commands":[...]}
+ *   {"type":"command_result","command":"...","output":"..."}
+ *   {"type":"working_dir","dir":"..."}
+ *   {"type":"config","config":{...}}
+ *   {"type":"file_diff","filePath":"...","diff":"...","toolCallId":"..."}
+ *   {"type":"cost_update","inputTokens":0,"outputTokens":0,"totalCost":0}
  */
 
 import { createInterface } from "node:readline";
+import { execSync } from "node:child_process";
 import {
   EventBus,
   ApprovalGate,
   PluginManager,
   SkillRegistry,
   ContextManager,
+  MemoryStore,
   loadConfig,
   findProjectRoot,
 } from "@devagent/core";
@@ -81,6 +109,68 @@ interface IncomingExit {
   type: "exit";
 }
 
+interface IncomingListSkills {
+  type: "list_skills";
+}
+
+interface IncomingLoadSkill {
+  type: "load_skill";
+  name: string;
+}
+
+interface IncomingListMcpServers {
+  type: "list_mcp_servers";
+}
+
+interface IncomingRestartMcpServer {
+  type: "restart_mcp_server";
+  name: string;
+}
+
+interface IncomingToggleMcpServer {
+  type: "toggle_mcp_server";
+  name: string;
+  enabled: boolean;
+}
+
+interface IncomingSearchMemories {
+  type: "search_memories";
+  query?: string;
+  category?: string;
+}
+
+interface IncomingGetMemorySummary {
+  type: "get_memory_summary";
+}
+
+interface IncomingDeleteMemory {
+  type: "delete_memory";
+  id: string;
+}
+
+interface IncomingListCommands {
+  type: "list_commands";
+}
+
+interface IncomingExecuteCommand {
+  type: "execute_command";
+  command: string;
+  args: string;
+}
+
+interface IncomingGetWorkingDir {
+  type: "get_working_dir";
+}
+
+interface IncomingSetWorkingDir {
+  type: "set_working_dir";
+  dir: string;
+}
+
+interface IncomingGetConfig {
+  type: "get_config";
+}
+
 type IncomingMessage =
   | IncomingQuery
   | IncomingSetMode
@@ -88,7 +178,20 @@ type IncomingMessage =
   | IncomingSetApproval
   | IncomingApprovalResponse
   | IncomingAbort
-  | IncomingExit;
+  | IncomingExit
+  | IncomingListSkills
+  | IncomingLoadSkill
+  | IncomingListMcpServers
+  | IncomingRestartMcpServer
+  | IncomingToggleMcpServer
+  | IncomingSearchMemories
+  | IncomingGetMemorySummary
+  | IncomingDeleteMemory
+  | IncomingListCommands
+  | IncomingExecuteCommand
+  | IncomingGetWorkingDir
+  | IncomingSetWorkingDir
+  | IncomingGetConfig;
 
 // ─── Outgoing helpers ──────────────────────────────────────
 
@@ -142,9 +245,16 @@ export async function runDesktopBridge(initialArgs: {
   let config = loadConfig(projectRoot, configOverrides);
   let currentMode: TaskMode = initialArgs.mode ?? "act";
 
-  // Set up providers
+  // Set up providers — defer provider creation until needed.
+  // The desktop app may not have an API key configured on startup;
+  // the user sets it via the Settings panel which sends "set_provider".
   const providerRegistry = createDefaultRegistry();
-  let provider = createProvider(providerRegistry, config);
+  let provider: LLMProvider | null = null;
+  try {
+    provider = createProvider(providerRegistry, config);
+  } catch {
+    // No API key yet — that's OK, user will configure via Settings
+  }
 
   // Set up tools, bus, approval
   const toolRegistry = createDefaultToolRegistry();
@@ -179,23 +289,47 @@ export async function runDesktopBridge(initialArgs: {
   // Context management
   const _contextManager = new ContextManager(config.context);
 
+  // Memory store
+  const memoryStore = new MemoryStore();
+
   // Wire up event bus → JSON-lines output
-  setupBusToJsonLines(bus);
+  setupBusToJsonLines(bus, projectRoot);
 
-  // Create initial task loop
-  let loop = createLoop(
-    provider,
-    toolRegistry,
-    bus,
-    gate,
-    config,
-    projectRoot,
-    currentMode,
-    skills,
-  );
+  // Create initial task loop — deferred if no provider yet
+  let loop: TaskLoop | null = null;
+  if (provider) {
+    loop = createLoop(
+      provider,
+      toolRegistry,
+      bus,
+      gate,
+      config,
+      projectRoot,
+      currentMode,
+      skills,
+    );
+  }
 
-  // Signal ready
+  // Helper: ensure loop exists (throws user-friendly error if not configured)
+  function ensureLoop(): TaskLoop {
+    if (!loop) {
+      throw new Error(
+        "No LLM provider configured. Open Settings and set your API key first.",
+      );
+    }
+    return loop;
+  }
+
+  // Signal ready + initial state
   send({ type: "ready" });
+  send({ type: "working_dir", dir: projectRoot });
+  if (!provider) {
+    send({
+      type: "error",
+      message: "No API key configured. Open Settings to set your provider and API key.",
+      fatal: false,
+    });
+  }
 
   // Read stdin line by line using event-based handler.
   // IMPORTANT: We use rl.on("line") instead of `for await (const line of rl)`
@@ -229,19 +363,29 @@ export async function runDesktopBridge(initialArgs: {
           send({ type: "error", message: "A query is already running", fatal: false });
           return;
         }
+
+        let activeLoop: TaskLoop;
+        try {
+          activeLoop = ensureLoop();
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          send({ type: "error", message: errMsg, fatal: false });
+          return;
+        }
+
         running = true;
 
         if (msg.mode) {
           currentMode = msg.mode;
-          loop.setMode(currentMode);
+          activeLoop.setMode(currentMode);
         }
 
         // Run the query asynchronously so stdin remains responsive
         // for approval_response and abort messages during execution.
         void (async () => {
           try {
-            loop.resetIterations();
-            const result = await loop.run(msg.content);
+            activeLoop.resetIterations();
+            const result = await activeLoop.run(msg.content);
             send({
               type: "done",
               iterations: result.iterations,
@@ -260,7 +404,7 @@ export async function runDesktopBridge(initialArgs: {
 
       case "set_mode": {
         currentMode = msg.mode;
-        loop.setMode(currentMode);
+        if (loop) loop.setMode(currentMode);
         send({ type: "mode_changed", mode: currentMode });
         break;
       }
@@ -332,13 +476,202 @@ export async function runDesktopBridge(initialArgs: {
       }
 
       case "abort": {
-        loop.abort();
+        if (loop) loop.abort();
+        break;
+      }
+
+      case "list_skills": {
+        const skillList = skills.list();
+        send({
+          type: "skills_list",
+          skills: skillList.map((s) => ({
+            name: s.name,
+            description: s.description,
+            source: s.source,
+          })),
+        });
+        break;
+      }
+
+      case "load_skill": {
+        try {
+          const skill = skills.load(msg.name);
+          send({
+            type: "skill_loaded",
+            name: skill.name,
+            description: skill.description,
+            source: skill.source,
+            instructions: skill.instructions,
+          });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          send({ type: "error", message: `Failed to load skill: ${errMsg}`, fatal: false });
+        }
+        break;
+      }
+
+      case "list_mcp_servers": {
+        const servers = mcpHub.getServers();
+        send({
+          type: "mcp_servers",
+          servers: servers.map((s) => ({
+            name: s.name,
+            status: s.status,
+            toolCount: s.tools.length,
+            tools: s.tools.map((t) => ({
+              name: t.name,
+              description: t.description,
+            })),
+            error: s.error,
+          })),
+        });
+        break;
+      }
+
+      case "restart_mcp_server": {
+        // Dispose and re-init the hub (individual server restart not yet supported)
+        try {
+          mcpHub.dispose();
+          void (async () => {
+            await mcpHub.init();
+            const servers = mcpHub.getServers();
+            send({
+              type: "mcp_servers",
+              servers: servers.map((s) => ({
+                name: s.name,
+                status: s.status,
+                toolCount: s.tools.length,
+                tools: s.tools.map((t) => ({
+                  name: t.name,
+                  description: t.description,
+                })),
+                error: s.error,
+              })),
+            });
+          })();
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          send({ type: "error", message: `Failed to restart MCP server: ${errMsg}`, fatal: false });
+        }
+        break;
+      }
+
+      case "toggle_mcp_server": {
+        // Toggle not yet supported at hub level — send current state
+        send({
+          type: "error",
+          message: `MCP server toggle not yet implemented. Edit mcp.json to enable/disable servers.`,
+          fatal: false,
+        });
+        break;
+      }
+
+      case "search_memories": {
+        try {
+          const searchOpts: Record<string, unknown> = {};
+          if (msg.query) searchOpts["query"] = msg.query;
+          if (msg.category) searchOpts["category"] = msg.category;
+          const entries = memoryStore.search(searchOpts);
+          send({
+            type: "memories",
+            entries: entries.map((m) => ({
+              id: m.id,
+              category: m.category,
+              key: m.key,
+              content: m.content,
+              relevance: m.relevance,
+              tags: m.tags,
+              updatedAt: m.updatedAt,
+              accessCount: m.accessCount,
+            })),
+          });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          send({ type: "error", message: `Memory search failed: ${errMsg}`, fatal: false });
+        }
+        break;
+      }
+
+      case "get_memory_summary": {
+        try {
+          const summary = memoryStore.summary();
+          send({ type: "memory_summary", summary });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          send({ type: "error", message: `Memory summary failed: ${errMsg}`, fatal: false });
+        }
+        break;
+      }
+
+      case "delete_memory": {
+        try {
+          const deleted = memoryStore.delete(msg.id);
+          if (deleted) {
+            send({ type: "memory_deleted", id: msg.id });
+          } else {
+            send({ type: "error", message: `Memory not found: ${msg.id}`, fatal: false });
+          }
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          send({ type: "error", message: `Memory delete failed: ${errMsg}`, fatal: false });
+        }
+        break;
+      }
+
+      case "list_commands": {
+        const commands = pluginManager.listCommands();
+        send({ type: "commands_list", commands });
+        break;
+      }
+
+      case "execute_command": {
+        void (async () => {
+          try {
+            const output = await pluginManager.executeCommand(msg.command, msg.args);
+            send({ type: "command_result", command: msg.command, output });
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            send({ type: "error", message: `Command failed: ${errMsg}`, fatal: false });
+          }
+        })();
+        break;
+      }
+
+      case "get_working_dir": {
+        send({ type: "working_dir", dir: projectRoot });
+        break;
+      }
+
+      case "set_working_dir": {
+        // Working directory change requires process restart.
+        // The Tauri frontend handles this by killing and respawning
+        // the CLI child process with the new directory.
+        send({
+          type: "error",
+          message: "Working directory change requires engine restart. The desktop app will respawn the CLI process.",
+          fatal: false,
+        });
+        break;
+      }
+
+      case "get_config": {
+        send({
+          type: "config",
+          config: {
+            provider: config.provider,
+            model: config.model,
+            approval: config.approval,
+            context: config.context,
+            budget: config.budget,
+          },
+        });
         break;
       }
 
       case "exit": {
         pluginManager.destroy();
         mcpHub.dispose();
+        memoryStore.close();
         process.exit(0);
         break;
       }
@@ -353,6 +686,7 @@ export async function runDesktopBridge(initialArgs: {
     // Stdin closed — clean exit
     pluginManager.destroy();
     mcpHub.dispose();
+    memoryStore.close();
   });
 
   // Keep process alive (stdin event loop handles messages)
@@ -404,7 +738,10 @@ function createLoop(
   });
 }
 
-function setupBusToJsonLines(bus: EventBus): void {
+function setupBusToJsonLines(bus: EventBus, repoRoot: string): void {
+  // Track tool params by callId so we can access them in tool:after
+  const pendingToolParams = new Map<string, Record<string, unknown>>();
+
   // Stream text chunks
   bus.on("message:assistant", (event) => {
     if (event.partial) {
@@ -414,6 +751,7 @@ function setupBusToJsonLines(bus: EventBus): void {
 
   // Tool execution events
   bus.on("tool:before", (event) => {
+    pendingToolParams.set(event.callId, event.params);
     send({
       type: "tool_start",
       name: event.name,
@@ -423,6 +761,9 @@ function setupBusToJsonLines(bus: EventBus): void {
   });
 
   bus.on("tool:after", (event) => {
+    const params = pendingToolParams.get(event.callId);
+    pendingToolParams.delete(event.callId);
+
     send({
       type: "tool_end",
       name: event.name,
@@ -432,6 +773,34 @@ function setupBusToJsonLines(bus: EventBus): void {
       error: event.result.error,
       durationMs: event.durationMs,
     });
+
+    // Emit file diffs for mutating file tools
+    if (
+      event.result.success &&
+      (event.name === "write_file" || event.name === "replace_in_file") &&
+      params
+    ) {
+      const filePath = (params["path"] ?? params["filePath"] ?? "") as string;
+      if (filePath) {
+        try {
+          const diff = execSync(`git diff -- "${filePath}"`, {
+            cwd: repoRoot,
+            encoding: "utf-8",
+            timeout: 5000,
+          });
+          if (diff.trim()) {
+            send({
+              type: "file_diff",
+              filePath,
+              diff,
+              toolCallId: event.callId,
+            });
+          }
+        } catch {
+          // Not a git repo or git diff failed — skip silently
+        }
+      }
+    }
   });
 
   // Approval requests

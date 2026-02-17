@@ -33,13 +33,26 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
       const aiTools = tools ? convertTools(tools) : undefined;
 
       try {
+        // Use Responses API for codex models (required by OpenAI)
+        const useResponses = config.model.includes("codex");
+        const model = useResponses
+          ? openai.responses(config.model)
+          : openai(config.model);
+
         const result = streamText({
-          model: openai(config.model),
+          model,
           messages: aiMessages,
           tools: aiTools,
           maxTokens: config.maxTokens ?? 4096,
           temperature: config.temperature ?? 0,
           abortSignal: abortController.signal,
+          ...(config.reasoningEffort
+            ? {
+                providerOptions: {
+                  openai: { reasoningEffort: config.reasoningEffort },
+                },
+              }
+            : {}),
         });
 
         for await (const part of result.fullStream) {

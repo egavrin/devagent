@@ -104,7 +104,7 @@ export class TaskLoop {
 
     while (!this.aborted) {
       // Check budget
-      if (this.iterations >= this.config.budget.maxIterations) {
+      if (this.config.budget.maxIterations > 0 && this.iterations >= this.config.budget.maxIterations) {
         throw new BudgetExceededError(
           `Max iterations (${this.config.budget.maxIterations}) exceeded`,
         );

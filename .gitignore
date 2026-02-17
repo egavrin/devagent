@@ -63,6 +63,9 @@ Thumbs.db
 # Automation reports
 reports/
 
+# Claude Code
+.claude/worktrees/
+
 # Internal
 docs/
 review_rules/

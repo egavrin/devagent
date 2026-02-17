@@ -4,25 +4,19 @@
  * Spawns the CLI with `--desktop` flag via Tauri's shell plugin.
  * Communicates via JSON-lines protocol over stdin/stdout.
  *
- * Incoming from CLI (stdout):
- *   {"type":"ready"}
- *   {"type":"text","content":"partial text..."}
- *   {"type":"tool_start","name":"read_file","callId":"...","params":{}}
- *   {"type":"tool_end","name":"read_file","callId":"...","success":true,"output":"..."}
- *   {"type":"approval_request","id":"...","toolName":"write_file","details":"..."}
- *   {"type":"done","iterations":3}
- *   {"type":"error","message":"...","fatal":false}
- *
- * Outgoing to CLI (stdin):
- *   {"type":"query","content":"...","mode":"act"}
- *   {"type":"set_mode","mode":"plan"}
- *   {"type":"set_provider","provider":"anthropic","model":"...","apiKey":"..."}
- *   {"type":"abort"}
- *   {"type":"approval_response","id":"...","approved":true}
+ * Other hooks subscribe to specific message types via onMessage().
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessage, AppMode, ToolExecution, ApprovalRequest } from "../types";
+import type {
+  ChatMessage,
+  AppMode,
+  ToolExecution,
+  ApprovalRequest,
+  CostState,
+} from "../types";
+
+// ─── Types ─────────────────────────────────────────────────
 
 interface BridgeState {
   readonly connected: boolean;
@@ -31,12 +25,18 @@ interface BridgeState {
   readonly ready: boolean;
 }
 
-interface EngineBridgeResult {
+export type MessageHandler = (data: Record<string, unknown>) => void;
+
+export interface EngineBridgeResult {
   readonly state: BridgeState;
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly tools: ReadonlyArray<ToolExecution>;
   readonly approvalRequests: ReadonlyArray<ApprovalRequest>;
+  readonly costState: CostState;
+  readonly workingDir: string;
   sendQuery: (content: string, mode: AppMode) => void;
+  sendRaw: (data: Record<string, unknown>) => void;
+  onMessage: (type: string, handler: MessageHandler) => () => void;
   abort: () => void;
   clearMessages: () => void;
   setProvider: (provider: string, model: string, apiKey?: string) => void;
@@ -50,12 +50,15 @@ interface ChildProcess {
   kill: () => Promise<void>;
 }
 
-/**
- * Bridge to the DevAgent engine via CLI subprocess.
- *
- * In Tauri mode: spawns CLI subprocess with --desktop flag.
- * In browser mode: simulates responses for development.
- */
+// ─── Tauri Detection ───────────────────────────────────────
+
+const checkIsTauri = (): boolean => {
+  if (typeof window === "undefined") return false;
+  return "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
+};
+
+// ─── Hook ──────────────────────────────────────────────────
+
 export function useEngineBridge(): EngineBridgeResult {
   const [state, setState] = useState<BridgeState>({
     connected: false,
@@ -66,23 +69,42 @@ export function useEngineBridge(): EngineBridgeResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [tools, setTools] = useState<ToolExecution[]>([]);
   const [approvalRequests, setApprovalRequests] = useState<ApprovalRequest[]>([]);
+  const [costState, setCostState] = useState<CostState>({
+    inputTokens: 0,
+    outputTokens: 0,
+    totalCost: 0,
+  });
+  const [workingDir, setWorkingDir] = useState<string>("");
 
   const childRef = useRef<ChildProcess | null>(null);
   const currentAssistantId = useRef<string | null>(null);
 
-  // Detect Tauri v2 environment.
-  // Tauri v2 always injects __TAURI_INTERNALS__ into the WebView.
-  // __TAURI__ is only available with "withGlobalTauri": true in tauri.conf.json.
-  // Check both for maximum reliability.
-  const checkIsTauri = (): boolean => {
-    if (typeof window === "undefined") return false;
-    const hasTauri =
-      "__TAURI_INTERNALS__" in window ||
-      "__TAURI__" in window;
-    return hasTauri;
-  };
+  // Pub/sub for message types — other hooks register handlers here
+  const messageHandlers = useRef<Map<string, Set<MessageHandler>>>(new Map());
 
-  // ─── Message Processing ─────────────────────────────────
+  // ─── Pub/Sub API ──────────────────────────────────────────
+
+  const onMessage = useCallback(
+    (type: string, handler: MessageHandler): (() => void) => {
+      const handlers = messageHandlers.current;
+      if (!handlers.has(type)) {
+        handlers.set(type, new Set());
+      }
+      handlers.get(type)!.add(handler);
+
+      // Return unsubscribe function
+      return () => {
+        const set = handlers.get(type);
+        if (set) {
+          set.delete(handler);
+          if (set.size === 0) handlers.delete(type);
+        }
+      };
+    },
+    [],
+  );
+
+  // ─── Message Processing ───────────────────────────────────
 
   const appendToAssistant = useCallback((text: string) => {
     const id = currentAssistantId.current;
@@ -115,13 +137,21 @@ export function useEngineBridge(): EngineBridgeResult {
       try {
         data = JSON.parse(trimmed) as Record<string, unknown>;
       } catch {
-        // Non-JSON output from CLI (e.g. stderr leak) — append as text
         appendToAssistant(trimmed + "\n");
         return;
       }
 
       const msgType = data["type"] as string;
 
+      // Dispatch to registered handlers first
+      const handlers = messageHandlers.current.get(msgType);
+      if (handlers) {
+        for (const handler of handlers) {
+          handler(data);
+        }
+      }
+
+      // Built-in handling
       switch (msgType) {
         case "ready":
           setState((prev) => ({ ...prev, connected: true, ready: true }));
@@ -140,8 +170,6 @@ export function useEngineBridge(): EngineBridgeResult {
             timestamp: Date.now(),
           };
           setTools((prev) => [...prev, toolExec]);
-
-          // Also show tool call in chat as a system-style message
           appendToAssistant(`\n🔧 ${data["name"] as string}\n`);
           break;
         }
@@ -158,10 +186,9 @@ export function useEngineBridge(): EngineBridgeResult {
                 ? {
                     ...t,
                     status: success ? ("done" as const) : ("error" as const),
-                    result: success
-                      ? `✓ (${durationMs}ms)`
-                      : undefined,
+                    result: success ? `✓ (${durationMs}ms)` : undefined,
                     error: error ?? undefined,
+                    durationMs,
                   }
                 : t,
             ),
@@ -202,22 +229,32 @@ export function useEngineBridge(): EngineBridgeResult {
           break;
         }
 
+        case "cost_update":
+          setCostState({
+            inputTokens: (data["inputTokens"] as number) ?? 0,
+            outputTokens: (data["outputTokens"] as number) ?? 0,
+            totalCost: (data["totalCost"] as number) ?? 0,
+          });
+          break;
+
+        case "working_dir":
+          setWorkingDir((data["dir"] ?? data["path"]) as string);
+          break;
+
         case "mode_changed":
         case "provider_changed":
         case "approval_changed":
-        case "cost_update":
-          // Status updates — could be displayed in UI
           break;
 
         default:
-          // Unknown message type — ignore
+          // Unknown messages are dispatched to handlers above, no built-in handling needed
           break;
       }
     },
     [appendToAssistant, finishAssistant],
   );
 
-  // ─── Send to child process ──────────────────────────────
+  // ─── Send to child process ────────────────────────────────
 
   const sendToChild = useCallback(
     async (data: Record<string, unknown>) => {
@@ -235,37 +272,29 @@ export function useEngineBridge(): EngineBridgeResult {
     [],
   );
 
-  // ─── Spawn CLI Process ──────────────────────────────────
+  // ─── Spawn CLI Process ────────────────────────────────────
 
   useEffect(() => {
     const isTauri = checkIsTauri();
-    console.log("[EngineBridge] checkIsTauri:", isTauri,
-      "__TAURI_INTERNALS__" in (typeof window !== "undefined" ? window : {}),
-      "__TAURI__" in (typeof window !== "undefined" ? window : {}));
 
     if (!isTauri) {
-      // Browser dev mode — mark as ready with simulated connection
-      console.warn("[EngineBridge] Not in Tauri — entering browser simulation mode");
       setState({ connected: true, streaming: false, error: null, ready: true });
+      setWorkingDir(window.location.pathname || "/tmp");
       return;
     }
 
-    console.log("[EngineBridge] Tauri detected — spawning CLI subprocess");
     let killed = false;
 
     void (async () => {
       try {
         const { Command } = await import("@tauri-apps/plugin-shell");
-
-        // Resolve CLI path via Rust backend (searches monorepo structure)
         const { invoke } = await import("@tauri-apps/api/core");
+
         let cliPath: string;
         try {
           cliPath = await invoke<string>("get_cli_path");
-          console.log("[EngineBridge] CLI path resolved:", cliPath);
         } catch (pathErr) {
           const msg = pathErr instanceof Error ? pathErr.message : String(pathErr);
-          console.error("[EngineBridge] CLI path resolution failed:", msg);
           setState((prev) => ({
             ...prev,
             connected: false,
@@ -274,23 +303,21 @@ export function useEngineBridge(): EngineBridgeResult {
           return;
         }
 
-        // Spawn CLI with --desktop flag
-        // "devagent-cli" is a scoped command in capabilities/default.json
-        // that maps to `bun <resolved-cli-path> --desktop`
-        console.log("[EngineBridge] Spawning: bun", cliPath, "--desktop");
-        const cmd = Command.create("devagent-cli", [
-          cliPath,
-          "--desktop",
-        ]);
+        // Get initial working directory
+        try {
+          const dir = await invoke<string>("get_working_directory");
+          setWorkingDir(dir);
+        } catch {
+          // Fallback — will be set by the engine
+        }
 
-        // Buffer for incomplete lines
+        const cmd = Command.create("devagent-cli", [cliPath, "--desktop"]);
+
         let stdoutBuffer = "";
 
         cmd.stdout.on("data", (chunk: string) => {
-          console.log("[engine stdout]", chunk.substring(0, 200));
           stdoutBuffer += chunk;
           const lines = stdoutBuffer.split("\n");
-          // Process all complete lines
           stdoutBuffer = lines.pop() ?? "";
           for (const line of lines) {
             if (line.trim()) {
@@ -300,12 +327,10 @@ export function useEngineBridge(): EngineBridgeResult {
         });
 
         cmd.stderr.on("data", (chunk: string) => {
-          // stderr from CLI — log as error context
           console.warn("[engine stderr]", chunk);
         });
 
         cmd.on("error", (error: string) => {
-          console.error("[EngineBridge] Process error:", error);
           setState((prev) => ({
             ...prev,
             connected: false,
@@ -314,7 +339,6 @@ export function useEngineBridge(): EngineBridgeResult {
         });
 
         cmd.on("close", (data: { code: number | null }) => {
-          console.log("[EngineBridge] Process closed with code:", data.code);
           if (!killed) {
             setState((prev) => ({
               ...prev,
@@ -326,11 +350,9 @@ export function useEngineBridge(): EngineBridgeResult {
         });
 
         const child = await cmd.spawn();
-        console.log("[EngineBridge] CLI subprocess spawned successfully");
 
         childRef.current = {
           write: async (data: string) => {
-            console.log("[EngineBridge] Writing to stdin:", data.substring(0, 100));
             await child.write(data);
           },
           kill: async () => {
@@ -342,7 +364,6 @@ export function useEngineBridge(): EngineBridgeResult {
         setState((prev) => ({ ...prev, connected: true }));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error("[EngineBridge] Failed to start engine:", msg);
         setState((prev) => ({
           ...prev,
           connected: false,
@@ -352,7 +373,6 @@ export function useEngineBridge(): EngineBridgeResult {
     })();
 
     return () => {
-      // Cleanup on unmount
       if (childRef.current) {
         void childRef.current.kill();
         childRef.current = null;
@@ -360,13 +380,19 @@ export function useEngineBridge(): EngineBridgeResult {
     };
   }, [handleLine]);
 
-  // ─── Public API ─────────────────────────────────────────
+  // ─── Public API ───────────────────────────────────────────
+
+  const sendRaw = useCallback(
+    (data: Record<string, unknown>) => {
+      void sendToChild(data);
+    },
+    [sendToChild],
+  );
 
   const sendQuery = useCallback(
     (content: string, mode: AppMode) => {
       if (state.streaming) return;
 
-      // Add user message
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "user",
@@ -374,7 +400,6 @@ export function useEngineBridge(): EngineBridgeResult {
         timestamp: Date.now(),
       };
 
-      // Create assistant placeholder
       const assistantId = crypto.randomUUID();
       const assistantMsg: ChatMessage = {
         id: assistantId,
@@ -387,22 +412,19 @@ export function useEngineBridge(): EngineBridgeResult {
       currentAssistantId.current = assistantId;
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setTools([]);
+      // Reset cost per query
+      setCostState({ inputTokens: 0, outputTokens: 0, totalCost: 0 });
       setState((prev) => ({ ...prev, streaming: true, error: null }));
 
       if (checkIsTauri() && childRef.current) {
-        // Send query to CLI subprocess
         void sendToChild({ type: "query", content, mode });
       } else {
-        // Browser dev mode: simulate response
         setTimeout(() => {
           appendToAssistant(
-            `This is a simulated response (browser dev mode).\n\n` +
+            `Simulated response (browser dev mode).\n\n` +
               `**Mode:** ${mode}\n` +
               `**Query:** "${content}"\n\n` +
-              `In the Tauri desktop app, this connects to the DevAgent CLI engine ` +
-              `via the \`--desktop\` JSON-lines protocol. The engine provides real ` +
-              `LLM-powered responses with tool calling, file operations, and code analysis.\n\n` +
-              `To test with a real engine, run: \`cargo-tauri dev\``,
+              `Run \`cargo tauri dev\` for real engine responses.`,
           );
           finishAssistant();
         }, 800);
@@ -457,7 +479,11 @@ export function useEngineBridge(): EngineBridgeResult {
     messages,
     tools,
     approvalRequests,
+    costState,
+    workingDir,
     sendQuery,
+    sendRaw,
+    onMessage,
     abort,
     clearMessages,
     setProvider,

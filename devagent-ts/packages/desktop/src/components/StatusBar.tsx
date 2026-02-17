@@ -4,6 +4,7 @@ interface StatusBarProps {
   readonly streaming: boolean;
   readonly error: string | null;
   readonly toolCount: number;
+  readonly workingDir: string;
 }
 
 export function StatusBar({
@@ -12,6 +13,7 @@ export function StatusBar({
   streaming,
   error,
   toolCount,
+  workingDir,
 }: StatusBarProps): React.JSX.Element {
   const statusDot = connected && ready ? "status-dot-connected" : "status-dot-disconnected";
   const statusText = error
@@ -29,6 +31,12 @@ export function StatusBar({
       <div className="status-bar-left">
         <span className={`status-dot ${statusDot}`} />
         <span className="status-text">{statusText}</span>
+        {workingDir && (
+          <>
+            <span className="status-separator">|</span>
+            <span className="status-dir" title={workingDir}>{workingDir}</span>
+          </>
+        )}
       </div>
       <div className="status-bar-right">
         {toolCount > 0 && (

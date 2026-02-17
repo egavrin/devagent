@@ -30,6 +30,8 @@ interface CliArgs {
   mode: TaskMode;
   provider: string | null;
   model: string | null;
+  maxIterations: number | null;
+  reasoning: "low" | "medium" | "high" | null;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -41,6 +43,8 @@ function parseArgs(argv: string[]): CliArgs {
     mode: "act",
     provider: null,
     model: null,
+    maxIterations: null,
+    reasoning: null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -62,6 +66,14 @@ function parseArgs(argv: string[]): CliArgs {
       result.provider = args[++i]!;
     } else if (arg === "--model" && i + 1 < args.length) {
       result.model = args[++i]!;
+    } else if (arg === "--max-iterations" && i + 1 < args.length) {
+      const val = parseInt(args[++i]!, 10);
+      result.maxIterations = isNaN(val) ? null : val;
+    } else if (arg === "--reasoning" && i + 1 < args.length) {
+      const val = args[++i]! as "low" | "medium" | "high";
+      if (["low", "medium", "high"].includes(val)) {
+        result.reasoning = val;
+      }
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -97,6 +109,8 @@ Usage:
 Options:
   --provider <name>     LLM provider (anthropic, openai)
   --model <id>          Model ID
+  --max-iterations <n>  Max tool-call iterations (0 = unlimited)
+  --reasoning <level>   Reasoning effort: low, medium, high
   --suggest             Suggest mode (show diffs, ask before writing)
   --auto-edit           Auto-edit mode (auto-approve file writes)
   --full-auto           Full-auto mode (auto-approve everything)
@@ -176,13 +190,24 @@ export async function main(): Promise<void> {
     ...(approvalMode ? { approval: { mode: approvalMode } as ApprovalPolicy } : {}),
   };
 
-  const config = loadConfig(projectRoot, configOverrides);
+  let config = loadConfig(projectRoot, configOverrides);
+
+  // Apply CLI overrides that loadConfig doesn't handle
+  if (cliArgs.maxIterations !== null) {
+    config = {
+      ...config,
+      budget: { ...config.budget, maxIterations: cliArgs.maxIterations },
+    };
+  }
 
   // Set up providers
   const providerRegistry = createDefaultRegistry();
-  const providerConfig = config.providers[config.provider] ?? {
-    model: config.model,
-    apiKey: process.env["DEVAGENT_API_KEY"],
+  const providerConfig = {
+    ...(config.providers[config.provider] ?? {
+      model: config.model,
+      apiKey: process.env["DEVAGENT_API_KEY"],
+    }),
+    ...(cliArgs.reasoning ? { reasoningEffort: cliArgs.reasoning } : {}),
   };
 
   if (!providerConfig.apiKey) {

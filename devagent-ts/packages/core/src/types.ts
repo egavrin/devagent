@@ -127,6 +127,7 @@ export interface ProviderConfig {
   readonly model: string;
   readonly maxTokens?: number;
   readonly temperature?: number;
+  readonly reasoningEffort?: "low" | "medium" | "high";
 }
 
 // ─── Approval Types ──────────────────────────────────────────
