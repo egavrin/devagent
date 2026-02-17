@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, devagent-ts-v2]
+    paths:
+      - 'devagent-ts/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'devagent-ts/**'
+      - '.github/workflows/ci.yml'
+
+defaults:
+  run:
+    working-directory: devagent-ts
+
+jobs:
+  check:
+    name: Lint, Typecheck, Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx turbo run typecheck
+
+      - name: Test
+        run: bunx turbo run test
+
+      - name: Build
+        run: bunx turbo run build

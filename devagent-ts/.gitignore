@@ -33,3 +33,16 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Rust / Cargo (Tauri)
+**/target/
+**/*.rs.bk
+
+# Tauri generated schemas (auto-generated, platform-specific)
+packages/desktop/src-tauri/gen/
+
+# SQLite databases (runtime)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm

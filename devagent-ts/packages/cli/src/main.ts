@@ -1,26 +1,32 @@
 /**
  * CLI main entry point — parses arguments, wires up engine, runs queries.
+ * Integrates: plugins, skills, MCP, context management.
  */
 
 import { createInterface } from "node:readline";
 import {
   EventBus,
   ApprovalGate,
+  PluginManager,
+  SkillRegistry,
+  ContextManager,
   loadConfig,
   findProjectRoot,
 } from "@devagent/core";
 import type { DevAgentConfig, ApprovalPolicy } from "@devagent/core";
 import { ApprovalMode } from "@devagent/core";
 import { createDefaultRegistry } from "@devagent/providers";
-import { createDefaultToolRegistry } from "@devagent/tools";
-import { TaskLoop } from "@devagent/engine";
+import { createDefaultToolRegistry, McpHub } from "@devagent/tools";
+import { TaskLoop, createBuiltinPlugins } from "@devagent/engine";
 import type { TaskMode } from "@devagent/engine";
+import { runDesktopBridge } from "./desktop-bridge.js";
 
 // ─── Argument Parsing ────────────────────────────────────────
 
 interface CliArgs {
   query: string | null;
   interactive: boolean;
+  desktop: boolean;
   mode: TaskMode;
   provider: string | null;
   model: string | null;
@@ -31,6 +37,7 @@ function parseArgs(argv: string[]): CliArgs {
   const result: CliArgs = {
     query: null,
     interactive: false,
+    desktop: false,
     mode: "act",
     provider: null,
     model: null,
@@ -41,6 +48,8 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg === "chat") {
       result.interactive = true;
+    } else if (arg === "--desktop") {
+      result.desktop = true;
     } else if (arg === "--plan") {
       result.mode = "plan";
     } else if (arg === "--suggest") {
@@ -91,7 +100,17 @@ Options:
   --suggest             Suggest mode (show diffs, ask before writing)
   --auto-edit           Auto-edit mode (auto-approve file writes)
   --full-auto           Full-auto mode (auto-approve everything)
+  --desktop             Desktop bridge mode (JSON-lines protocol over stdio)
   -h, --help            Show this help
+
+Interactive Commands:
+  /plan                 Switch to plan mode (read-only)
+  /act                  Switch to act mode
+  /clear                Clear conversation history
+  /skills               List available skills
+  /commands             List available plugin commands
+  /<command> [args]      Run a plugin command
+  exit                  Quit
 
 Environment:
   DEVAGENT_PROVIDER     Default provider
@@ -102,8 +121,20 @@ Environment:
 
 // ─── System Prompt ──────────────────────────────────────────
 
-function getSystemPrompt(mode: TaskMode, repoRoot: string): string {
+function getSystemPrompt(
+  mode: TaskMode,
+  repoRoot: string,
+  skills: SkillRegistry,
+): string {
   const modeLabel = mode === "plan" ? "PLAN (read-only)" : "ACT";
+
+  let skillsSection = "";
+  const skillList = skills.list();
+  if (skillList.length > 0) {
+    const skillNames = skillList.map((s) => `- ${s.name}: ${s.description}`).join("\n");
+    skillsSection = `\n\nAvailable skills:\n${skillNames}\nYou can reference these skills when the user asks about related topics.`;
+  }
+
   return `You are DevAgent, an AI-powered development assistant.
 
 Mode: ${modeLabel}
@@ -117,13 +148,24 @@ When the user asks you to perform a task:
 3. Make changes or provide analysis as requested
 4. Report what you did
 
-Be concise and direct. Fail fast — report errors immediately rather than guessing.`;
+Be concise and direct. Fail fast — report errors immediately rather than guessing.${skillsSection}`;
 }
 
 // ─── Main ──────────────────────────────────────────────────
 
 export async function main(): Promise<void> {
   const cliArgs = parseArgs(process.argv);
+
+  // Desktop bridge mode — JSON-lines protocol for Tauri IPC
+  if (cliArgs.desktop) {
+    await runDesktopBridge({
+      provider: cliArgs.provider ?? undefined,
+      model: cliArgs.model ?? undefined,
+      mode: cliArgs.mode,
+    });
+    return;
+  }
+
   const projectRoot = findProjectRoot() ?? process.cwd();
 
   // Load config with CLI overrides
@@ -160,36 +202,92 @@ export async function main(): Promise<void> {
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
 
+  // ─── Skills ────────────────────────────────────────────────
+  const skills = new SkillRegistry();
+  skills.discover(projectRoot);
+  if (skills.size > 0) {
+    process.stderr.write(
+      `\x1b[90m[skills] Discovered ${skills.size} skill(s)\x1b[0m\n`,
+    );
+  }
+
+  // ─── Plugins ───────────────────────────────────────────────
+  const pluginManager = new PluginManager();
+  pluginManager.init({ bus, config, repoRoot: projectRoot });
+
+  // Register built-in plugins
+  const builtinPlugins = createBuiltinPlugins();
+  for (const plugin of builtinPlugins) {
+    pluginManager.register(plugin);
+
+    // Register plugin tools in the tool registry
+    if (plugin.tools) {
+      for (const tool of plugin.tools) {
+        toolRegistry.register(tool);
+      }
+    }
+  }
+
+  // ─── MCP ───────────────────────────────────────────────────
+  const mcpHub = new McpHub({ repoRoot: projectRoot, watchConfig: true });
+  await mcpHub.init();
+
+  // Register MCP tools
+  const mcpTools = mcpHub.getToolSpecs();
+  for (const tool of mcpTools) {
+    toolRegistry.register(tool);
+  }
+
+  const mcpServers = mcpHub.getServers();
+  if (mcpServers.length > 0) {
+    process.stderr.write(
+      `\x1b[90m[mcp] ${mcpServers.length} server(s) connected\x1b[0m\n`,
+    );
+  }
+
+  // ─── Context Management ────────────────────────────────────
+  const contextManager = new ContextManager(config.context);
+
   // Set up event handlers for CLI output
   setupEventHandlers(bus, config);
 
-  if (cliArgs.interactive) {
-    await runInteractive(
-      provider,
-      toolRegistry,
-      bus,
-      gate,
-      config,
-      projectRoot,
-      cliArgs.mode,
-    );
-  } else if (cliArgs.query) {
-    await runSingleQuery(
-      cliArgs.query,
-      provider,
-      toolRegistry,
-      bus,
-      gate,
-      config,
-      projectRoot,
-      cliArgs.mode,
-    );
+  try {
+    if (cliArgs.interactive) {
+      await runInteractive(
+        provider,
+        toolRegistry,
+        bus,
+        gate,
+        config,
+        projectRoot,
+        cliArgs.mode,
+        pluginManager,
+        skills,
+        contextManager,
+      );
+    } else if (cliArgs.query) {
+      await runSingleQuery(
+        cliArgs.query,
+        provider,
+        toolRegistry,
+        bus,
+        gate,
+        config,
+        projectRoot,
+        cliArgs.mode,
+        skills,
+      );
+    }
+  } finally {
+    // Cleanup
+    pluginManager.destroy();
+    mcpHub.dispose();
   }
 }
 
 // ─── Event Handlers ──────────────────────────────────────────
 
-function setupEventHandlers(bus: EventBus, config: DevAgentConfig): void {
+function setupEventHandlers(bus: EventBus, _config: DevAgentConfig): void {
   bus.on("tool:before", (event) => {
     if (!event.name.startsWith("audit:")) {
       process.stderr.write(`\x1b[90m[tool] ${event.name}\x1b[0m\n`);
@@ -238,8 +336,9 @@ async function runSingleQuery(
   config: DevAgentConfig,
   repoRoot: string,
   mode: TaskMode,
+  skills: SkillRegistry,
 ): Promise<void> {
-  const systemPrompt = getSystemPrompt(mode, repoRoot);
+  const systemPrompt = getSystemPrompt(mode, repoRoot, skills);
 
   // Stream assistant output to stdout
   let isFirstChunk = true;
@@ -281,10 +380,23 @@ async function runInteractive(
   config: DevAgentConfig,
   repoRoot: string,
   mode: TaskMode,
+  pluginManager: PluginManager,
+  skills: SkillRegistry,
+  contextManager: ContextManager,
 ): Promise<void> {
   console.log("DevAgent interactive mode");
   console.log(`Mode: ${mode} | Provider: ${config.provider} | Model: ${config.model}`);
-  console.log('Type your query, or "exit" to quit.\n');
+
+  // Show available plugins and skills
+  const pluginNames = pluginManager.list();
+  if (pluginNames.length > 0) {
+    console.log(`Plugins: ${pluginNames.join(", ")}`);
+  }
+  if (skills.size > 0) {
+    console.log(`Skills: ${skills.list().map((s) => s.name).join(", ")}`);
+  }
+
+  console.log('Type your query, "/commands" for commands, or "exit" to quit.\n');
 
   const rl = createInterface({
     input: process.stdin,
@@ -292,7 +404,7 @@ async function runInteractive(
     prompt: "\x1b[36m> \x1b[0m",
   });
 
-  const systemPrompt = getSystemPrompt(mode, repoRoot);
+  const systemPrompt = getSystemPrompt(mode, repoRoot, skills);
 
   // Create a single TaskLoop that persists across turns (multi-turn conversation)
   const loop = new TaskLoop({
@@ -327,6 +439,7 @@ async function runInteractive(
       break;
     }
 
+    // ─── Built-in CLI Commands ─────────────────────────────
     if (input === "/plan") {
       mode = "plan";
       loop.setMode("plan");
@@ -345,12 +458,63 @@ async function runInteractive(
 
     if (input === "/clear") {
       console.log("Conversation cleared. Starting fresh.");
-      // Cannot clear a TaskLoop's history, so we inform the user
-      // In practice, a new TaskLoop would be created
       rl.prompt();
       continue;
     }
 
+    if (input === "/commands") {
+      const cmds = pluginManager.listCommands();
+      if (cmds.length === 0) {
+        console.log("No plugin commands available.");
+      } else {
+        console.log("Available commands:");
+        for (const cmd of cmds) {
+          console.log(`  /${cmd.name} — ${cmd.description} (${cmd.plugin})`);
+        }
+      }
+      rl.prompt();
+      continue;
+    }
+
+    if (input === "/skills") {
+      const skillList = skills.list();
+      if (skillList.length === 0) {
+        console.log("No skills discovered. Add .md files to .devagent/skills/");
+      } else {
+        console.log("Available skills:");
+        for (const skill of skillList) {
+          console.log(`  ${skill.name} — ${skill.description} (${skill.source})`);
+        }
+      }
+      rl.prompt();
+      continue;
+    }
+
+    // ─── Plugin Commands ──────────────────────────────────
+    if (input.startsWith("/")) {
+      const spaceIdx = input.indexOf(" ");
+      const cmdName = spaceIdx > 0 ? input.substring(1, spaceIdx) : input.substring(1);
+      const cmdArgs = spaceIdx > 0 ? input.substring(spaceIdx + 1) : "";
+
+      if (pluginManager.hasCommand(cmdName)) {
+        try {
+          const result = await pluginManager.executeCommand(cmdName, cmdArgs);
+          console.log(result);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`\x1b[31mCommand error: ${msg}\x1b[0m`);
+        }
+        rl.prompt();
+        continue;
+      }
+
+      // Unknown slash command
+      console.log(`Unknown command: /${cmdName}. Use /commands to see available commands.`);
+      rl.prompt();
+      continue;
+    }
+
+    // ─── LLM Query ────────────────────────────────────────
     try {
       // Reset iteration budget per turn, but keep message history
       loop.resetIterations();

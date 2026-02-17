@@ -71,6 +71,37 @@ export type {
   ApprovalResult,
 } from "./approval.js";
 
+// Plugins
+export { PluginManager } from "./plugins.js";
+export type {
+  Plugin,
+  PluginContext,
+  CommandHandler,
+} from "./plugins.js";
+
+// Skills
+export { SkillRegistry } from "./skills.js";
+export type {
+  Skill,
+  SkillMetadata,
+} from "./skills.js";
+
+// Context management
+export { ContextManager, estimateTokens, estimateMessageTokens } from "./context.js";
+export type {
+  ContextTruncationResult,
+  SummarizeCallback,
+} from "./context.js";
+
+// Memory (cross-session learning)
+export { MemoryStore } from "./memory.js";
+export type {
+  Memory,
+  MemoryCategory,
+  MemoryStoreOptions,
+  MemorySearchOptions,
+} from "./memory.js";
+
 // Errors
 export {
   DevAgentError,

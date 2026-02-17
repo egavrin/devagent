@@ -32,3 +32,13 @@ export type {
   DiagnosticProvider,
   TestRunner,
 } from "./double-check.js";
+
+// Built-in plugins
+export {
+  createCommitPlugin,
+  createReviewPlugin,
+  createFeatureDevPlugin,
+  createBuiltinPlugins,
+  getFeaturePhases,
+} from "./plugins/index.js";
+export type { FeaturePhase } from "./plugins/index.js";

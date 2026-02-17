@@ -1,0 +1,33 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for DevAgent desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    "shell:allow-stdin-write",
+    "shell:allow-kill",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "devagent-cli",
+          "cmd": "bun",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "devagent-cli",
+          "cmd": "bun",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    }
+  ]
+}

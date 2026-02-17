@@ -25,6 +25,16 @@ export type {
   LocationResult,
 } from "./lsp/index.js";
 
+// MCP integration
+export { McpHub } from "./mcp/index.js";
+export type {
+  McpServerConfig,
+  McpConfig,
+  McpToolDefinition,
+  McpServer,
+  McpHubOptions,
+} from "./mcp/index.js";
+
 import { ToolRegistry } from "./registry.js";
 import { builtinTools } from "./builtins/index.js";
 

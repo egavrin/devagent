@@ -156,12 +156,34 @@ function convertTools(
   const result: Record<string, ReturnType<typeof aiTool>> = {};
 
   for (const t of tools) {
+    // OpenAI strict mode requires all properties in `required` and `additionalProperties: false`.
+    // Optional properties must be made nullable (type: ["string", "null"]) instead.
+    const rawProps = (t.paramSchema.properties ?? {}) as Record<string, Record<string, unknown>>;
+    const requiredSet = new Set(t.paramSchema.required ?? []);
+    const allPropertyNames = Object.keys(rawProps);
+
+    // Make non-required properties nullable
+    const strictProps: Record<string, Record<string, unknown>> = {};
+    for (const [key, schema] of Object.entries(rawProps)) {
+      if (!requiredSet.has(key)) {
+        // Convert to nullable: type becomes ["originalType", "null"]
+        const origType = schema["type"] as string | undefined;
+        strictProps[key] = {
+          ...schema,
+          type: origType ? [origType, "null"] : ["string", "null"],
+        };
+      } else {
+        strictProps[key] = schema;
+      }
+    }
+
     result[t.name] = aiTool({
       description: t.description,
       parameters: jsonSchema({
         type: t.paramSchema.type as "object",
-        properties: (t.paramSchema.properties ?? {}) as Record<string, Record<string, unknown>>,
-        required: [...(t.paramSchema.required ?? [])],
+        properties: strictProps,
+        required: allPropertyNames,
+        additionalProperties: false,
       }),
     });
   }
