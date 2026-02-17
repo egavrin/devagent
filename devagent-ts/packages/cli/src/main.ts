@@ -25,8 +25,19 @@ import { TaskLoop, createBuiltinPlugins, createPlanTool } from "@devagent/engine
 import type { TaskMode } from "@devagent/engine";
 import { runDesktopBridge } from "./desktop-bridge.js";
 import { assembleSystemPrompt } from "./prompts/index.js";
+import {
+  Spinner,
+  dim, red, cyan, green, yellow, bold,
+  formatToolStart,
+  formatToolEnd,
+  formatPlan,
+  formatSummary,
+  formatError,
+} from "./format.js";
 
 // ─── Argument Parsing ────────────────────────────────────────
+
+type Verbosity = "quiet" | "normal" | "verbose";
 
 interface CliArgs {
   query: string | null;
@@ -37,6 +48,7 @@ interface CliArgs {
   model: string | null;
   maxIterations: number | null;
   reasoning: "low" | "medium" | "high" | null;
+  verbosity: Verbosity;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -50,6 +62,7 @@ function parseArgs(argv: string[]): CliArgs {
     model: null,
     maxIterations: null,
     reasoning: null,
+    verbosity: "normal",
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -67,6 +80,10 @@ function parseArgs(argv: string[]): CliArgs {
       // handled in config override
     } else if (arg === "--full-auto") {
       // handled in config override
+    } else if (arg === "-q" || arg === "--quiet") {
+      result.verbosity = "quiet";
+    } else if (arg === "-v" || arg === "--verbose") {
+      result.verbosity = "verbose";
     } else if (arg === "--provider" && i + 1 < args.length) {
       result.provider = args[++i]!;
     } else if (arg === "--model" && i + 1 < args.length) {
@@ -120,6 +137,8 @@ Options:
   --auto-edit           Auto-edit mode (auto-approve file writes)
   --full-auto           Full-auto mode (auto-approve everything)
   --desktop             Desktop bridge mode (JSON-lines protocol over stdio)
+  -v, --verbose         Verbose output (show full tool params and results)
+  -q, --quiet           Quiet output (errors only)
   -h, --help            Show this help
 
 Interactive Commands:
@@ -197,11 +216,11 @@ export async function main(): Promise<void> {
   };
 
   if (!providerConfig.apiKey) {
-    console.error(
-      `Error: No API key configured for provider "${config.provider}".`,
+    process.stderr.write(
+      formatError(`No API key configured for provider "${config.provider}".`) + "\n",
     );
-    console.error(
-      "Set DEVAGENT_API_KEY or configure in .devagent.toml",
+    process.stderr.write(
+      dim("Set DEVAGENT_API_KEY or configure in .devagent.toml") + "\n",
     );
     process.exit(1);
   }
@@ -219,10 +238,8 @@ export async function main(): Promise<void> {
   // ─── Skills ────────────────────────────────────────────────
   const skills = new SkillRegistry();
   skills.discover(projectRoot);
-  if (skills.size > 0) {
-    process.stderr.write(
-      `\x1b[90m[skills] Discovered ${skills.size} skill(s)\x1b[0m\n`,
-    );
+  if (skills.size > 0 && cliArgs.verbosity !== "quiet") {
+    process.stderr.write(dim(`[skills] Discovered ${skills.size} skill(s)`) + "\n");
   }
 
   // ─── Plugins ───────────────────────────────────────────────
@@ -253,17 +270,15 @@ export async function main(): Promise<void> {
   }
 
   const mcpServers = mcpHub.getServers();
-  if (mcpServers.length > 0) {
-    process.stderr.write(
-      `\x1b[90m[mcp] ${mcpServers.length} server(s) connected\x1b[0m\n`,
-    );
+  if (mcpServers.length > 0 && cliArgs.verbosity !== "quiet") {
+    process.stderr.write(dim(`[mcp] ${mcpServers.length} server(s) connected`) + "\n");
   }
 
   // ─── Context Management ────────────────────────────────────
   const contextManager = new ContextManager(config.context);
 
   // Set up event handlers for CLI output
-  setupEventHandlers(bus, config);
+  setupEventHandlers(bus, config, cliArgs.verbosity);
 
   try {
     if (cliArgs.interactive) {
@@ -278,6 +293,7 @@ export async function main(): Promise<void> {
         pluginManager,
         skills,
         contextManager,
+        cliArgs.verbosity,
       );
     } else if (cliArgs.query) {
       await runSingleQuery(
@@ -290,6 +306,7 @@ export async function main(): Promise<void> {
         projectRoot,
         cliArgs.mode,
         skills,
+        cliArgs.verbosity,
       );
     }
   } finally {
@@ -301,33 +318,118 @@ export async function main(): Promise<void> {
 
 // ─── Event Handlers ──────────────────────────────────────────
 
-function setupEventHandlers(bus: EventBus, _config: DevAgentConfig): void {
-  bus.on("tool:before", (event) => {
-    if (!event.name.startsWith("audit:")) {
-      process.stderr.write(`\x1b[90m[tool] ${event.name}\x1b[0m\n`);
-    }
-  });
+/** Shared spinner instance — started during LLM thinking, stopped on tool/text events. */
+const spinner = new Spinner();
 
-  bus.on("tool:after", (event) => {
-    if (event.result.error) {
+/** Mutable iteration counter — updated by tool:before events, reset per query turn. */
+let currentIteration = 0;
+
+/** Reset per query turn so formatToolStart shows correct [n/max] counter. */
+export function resetOutputIteration(): void {
+  currentIteration = 0;
+}
+
+function setupEventHandlers(
+  bus: EventBus,
+  config: DevAgentConfig,
+  verbosity: Verbosity,
+): void {
+  const maxIter = config.budget.maxIterations;
+
+  // ─── Tool events ──────────────────────────────────────────
+
+  bus.on("tool:before", (event) => {
+    if (event.name.startsWith("audit:")) return;
+
+    // Stop spinner — a tool call arrived
+    spinner.stop();
+
+    currentIteration++;
+
+    if (verbosity === "quiet") return;
+
+    if (verbosity === "verbose") {
+      // Verbose: show full params as JSON
+      const line = formatToolStart(event.name, event.params, currentIteration, maxIter);
+      process.stderr.write(line + "\n");
+      process.stderr.write(dim(`  params: ${JSON.stringify(event.params, null, 2)}`) + "\n");
+    } else {
+      // Normal: concise summary
       process.stderr.write(
-        `\x1b[31m[error] ${event.name}: ${event.result.error}\x1b[0m\n`,
+        formatToolStart(event.name, event.params, currentIteration, maxIter) + "\n",
       );
     }
   });
 
-  bus.on("error", (event) => {
-    process.stderr.write(`\x1b[31m[error] ${event.message}\x1b[0m\n`);
+  bus.on("tool:after", (event) => {
+    if (event.name.startsWith("audit:")) return;
+    if (verbosity === "quiet" && event.result.success) return;
+
+    const line = formatToolEnd(
+      event.name,
+      event.result.success,
+      event.durationMs,
+      event.result.error ?? undefined,
+    );
+    process.stderr.write(line + "\n");
+
+    if (verbosity === "verbose" && event.result.output) {
+      // Show truncated output in verbose mode
+      const output = event.result.output.length > 500
+        ? event.result.output.substring(0, 500) + "…"
+        : event.result.output;
+      process.stderr.write(dim(`  output: ${output}`) + "\n");
+    }
+
+    // Restart spinner after tool completes (waiting for next LLM response)
+    if (verbosity !== "quiet") {
+      spinner.start("Thinking…");
+    }
   });
 
-  // Approval prompts
+  // ─── Plan updates ──────────────────────────────────────────
+
+  bus.on("plan:updated", (event) => {
+    if (verbosity === "quiet") return;
+
+    spinner.stop();
+    process.stderr.write("\n" + dim("── Plan ──") + "\n");
+    process.stderr.write(formatPlan(event.steps) + "\n\n");
+  });
+
+  // ─── Message events (spinner management) ───────────────────
+
+  bus.on("message:user", () => {
+    // Start spinner when user query is sent (waiting for LLM)
+    if (verbosity !== "quiet") {
+      spinner.start("Thinking…");
+    }
+  });
+
+  bus.on("message:assistant", (event) => {
+    if (event.partial) {
+      // First text chunk from LLM — stop spinner
+      spinner.stop();
+    }
+  });
+
+  // ─── Errors ────────────────────────────────────────────────
+
+  bus.on("error", (event) => {
+    spinner.stop();
+    process.stderr.write(formatError(event.message) + "\n");
+  });
+
+  // ─── Approval prompts ─────────────────────────────────────
+
   bus.on("approval:request", (event) => {
+    spinner.stop();
     const rl = createInterface({
       input: process.stdin,
       output: process.stdout,
     });
     rl.question(
-      `\x1b[33m[approval] ${event.toolName}: ${event.details}\nApprove? (y/n): \x1b[0m`,
+      yellow(`[approval] ${event.toolName}: ${event.details}\nApprove? (y/n): `),
       (answer) => {
         rl.close();
         bus.emit("approval:response", {
@@ -351,6 +453,7 @@ async function runSingleQuery(
   repoRoot: string,
   mode: TaskMode,
   skills: SkillRegistry,
+  verbosity: Verbosity,
 ): Promise<void> {
   const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills });
 
@@ -362,6 +465,9 @@ async function runSingleQuery(
       isFirstChunk = false;
     }
   });
+
+  resetOutputIteration();
+  const startTime = Date.now();
 
   const loop = new TaskLoop({
     provider,
@@ -375,12 +481,15 @@ async function runSingleQuery(
   });
 
   const result = await loop.run(query);
+
+  // Stop spinner in case LLM finished without emitting text
+  spinner.stop();
+
   if (!isFirstChunk) process.stdout.write("\n");
 
-  if (config.budget.enableCostTracking) {
-    process.stderr.write(
-      `\x1b[90m[${result.iterations} iterations]\x1b[0m\n`,
-    );
+  if (verbosity !== "quiet") {
+    const elapsed = Date.now() - startTime;
+    process.stderr.write(formatSummary(result.iterations, elapsed) + "\n");
   }
 }
 
@@ -397,25 +506,32 @@ async function runInteractive(
   pluginManager: PluginManager,
   skills: SkillRegistry,
   contextManager: ContextManager,
+  verbosity: Verbosity,
 ): Promise<void> {
-  console.log("DevAgent interactive mode");
-  console.log(`Mode: ${mode} | Provider: ${config.provider} | Model: ${config.model}`);
+  process.stderr.write(bold("DevAgent") + " interactive mode\n");
+  process.stderr.write(
+    dim(`Mode: ${mode} | Provider: ${config.provider} | Model: ${config.model}`) + "\n",
+  );
 
   // Show available plugins and skills
   const pluginNames = pluginManager.list();
   if (pluginNames.length > 0) {
-    console.log(`Plugins: ${pluginNames.join(", ")}`);
+    process.stderr.write(dim(`Plugins: ${pluginNames.join(", ")}`) + "\n");
   }
   if (skills.size > 0) {
-    console.log(`Skills: ${skills.list().map((s) => s.name).join(", ")}`);
+    process.stderr.write(
+      dim(`Skills: ${skills.list().map((s) => s.name).join(", ")}`) + "\n",
+    );
   }
 
-  console.log('Type your query, "/commands" for commands, or "exit" to quit.\n');
+  process.stderr.write(
+    dim('Type your query, "/commands" for commands, or "exit" to quit.') + "\n\n",
+  );
 
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: "\x1b[36m> \x1b[0m",
+    prompt: cyan("> "),
   });
 
   const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills });
@@ -449,7 +565,7 @@ async function runInteractive(
     }
 
     if (input === "exit" || input === "quit" || input === "/exit") {
-      console.log("Goodbye!");
+      process.stderr.write(dim("Goodbye!") + "\n");
       break;
     }
 
@@ -457,7 +573,7 @@ async function runInteractive(
     if (input === "/plan") {
       mode = "plan";
       loop.setMode("plan");
-      console.log("Switched to plan mode (read-only).");
+      process.stderr.write(yellow("Switched to plan mode (read-only).") + "\n");
       rl.prompt();
       continue;
     }
@@ -465,13 +581,13 @@ async function runInteractive(
     if (input === "/act") {
       mode = "act";
       loop.setMode("act");
-      console.log("Switched to act mode.");
+      process.stderr.write(green("Switched to act mode.") + "\n");
       rl.prompt();
       continue;
     }
 
     if (input === "/clear") {
-      console.log("Conversation cleared. Starting fresh.");
+      process.stderr.write(dim("Conversation cleared. Starting fresh.") + "\n");
       rl.prompt();
       continue;
     }
@@ -479,11 +595,11 @@ async function runInteractive(
     if (input === "/commands") {
       const cmds = pluginManager.listCommands();
       if (cmds.length === 0) {
-        console.log("No plugin commands available.");
+        process.stderr.write(dim("No plugin commands available.") + "\n");
       } else {
-        console.log("Available commands:");
+        process.stderr.write(bold("Available commands:") + "\n");
         for (const cmd of cmds) {
-          console.log(`  /${cmd.name} — ${cmd.description} (${cmd.plugin})`);
+          process.stderr.write(`  ${cyan("/" + cmd.name)} ${dim("—")} ${cmd.description} ${dim(`(${cmd.plugin})`)}` + "\n");
         }
       }
       rl.prompt();
@@ -493,11 +609,11 @@ async function runInteractive(
     if (input === "/skills") {
       const skillList = skills.list();
       if (skillList.length === 0) {
-        console.log("No skills discovered. Add .md files to .devagent/skills/");
+        process.stderr.write(dim("No skills discovered. Add .md files to .devagent/skills/") + "\n");
       } else {
-        console.log("Available skills:");
+        process.stderr.write(bold("Available skills:") + "\n");
         for (const skill of skillList) {
-          console.log(`  ${skill.name} — ${skill.description} (${skill.source})`);
+          process.stderr.write(`  ${cyan(skill.name)} ${dim("—")} ${skill.description} ${dim(`(${skill.source})`)}` + "\n");
         }
       }
       rl.prompt();
@@ -513,17 +629,19 @@ async function runInteractive(
       if (pluginManager.hasCommand(cmdName)) {
         try {
           const result = await pluginManager.executeCommand(cmdName, cmdArgs);
-          console.log(result);
+          process.stderr.write(result + "\n");
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.error(`\x1b[31mCommand error: ${msg}\x1b[0m`);
+          process.stderr.write(formatError(`Command error: ${msg}`) + "\n");
         }
         rl.prompt();
         continue;
       }
 
       // Unknown slash command
-      console.log(`Unknown command: /${cmdName}. Use /commands to see available commands.`);
+      process.stderr.write(
+        yellow(`Unknown command: /${cmdName}. Use /commands to see available commands.`) + "\n",
+      );
       rl.prompt();
       continue;
     }
@@ -532,11 +650,24 @@ async function runInteractive(
     try {
       // Reset iteration budget per turn, but keep message history
       loop.resetIterations();
+      resetOutputIteration();
+      const turnStart = Date.now();
       await loop.run(input);
+
+      // Stop spinner in case LLM finished without emitting text
+      spinner.stop();
+
       process.stdout.write("\n\n");
+
+      if (verbosity !== "quiet") {
+        const elapsed = Date.now() - turnStart;
+        const result = loop.getIterations();
+        process.stderr.write(formatSummary(result, elapsed) + "\n");
+      }
     } catch (err) {
+      spinner.stop();
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`\x1b[31mError: ${msg}\x1b[0m`);
+      process.stderr.write(formatError(msg) + "\n");
     }
 
     rl.prompt();
