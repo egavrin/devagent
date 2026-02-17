@@ -51,6 +51,67 @@ strict_mode = true
     }
   });
 
+  it("parses model capabilities from TOML provider config", () => {
+    const dir = join(tmpdir(), `devagent-test-caps-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const configPath = join(dir, ".devagent.toml");
+    writeFileSync(
+      configPath,
+      `
+provider = "openai"
+model = "gpt-5-codex"
+
+[providers.openai]
+model = "gpt-5-codex"
+api_key = "test-key"
+use_responses_api = true
+reasoning = true
+supports_temperature = false
+default_max_tokens = 16384
+reasoning_effort = "medium"
+`,
+    );
+
+    try {
+      const config = loadConfig(dir);
+      const openaiCfg = config.providers["openai"];
+      expect(openaiCfg).toBeDefined();
+      expect(openaiCfg!.capabilities).toBeDefined();
+      expect(openaiCfg!.capabilities!.useResponsesApi).toBe(true);
+      expect(openaiCfg!.capabilities!.reasoning).toBe(true);
+      expect(openaiCfg!.capabilities!.supportsTemperature).toBe(false);
+      expect(openaiCfg!.capabilities!.defaultMaxTokens).toBe(16384);
+      expect(openaiCfg!.reasoningEffort).toBe("medium");
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it("omits capabilities when none specified in TOML", () => {
+    const dir = join(tmpdir(), `devagent-test-nocaps-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const configPath = join(dir, ".devagent.toml");
+    writeFileSync(
+      configPath,
+      `
+provider = "openai"
+
+[providers.openai]
+model = "gpt-4o"
+api_key = "test-key"
+`,
+    );
+
+    try {
+      const config = loadConfig(dir);
+      const openaiCfg = config.providers["openai"];
+      expect(openaiCfg).toBeDefined();
+      expect(openaiCfg!.capabilities).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
   it("respects environment variable overrides", () => {
     const original = { ...process.env };
     process.env["DEVAGENT_PROVIDER"] = "deepseek";

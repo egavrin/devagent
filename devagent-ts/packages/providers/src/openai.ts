@@ -1,12 +1,29 @@
 /**
  * OpenAI provider — uses Vercel AI SDK with @ai-sdk/openai.
  * Supports streaming, tool calling, and ChatGPT subscriptions.
+ *
+ * Model capabilities (Responses API, reasoning, temperature, maxTokens)
+ * are driven by config.capabilities. No heuristics — configure explicitly.
  */
 
 import { createOpenAI } from "@ai-sdk/openai";
 import { streamText, tool as aiTool, jsonSchema, type CoreMessage } from "ai";
-import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/core";
+import type { LLMProvider, ProviderConfig, ModelCapabilities, Message, ToolSpec, StreamChunk } from "@devagent/core";
 import { MessageRole, ProviderError } from "@devagent/core";
+
+/**
+ * Resolve model capabilities from explicit config.
+ * No heuristics — if capabilities aren't configured, safe defaults apply.
+ * Configure via TOML or ProviderConfig.capabilities.
+ */
+export function resolveCapabilities(explicit: ModelCapabilities | undefined): Required<ModelCapabilities> {
+  return {
+    useResponsesApi: explicit?.useResponsesApi ?? false,
+    reasoning: explicit?.reasoning ?? false,
+    supportsTemperature: explicit?.supportsTemperature ?? true,
+    defaultMaxTokens: explicit?.defaultMaxTokens ?? 4096,
+  };
+}
 
 export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
   if (!config.apiKey) {
@@ -33,9 +50,10 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
       const aiTools = tools ? convertTools(tools) : undefined;
 
       try {
-        // Use Responses API for codex models (required by OpenAI)
-        const useResponses = config.model.includes("codex");
-        const model = useResponses
+        // Resolve capabilities from explicit config (no heuristics)
+        const caps = resolveCapabilities(config.capabilities);
+
+        const model = caps.useResponsesApi
           ? openai.responses(config.model)
           : openai(config.model);
 
@@ -43,8 +61,8 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
           model,
           messages: aiMessages,
           tools: aiTools,
-          maxTokens: config.maxTokens ?? 4096,
-          temperature: config.temperature ?? 0,
+          maxTokens: config.maxTokens ?? caps.defaultMaxTokens,
+          ...(caps.supportsTemperature ? { temperature: config.temperature ?? 0 } : {}),
           abortSignal: abortController.signal,
           ...(config.reasoningEffort
             ? {

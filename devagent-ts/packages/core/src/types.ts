@@ -121,13 +121,44 @@ export interface LLMProvider {
   abort(): void;
 }
 
+/**
+ * Model capability flags — explicitly configured per-model via TOML or config.
+ * No heuristics: if not set, safe defaults apply (Chat Completions, temperature
+ * enabled, 4096 output tokens).
+ *
+ * Example TOML:
+ *   [providers.openai]
+ *   model = "gpt-5.2-codex"
+ *   api_key = "env:OPENAI_API_KEY"
+ *   use_responses_api = true        # Codex models require Responses API
+ *   reasoning = true                # Reasoning model
+ *   supports_temperature = false    # Reasoning models reject temperature
+ *   default_max_tokens = 128000     # GPT-5.2 family supports 128K output
+ */
+export interface ModelCapabilities {
+  /** Use OpenAI Responses API (v1/responses) instead of Chat Completions.
+   *  Required for codex models; Chat Completions deprecated for codex (Feb 2026). */
+  readonly useResponsesApi?: boolean;
+  /** Model supports extended reasoning (codex, o-series, gpt-5 family). */
+  readonly reasoning?: boolean;
+  /** Model accepts temperature parameter.
+   *  false for reasoning models (gpt-5, o3, o4-mini, codex).
+   *  gpt-5.2 with reasoning_effort="none" supports temperature. */
+  readonly supportsTemperature?: boolean;
+  /** Default max output tokens when not explicitly set.
+   *  GPT-5.2 family: 128000, o3/o4-mini: 16384, standard: 4096. */
+  readonly defaultMaxTokens?: number;
+}
+
 export interface ProviderConfig {
   readonly apiKey?: string;
   readonly baseUrl?: string;
   readonly model: string;
   readonly maxTokens?: number;
   readonly temperature?: number;
+  /** Reasoning effort: none, low, medium, high, xhigh (model-dependent). */
   readonly reasoningEffort?: "low" | "medium" | "high";
+  readonly capabilities?: ModelCapabilities;
 }
 
 // ─── Approval Types ──────────────────────────────────────────

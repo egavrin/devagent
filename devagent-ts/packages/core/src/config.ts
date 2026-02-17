@@ -16,6 +16,7 @@ import type {
   ContextConfig,
   ArkTSConfig,
   ProviderConfig,
+  ModelCapabilities,
 } from "./types.js";
 
 // ─── Defaults ────────────────────────────────────────────────
@@ -101,9 +102,31 @@ function resolveEnvValue(value: unknown): unknown {
   return value;
 }
 
+function parseModelCapabilities(
+  raw: Record<string, unknown>,
+): ModelCapabilities | undefined {
+  const useResponsesApi = (raw["use_responses_api"] ?? raw["useResponsesApi"]) as boolean | undefined;
+  const reasoning = (raw["reasoning"]) as boolean | undefined;
+  const supportsTemperature = (raw["supports_temperature"] ?? raw["supportsTemperature"]) as boolean | undefined;
+  const defaultMaxTokens = (raw["default_max_tokens"] ?? raw["defaultMaxTokens"]) as number | undefined;
+
+  // Only return capabilities object if at least one field is set
+  if (
+    useResponsesApi === undefined &&
+    reasoning === undefined &&
+    supportsTemperature === undefined &&
+    defaultMaxTokens === undefined
+  ) {
+    return undefined;
+  }
+
+  return { useResponsesApi, reasoning, supportsTemperature, defaultMaxTokens };
+}
+
 function mergeProviderConfig(
   raw: Record<string, unknown>,
 ): ProviderConfig {
+  const capabilities = parseModelCapabilities(raw);
   return {
     apiKey: resolveEnvValue(raw["api_key"] ?? raw["apiKey"]) as
       | string
@@ -112,6 +135,8 @@ function mergeProviderConfig(
     model: (raw["model"] as string) ?? "claude-sonnet-4-20250514",
     maxTokens: raw["max_tokens"] as number | undefined ?? raw["maxTokens"] as number | undefined,
     temperature: raw["temperature"] as number | undefined,
+    reasoningEffort: raw["reasoning_effort"] as "low" | "medium" | "high" | undefined,
+    ...(capabilities ? { capabilities } : {}),
   };
 }
 

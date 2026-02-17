@@ -17,6 +17,7 @@ export type {
   StreamChunk,
   LLMProvider,
   ProviderConfig,
+  ModelCapabilities,
   ApprovalPolicy,
   PathRule,
   DevAgentConfig,

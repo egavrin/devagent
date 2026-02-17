@@ -103,7 +103,7 @@ export class TaskLoop {
     this.bus.emit("message:user", { content: userQuery });
 
     while (!this.aborted) {
-      // Check budget
+      // Check budget (0 = unlimited)
       if (this.config.budget.maxIterations > 0 && this.iterations >= this.config.budget.maxIterations) {
         throw new BudgetExceededError(
           `Max iterations (${this.config.budget.maxIterations}) exceeded`,

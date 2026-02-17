@@ -109,7 +109,7 @@ Usage:
 Options:
   --provider <name>     LLM provider (anthropic, openai)
   --model <id>          Model ID
-  --max-iterations <n>  Max tool-call iterations (0 = unlimited)
+  --max-iterations <n>  Max tool-call iterations (default: 30)
   --reasoning <level>   Reasoning effort: low, medium, high
   --suggest             Suggest mode (show diffs, ask before writing)
   --auto-edit           Auto-edit mode (auto-approve file writes)

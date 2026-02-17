@@ -6,7 +6,7 @@
 export { ProviderRegistry } from "./registry.js";
 export type { ProviderFactory } from "./registry.js";
 export { createAnthropicProvider } from "./anthropic.js";
-export { createOpenAIProvider } from "./openai.js";
+export { createOpenAIProvider, resolveCapabilities } from "./openai.js";
 
 import { ProviderRegistry } from "./registry.js";
 import { createAnthropicProvider } from "./anthropic.js";

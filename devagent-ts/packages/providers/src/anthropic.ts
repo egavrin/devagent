@@ -33,12 +33,16 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
       const aiTools = tools ? convertTools(tools) : undefined;
 
       try {
+        const caps = config.capabilities;
+        const defaultMaxTokens = caps?.defaultMaxTokens ?? 4096;
+        const supportsTemp = caps?.supportsTemperature ?? true;
+
         const result = streamText({
           model: anthropic(config.model),
           messages: aiMessages,
           tools: aiTools,
-          maxTokens: config.maxTokens ?? 4096,
-          temperature: config.temperature ?? 0,
+          maxTokens: config.maxTokens ?? defaultMaxTokens,
+          ...(supportsTemp ? { temperature: config.temperature ?? 0 } : {}),
           abortSignal: abortController.signal,
         });
 
