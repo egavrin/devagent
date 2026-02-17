@@ -10,7 +10,7 @@ import type { ToolSpec } from "@devagent/core";
 export const findFilesTool: ToolSpec = {
   name: "find_files",
   description:
-    "Find files matching a glob-like pattern. Supports * and ** wildcards. Returns relative paths.",
+    "Find files matching a glob-like pattern. Supports * and ** wildcards. Returns relative paths. Use to discover project structure before reading specific files. Skips node_modules, .git, dist, .cache.",
   category: "readonly",
   paramSchema: {
     type: "object",

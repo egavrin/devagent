@@ -24,7 +24,7 @@ function execGit(args: string, repoRoot: string): string {
 
 export const gitStatusTool: ToolSpec = {
   name: "git_status",
-  description: "Show the working tree status (modified, staged, untracked files).",
+  description: "Show the working tree status (modified, staged, untracked files). Use before committing to verify changed files.",
   category: "readonly",
   paramSchema: {
     type: "object",
@@ -50,7 +50,7 @@ export const gitStatusTool: ToolSpec = {
 export const gitDiffTool: ToolSpec = {
   name: "git_diff",
   description:
-    "Show changes between commits, working tree, etc. Optionally specify a file path or ref.",
+    "Show changes between commits, working tree, etc. Optionally specify a file path or ref. Use after edits to verify modifications, or before committing to review changes.",
   category: "readonly",
   paramSchema: {
     type: "object",
@@ -89,7 +89,7 @@ export const gitDiffTool: ToolSpec = {
 export const gitCommitTool: ToolSpec = {
   name: "git_commit",
   description:
-    "Stage files and create a git commit. Requires a commit message.",
+    "Stage files and create a git commit. Requires a commit message. Only use when explicitly requested by the user. Specify individual files rather than '.'. Never commit .env or secrets.",
   category: "mutating",
   paramSchema: {
     type: "object",

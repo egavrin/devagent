@@ -11,7 +11,7 @@ import { ToolError } from "@devagent/core";
 export const replaceInFileTool: ToolSpec = {
   name: "replace_in_file",
   description:
-    "Replace occurrences of a search string with a replacement string in a file. Fails if the search string is not found.",
+    "Replace occurrences of a search string with a replacement string in a file. Fails if the search string is not found. Always read_file first to get exact text. Include enough surrounding context for a unique match. If 'not found', re-read the file and retry.",
   category: "mutating",
   paramSchema: {
     type: "object",

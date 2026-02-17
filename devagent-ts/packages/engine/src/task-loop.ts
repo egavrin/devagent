@@ -71,6 +71,7 @@ export class TaskLoop {
     totalCost: 0,
   };
   private aborted = false;
+  private consecutiveFailures = 0;
 
   constructor(options: TaskLoopOptions) {
     this.provider = options.provider;
@@ -147,6 +148,18 @@ export class TaskLoop {
           });
         }
 
+        // Inject failure warning if needed
+        const failureWarning = this.getFailureWarning();
+        if (failureWarning) {
+          this.messages.push({
+            role: MessageRole.SYSTEM,
+            content: failureWarning,
+          });
+          if (this.consecutiveFailures >= 5) {
+            break;
+          }
+        }
+
         // Continue loop — feed tool results back to LLM
         continue;
       }
@@ -208,6 +221,7 @@ export class TaskLoop {
   resetIterations(): void {
     this.iterations = 0;
     this.aborted = false;
+    this.consecutiveFailures = 0;
   }
 
   // ─── Private ────────────────────────────────────────────────
@@ -337,6 +351,13 @@ export class TaskLoop {
 
     const durationMs = Date.now() - startTime;
 
+    // Track consecutive failures
+    if (result.success) {
+      this.consecutiveFailures = 0;
+    } else {
+      this.consecutiveFailures++;
+    }
+
     // Fire tool:after event
     this.bus.emit("tool:after", {
       name: toolCall.name,
@@ -346,6 +367,21 @@ export class TaskLoop {
     });
 
     return result;
+  }
+
+  /**
+   * Check if a failure warning should be injected after tool results.
+   * Returns a warning message if 3+ consecutive failures, null otherwise.
+   * At 5+ failures, the loop should break.
+   */
+  private getFailureWarning(): string | null {
+    if (this.consecutiveFailures >= 5) {
+      return "CRITICAL: 5 consecutive tool failures. Stopping execution. Report the issue to the user and suggest a different approach.";
+    }
+    if (this.consecutiveFailures >= 3) {
+      return "Warning: 3 consecutive tool failures. Consider a different approach or ask the user for guidance.";
+    }
+    return null;
   }
 }
 

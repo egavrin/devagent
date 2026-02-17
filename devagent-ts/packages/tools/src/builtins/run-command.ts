@@ -14,7 +14,7 @@ const MAX_OUTPUT_BYTES = 100_000;
 export const runCommandTool: ToolSpec = {
   name: "run_command",
   description:
-    "Execute a shell command. Returns stdout and stderr. Times out after 2 minutes by default.",
+    "Execute a shell command. Returns stdout and stderr. Times out after 2 minutes by default. Use for builds, tests, linting. Prefer targeted test commands over running the full suite. Never run destructive git commands without user approval.",
   category: "workflow",
   paramSchema: {
     type: "object",

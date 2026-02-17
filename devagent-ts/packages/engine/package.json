@@ -11,7 +11,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && mkdir -p dist/prompts && cp src/prompts/*.md dist/prompts/",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint src/",
     "lint:arkts": "eslint --config eslint.arkts.cjs src/",

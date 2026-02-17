@@ -50,7 +50,7 @@ supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
 
-[claude-2.1]
+["claude-2.1"]
 context_window = 200000
 response_headroom = 4096
 tokenizer = "claude"
@@ -58,7 +58,7 @@ supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
 
-[claude-2.0]
+["claude-2.0"]
 context_window = 100000
 response_headroom = 4096
 tokenizer = "claude"

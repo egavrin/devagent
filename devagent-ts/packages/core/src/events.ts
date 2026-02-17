@@ -18,6 +18,7 @@ export interface EventMap {
   "session:start": SessionStartEvent;
   "session:end": SessionEndEvent;
   "cost:update": CostUpdateEvent;
+  "plan:updated": PlanUpdatedEvent;
   "error": ErrorEvent;
 }
 
@@ -77,6 +78,14 @@ export interface CostUpdateEvent {
   readonly outputTokens: number;
   readonly totalCost: number;
   readonly model: string;
+}
+
+export interface PlanUpdatedEvent {
+  readonly steps: ReadonlyArray<{
+    readonly description: string;
+    readonly status: string;
+  }>;
+  readonly explanation: string | null;
 }
 
 export interface ErrorEvent {

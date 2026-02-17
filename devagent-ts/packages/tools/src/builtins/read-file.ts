@@ -11,7 +11,7 @@ import { ToolError } from "@devagent/core";
 export const readFileTool: ToolSpec = {
   name: "read_file",
   description:
-    "Read the contents of a file. Optionally specify start_line and end_line to read a range.",
+    "Read the contents of a file. Optionally specify start_line and end_line to read a range. For large files (>200 lines), use start_line/end_line to read targeted sections. Always read before editing with replace_in_file.",
   category: "readonly",
   paramSchema: {
     type: "object",

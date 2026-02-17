@@ -54,11 +54,21 @@ export type {
   SessionStartEvent,
   SessionEndEvent,
   CostUpdateEvent,
+  PlanUpdatedEvent,
   ErrorEvent,
 } from "./events.js";
 
 // Config
 export { loadConfig, findProjectRoot } from "./config.js";
+
+// Model registry
+export {
+  loadModelRegistry,
+  lookupModelCapabilities,
+  lookupModelEntry,
+  getRegisteredModels,
+} from "./model-registry.js";
+export type { ModelRegistryEntry } from "./model-registry.js";
 
 // Session
 export { SessionStore } from "./session.js";

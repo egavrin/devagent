@@ -16,7 +16,7 @@ export interface SearchMatch {
 export const searchFilesTool: ToolSpec = {
   name: "search_files",
   description:
-    "Search for a text pattern or regex in files. Returns matching lines with file paths and line numbers.",
+    "Search for a text pattern or regex in files. Returns matching lines with file paths and line numbers. Use file_pattern to scope the search. Prefer this over reading entire files to find symbols or patterns.",
   category: "readonly",
   paramSchema: {
     type: "object",

@@ -9,7 +9,7 @@ import type { ToolSpec } from "@devagent/core";
 
 export const writeFileTool: ToolSpec = {
   name: "write_file",
-  description: "Write content to a file. Creates the file and parent directories if they don't exist.",
+  description: "Write content to a file. Creates the file and parent directories if they don't exist. For small edits to existing files, prefer replace_in_file instead. Do not re-read after writing — the tool confirms success or failure.",
   category: "mutating",
   paramSchema: {
     type: "object",

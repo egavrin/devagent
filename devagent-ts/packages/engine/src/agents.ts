@@ -4,6 +4,9 @@
  * and restricted tool set. Agents are spawned by the delegate tool.
  */
 
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   LLMProvider,
   DevAgentConfig,
@@ -43,86 +46,70 @@ export interface AgentRunResult {
   readonly cost: CostRecord;
 }
 
-// ─── System Prompts ──────────────────────────────────────────
+// ─── System Prompts (loaded from markdown files) ─────────────
 
-const GENERAL_PROMPT = `You are a General development agent.
+const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "prompts");
 
-Working directory: {{repoRoot}}
+function loadAgentPrompt(filename: string): string {
+  return readFileSync(join(PROMPTS_DIR, filename), "utf-8");
+}
 
-You have access to tools for reading files, writing files, searching code, running commands, and git operations.
+// Cache loaded prompts (never change during process lifetime)
+let cachedGeneralPrompt: string | null = null;
+let cachedReviewerPrompt: string | null = null;
+let cachedArchitectPrompt: string | null = null;
 
-When the user asks you to perform a task:
-1. Understand the request
-2. Use tools to explore the codebase and gather information
-3. Make changes or provide analysis as requested
-4. Report what you did
+function getGeneralPrompt(): string {
+  cachedGeneralPrompt ??= loadAgentPrompt("agent-general.md");
+  return cachedGeneralPrompt;
+}
 
-Be concise and direct. Fail fast — report errors immediately rather than guessing.`;
+function getReviewerPrompt(): string {
+  cachedReviewerPrompt ??= loadAgentPrompt("agent-reviewer.md");
+  return cachedReviewerPrompt;
+}
 
-const REVIEWER_PROMPT = `You are a Code Review agent.
-
-Working directory: {{repoRoot}}
-
-You have access to read-only tools for analyzing code. You CANNOT modify files or run commands.
-
-When reviewing code:
-1. Read the relevant files and understand the context
-2. Check for bugs, security issues, performance problems, and style violations
-3. Provide structured feedback with file paths and line numbers
-4. Rate severity: critical, warning, suggestion, nitpick
-5. Suggest specific fixes where possible
-
-Be thorough but concise. Focus on issues that matter — skip trivial formatting.`;
-
-const ARCHITECT_PROMPT = `You are an Architecture agent.
-
-Working directory: {{repoRoot}}
-
-You have access to read-only tools for analyzing code. You CANNOT modify files or run commands.
-
-When designing or analyzing architecture:
-1. Read the relevant files and understand the current structure
-2. Identify patterns, dependencies, and architectural decisions
-3. Break down complex tasks into concrete implementation steps
-4. Consider trade-offs and alternatives
-5. Produce a clear, actionable plan
-
-Be specific about file paths and function signatures. Avoid hand-waving.`;
+function getArchitectPrompt(): string {
+  cachedArchitectPrompt ??= loadAgentPrompt("agent-architect.md");
+  return cachedArchitectPrompt;
+}
 
 // ─── Agent Registry ──────────────────────────────────────────
 
-const AGENT_DEFINITIONS: ReadonlyArray<AgentDefinition> = [
-  {
-    type: AgentType.GENERAL,
-    name: "General",
-    description: "Default agent. Answers questions, writes code, runs commands.",
-    systemPromptTemplate: GENERAL_PROMPT,
-    defaultMode: "act",
-    allowedToolCategories: ["readonly", "mutating", "workflow", "external"],
-  },
-  {
-    type: AgentType.REVIEWER,
-    name: "Reviewer",
-    description: "Code review with structured output. Read-only tools only.",
-    systemPromptTemplate: REVIEWER_PROMPT,
-    defaultMode: "plan",
-    allowedToolCategories: ["readonly"],
-  },
-  {
-    type: AgentType.ARCHITECT,
-    name: "Architect",
-    description: "Design documents and task breakdown. Read-only tools only.",
-    systemPromptTemplate: ARCHITECT_PROMPT,
-    defaultMode: "plan",
-    allowedToolCategories: ["readonly"],
-  },
-];
+function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
+  return [
+    {
+      type: AgentType.GENERAL,
+      name: "General",
+      description: "Default agent. Answers questions, writes code, runs commands.",
+      systemPromptTemplate: getGeneralPrompt(),
+      defaultMode: "act",
+      allowedToolCategories: ["readonly", "mutating", "workflow", "external"],
+    },
+    {
+      type: AgentType.REVIEWER,
+      name: "Reviewer",
+      description: "Code review with structured output. Read-only tools only.",
+      systemPromptTemplate: getReviewerPrompt(),
+      defaultMode: "plan",
+      allowedToolCategories: ["readonly"],
+    },
+    {
+      type: AgentType.ARCHITECT,
+      name: "Architect",
+      description: "Design documents and task breakdown. Read-only tools only.",
+      systemPromptTemplate: getArchitectPrompt(),
+      defaultMode: "plan",
+      allowedToolCategories: ["readonly"],
+    },
+  ];
+}
 
 export class AgentRegistry {
   private readonly definitions = new Map<AgentType, AgentDefinition>();
 
   constructor() {
-    for (const def of AGENT_DEFINITIONS) {
+    for (const def of getAgentDefinitions()) {
       this.definitions.set(def.type, def);
     }
   }

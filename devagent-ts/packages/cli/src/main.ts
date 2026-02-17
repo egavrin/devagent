@@ -4,6 +4,8 @@
  */
 
 import { createInterface } from "node:readline";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   EventBus,
   ApprovalGate,
@@ -12,14 +14,17 @@ import {
   ContextManager,
   loadConfig,
   findProjectRoot,
+  loadModelRegistry,
+  lookupModelCapabilities,
 } from "@devagent/core";
 import type { DevAgentConfig, ApprovalPolicy } from "@devagent/core";
 import { ApprovalMode } from "@devagent/core";
 import { createDefaultRegistry } from "@devagent/providers";
 import { createDefaultToolRegistry, McpHub } from "@devagent/tools";
-import { TaskLoop, createBuiltinPlugins } from "@devagent/engine";
+import { TaskLoop, createBuiltinPlugins, createPlanTool } from "@devagent/engine";
 import type { TaskMode } from "@devagent/engine";
 import { runDesktopBridge } from "./desktop-bridge.js";
+import { assembleSystemPrompt } from "./prompts/index.js";
 
 // ─── Argument Parsing ────────────────────────────────────────
 
@@ -133,38 +138,6 @@ Environment:
 `.trim());
 }
 
-// ─── System Prompt ──────────────────────────────────────────
-
-function getSystemPrompt(
-  mode: TaskMode,
-  repoRoot: string,
-  skills: SkillRegistry,
-): string {
-  const modeLabel = mode === "plan" ? "PLAN (read-only)" : "ACT";
-
-  let skillsSection = "";
-  const skillList = skills.list();
-  if (skillList.length > 0) {
-    const skillNames = skillList.map((s) => `- ${s.name}: ${s.description}`).join("\n");
-    skillsSection = `\n\nAvailable skills:\n${skillNames}\nYou can reference these skills when the user asks about related topics.`;
-  }
-
-  return `You are DevAgent, an AI-powered development assistant.
-
-Mode: ${modeLabel}
-Working directory: ${repoRoot}
-
-You have access to tools for reading files, writing files, searching code, running commands, and git operations.
-${mode === "plan" ? "In plan mode, you can only use read-only tools (read_file, find_files, search_files, git_status, git_diff)." : ""}
-When the user asks you to perform a task:
-1. Understand the request
-2. Use tools to explore the codebase and gather information
-3. Make changes or provide analysis as requested
-4. Report what you did
-
-Be concise and direct. Fail fast — report errors immediately rather than guessing.${skillsSection}`;
-}
-
 // ─── Main ──────────────────────────────────────────────────
 
 export async function main(): Promise<void> {
@@ -200,14 +173,27 @@ export async function main(): Promise<void> {
     };
   }
 
+  // Load model registry (models/*.toml files with per-model capabilities)
+  // Search: devagent repo models/ dir, project models/ dir, ~/.config/devagent/models/
+  const cliDir = dirname(fileURLToPath(import.meta.url));
+  const devagentModelsDir = join(cliDir, "..", "..", "..", "..", "models");
+  loadModelRegistry(projectRoot, [devagentModelsDir]);
+
   // Set up providers
   const providerRegistry = createDefaultRegistry();
+  const baseProviderConfig = config.providers[config.provider] ?? {
+    model: config.model,
+    apiKey: process.env["DEVAGENT_API_KEY"],
+  };
+
+  // Auto-resolve capabilities from model registry if not explicitly configured
+  const registryCaps = lookupModelCapabilities(config.model);
   const providerConfig = {
-    ...(config.providers[config.provider] ?? {
-      model: config.model,
-      apiKey: process.env["DEVAGENT_API_KEY"],
-    }),
+    ...baseProviderConfig,
     ...(cliArgs.reasoning ? { reasoningEffort: cliArgs.reasoning } : {}),
+    ...(!baseProviderConfig.capabilities && registryCaps
+      ? { capabilities: registryCaps }
+      : {}),
   };
 
   if (!providerConfig.apiKey) {
@@ -226,6 +212,9 @@ export async function main(): Promise<void> {
   const toolRegistry = createDefaultToolRegistry();
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
+
+  // Register workflow tools
+  toolRegistry.register(createPlanTool(bus));
 
   // ─── Skills ────────────────────────────────────────────────
   const skills = new SkillRegistry();
@@ -363,7 +352,7 @@ async function runSingleQuery(
   mode: TaskMode,
   skills: SkillRegistry,
 ): Promise<void> {
-  const systemPrompt = getSystemPrompt(mode, repoRoot, skills);
+  const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills });
 
   // Stream assistant output to stdout
   let isFirstChunk = true;
@@ -429,7 +418,7 @@ async function runInteractive(
     prompt: "\x1b[36m> \x1b[0m",
   });
 
-  const systemPrompt = getSystemPrompt(mode, repoRoot, skills);
+  const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills });
 
   // Create a single TaskLoop that persists across turns (multi-turn conversation)
   const loop = new TaskLoop({
