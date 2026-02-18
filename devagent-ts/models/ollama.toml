@@ -1,0 +1,78 @@
+# Ollama — local LLM inference via OpenAI-compatible API.
+# Default endpoint: http://localhost:11434/v1
+# Usage: devagent --provider ollama --model <model_name> "query"
+
+provider = "ollama"
+base_url = "http://localhost:11434/v1"
+
+[llama3]
+context_window = 8192
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+["llama3.1"]
+context_window = 131072
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+["llama3.2"]
+context_window = 131072
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+["llama3.3"]
+context_window = 131072
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+[codellama]
+context_window = 16384
+supports_tools = false
+supports_temperature = true
+default_max_tokens = 4096
+
+[mistral]
+context_window = 32768
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+[mixtral]
+context_window = 32768
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+["qwen2.5"]
+context_window = 32768
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+["qwen2.5-coder"]
+context_window = 32768
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+[deepseek-coder-v2]
+context_window = 131072
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+[gemma2]
+context_window = 8192
+supports_tools = false
+supports_temperature = true
+default_max_tokens = 4096
+
+[phi3]
+context_window = 131072
+supports_tools = false
+supports_temperature = true
+default_max_tokens = 4096

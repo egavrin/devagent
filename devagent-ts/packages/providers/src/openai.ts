@@ -26,12 +26,10 @@ export function resolveCapabilities(explicit: ModelCapabilities | undefined): Re
 }
 
 export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
-  if (!config.apiKey) {
-    throw new ProviderError("OpenAI provider requires an API key");
-  }
-
+  // apiKey is optional — local endpoints (Ollama, LM Studio) don't require auth.
+  // The @ai-sdk/openai SDK handles undefined apiKey gracefully.
   const openai = createOpenAI({
-    apiKey: config.apiKey,
+    apiKey: config.apiKey ?? "",
     baseURL: config.baseUrl,
   });
 

@@ -129,7 +129,7 @@ Usage:
   devagent --plan "<query>"       Plan mode (read-only analysis)
 
 Options:
-  --provider <name>     LLM provider (anthropic, openai)
+  --provider <name>     LLM provider (anthropic, openai, ollama)
   --model <id>          Model ID
   --max-iterations <n>  Max tool-call iterations (default: 30)
   --reasoning <level>   Reasoning effort: low, medium, high
@@ -154,6 +154,9 @@ Environment:
   DEVAGENT_PROVIDER     Default provider
   DEVAGENT_MODEL        Default model
   DEVAGENT_API_KEY      API key for the default provider
+
+Installation:
+  bun run build && bun run install-cli    Install as 'devagent' command
 `.trim());
 }
 
@@ -215,7 +218,9 @@ export async function main(): Promise<void> {
       : {}),
   };
 
-  if (!providerConfig.apiKey) {
+  // Providers that don't require an API key (local endpoints)
+  const noKeyProviders = new Set(["ollama"]);
+  if (!providerConfig.apiKey && !noKeyProviders.has(config.provider)) {
     process.stderr.write(
       formatError(`No API key configured for provider "${config.provider}".`) + "\n",
     );

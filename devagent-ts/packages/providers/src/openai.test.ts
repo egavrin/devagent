@@ -3,11 +3,12 @@ import { createOpenAIProvider, resolveCapabilities } from "./openai.js";
 import type { ProviderConfig, ModelCapabilities } from "@devagent/core";
 
 describe("createOpenAIProvider", () => {
-  it("throws when no API key provided", () => {
-    const config: ProviderConfig = { model: "gpt-4o" };
-    expect(() => createOpenAIProvider(config)).toThrow(
-      "requires an API key",
-    );
+  it("creates a provider without API key (for local endpoints)", () => {
+    const config: ProviderConfig = { model: "llama3" };
+    const provider = createOpenAIProvider(config);
+    expect(provider.id).toBe("openai");
+    expect(typeof provider.chat).toBe("function");
+    expect(typeof provider.abort).toBe("function");
   });
 
   it("creates a provider with valid config", () => {
@@ -19,6 +20,15 @@ describe("createOpenAIProvider", () => {
     expect(provider.id).toBe("openai");
     expect(typeof provider.chat).toBe("function");
     expect(typeof provider.abort).toBe("function");
+  });
+
+  it("accepts a custom baseUrl", () => {
+    const config: ProviderConfig = {
+      model: "llama3",
+      baseUrl: "http://localhost:11434/v1",
+    };
+    const provider = createOpenAIProvider(config);
+    expect(provider.id).toBe("openai");
   });
 });
 
