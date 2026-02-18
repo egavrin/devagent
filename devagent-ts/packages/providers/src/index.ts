@@ -7,6 +7,7 @@ export { ProviderRegistry } from "./registry.js";
 export type { ProviderFactory } from "./registry.js";
 export { createAnthropicProvider } from "./anthropic.js";
 export { createOpenAIProvider, resolveCapabilities } from "./openai.js";
+export { validateOllamaModel } from "./ollama-preflight.js";
 
 import type { LLMProvider, ProviderConfig } from "@devagent/core";
 import { ProviderRegistry } from "./registry.js";

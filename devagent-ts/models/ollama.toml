@@ -76,3 +76,15 @@ context_window = 131072
 supports_tools = false
 supports_temperature = true
 default_max_tokens = 4096
+
+[qwen3-coder]
+context_window = 32768
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+["glm-4.7-flash"]
+context_window = 32768
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096

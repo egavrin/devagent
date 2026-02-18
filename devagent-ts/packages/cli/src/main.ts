@@ -19,7 +19,7 @@ import {
 } from "@devagent/core";
 import type { DevAgentConfig, ApprovalPolicy } from "@devagent/core";
 import { ApprovalMode } from "@devagent/core";
-import { createDefaultRegistry } from "@devagent/providers";
+import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
 import { createDefaultToolRegistry, McpHub } from "@devagent/tools";
 import { TaskLoop, createBuiltinPlugins, createPlanTool } from "@devagent/engine";
 import type { TaskMode } from "@devagent/engine";
@@ -231,6 +231,18 @@ export async function main(): Promise<void> {
   }
 
   const provider = providerRegistry.get(config.provider, providerConfig);
+
+  // Pre-flight: validate Ollama model availability before session setup
+  if (config.provider === "ollama") {
+    try {
+      const ollamaBaseUrl = providerConfig.baseUrl ?? "http://localhost:11434/v1";
+      await validateOllamaModel(config.model, ollamaBaseUrl);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(formatError(msg) + "\n");
+      process.exit(1);
+    }
+  }
 
   // Set up tools, bus, approval
   const toolRegistry = createDefaultToolRegistry();
