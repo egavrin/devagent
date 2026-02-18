@@ -42,10 +42,9 @@ export class Spinner {
   }
 
   stop(finalMessage?: string): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    if (!this.timer) return; // Not running — nothing to clear
+    clearInterval(this.timer);
+    this.timer = null;
     // Clear the spinner line
     process.stderr.write("\x1b[2K\r");
     if (finalMessage) {

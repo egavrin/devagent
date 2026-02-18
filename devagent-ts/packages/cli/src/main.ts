@@ -324,9 +324,25 @@ const spinner = new Spinner();
 /** Mutable iteration counter — updated by tool:before events, reset per query turn. */
 let currentIteration = 0;
 
+/** Tracks whether any tool was called this turn — for visual separator before final response. */
+let hadToolCalls = false;
+
+/**
+ * Buffer for streamed assistant text. Text is buffered during each LLM iteration.
+ * If tool calls follow (tool:before fires), the buffer is discarded (it was thinking text).
+ * If no tool calls follow (final response), the buffer is flushed to stdout.
+ */
+let textBuffer = "";
+
+/** Whether we're currently buffering text (between first partial text and tool:before/end). */
+let isBufferingText = false;
+
 /** Reset per query turn so formatToolStart shows correct [n/max] counter. */
 export function resetOutputIteration(): void {
   currentIteration = 0;
+  hadToolCalls = false;
+  textBuffer = "";
+  isBufferingText = false;
 }
 
 function setupEventHandlers(
@@ -344,7 +360,12 @@ function setupEventHandlers(
     // Stop spinner — a tool call arrived
     spinner.stop();
 
+    // Discard any buffered thinking text that preceded these tool calls
+    textBuffer = "";
+    isBufferingText = false;
+
     currentIteration++;
+    hadToolCalls = true;
 
     if (verbosity === "quiet") return;
 
@@ -408,8 +429,13 @@ function setupEventHandlers(
 
   bus.on("message:assistant", (event) => {
     if (event.partial) {
-      // First text chunk from LLM — stop spinner
+      // Stop spinner on first text chunk
       spinner.stop();
+      // Buffer the text — it might be thinking text before tool calls,
+      // or it might be the final response. We'll know when tool:before
+      // fires (discard buffer) or the loop ends (flush buffer to stdout).
+      textBuffer += event.content;
+      isBufferingText = true;
     }
   });
 
@@ -457,15 +483,6 @@ async function runSingleQuery(
 ): Promise<void> {
   const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills });
 
-  // Stream assistant output to stdout
-  let isFirstChunk = true;
-  bus.on("message:assistant", (event) => {
-    if (event.partial) {
-      process.stdout.write(event.content);
-      isFirstChunk = false;
-    }
-  });
-
   resetOutputIteration();
   const startTime = Date.now();
 
@@ -485,7 +502,11 @@ async function runSingleQuery(
   // Stop spinner in case LLM finished without emitting text
   spinner.stop();
 
-  if (!isFirstChunk) process.stdout.write("\n");
+  // Flush buffered final response to stdout
+  if (textBuffer.trim()) {
+    if (hadToolCalls) process.stderr.write("\n");
+    process.stdout.write(textBuffer + "\n");
+  }
 
   if (verbosity !== "quiet") {
     const elapsed = Date.now() - startTime;
@@ -546,13 +567,6 @@ async function runInteractive(
     systemPrompt,
     repoRoot,
     mode,
-  });
-
-  // Stream assistant output to stdout
-  bus.on("message:assistant", (event) => {
-    if (event.partial) {
-      process.stdout.write(event.content);
-    }
   });
 
   rl.prompt();
@@ -657,12 +671,16 @@ async function runInteractive(
       // Stop spinner in case LLM finished without emitting text
       spinner.stop();
 
-      process.stdout.write("\n\n");
+      // Flush buffered final response to stdout
+      if (textBuffer.trim()) {
+        if (hadToolCalls) process.stderr.write("\n");
+        process.stdout.write(textBuffer + "\n");
+      }
 
       if (verbosity !== "quiet") {
         const elapsed = Date.now() - turnStart;
-        const result = loop.getIterations();
-        process.stderr.write(formatSummary(result, elapsed) + "\n");
+        const iterations = loop.getIterations();
+        process.stderr.write(formatSummary(iterations, elapsed) + "\n");
       }
     } catch (err) {
       spinner.stop();
