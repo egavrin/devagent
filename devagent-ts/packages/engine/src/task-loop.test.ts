@@ -12,6 +12,7 @@ import {
   ApprovalGate,
   ApprovalMode,
   MessageRole,
+  ProviderError,
 } from "@devagent/core";
 import { ToolRegistry } from "@devagent/tools";
 
@@ -461,5 +462,172 @@ describe("TaskLoop", () => {
     loop.abort();
     loop.resetIterations();
     expect(loop.getIterations()).toBe(0);
+  });
+
+  // ─── Provider Error Retry Tests ──────────────────────────────
+
+  it("propagates ProviderError when provider throws", async () => {
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "failing",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        throw new ProviderError("Connection refused");
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    await expect(loop.run("hello")).rejects.toThrow(ProviderError);
+    // 1 initial + 3 retries = 4 total calls
+    expect(callCount).toBe(4);
+  });
+
+  it("retries on ProviderError and succeeds on second attempt", async () => {
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "flaky",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (callCount === 1) {
+          throw new ProviderError("Temporary failure");
+        }
+        yield { type: "text", content: "Success after retry" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("hello");
+    expect(callCount).toBe(2);
+    expect(result.iterations).toBe(1);
+
+    const assistantMsgs = result.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT,
+    );
+    expect(assistantMsgs[assistantMsgs.length - 1]!.content).toBe(
+      "Success after retry",
+    );
+  });
+
+  it("throws after exhausting all retry attempts", async () => {
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "always-failing",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        throw new ProviderError("Persistent failure");
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    await expect(loop.run("hello")).rejects.toThrow("Persistent failure");
+    expect(callCount).toBe(4); // 1 initial + 3 retries
+  });
+
+  it("does not retry non-ProviderError exceptions", async () => {
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "type-error",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        throw new TypeError("Cannot read property 'x' of undefined");
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    await expect(loop.run("hello")).rejects.toThrow(TypeError);
+    expect(callCount).toBe(1); // No retry
+  });
+
+  it("emits PROVIDER_RETRY error events during retries", async () => {
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "retry-events",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (callCount <= 2) {
+          throw new ProviderError("Transient error");
+        }
+        yield { type: "text", content: "Finally works" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const retryEvents: Array<{ message: string; code: string; fatal: boolean }> = [];
+    bus.on("error", (event) => {
+      if ((event as { code?: string }).code === "PROVIDER_RETRY") {
+        retryEvents.push(event as { message: string; code: string; fatal: boolean });
+      }
+    });
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("hello");
+    expect(callCount).toBe(3);
+    expect(retryEvents.length).toBe(2);
+    expect(retryEvents[0]!.code).toBe("PROVIDER_RETRY");
+    expect(retryEvents[0]!.fatal).toBe(false);
+    expect(retryEvents[1]!.code).toBe("PROVIDER_RETRY");
+    expect(result.iterations).toBe(1);
   });
 });

@@ -90,8 +90,15 @@ function summarizeToolParams(name: string, params: Record<string, unknown>): str
       return `${path} (${content.length} bytes)`;
     }
 
-    case "replace_in_file":
-      return (params["path"] as string) ?? "";
+    case "replace_in_file": {
+      const rifPath = (params["path"] as string) ?? "";
+      const search = params["search"] as string | undefined;
+      if (search) {
+        const firstLine = search.split("\n")[0] ?? "";
+        return `${rifPath} "${truncate(firstLine.trim(), 30)}"`;
+      }
+      return rifPath;
+    }
 
     case "search_files": {
       const pattern = params["pattern"] as string ?? "";

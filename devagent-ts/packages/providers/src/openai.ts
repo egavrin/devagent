@@ -157,11 +157,7 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
               break;
 
             case "error":
-              yield {
-                type: "error",
-                content: String(part.error),
-              };
-              break;
+              throw new ProviderError(`OpenAI stream error: ${String(part.error)}`);
 
             case "finish":
               yield {
@@ -176,6 +172,7 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
           yield { type: "done", content: "" };
           return;
         }
+        if (err instanceof ProviderError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         throw new ProviderError(`OpenAI API error: ${msg}`);
       } finally {

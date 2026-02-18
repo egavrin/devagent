@@ -65,11 +65,7 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
               break;
 
             case "error":
-              yield {
-                type: "error",
-                content: String(part.error),
-              };
-              break;
+              throw new ProviderError(`Anthropic stream error: ${String(part.error)}`);
 
             case "finish":
               yield {
@@ -84,6 +80,7 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
           yield { type: "done", content: "" };
           return;
         }
+        if (err instanceof ProviderError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         throw new ProviderError(`Anthropic API error: ${msg}`);
       } finally {

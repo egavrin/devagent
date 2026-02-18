@@ -19,6 +19,7 @@ import {
   EventBus,
   ApprovalGate,
   BudgetExceededError,
+  ProviderError,
 } from "@devagent/core";
 import type { ToolRegistry } from "@devagent/tools";
 
@@ -116,10 +117,26 @@ export class TaskLoop {
       // Get available tools based on mode
       const availableTools = this.getAvailableTools();
 
-      // Stream LLM response
-      const { textContent, toolCalls } = await this.streamLLMResponse(
-        availableTools,
-      );
+      // Stream LLM response with retry on transient provider errors
+      let textContent = "";
+      let toolCalls: PendingToolCall[] = [];
+      for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
+        try {
+          const result = await this.streamLLMResponse(availableTools);
+          textContent = result.textContent;
+          toolCalls = result.toolCalls;
+          break;
+        } catch (err) {
+          if (!(err instanceof ProviderError)) throw err;
+          if (attempt >= RETRY_DELAYS.length) throw err; // Exhausted retries
+          this.bus.emit("error", {
+            message: `Provider error (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}): ${(err as Error).message}. Retrying in ${RETRY_DELAYS[attempt]!}ms…`,
+            code: "PROVIDER_RETRY",
+            fatal: false,
+          });
+          await sleep(RETRY_DELAYS[attempt]!);
+        }
+      }
 
       if (toolCalls.length > 0) {
         // Add single assistant message with both text and tool calls
@@ -264,14 +281,6 @@ export class TaskLoop {
           break;
         }
 
-        case "error":
-          this.bus.emit("error", {
-            message: chunk.content,
-            code: "PROVIDER_ERROR",
-            fatal: false,
-          });
-          break;
-
         case "done":
           break;
       }
@@ -383,6 +392,18 @@ export class TaskLoop {
     }
     return null;
   }
+}
+
+// ─── Retry Constants ─────────────────────────────────────────
+
+/** Delay (ms) before each retry attempt. Length = max retries. */
+const RETRY_DELAYS = [300, 900, 1800] as const;
+
+/** Total attempts = 1 initial + retries. */
+const MAX_RETRY_ATTEMPTS = RETRY_DELAYS.length + 1;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ─── Helpers ────────────────────────────────────────────────
