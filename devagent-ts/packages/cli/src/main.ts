@@ -13,6 +13,7 @@ import {
   SkillRegistry,
   ContextManager,
   loadConfig,
+  resolveProviderCredentials,
   findProjectRoot,
   loadModelRegistry,
   lookupModelCapabilities,
@@ -49,6 +50,7 @@ interface CliArgs {
   maxIterations: number | null;
   reasoning: "low" | "medium" | "high" | null;
   verbosity: Verbosity;
+  authCommand: string | null;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -63,12 +65,17 @@ function parseArgs(argv: string[]): CliArgs {
     maxIterations: null,
     reasoning: null,
     verbosity: "normal",
+    authCommand: null,
   };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
 
-    if (arg === "chat") {
+    if (arg === "auth") {
+      result.authCommand = args[i + 1] ?? "login";
+      i++;
+      return result; // auth is handled before anything else
+    } else if (arg === "chat") {
       result.interactive = true;
     } else if (arg === "--desktop") {
       result.desktop = true;
@@ -128,8 +135,13 @@ Usage:
   devagent chat                   Interactive chat mode
   devagent --plan "<query>"       Plan mode (read-only analysis)
 
+Auth:
+  devagent auth login             Store API key for a provider
+  devagent auth status            Show configured credentials
+  devagent auth logout            Remove stored credentials
+
 Options:
-  --provider <name>     LLM provider (anthropic, openai, ollama)
+  --provider <name>     LLM provider (anthropic, openai, ollama, chatgpt, github-copilot)
   --model <id>          Model ID
   --max-iterations <n>  Max tool-call iterations (default: 30)
   --reasoning <level>   Reasoning effort: low, medium, high
@@ -165,6 +177,13 @@ Installation:
 export async function main(): Promise<void> {
   const cliArgs = parseArgs(process.argv);
 
+  // Auth commands — handle before config loading (doesn't need provider setup)
+  if (cliArgs.authCommand) {
+    const { runAuthCommand } = await import("./auth.js");
+    await runAuthCommand(cliArgs.authCommand);
+    return;
+  }
+
   // Desktop bridge mode — JSON-lines protocol for Tauri IPC
   if (cliArgs.desktop) {
     await runDesktopBridge({
@@ -186,6 +205,16 @@ export async function main(): Promise<void> {
   };
 
   let config = loadConfig(projectRoot, configOverrides);
+
+  // Resolve OAuth credentials (refresh expired tokens) — must come before provider setup
+  try {
+    config = await resolveProviderCredentials(config);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(formatError(`OAuth credential error: ${msg}`) + "\n");
+    process.stderr.write(dim('Run "devagent auth login" to re-authenticate.') + "\n");
+    process.exit(1);
+  }
 
   // Apply CLI overrides that loadConfig doesn't handle
   if (cliArgs.maxIterations !== null) {
@@ -218,14 +247,14 @@ export async function main(): Promise<void> {
       : {}),
   };
 
-  // Providers that don't require an API key (local endpoints)
-  const noKeyProviders = new Set(["ollama"]);
-  if (!providerConfig.apiKey && !noKeyProviders.has(config.provider)) {
+  // Providers that don't require an API key (local endpoints or OAuth-based)
+  const noKeyProviders = new Set(["ollama", "chatgpt", "github-copilot"]);
+  if (!providerConfig.apiKey && !providerConfig.oauthToken && !noKeyProviders.has(config.provider)) {
     process.stderr.write(
       formatError(`No API key configured for provider "${config.provider}".`) + "\n",
     );
     process.stderr.write(
-      dim("Set DEVAGENT_API_KEY or configure in .devagent.toml") + "\n",
+      dim('Run "devagent auth login" to store a key, or set DEVAGENT_API_KEY') + "\n",
     );
     process.exit(1);
   }

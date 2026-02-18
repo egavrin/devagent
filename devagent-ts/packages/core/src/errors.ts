@@ -120,3 +120,19 @@ export class SessionError extends DevAgentError {
     this.name = "SessionError";
   }
 }
+
+// ─── Credential Errors ──────────────────────────────────────
+
+export class CredentialError extends DevAgentError {
+  constructor(message: string) {
+    super(message, "CREDENTIAL_ERROR");
+    this.name = "CredentialError";
+  }
+}
+
+export class OAuthError extends CredentialError {
+  constructor(message: string) {
+    super(message);
+    this.name = "OAuthError";
+  }
+}

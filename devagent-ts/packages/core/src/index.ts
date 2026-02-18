@@ -59,7 +59,7 @@ export type {
 } from "./events.js";
 
 // Config
-export { loadConfig, findProjectRoot } from "./config.js";
+export { loadConfig, findProjectRoot, resolveProviderCredentials } from "./config.js";
 
 // Model registry
 export {
@@ -113,6 +113,48 @@ export type {
   MemorySearchOptions,
 } from "./memory.js";
 
+// Credentials (persistent API key and OAuth token storage)
+export { CredentialStore } from "./credentials.js";
+export type {
+  Credential,
+  ApiCredential,
+  OAuthCredential,
+  CredentialInfo,
+  CredentialStoreOptions,
+} from "./credentials.js";
+
+// OAuth primitives
+export {
+  generatePKCE,
+  generateState,
+  startCallbackServer,
+  exchangeCodeForTokens,
+  refreshAccessToken,
+  requestDeviceCode,
+  pollDeviceCodeToken,
+  requestChatGPTDeviceCode,
+  pollChatGPTDeviceAuth,
+  exchangeChatGPTDeviceToken,
+  exchangeCopilotSessionToken,
+  extractAccountIdFromIdToken,
+} from "./oauth.js";
+export type {
+  PKCEPair,
+  TokenResponse,
+  DeviceCodeResponse,
+  ChatGPTDeviceCodeResponse,
+  CopilotSessionToken,
+  CallbackResult,
+  CallbackServer,
+} from "./oauth.js";
+
+// OAuth provider configs
+export { getOAuthProvider, OAUTH_PROVIDERS } from "./oauth-providers.js";
+export type { OAuthProviderConfig } from "./oauth-providers.js";
+
+// Browser URL opener
+export { openUrl } from "./open-url.js";
+
 // Errors
 export {
   DevAgentError,
@@ -128,4 +170,6 @@ export {
   ApprovalDeniedError,
   BudgetExceededError,
   SessionError,
+  CredentialError,
+  OAuthError,
 } from "./errors.js";

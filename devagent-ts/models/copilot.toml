@@ -1,0 +1,33 @@
+provider = "github-copilot"
+
+# Standard models (included with Copilot subscription)
+[gpt-4o]
+context_window = 128000
+supports_temperature = true
+default_max_tokens = 4096
+
+["gpt-4.1"]
+context_window = 1047576
+supports_temperature = true
+default_max_tokens = 32768
+
+[gpt-5-mini]
+context_window = 1047576
+supports_temperature = true
+default_max_tokens = 32768
+
+# Premium models (may require Copilot Pro)
+[claude-sonnet-4]
+context_window = 200000
+supports_temperature = true
+default_max_tokens = 16384
+
+["claude-sonnet-4.5"]
+context_window = 200000
+supports_temperature = true
+default_max_tokens = 16384
+
+[gemini-2-5-pro]
+context_window = 1048576
+supports_temperature = true
+default_max_tokens = 65536

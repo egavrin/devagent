@@ -152,6 +152,10 @@ export interface ModelCapabilities {
 
 export interface ProviderConfig {
   readonly apiKey?: string;
+  /** OAuth Bearer token (from browser/device-code login). */
+  readonly oauthToken?: string;
+  /** OAuth account ID (e.g., ChatGPT org ID for subscription routing). */
+  readonly oauthAccountId?: string;
   readonly baseUrl?: string;
   readonly model: string;
   readonly maxTokens?: number;
@@ -159,6 +163,16 @@ export interface ProviderConfig {
   /** Reasoning effort: none, low, medium, high, xhigh (model-dependent). */
   readonly reasoningEffort?: "low" | "medium" | "high";
   readonly capabilities?: ModelCapabilities;
+  /** ChatGPT Codex-specific options (store, include, instructions). */
+  readonly codexOptions?: {
+    readonly store?: boolean;
+    readonly include?: ReadonlyArray<string>;
+    readonly instructions?: string;
+  };
+  /** Custom headers to send with every API request. Used by Copilot provider. */
+  readonly customHeaders?: Record<string, string>;
+  /** Fields to strip from request bodies (Copilot rejects store, metadata, etc.). */
+  readonly stripFields?: ReadonlyArray<string>;
 }
 
 // ─── Approval Types ──────────────────────────────────────────

@@ -8,6 +8,7 @@ import { parse as parseToml } from "smol-toml";
 import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { CredentialStore } from "./credentials.js";
 import type {
   DevAgentConfig,
   ApprovalPolicy,
@@ -200,6 +201,18 @@ export function loadConfig(
     providers[key] = mergeProviderConfig(value);
   }
 
+  // Inject stored credentials into provider configs missing apiKey
+  // Priority: env var > stored credentials > TOML config
+  const credentialStore = new CredentialStore();
+  for (const [key, provConfig] of Object.entries(providers)) {
+    if (!provConfig.apiKey) {
+      const stored = credentialStore.get(key);
+      if (stored?.type === "api") {
+        providers[key] = { ...provConfig, apiKey: stored.key };
+      }
+    }
+  }
+
   // Check env overrides
   const envProvider = process.env["DEVAGENT_PROVIDER"];
   const envModel = process.env["DEVAGENT_MODEL"];
@@ -248,19 +261,23 @@ export function loadConfig(
     ...overrides?.arkts,
   };
 
-  // Resolve top-level api_key if it references env
+  // Resolve top-level api_key: TOML > env var > stored credentials
   const topLevelApiKey = fileConfig["api_key"] as string | undefined;
-  const resolvedApiKey = topLevelApiKey
-    ? (resolveEnvValue(topLevelApiKey) as string)
-    : envApiKey;
 
-  // If we have a top-level API key, inject it into the provider config
+  // Determine provider early so we can look up stored credentials
   const provider =
     envProvider ??
     overrides?.provider ??
     (fileConfig["provider"] as string) ??
     DEFAULT_CONFIG.provider;
 
+  const storedCred = credentialStore.get(provider);
+  const storedApiKey = storedCred?.type === "api" ? storedCred.key : undefined;
+  const resolvedApiKey = topLevelApiKey
+    ? (resolveEnvValue(topLevelApiKey) as string)
+    : envApiKey ?? storedApiKey;
+
+  // If we have a top-level API key, inject it into the provider config
   if (resolvedApiKey && !providers[provider]) {
     providers[provider] = {
       model:
@@ -341,4 +358,106 @@ export function findProjectRoot(startDir?: string): string | null {
   }
 
   return null;
+}
+
+// ─── OAuth Credential Resolution ────────────────────────────
+
+import type { OAuthCredential } from "./credentials.js";
+import { getOAuthProvider } from "./oauth-providers.js";
+import { refreshAccessToken, exchangeCopilotSessionToken } from "./oauth.js";
+import { OAuthError } from "./errors.js";
+
+/**
+ * Resolve OAuth credentials for all providers that have stored OAuth tokens.
+ * Refreshes expired tokens automatically. Call after loadConfig() in main().
+ * Keeps loadConfig() synchronous — async refresh is deferred to this function.
+ */
+export async function resolveProviderCredentials(
+  config: DevAgentConfig,
+): Promise<DevAgentConfig> {
+  const credentialStore = new CredentialStore();
+  const updatedProviders: Record<string, ProviderConfig> = { ...config.providers };
+
+  // Check the active provider for OAuth credentials
+  const providersToCheck = new Set(Object.keys(updatedProviders));
+  providersToCheck.add(config.provider);
+
+  for (const key of providersToCheck) {
+    const provConfig = updatedProviders[key];
+    // Skip if already has apiKey or oauthToken
+    if (provConfig?.apiKey || provConfig?.oauthToken) continue;
+
+    const stored = credentialStore.get(key);
+    if (stored?.type !== "oauth") continue;
+
+    let accessToken = stored.accessToken;
+
+    // Refresh if expired (1-minute buffer).
+    // Skip refresh for tokens without expiresAt (e.g., GitHub OAuth — non-expiring).
+    const isExpired = stored.expiresAt != null && stored.expiresAt < Date.now() + 60_000;
+    if (isExpired && stored.refreshToken) {
+      const oauthConfig = getOAuthProvider(key);
+      if (!oauthConfig) {
+        throw new OAuthError(
+          `OAuth token for "${key}" is expired but no OAuth config found to refresh. Run "devagent auth login" to re-authenticate.`,
+        );
+      }
+
+      try {
+        const newTokens = await refreshAccessToken(
+          oauthConfig.tokenUrl,
+          stored.refreshToken,
+          oauthConfig.clientId,
+        );
+        const updated: OAuthCredential = {
+          type: "oauth",
+          accessToken: newTokens.access_token,
+          ...(newTokens.refresh_token ? { refreshToken: newTokens.refresh_token } : {}),
+          ...(newTokens.expires_in ? { expiresAt: Date.now() + newTokens.expires_in * 1000 } : {}),
+          accountId: stored.accountId,
+          storedAt: Date.now(),
+        };
+        credentialStore.set(key, updated);
+        accessToken = updated.accessToken;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new OAuthError(
+          `Failed to refresh OAuth token for "${key}": ${msg}. Run "devagent auth login" to re-authenticate.`,
+        );
+      }
+    } else if (isExpired && !stored.refreshToken) {
+      throw new OAuthError(
+        `OAuth token for "${key}" is expired and cannot be refreshed (no refresh token). Run "devagent auth login" to re-authenticate.`,
+      );
+    }
+
+    // Inject OAuth token into provider config
+    const existingConfig = updatedProviders[key] ?? { model: config.model };
+
+    if (key === "github-copilot") {
+      // GitHub Copilot requires exchanging the GitHub OAuth token for a
+      // short-lived Copilot session JWT before API calls.
+      try {
+        const session = await exchangeCopilotSessionToken(accessToken);
+        updatedProviders[key] = {
+          ...existingConfig,
+          oauthToken: session.token,
+          baseUrl: session.endpoint ?? existingConfig.baseUrl,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new OAuthError(
+          `Failed to obtain Copilot session token: ${msg}. Run "devagent auth login" to re-authenticate.`,
+        );
+      }
+    } else {
+      updatedProviders[key] = {
+        ...existingConfig,
+        oauthToken: accessToken,
+        oauthAccountId: stored.accountId,
+      };
+    }
+  }
+
+  return { ...config, providers: updatedProviders };
 }
