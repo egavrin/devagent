@@ -3,6 +3,10 @@
  * Streams LLM responses, parses tool calls, checks approval,
  * executes tools, feeds results back to LLM.
  * Fail fast: tool errors surface to LLM immediately.
+ *
+ * Auto-compaction: monitors estimated token usage and triggers
+ * context truncation (sliding window or LLM-based summarization)
+ * when approaching the budget limit, following the Codex pattern.
  */
 
 import type {
@@ -20,12 +24,20 @@ import {
   ApprovalGate,
   BudgetExceededError,
   ProviderError,
+  ContextManager,
+  estimateMessageTokens,
 } from "@devagent/core";
 import type { ToolRegistry } from "@devagent/tools";
 
 // ─── Types ──────────────────────────────────────────────────
 
 export type TaskMode = "plan" | "act";
+
+export type TaskCompletionStatus =
+  | "success"
+  | "empty_response"
+  | "budget_exceeded"
+  | "aborted";
 
 export interface TaskLoopOptions {
   readonly provider: LLMProvider;
@@ -36,6 +48,7 @@ export interface TaskLoopOptions {
   readonly systemPrompt: string;
   readonly repoRoot: string;
   readonly mode?: TaskMode;
+  readonly contextManager?: ContextManager;
 }
 
 export interface TaskLoopResult {
@@ -43,6 +56,8 @@ export interface TaskLoopResult {
   readonly iterations: number;
   readonly cost: CostRecord;
   readonly aborted: boolean;
+  readonly status: TaskCompletionStatus;
+  readonly lastText: string | null;
 }
 
 interface PendingToolCall {
@@ -61,6 +76,7 @@ export class TaskLoop {
   private readonly config: DevAgentConfig;
   private readonly systemPrompt: string;
   private readonly repoRoot: string;
+  private readonly contextManager: ContextManager | null;
   private mode: TaskMode;
   private messages: Message[] = [];
   private iterations = 0;
@@ -72,7 +88,8 @@ export class TaskLoop {
     totalCost: 0,
   };
   private aborted = false;
-  private consecutiveFailures = 0;
+  private recentToolCalls: Array<{ name: string; argsKey: string }> = [];
+  private doomLoopWarned = false;
 
   constructor(options: TaskLoopOptions) {
     this.provider = options.provider;
@@ -83,6 +100,7 @@ export class TaskLoop {
     this.systemPrompt = options.systemPrompt;
     this.repoRoot = options.repoRoot;
     this.mode = options.mode ?? "act";
+    this.contextManager = options.contextManager ?? null;
 
     // Add system prompt as first message
     this.messages.push({
@@ -104,18 +122,33 @@ export class TaskLoop {
     });
     this.bus.emit("message:user", { content: userQuery });
 
+    let hadToolCalls = false;
+    let summaryRequested = false;
+    let budgetGraceUsed = false;
+    let lastNonEmptyText: string | null = null;
+    let status: TaskCompletionStatus = "success";
+
     while (!this.aborted) {
       // Check budget (0 = unlimited)
       if (this.config.budget.maxIterations > 0 && this.iterations >= this.config.budget.maxIterations) {
-        throw new BudgetExceededError(
-          `Max iterations (${this.config.budget.maxIterations}) exceeded`,
-        );
+        if (!budgetGraceUsed) {
+          // Grace iteration: ask the model to summarize before stopping
+          budgetGraceUsed = true;
+          this.messages.push({
+            role: MessageRole.SYSTEM,
+            content: "You have reached the iteration limit. Please provide a concise summary of your progress and findings so far. Do not use any tools — respond with text only.",
+          });
+          // Fall through to allow one more LLM call
+        } else {
+          status = "budget_exceeded";
+          break;
+        }
       }
 
       this.iterations++;
 
-      // Get available tools based on mode
-      const availableTools = this.getAvailableTools();
+      // Get available tools based on mode (no tools during grace iteration)
+      const availableTools = budgetGraceUsed ? [] : this.getAvailableTools();
 
       // Stream LLM response with retry on transient provider errors
       let textContent = "";
@@ -138,7 +171,14 @@ export class TaskLoop {
         }
       }
 
+      // Track last non-empty text from the LLM (even if tool calls follow)
+      if (textContent.trim()) {
+        lastNonEmptyText = textContent;
+      }
+
       if (toolCalls.length > 0) {
+        hadToolCalls = true;
+
         // Add single assistant message with both text and tool calls
         this.messages.push({
           role: MessageRole.ASSISTANT,
@@ -165,17 +205,17 @@ export class TaskLoop {
           });
         }
 
-        // Inject failure warning if needed
-        const failureWarning = this.getFailureWarning();
-        if (failureWarning) {
+        // Doom loop detection: warn the LLM if it's repeating identical failing calls
+        const doomLoopWarning = this.checkDoomLoop(toolCalls);
+        if (doomLoopWarning) {
           this.messages.push({
             role: MessageRole.SYSTEM,
-            content: failureWarning,
+            content: doomLoopWarning,
           });
-          if (this.consecutiveFailures >= 5) {
-            break;
-          }
         }
+
+        // Auto-compact: check if context is approaching token budget
+        await this.maybeCompactContext();
 
         // Continue loop — feed tool results back to LLM
         continue;
@@ -191,9 +231,27 @@ export class TaskLoop {
           content: textContent,
           partial: false,
         });
+        status = "success";
+        break;
       }
 
+      // Empty response — try to get a summary if work was done
+      if (hadToolCalls && !summaryRequested) {
+        summaryRequested = true;
+        this.messages.push({
+          role: MessageRole.SYSTEM,
+          content: "Please provide a summary of your findings and conclusions based on the work done so far.",
+        });
+        continue;
+      }
+
+      // Still empty after summary request — give up gracefully
+      status = hadToolCalls ? "empty_response" : "success";
       break;
+    }
+
+    if (this.aborted && status === "success") {
+      status = "aborted";
     }
 
     return {
@@ -201,6 +259,8 @@ export class TaskLoop {
       iterations: this.iterations,
       cost: this.totalCost,
       aborted: this.aborted,
+      status,
+      lastText: lastNonEmptyText,
     };
   }
 
@@ -238,10 +298,44 @@ export class TaskLoop {
   resetIterations(): void {
     this.iterations = 0;
     this.aborted = false;
-    this.consecutiveFailures = 0;
+    this.recentToolCalls = [];
+    this.doomLoopWarned = false;
   }
 
   // ─── Private ────────────────────────────────────────────────
+
+  /**
+   * Auto-compact context when approaching the token budget.
+   * Uses the ContextManager's truncateAsync (sliding window or hybrid
+   * summarization) to compress older messages while preserving the
+   * system prompt and original user task.
+   */
+  private async maybeCompactContext(): Promise<void> {
+    if (!this.contextManager) return;
+
+    const maxTokens = this.config.budget.maxContextTokens;
+    if (maxTokens <= 0) return;
+
+    const estimatedTokens = estimateMessageTokens(this.messages);
+    const threshold = maxTokens * this.config.context.triggerRatio;
+
+    if (estimatedTokens <= threshold) return;
+
+    this.bus.emit("context:compacting", { estimatedTokens, maxTokens });
+
+    const result = await this.contextManager.truncateAsync(
+      this.messages,
+      maxTokens,
+    );
+
+    if (result.truncated) {
+      this.messages = [...result.messages];
+      this.bus.emit("context:compacted", {
+        removedCount: result.removedCount,
+        estimatedTokens: result.estimatedTokens,
+      });
+    }
+  }
 
   private getAvailableTools(): ReadonlyArray<ToolSpec> {
     if (this.mode === "plan") {
@@ -360,11 +454,17 @@ export class TaskLoop {
 
     const durationMs = Date.now() - startTime;
 
-    // Track consecutive failures
+    // Track recent tool calls for doom loop detection
     if (result.success) {
-      this.consecutiveFailures = 0;
+      // Success resets doom loop tracking — the LLM found a working approach
+      this.recentToolCalls = [];
+      this.doomLoopWarned = false;
     } else {
-      this.consecutiveFailures++;
+      const argsKey = JSON.stringify(toolCall.arguments);
+      this.recentToolCalls.push({ name: toolCall.name, argsKey });
+      if (this.recentToolCalls.length > DOOM_LOOP_THRESHOLD) {
+        this.recentToolCalls.shift();
+      }
     }
 
     // Fire tool:after event
@@ -379,20 +479,44 @@ export class TaskLoop {
   }
 
   /**
-   * Check if a failure warning should be injected after tool results.
-   * Returns a warning message if 3+ consecutive failures, null otherwise.
-   * At 5+ failures, the loop should break.
+   * Doom loop detection: check if the LLM keeps calling the same tool
+   * with identical arguments and it keeps failing.
+   * Returns a warning message to inject, or null if no doom loop detected.
+   *
+   * Following the OpenCode pattern (DOOM_LOOP_THRESHOLD = 3):
+   * - Does NOT kill the loop — the LLM gets to try a different approach
+   * - Warning is injected once per doom loop pattern
+   * - Resets when any tool call succeeds (see executeToolCall)
    */
-  private getFailureWarning(): string | null {
-    if (this.consecutiveFailures >= 5) {
-      return "CRITICAL: 5 consecutive tool failures. Stopping execution. Report the issue to the user and suggest a different approach.";
-    }
-    if (this.consecutiveFailures >= 3) {
-      return "Warning: 3 consecutive tool failures. Consider a different approach or ask the user for guidance.";
-    }
-    return null;
+  private checkDoomLoop(toolCalls: ReadonlyArray<PendingToolCall>): string | null {
+    if (this.recentToolCalls.length < DOOM_LOOP_THRESHOLD) return null;
+
+    // Check if all recent calls are identical (same tool + same args)
+    const first = this.recentToolCalls[0]!;
+    const isDoomLoop = this.recentToolCalls.every(
+      (tc) => tc.name === first.name && tc.argsKey === first.argsKey,
+    );
+
+    if (!isDoomLoop) return null;
+    if (this.doomLoopWarned) return null; // Only warn once per pattern
+
+    this.doomLoopWarned = true;
+    const toolName = first.name;
+
+    this.bus.emit("error", {
+      message: `Doom loop detected: "${toolName}" called ${DOOM_LOOP_THRESHOLD} times with identical arguments and keeps failing.`,
+      code: "DOOM_LOOP",
+      fatal: false,
+    });
+
+    return `WARNING: You have called "${toolName}" ${DOOM_LOOP_THRESHOLD} times with the exact same arguments, and it keeps failing. This approach is not working. Try a completely different strategy — change the command arguments, use a different tool, or modify your approach. Do NOT repeat the same failing call.`;
   }
 }
+
+// ─── Doom Loop Detection ─────────────────────────────────────
+
+/** Number of identical failing tool calls (same name + same args) that triggers a doom loop warning. */
+const DOOM_LOOP_THRESHOLD = 3;
 
 // ─── Retry Constants ─────────────────────────────────────────
 

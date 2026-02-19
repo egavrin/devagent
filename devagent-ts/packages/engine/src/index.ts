@@ -5,6 +5,7 @@
 export { TaskLoop } from "./task-loop.js";
 export type {
   TaskMode,
+  TaskCompletionStatus,
   TaskLoopOptions,
   TaskLoopResult,
 } from "./task-loop.js";

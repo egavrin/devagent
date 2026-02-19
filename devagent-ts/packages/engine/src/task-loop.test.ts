@@ -234,7 +234,7 @@ describe("TaskLoop", () => {
     expect(toolMessages[0]!.content).toContain("Error: Intentional failure");
   });
 
-  it("enforces budget limit", async () => {
+  it("enforces budget limit with grace iteration", async () => {
     // Provider that always returns tool calls (infinite loop)
     let callCount = 0;
     const provider: LLMProvider = {
@@ -269,9 +269,11 @@ describe("TaskLoop", () => {
       repoRoot: "/tmp",
     });
 
-    await expect(loop.run("Loop forever")).rejects.toThrow(
-      "Max iterations",
-    );
+    // Now resolves with budget_exceeded status instead of throwing,
+    // because the loop injects a grace iteration for summary
+    const result = await loop.run("Loop forever");
+    expect(result.status).toBe("budget_exceeded");
+    expect(result.iterations).toBeGreaterThanOrEqual(3);
   });
 
   it("respects plan mode (readonly tools only)", async () => {
@@ -587,6 +589,146 @@ describe("TaskLoop", () => {
     expect(callCount).toBe(1); // No retry
   });
 
+  it("returns success status on normal completion", async () => {
+    const provider = createMockProvider([
+      [
+        { type: "text", content: "All done!" },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Hello");
+    expect(result.status).toBe("success");
+    expect(result.lastText).toBe("All done!");
+  });
+
+  it("retries with summary request on empty response after tool calls", async () => {
+    const provider = createMockProvider([
+      // First: tool call
+      [
+        {
+          type: "tool_call",
+          content: '{"text": "test"}',
+          toolCallId: "call_0",
+          toolName: "echo",
+        },
+        { type: "done", content: "" },
+      ],
+      // Second: empty response (no text, no tool calls)
+      [{ type: "done", content: "" }],
+      // Third: response after summary request injection
+      [
+        { type: "text", content: "Here is the summary" },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Do the thing");
+    expect(result.status).toBe("success");
+    expect(result.lastText).toBe("Here is the summary");
+  });
+
+  it("returns empty_response when summary retry also produces no text", async () => {
+    const provider = createMockProvider([
+      // First: tool call
+      [
+        {
+          type: "tool_call",
+          content: '{"text": "test"}',
+          toolCallId: "call_0",
+          toolName: "echo",
+        },
+        { type: "done", content: "" },
+      ],
+      // Second: empty response
+      [{ type: "done", content: "" }],
+      // Third: still empty after summary request
+      [{ type: "done", content: "" }],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Do the thing");
+    expect(result.status).toBe("empty_response");
+  });
+
+  it("tracks lastText across tool call iterations", async () => {
+    const provider = createMockProvider([
+      // First: text + tool call
+      [
+        { type: "text", content: "Let me check..." },
+        {
+          type: "tool_call",
+          content: '{"text": "test"}',
+          toolCallId: "call_0",
+          toolName: "echo",
+        },
+        { type: "done", content: "" },
+      ],
+      // Second: final text
+      [
+        { type: "text", content: "Final answer" },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Do something");
+    expect(result.status).toBe("success");
+    expect(result.lastText).toBe("Final answer");
+  });
+
   it("emits PROVIDER_RETRY error events during retries", async () => {
     let callCount = 0;
     const provider: LLMProvider = {
@@ -629,5 +771,228 @@ describe("TaskLoop", () => {
     expect(retryEvents[0]!.fatal).toBe(false);
     expect(retryEvents[1]!.code).toBe("PROVIDER_RETRY");
     expect(result.iterations).toBe(1);
+  });
+
+  // ─── Doom Loop Detection Tests ─────────────────────────────
+
+  it("detects doom loop when same failing tool called 3 times with identical args", async () => {
+    const failingTool: ToolSpec = {
+      name: "run_command",
+      description: "Run a command",
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: false,
+        output: "",
+        error: "Command exited with code 1",
+        artifacts: [],
+      }),
+    };
+
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "doom-loop",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (callCount <= 3) {
+          // Same tool call with identical args 3 times
+          yield {
+            type: "tool_call",
+            content: '{"cmd": "es2panda --input test.ets"}',
+            toolCallId: `call_${callCount}`,
+            toolName: "run_command",
+          };
+          yield { type: "done", content: "" };
+        } else {
+          // After doom loop warning, LLM responds with text
+          yield { type: "text", content: "The command keeps failing. Let me try a different approach." };
+          yield { type: "done", content: "" };
+        }
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    registry.register(failingTool);
+
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const doomLoopEvents: Array<{ code: string }> = [];
+    bus.on("error", (event) => {
+      if ((event as { code?: string }).code === "DOOM_LOOP") {
+        doomLoopEvents.push(event as { code: string });
+      }
+    });
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Run the compiler");
+
+    // Loop should NOT have broken — LLM got to respond
+    expect(result.status).toBe("success");
+    expect(result.lastText).toContain("different approach");
+
+    // Doom loop event should have been emitted
+    expect(doomLoopEvents.length).toBe(1);
+
+    // System message with doom loop warning should be in messages
+    const systemMessages = result.messages.filter(
+      (m) => m.role === MessageRole.SYSTEM && m.content?.includes("doom loop") || m.content?.includes("same arguments"),
+    );
+    expect(systemMessages.length).toBeGreaterThan(0);
+  });
+
+  it("does not trigger doom loop for different arguments", async () => {
+    let callCount = 0;
+    const failingTool: ToolSpec = {
+      name: "run_command",
+      description: "Run a command",
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: false,
+        output: "",
+        error: "Command exited with code 1",
+        artifacts: [],
+      }),
+    };
+
+    const provider: LLMProvider = {
+      id: "varied-args",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (callCount <= 3) {
+          // Same tool but different args each time
+          yield {
+            type: "tool_call",
+            content: JSON.stringify({ cmd: `attempt_${callCount}` }),
+            toolCallId: `call_${callCount}`,
+            toolName: "run_command",
+          };
+          yield { type: "done", content: "" };
+        } else {
+          yield { type: "text", content: "Done trying" };
+          yield { type: "done", content: "" };
+        }
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    registry.register(failingTool);
+
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const doomLoopEvents: Array<{ code: string }> = [];
+    bus.on("error", (event) => {
+      if ((event as { code?: string }).code === "DOOM_LOOP") {
+        doomLoopEvents.push(event as { code: string });
+      }
+    });
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Try different approaches");
+    expect(result.status).toBe("success");
+
+    // No doom loop because args are different each time
+    expect(doomLoopEvents.length).toBe(0);
+  });
+
+  it("resets doom loop state on successful tool call", async () => {
+    let callCount = 0;
+    const conditionalTool: ToolSpec = {
+      name: "run_command",
+      description: "Run a command",
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async (params) => {
+        const cmd = params["cmd"] as string;
+        if (cmd === "good") {
+          return { success: true, output: "OK", error: null, artifacts: [] };
+        }
+        return { success: false, output: "", error: "Failed", artifacts: [] };
+      },
+    };
+
+    const provider: LLMProvider = {
+      id: "reset-doom",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (callCount === 1) {
+          // First: fail with args "bad"
+          yield { type: "tool_call", content: '{"cmd": "bad"}', toolCallId: "c1", toolName: "run_command" };
+          yield { type: "done", content: "" };
+        } else if (callCount === 2) {
+          // Second: fail again with same args
+          yield { type: "tool_call", content: '{"cmd": "bad"}', toolCallId: "c2", toolName: "run_command" };
+          yield { type: "done", content: "" };
+        } else if (callCount === 3) {
+          // Third: succeed with different args — resets doom loop tracking
+          yield { type: "tool_call", content: '{"cmd": "good"}', toolCallId: "c3", toolName: "run_command" };
+          yield { type: "done", content: "" };
+        } else if (callCount === 4) {
+          // Fourth: fail again with "bad" — counter starts fresh
+          yield { type: "tool_call", content: '{"cmd": "bad"}', toolCallId: "c4", toolName: "run_command" };
+          yield { type: "done", content: "" };
+        } else if (callCount === 5) {
+          // Fifth: fail again with "bad"
+          yield { type: "tool_call", content: '{"cmd": "bad"}', toolCallId: "c5", toolName: "run_command" };
+          yield { type: "done", content: "" };
+        } else {
+          yield { type: "text", content: "Gave up" };
+          yield { type: "done", content: "" };
+        }
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    registry.register(conditionalTool);
+
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const doomLoopEvents: Array<{ code: string }> = [];
+    bus.on("error", (event) => {
+      if ((event as { code?: string }).code === "DOOM_LOOP") {
+        doomLoopEvents.push(event as { code: string });
+      }
+    });
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Test reset");
+    expect(result.status).toBe("success");
+
+    // No doom loop because success at call 3 reset the counter
+    // After reset: only 2 consecutive "bad" calls (c4, c5), not 3
+    expect(doomLoopEvents.length).toBe(0);
   });
 });

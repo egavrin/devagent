@@ -18,12 +18,12 @@ import {
   loadModelRegistry,
   lookupModelCapabilities,
 } from "@devagent/core";
-import type { DevAgentConfig, ApprovalPolicy } from "@devagent/core";
-import { ApprovalMode } from "@devagent/core";
+import type { DevAgentConfig, ApprovalPolicy, LLMProvider } from "@devagent/core";
+import { ApprovalMode, MessageRole } from "@devagent/core";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
 import { createDefaultToolRegistry, McpHub } from "@devagent/tools";
 import { TaskLoop, createBuiltinPlugins, createPlanTool } from "@devagent/engine";
-import type { TaskMode } from "@devagent/engine";
+import type { TaskMode, TaskLoopResult } from "@devagent/engine";
 import { runDesktopBridge } from "./desktop-bridge.js";
 import { assembleSystemPrompt } from "./prompts/index.js";
 import {
@@ -352,6 +352,7 @@ export async function main(): Promise<void> {
         projectRoot,
         cliArgs.mode,
         skills,
+        contextManager,
         cliArgs.verbosity,
       );
     }
@@ -485,6 +486,27 @@ function setupEventHandlers(
     }
   });
 
+  // ─── Context compaction ──────────────────────────────────
+
+  bus.on("context:compacting", (event) => {
+    spinner.stop();
+    if (verbosity !== "quiet") {
+      process.stderr.write(
+        dim(`[context] Compacting… (~${event.estimatedTokens} tokens, limit ${event.maxTokens})`) + "\n",
+      );
+      spinner.start("Compacting context…");
+    }
+  });
+
+  bus.on("context:compacted", (event) => {
+    spinner.stop();
+    if (verbosity !== "quiet") {
+      process.stderr.write(
+        dim(`[context] Compacted: removed ${event.removedCount} messages, ~${event.estimatedTokens} tokens remaining`) + "\n",
+      );
+    }
+  });
+
   // ─── Errors ────────────────────────────────────────────────
 
   bus.on("error", (event) => {
@@ -513,6 +535,83 @@ function setupEventHandlers(
   });
 }
 
+// ─── Helpers ─────────────────────────────────────────────────
+
+/**
+ * Set up the LLM-based summarization callback for context compaction.
+ * The callback sends older messages to the LLM with a compaction prompt
+ * and returns the summary text (following the Codex handoff pattern).
+ */
+function setupSummarizeCallback(
+  contextManager: ContextManager,
+  provider: LLMProvider,
+): void {
+  contextManager.setSummarizeCallback(async (messages) => {
+    const summaryPrompt = [
+      {
+        role: MessageRole.SYSTEM,
+        content:
+          "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.\n\nInclude:\n- Current progress and key decisions made\n- Important context, constraints, or user preferences\n- What remains to be done (clear next steps)\n- Any critical data, examples, or references needed to continue\n\nBe concise, structured, and focused on helping the next LLM seamlessly continue the work.",
+      },
+      ...messages,
+      {
+        role: MessageRole.USER,
+        content:
+          "Summarize the conversation above into a concise handoff summary.",
+      },
+    ];
+
+    let summary = "";
+    const stream = provider.chat(summaryPrompt, []);
+    for await (const chunk of stream) {
+      if (chunk.type === "text") {
+        summary += chunk.content;
+      }
+    }
+    return summary || "No summary available.";
+  });
+}
+
+/**
+ * Flush buffered output and handle TaskCompletionStatus.
+ * Falls back to result.lastText when the final response is empty.
+ */
+function flushOutput(result: TaskLoopResult, verbosity: Verbosity): void {
+  if (textBuffer.trim()) {
+    if (hadToolCalls) process.stderr.write("\n");
+    process.stdout.write(textBuffer + "\n");
+  } else if (result.lastText?.trim()) {
+    // No final response, but the LLM produced text earlier in the session
+    if (verbosity !== "quiet") {
+      process.stderr.write(
+        yellow("[warning] No final response. Showing last output from agent:") + "\n",
+      );
+    }
+    process.stdout.write(result.lastText + "\n");
+  }
+
+  // Status-specific messages
+  if (verbosity !== "quiet") {
+    switch (result.status) {
+      case "empty_response":
+        if (!textBuffer.trim() && !result.lastText?.trim()) {
+          process.stderr.write(
+            yellow("[warning] Agent completed but produced no output.") + "\n",
+          );
+        }
+        break;
+      case "budget_exceeded":
+        process.stderr.write(
+          yellow("[warning] Iteration limit reached — partial results shown.") + "\n",
+        );
+        break;
+      case "aborted":
+        process.stderr.write(dim("[info] Agent was interrupted.") + "\n");
+        break;
+    }
+  }
+}
+
 // ─── Single Query ────────────────────────────────────────────
 
 async function runSingleQuery(
@@ -525,9 +624,13 @@ async function runSingleQuery(
   repoRoot: string,
   mode: TaskMode,
   skills: SkillRegistry,
+  contextManager: ContextManager,
   verbosity: Verbosity,
 ): Promise<void> {
   const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills });
+
+  // Set up LLM-based summarization for context compaction
+  setupSummarizeCallback(contextManager, provider);
 
   resetOutputIteration();
   const startTime = Date.now();
@@ -541,6 +644,7 @@ async function runSingleQuery(
     systemPrompt,
     repoRoot,
     mode,
+    contextManager,
   });
 
   const result = await loop.run(query);
@@ -549,10 +653,7 @@ async function runSingleQuery(
   spinner.stop();
 
   // Flush buffered final response to stdout
-  if (textBuffer.trim()) {
-    if (hadToolCalls) process.stderr.write("\n");
-    process.stdout.write(textBuffer + "\n");
-  }
+  flushOutput(result, verbosity);
 
   if (verbosity !== "quiet") {
     const elapsed = Date.now() - startTime;
@@ -603,6 +704,9 @@ async function runInteractive(
 
   const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills });
 
+  // Set up LLM-based summarization for context compaction
+  setupSummarizeCallback(contextManager, provider);
+
   // Create a single TaskLoop that persists across turns (multi-turn conversation)
   const loop = new TaskLoop({
     provider,
@@ -613,6 +717,7 @@ async function runInteractive(
     systemPrompt,
     repoRoot,
     mode,
+    contextManager,
   });
 
   rl.prompt();
@@ -712,21 +817,17 @@ async function runInteractive(
       loop.resetIterations();
       resetOutputIteration();
       const turnStart = Date.now();
-      await loop.run(input);
+      const result = await loop.run(input);
 
       // Stop spinner in case LLM finished without emitting text
       spinner.stop();
 
       // Flush buffered final response to stdout
-      if (textBuffer.trim()) {
-        if (hadToolCalls) process.stderr.write("\n");
-        process.stdout.write(textBuffer + "\n");
-      }
+      flushOutput(result, verbosity);
 
       if (verbosity !== "quiet") {
         const elapsed = Date.now() - turnStart;
-        const iterations = loop.getIterations();
-        process.stderr.write(formatSummary(iterations, elapsed) + "\n");
+        process.stderr.write(formatSummary(result.iterations, elapsed) + "\n");
       }
     } catch (err) {
       spinner.stop();

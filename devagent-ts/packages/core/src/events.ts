@@ -19,6 +19,8 @@ export interface EventMap {
   "session:end": SessionEndEvent;
   "cost:update": CostUpdateEvent;
   "plan:updated": PlanUpdatedEvent;
+  "context:compacting": ContextCompactingEvent;
+  "context:compacted": ContextCompactedEvent;
   "error": ErrorEvent;
 }
 
@@ -86,6 +88,16 @@ export interface PlanUpdatedEvent {
     readonly status: string;
   }>;
   readonly explanation: string | null;
+}
+
+export interface ContextCompactingEvent {
+  readonly estimatedTokens: number;
+  readonly maxTokens: number;
+}
+
+export interface ContextCompactedEvent {
+  readonly removedCount: number;
+  readonly estimatedTokens: number;
 }
 
 export interface ErrorEvent {

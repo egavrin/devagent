@@ -55,6 +55,8 @@ export type {
   SessionEndEvent,
   CostUpdateEvent,
   PlanUpdatedEvent,
+  ContextCompactingEvent,
+  ContextCompactedEvent,
   ErrorEvent,
 } from "./events.js";
 
