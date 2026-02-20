@@ -176,13 +176,18 @@ Options:
   -h, --help            Show this help
 
 Interactive Commands:
-  /plan                 Switch to plan mode (read-only)
-  /act                  Switch to act mode
-  /clear                Clear conversation history
-  /skills               List available skills
-  /commands             List available plugin commands
-  /<command> [args]      Run a plugin command
-  exit                  Quit
+  /plan                        Switch to plan mode (read-only)
+  /act                         Switch to act mode
+  /clear                       Clear conversation history
+  /help                        Show interactive commands
+  /status                      Show session status
+  /checkpoint list             List all checkpoints
+  /checkpoint restore <id>     Restore workspace to checkpoint
+  /checkpoint diff <id> [<id2>] Show changes between checkpoints
+  /skills                      List available skills
+  /commands                    List available plugin commands
+  /<command> [args]             Run a plugin command
+  exit                         Quit
 
 Environment:
   DEVAGENT_PROVIDER     Default provider
@@ -1019,6 +1024,100 @@ async function runInteractive(
       continue;
     }
 
+    if (input === "/help") {
+      process.stderr.write(bold("Interactive Commands:") + "\n");
+      process.stderr.write(`  ${cyan("/plan")}                        Switch to plan mode (read-only)\n`);
+      process.stderr.write(`  ${cyan("/act")}                         Switch to act mode\n`);
+      process.stderr.write(`  ${cyan("/clear")}                       Clear conversation history\n`);
+      process.stderr.write(`  ${cyan("/help")}                        Show this help\n`);
+      process.stderr.write(`  ${cyan("/status")}                      Show session status\n`);
+      process.stderr.write(`  ${cyan("/checkpoint list")}             List all checkpoints\n`);
+      process.stderr.write(`  ${cyan("/checkpoint restore <id>")}     Restore workspace to checkpoint\n`);
+      process.stderr.write(`  ${cyan("/checkpoint diff <id> [<id2>]")} Show changes between checkpoints\n`);
+      process.stderr.write(`  ${cyan("/skills")}                      List available skills\n`);
+      process.stderr.write(`  ${cyan("/commands")}                    List plugin commands\n`);
+      process.stderr.write(`  ${cyan("exit")}                         Quit\n`);
+      rl.prompt();
+      continue;
+    }
+
+    if (input === "/status") {
+      const checkpoints = checkpointManager.list();
+      const memories = loadMemories();
+      process.stderr.write(bold("Session Status:") + "\n");
+      process.stderr.write(`  Provider:     ${cyan(config.provider)}  Model: ${cyan(config.model)}\n`);
+      process.stderr.write(`  Mode:         ${mode === "plan" ? yellow("plan (read-only)") : green("act")}\n`);
+      process.stderr.write(`  Turn:         ${turnNumber}\n`);
+      process.stderr.write(`  Approval:     ${config.approval.mode}\n`);
+      process.stderr.write(`  Checkpoints:  ${checkpoints.length}\n`);
+      process.stderr.write(`  Memories:     ${memories.length}\n`);
+      rl.prompt();
+      continue;
+    }
+
+    if (input.startsWith("/checkpoint")) {
+      const parts = input.split(/\s+/);
+      const subCmd = parts[1] ?? "";
+
+      if (subCmd === "list") {
+        const checkpoints = checkpointManager.list();
+        if (checkpoints.length === 0) {
+          process.stderr.write(dim("No checkpoints yet. Checkpoints are created automatically after file edits.") + "\n");
+        } else {
+          process.stderr.write(bold("Checkpoints:") + "\n");
+          for (const cp of checkpoints) {
+            const time = new Date(cp.timestamp).toLocaleTimeString();
+            process.stderr.write(`  ${cyan(cp.id)}  ${dim(time)}  ${cp.description}\n`);
+          }
+        }
+        rl.prompt();
+        continue;
+      }
+
+      if (subCmd === "restore" && parts[2]) {
+        const cpId = parts[2];
+        try {
+          const success = checkpointManager.restore(cpId);
+          if (success) {
+            process.stderr.write(green(`Restored workspace to checkpoint ${cpId}.`) + "\n");
+          } else {
+            process.stderr.write(yellow(`No changes to restore (workspace matches ${cpId}).`) + "\n");
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(formatError(`Checkpoint restore failed: ${msg}`) + "\n");
+        }
+        rl.prompt();
+        continue;
+      }
+
+      if (subCmd === "diff" && parts[2]) {
+        const fromId = parts[2];
+        const toId = parts[3] ?? undefined;
+        try {
+          const diffOutput = checkpointManager.diff(fromId, toId);
+          if (diffOutput.length === 0) {
+            process.stderr.write(dim("No differences.") + "\n");
+          } else {
+            process.stderr.write(diffOutput + "\n");
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(formatError(`Checkpoint diff failed: ${msg}`) + "\n");
+        }
+        rl.prompt();
+        continue;
+      }
+
+      // /checkpoint with no valid subcommand — show usage
+      process.stderr.write(bold("Checkpoint commands:") + "\n");
+      process.stderr.write(`  ${cyan("/checkpoint list")}             List all checkpoints\n`);
+      process.stderr.write(`  ${cyan("/checkpoint restore <id>")}     Restore workspace to checkpoint\n`);
+      process.stderr.write(`  ${cyan("/checkpoint diff <id> [<id2>]")} Show changes between checkpoints\n`);
+      rl.prompt();
+      continue;
+    }
+
     if (input === "/commands") {
       const cmds = pluginManager.listCommands();
       if (cmds.length === 0) {
@@ -1067,7 +1166,7 @@ async function runInteractive(
 
       // Unknown slash command
       process.stderr.write(
-        yellow(`Unknown command: /${cmdName}. Use /commands to see available commands.`) + "\n",
+        yellow(`Unknown command: /${cmdName}. Use /help to see available commands.`) + "\n",
       );
       rl.prompt();
       continue;
