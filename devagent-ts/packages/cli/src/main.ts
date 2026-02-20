@@ -33,8 +33,9 @@ import {
   CheckpointManager,
   DoubleCheck,
   DEFAULT_DOUBLE_CHECK_OPTIONS,
+  synthesizeBriefing,
 } from "@devagent/engine";
-import type { TaskMode, TaskLoopResult } from "@devagent/engine";
+import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback } from "@devagent/engine";
 import { runDesktopBridge } from "./desktop-bridge.js";
 import { assembleSystemPrompt } from "./prompts/index.js";
 import {
@@ -342,16 +343,42 @@ export async function main(): Promise<void> {
   }
 
   // ─── Memory (cross-session learning) ──────────────────────
-  const memoryStore = new MemoryStore();
-  const memories = memoryStore.search({ minRelevance: 0.3, limit: 10 });
+  const memoryStore = new MemoryStore({
+    dailyDecay: config.memory.dailyDecay,
+    minRelevance: config.memory.minRelevance,
+    accessBoost: config.memory.accessBoost,
+  });
+
+  // Run startup maintenance (decay + prune + dedup)
+  if (config.memory.maintenanceOnStartup) {
+    const maint = memoryStore.runMaintenance();
+    if ((maint.decayed > 0 || maint.pruned > 0 || maint.merged > 0) && cliArgs.verbosity !== "quiet") {
+      process.stderr.write(
+        dim(`[memory] Maintenance: ${maint.decayed} decayed, ${maint.pruned} pruned, ${maint.merged} merged`) + "\n",
+      );
+    }
+  }
+
+  // Helper to load fresh memories (re-queries each time for turn isolation)
+  function loadFreshMemories(): ReadonlyArray<import("@devagent/core").Memory> {
+    return memoryStore.search({
+      minRelevance: config.memory.recallMinRelevance,
+      limit: config.memory.promptMaxMemories,
+    });
+  }
+
+  const initialMemories = loadFreshMemories();
 
   // Register memory tools so the agent can store/recall learnings
-  for (const tool of createMemoryTools(memoryStore)) {
+  for (const tool of createMemoryTools(memoryStore, {
+    recallMinRelevance: config.memory.recallMinRelevance,
+    recallLimit: config.memory.recallLimit,
+  })) {
     toolRegistry.register(tool);
   }
 
-  if (memories.length > 0 && cliArgs.verbosity !== "quiet") {
-    process.stderr.write(dim(`[memory] ${memories.length} relevant memory(s) loaded`) + "\n");
+  if (initialMemories.length > 0 && cliArgs.verbosity !== "quiet") {
+    process.stderr.write(dim(`[memory] ${initialMemories.length} relevant memory(s) loaded`) + "\n");
   }
 
   // ─── Batched Readonly Tool Scripts ──────────────────────────
@@ -382,18 +409,36 @@ export async function main(): Promise<void> {
   const sessionStore = new SessionStore();
 
   // Resume previous session if requested
+  // Turn isolation: synthesize briefing from prior session instead of loading raw messages.
+  // This prevents accumulated history from degrading LLM accuracy (Manager-Worker pattern).
   let initialMessages: Message[] | undefined;
+  let resumeBriefing: TurnBriefing | undefined;
   if (cliArgs.resume || cliArgs.continue_) {
     const prevSession = cliArgs.resume
       ? sessionStore.getSession(cliArgs.resume)
       : sessionStore.listSessions(1)[0] ?? null;
 
     if (prevSession) {
-      initialMessages = [...prevSession.messages];
-      if (cliArgs.verbosity !== "quiet") {
-        process.stderr.write(
-          dim(`[session] Resuming ${prevSession.id} (${prevSession.messages.length} messages)`) + "\n",
+      const useTurnIsolation = config.context.turnIsolation !== false;
+      if (useTurnIsolation && cliArgs.interactive) {
+        // Synthesize briefing from prior session (clean context, no raw history)
+        resumeBriefing = await synthesizeBriefing(
+          prevSession.messages, 1,
+          { strategy: config.context.briefingStrategy ?? "auto", provider },
         );
+        if (cliArgs.verbosity !== "quiet") {
+          process.stderr.write(
+            dim(`[session] Resuming ${prevSession.id} via briefing (${prevSession.messages.length} messages → synthesized)`) + "\n",
+          );
+        }
+      } else {
+        // Raw message resume (single-query mode or turn isolation disabled)
+        initialMessages = [...prevSession.messages];
+        if (cliArgs.verbosity !== "quiet") {
+          process.stderr.write(
+            dim(`[session] Resuming ${prevSession.id} (${prevSession.messages.length} messages)`) + "\n",
+          );
+        }
       }
     } else {
       const searchId = cliArgs.resume ?? "most recent";
@@ -444,11 +489,12 @@ export async function main(): Promise<void> {
         skills,
         contextManager,
         memoryStore,
-        memories,
+        loadFreshMemories,
         checkpointManager,
         doubleCheck,
         initialMessages,
         cliArgs.verbosity,
+        resumeBriefing,
       );
     } else if (cliArgs.query) {
       await runSingleQuery(
@@ -463,7 +509,7 @@ export async function main(): Promise<void> {
         skills,
         contextManager,
         memoryStore,
-        memories,
+        loadFreshMemories(),
         checkpointManager,
         doubleCheck,
         initialMessages,
@@ -758,6 +804,7 @@ async function runSingleQuery(
     repoRoot,
     skills,
     memories,
+    memoryConfig: config.memory,
     approvalMode: config.approval.mode,
     provider: config.provider,
     model: config.model,
@@ -813,11 +860,12 @@ async function runInteractive(
   skills: SkillRegistry,
   contextManager: ContextManager,
   memoryStore: MemoryStore,
-  memories: ReadonlyArray<import("@devagent/core").Memory>,
+  loadMemories: () => ReadonlyArray<import("@devagent/core").Memory>,
   checkpointManager: CheckpointManager,
   doubleCheck: DoubleCheck,
   initialMessages: Message[] | undefined,
   verbosity: Verbosity,
+  resumeBriefing?: TurnBriefing,
 ): Promise<void> {
   process.stderr.write(bold("DevAgent") + " interactive mode\n");
   process.stderr.write(
@@ -845,35 +893,78 @@ async function runInteractive(
     prompt: cyan("> "),
   });
 
-  const systemPrompt = assembleSystemPrompt({
-    mode,
-    repoRoot,
-    skills,
-    memories,
-    approvalMode: config.approval.mode,
-    provider: config.provider,
-    model: config.model,
-  });
-
-  // Set up LLM-based summarization for context compaction
+  // Set up LLM-based summarization for context compaction (safety net)
   setupSummarizeCallback(contextManager, provider);
 
-  // Create a single TaskLoop that persists across turns (multi-turn conversation)
-  const loop = new TaskLoop({
-    provider,
-    tools: toolRegistry,
-    bus,
-    approvalGate: gate,
-    config,
-    systemPrompt,
-    repoRoot,
-    mode,
-    contextManager,
-    memoryStore,
-    checkpointManager,
-    doubleCheck,
-    initialMessages,
-  });
+  // ─── Turn Isolation State ──────────────────────────────
+  // Each interactive turn creates a fresh TaskLoop with a synthesized
+  // briefing instead of accumulating raw message history (Manager-Worker pattern).
+  const useTurnIsolation = config.context.turnIsolation !== false;
+  let turnNumber = resumeBriefing?.turnNumber ?? 0;
+  let currentBriefing: TurnBriefing | undefined = resumeBriefing;
+
+  // Midpoint callback: re-synthesize context during long-running turns
+  const midpointCallback: MidpointCallback = async (messages, iteration) => {
+    const briefing = await synthesizeBriefing(messages, turnNumber, {
+      strategy: "llm",
+      provider,
+    });
+    const freshPrompt = assembleSystemPrompt({
+      mode,
+      repoRoot,
+      skills,
+      memories: loadMemories(),
+      memoryConfig: config.memory,
+      approvalMode: config.approval.mode,
+      provider: config.provider,
+      model: config.model,
+      briefing,
+    });
+    // Find last user message to continue from
+    let lastUserContent = "(continue)";
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]!.role === MessageRole.USER && messages[i]!.content?.trim()) {
+        lastUserContent = messages[i]!.content!;
+        break;
+      }
+    }
+    return {
+      continueMessages: [
+        { role: MessageRole.SYSTEM, content: freshPrompt },
+        { role: MessageRole.USER, content: lastUserContent },
+      ],
+    };
+  };
+
+  // Fallback: persistent TaskLoop when turn isolation is disabled
+  let legacyLoop: TaskLoop | null = null;
+  if (!useTurnIsolation) {
+    const systemPrompt = assembleSystemPrompt({
+      mode,
+      repoRoot,
+      skills,
+      memories: loadMemories(),
+      memoryConfig: config.memory,
+      approvalMode: config.approval.mode,
+      provider: config.provider,
+      model: config.model,
+    });
+    legacyLoop = new TaskLoop({
+      provider,
+      tools: toolRegistry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt,
+      repoRoot,
+      mode,
+      contextManager,
+      memoryStore,
+      checkpointManager,
+      doubleCheck,
+      initialMessages,
+    });
+  }
 
   rl.prompt();
 
@@ -892,7 +983,7 @@ async function runInteractive(
     // ─── Built-in CLI Commands ─────────────────────────────
     if (input === "/plan") {
       mode = "plan";
-      loop.setMode("plan");
+      if (legacyLoop) legacyLoop.setMode("plan");
       process.stderr.write(yellow("Switched to plan mode (read-only).") + "\n");
       rl.prompt();
       continue;
@@ -900,13 +991,15 @@ async function runInteractive(
 
     if (input === "/act") {
       mode = "act";
-      loop.setMode("act");
+      if (legacyLoop) legacyLoop.setMode("act");
       process.stderr.write(green("Switched to act mode.") + "\n");
       rl.prompt();
       continue;
     }
 
     if (input === "/clear") {
+      currentBriefing = undefined;
+      turnNumber = 0;
       process.stderr.write(dim("Conversation cleared. Starting fresh.") + "\n");
       rl.prompt();
       continue;
@@ -968,11 +1061,71 @@ async function runInteractive(
 
     // ─── LLM Query ────────────────────────────────────────
     try {
-      // Reset iteration budget per turn, but keep message history
-      loop.resetIterations();
       resetOutputIteration();
       const turnStart = Date.now();
-      const result = await loop.run(input);
+      let result: TaskLoopResult;
+
+      if (useTurnIsolation) {
+        // ─── Turn Isolation Mode ──────────────────────────
+        // Fresh TaskLoop per turn — no accumulated raw history.
+        // The briefing from the prior turn provides continuity.
+        turnNumber++;
+
+        const turnSystemPrompt = assembleSystemPrompt({
+          mode,
+          repoRoot,
+          skills,
+          memories: loadMemories(),
+          memoryConfig: config.memory,
+          approvalMode: config.approval.mode,
+          provider: config.provider,
+          model: config.model,
+          briefing: currentBriefing,
+        });
+
+        const turnLoop = new TaskLoop({
+          provider,
+          tools: toolRegistry,
+          bus,
+          approvalGate: gate,
+          config,
+          systemPrompt: turnSystemPrompt,
+          repoRoot,
+          mode,
+          contextManager,
+          memoryStore,
+          checkpointManager,
+          doubleCheck,
+          midpointCallback,
+        });
+
+        result = await turnLoop.run(input);
+
+        // Synthesize briefing for the next turn (proactive, between-turn)
+        try {
+          currentBriefing = await synthesizeBriefing(
+            result.messages,
+            turnNumber,
+            {
+              strategy: config.context.briefingStrategy ?? "auto",
+              provider,
+            },
+          );
+        } catch {
+          // Non-fatal: next turn starts without briefing
+          if (verbosity !== "quiet") {
+            process.stderr.write(
+              dim("[briefing] Synthesis failed — next turn starts without prior context") + "\n",
+            );
+          }
+          currentBriefing = undefined;
+        }
+      } else {
+        // ─── Legacy Mode (turn isolation disabled) ────────
+        // Single persistent TaskLoop across all turns.
+        legacyLoop!.resetIterations();
+        result = await legacyLoop!.run(input);
+      }
 
       // Stop spinner in case LLM finished without emitting text
       spinner.stop();

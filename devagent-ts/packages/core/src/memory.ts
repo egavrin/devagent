@@ -41,6 +41,9 @@ export interface Memory {
 
 export interface MemoryStoreOptions {
   readonly dbPath?: string;
+  readonly dailyDecay?: number;
+  readonly minRelevance?: number;
+  readonly accessBoost?: number;
 }
 
 export interface MemorySearchOptions {
@@ -96,9 +99,16 @@ const ACCESS_BOOST = 0.1;
 
 export class MemoryStore {
   private readonly db: Database;
+  private readonly dailyDecay: number;
+  private readonly minRelevance: number;
+  private readonly accessBoost: number;
 
   constructor(options?: MemoryStoreOptions) {
     const dbPath = options?.dbPath ?? getDefaultMemoryDbPath();
+
+    this.dailyDecay = options?.dailyDecay ?? DAILY_DECAY;
+    this.minRelevance = options?.minRelevance ?? MIN_RELEVANCE;
+    this.accessBoost = options?.accessBoost ?? ACCESS_BOOST;
 
     const dir = dirname(dbPath);
     if (!existsSync(dir)) {
@@ -205,7 +215,7 @@ export class MemoryStore {
          relevance = MIN(1.0, relevance + ?), updated_at = ?
          WHERE id = ?`,
       )
-      .run(ACCESS_BOOST, Date.now(), row.id);
+      .run(this.accessBoost, Date.now(), row.id);
 
     return rowToMemory(row);
   }
@@ -279,13 +289,13 @@ export class MemoryStore {
     // Calculate days since last update for each memory
     const rows = this.db
       .prepare("SELECT id, updated_at, relevance FROM memories WHERE relevance > ?")
-      .all(MIN_RELEVANCE) as Array<{ id: string; updated_at: number; relevance: number }>;
+      .all(this.minRelevance) as Array<{ id: string; updated_at: number; relevance: number }>;
 
     let decayed = 0;
     for (const row of rows) {
       const daysSinceUpdate = (now - row.updated_at) / (1000 * 60 * 60 * 24);
-      const decay = daysSinceUpdate * DAILY_DECAY;
-      const newRelevance = Math.max(MIN_RELEVANCE, row.relevance - decay);
+      const decay = daysSinceUpdate * this.dailyDecay;
+      const newRelevance = Math.max(this.minRelevance, row.relevance - decay);
 
       if (newRelevance < row.relevance) {
         this.db
@@ -302,7 +312,7 @@ export class MemoryStore {
    * Remove memories below minimum relevance threshold.
    */
   prune(threshold?: number): number {
-    const minRelevance = threshold ?? MIN_RELEVANCE;
+    const minRelevance = threshold ?? this.minRelevance;
     const result = this.db
       .prepare("DELETE FROM memories WHERE relevance < ?")
       .run(minRelevance);
@@ -352,6 +362,79 @@ export class MemoryStore {
     return result as Record<MemoryCategory, number>;
   }
 
+  // ─── Deduplication ─────────────────────────────────────────
+
+  /**
+   * Deduplicate memories within the same category based on content similarity.
+   * Uses Jaccard similarity on word tokens. Merges duplicates: keeps the
+   * higher-relevance memory, updates its content if the other is newer,
+   * and deletes the lower-relevance duplicate.
+   *
+   * @param similarityThreshold - Jaccard coefficient threshold (0.0-1.0). Default 0.7.
+   * @returns Number of memories merged/removed.
+   */
+  deduplicate(similarityThreshold: number = 0.7): number {
+    const categories: MemoryCategory[] = [
+      "pattern", "decision", "mistake", "preference", "context",
+    ];
+    let mergedCount = 0;
+
+    for (const category of categories) {
+      const rows = this.db
+        .prepare(
+          "SELECT id, key, content, relevance, updated_at FROM memories WHERE category = ? ORDER BY relevance DESC",
+        )
+        .all(category) as Array<{
+          id: string; key: string; content: string;
+          relevance: number; updated_at: number;
+        }>;
+
+      const removed = new Set<string>();
+
+      for (let i = 0; i < rows.length; i++) {
+        if (removed.has(rows[i]!.id)) continue;
+
+        for (let j = i + 1; j < rows.length; j++) {
+          if (removed.has(rows[j]!.id)) continue;
+
+          const sim = jaccardSimilarity(rows[i]!.content, rows[j]!.content);
+          if (sim >= similarityThreshold) {
+            // Keep the higher-relevance one (rows[i], since sorted DESC).
+            // If the lower one is newer, update the survivor's content.
+            if (rows[j]!.updated_at > rows[i]!.updated_at) {
+              this.db
+                .prepare("UPDATE memories SET content = ?, updated_at = ? WHERE id = ?")
+                .run(rows[j]!.content, rows[j]!.updated_at, rows[i]!.id);
+            }
+            // Boost the survivor's relevance slightly
+            this.db
+              .prepare("UPDATE memories SET relevance = MIN(1.0, relevance + 0.05) WHERE id = ?")
+              .run(rows[i]!.id);
+            // Delete the duplicate
+            this.db.prepare("DELETE FROM memories WHERE id = ?").run(rows[j]!.id);
+            removed.add(rows[j]!.id);
+            mergedCount++;
+          }
+        }
+      }
+    }
+
+    return mergedCount;
+  }
+
+  // ─── Maintenance ──────────────────────────────────────────
+
+  /**
+   * Run startup maintenance: apply decay, prune stale memories, deduplicate.
+   * Call once at process start, not per-turn.
+   */
+  runMaintenance(): { decayed: number; pruned: number; merged: number } {
+    const decayed = this.applyDecay();
+    const pruned = this.prune();
+    const merged = this.deduplicate();
+    return { decayed, pruned, merged };
+  }
+
   // ─── Lifecycle ───────────────────────────────────────────────
 
   close(): void {
@@ -387,6 +470,24 @@ function rowToMemory(row: MemoryRow): Memory {
     accessCount: row.access_count,
     sessionId: row.session_id,
   };
+}
+
+/**
+ * Jaccard similarity on whitespace-separated word tokens.
+ * Returns 0.0 (no overlap) to 1.0 (identical token sets).
+ */
+function jaccardSimilarity(a: string, b: string): number {
+  const tokensA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean));
+  const tokensB = new Set(b.toLowerCase().split(/\s+/).filter(Boolean));
+  if (tokensA.size === 0 && tokensB.size === 0) return 1.0;
+  if (tokensA.size === 0 || tokensB.size === 0) return 0.0;
+
+  let intersection = 0;
+  for (const t of tokensA) {
+    if (tokensB.has(t)) intersection++;
+  }
+  const union = tokensA.size + tokensB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
 }
 
 function getDefaultMemoryDbPath(): string {

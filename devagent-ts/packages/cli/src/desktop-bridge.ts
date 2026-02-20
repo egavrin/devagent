@@ -66,8 +66,8 @@ import { createDefaultRegistry } from "@devagent/providers";
 import type { ProviderRegistry } from "@devagent/providers";
 import { createDefaultToolRegistry, McpHub } from "@devagent/tools";
 import type { ToolRegistry } from "@devagent/tools";
-import { TaskLoop, createBuiltinPlugins } from "@devagent/engine";
-import type { TaskMode } from "@devagent/engine";
+import { TaskLoop, createBuiltinPlugins, synthesizeBriefing } from "@devagent/engine";
+import type { TaskMode, TurnBriefing } from "@devagent/engine";
 import type { LLMProvider } from "@devagent/core";
 
 // ─── JSON-lines Protocol Types ──────────────────────────────
@@ -295,9 +295,17 @@ export async function runDesktopBridge(initialArgs: {
   // Wire up event bus → JSON-lines output
   setupBusToJsonLines(bus, projectRoot);
 
-  // Create initial task loop — deferred if no provider yet
+  // ─── Turn Isolation State ──────────────────────────────
+  // Each query creates a fresh TaskLoop with a synthesized briefing
+  // instead of accumulating raw message history (Manager-Worker pattern).
+  const useTurnIsolation = config.context.turnIsolation !== false;
+  let turnNumber = 0;
+  let currentBriefing: TurnBriefing | undefined;
+
+  // Create initial task loop — deferred if no provider yet.
+  // Used only when turn isolation is disabled (legacy mode).
   let loop: TaskLoop | null = null;
-  if (provider) {
+  if (provider && !useTurnIsolation) {
     loop = createLoop(
       provider,
       toolRegistry,
@@ -310,14 +318,14 @@ export async function runDesktopBridge(initialArgs: {
     );
   }
 
-  // Helper: ensure loop exists (throws user-friendly error if not configured)
-  function ensureLoop(): TaskLoop {
-    if (!loop) {
+  // Helper: ensure provider exists (throws user-friendly error if not configured)
+  function ensureProvider(): LLMProvider {
+    if (!provider) {
       throw new Error(
         "No LLM provider configured. Open Settings and set your API key first.",
       );
     }
-    return loop;
+    return provider;
   }
 
   // Signal ready + initial state
@@ -344,6 +352,7 @@ export async function runDesktopBridge(initialArgs: {
   });
 
   let running = false; // Guard against concurrent queries
+  let activeRunLoop: TaskLoop | null = null; // Current running loop (for abort)
 
   rl.on("line", (line: string) => {
     const trimmed = line.trim();
@@ -364,9 +373,9 @@ export async function runDesktopBridge(initialArgs: {
           return;
         }
 
-        let activeLoop: TaskLoop;
+        let activeProvider: LLMProvider;
         try {
-          activeLoop = ensureLoop();
+          activeProvider = ensureProvider();
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           send({ type: "error", message: errMsg, fatal: false });
@@ -377,15 +386,61 @@ export async function runDesktopBridge(initialArgs: {
 
         if (msg.mode) {
           currentMode = msg.mode;
-          activeLoop.setMode(currentMode);
+          if (loop) loop.setMode(currentMode);
         }
 
         // Run the query asynchronously so stdin remains responsive
         // for approval_response and abort messages during execution.
         void (async () => {
           try {
-            activeLoop.resetIterations();
+            let activeLoop: TaskLoop;
+
+            if (useTurnIsolation) {
+              // Fresh TaskLoop per query with briefing from prior turn
+              turnNumber++;
+              const turnSystemPrompt = getSystemPrompt(currentMode, projectRoot, skills);
+              // Append briefing context if available
+              const briefingSection = currentBriefing
+                ? `\n\n## Session Context\n\nYou are continuing a conversation. Here is a summary of prior work:\n\nTurn: ${currentBriefing.turnNumber}\n\nPrevious work:\n${currentBriefing.priorTaskSummary}${currentBriefing.activeContext ? `\n\nContext:\n${currentBriefing.activeContext}` : ""}${currentBriefing.pendingWork ? `\n\nPending:\n${currentBriefing.pendingWork}` : ""}${currentBriefing.keyArtifacts.length > 0 ? `\n\nKey files: ${currentBriefing.keyArtifacts.join(", ")}` : ""}`
+                : "";
+
+              activeLoop = new TaskLoop({
+                provider: activeProvider,
+                tools: toolRegistry,
+                bus,
+                approvalGate: gate,
+                config,
+                systemPrompt: turnSystemPrompt + briefingSection,
+                repoRoot: projectRoot,
+                mode: currentMode,
+              });
+            } else {
+              // Legacy: reuse persistent loop
+              if (!loop) {
+                loop = createLoop(
+                  activeProvider, toolRegistry, bus, gate,
+                  config, projectRoot, currentMode, skills,
+                );
+              }
+              activeLoop = loop;
+              activeLoop.resetIterations();
+            }
+
+            activeRunLoop = activeLoop;
             const result = await activeLoop.run(msg.content);
+
+            // Synthesize briefing for next turn (non-fatal if it fails)
+            if (useTurnIsolation) {
+              try {
+                currentBriefing = await synthesizeBriefing(
+                  result.messages, turnNumber,
+                  { strategy: config.context.briefingStrategy ?? "auto", provider: activeProvider },
+                );
+              } catch {
+                currentBriefing = undefined;
+              }
+            }
+
             send({
               type: "done",
               iterations: result.iterations,
@@ -397,6 +452,7 @@ export async function runDesktopBridge(initialArgs: {
             send({ type: "error", message: errMsg, fatal: false });
           } finally {
             running = false;
+            activeRunLoop = null;
           }
         })();
         break;
@@ -430,18 +486,26 @@ export async function runDesktopBridge(initialArgs: {
             provider = createProvider(providerRegistry, config);
           }
 
-          // Recreate task loop with new provider (fresh conversation)
+          // Reset turn isolation state (fresh conversation with new provider)
           gate = new ApprovalGate(config.approval, bus);
-          loop = createLoop(
-            provider,
-            toolRegistry,
-            bus,
-            gate,
-            config,
-            projectRoot,
-            currentMode,
-            skills,
-          );
+          currentBriefing = undefined;
+          turnNumber = 0;
+
+          // Recreate legacy task loop if turn isolation is disabled
+          if (!useTurnIsolation) {
+            loop = createLoop(
+              provider,
+              toolRegistry,
+              bus,
+              gate,
+              config,
+              projectRoot,
+              currentMode,
+              skills,
+            );
+          } else {
+            loop = null;
+          }
 
           send({ type: "provider_changed", provider: msg.provider, model: msg.model });
         } catch (err) {
@@ -476,7 +540,8 @@ export async function runDesktopBridge(initialArgs: {
       }
 
       case "abort": {
-        if (loop) loop.abort();
+        if (activeRunLoop) activeRunLoop.abort();
+        else if (loop) loop.abort();
         break;
       }
 

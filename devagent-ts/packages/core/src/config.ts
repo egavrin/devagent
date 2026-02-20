@@ -15,6 +15,7 @@ import type {
   ApprovalMode,
   BudgetConfig,
   ContextConfig,
+  MemoryConfig,
   ArkTSConfig,
   ProviderConfig,
   ModelCapabilities,
@@ -44,6 +45,21 @@ const DEFAULT_CONTEXT: ContextConfig = {
   pruningStrategy: "hybrid",
   triggerRatio: 0.8,
   keepRecentMessages: 10,
+  turnIsolation: true,
+  midpointBriefingInterval: 15,
+  briefingStrategy: "auto",
+};
+
+const DEFAULT_MEMORY: MemoryConfig = {
+  enabled: true,
+  dailyDecay: 0.02,
+  minRelevance: 0.1,
+  accessBoost: 0.1,
+  recallMinRelevance: 0.3,
+  recallLimit: 10,
+  promptMaxMemories: 10,
+  promptMaxChars: 2000,
+  maintenanceOnStartup: true,
 };
 
 const DEFAULT_ARKTS: ArkTSConfig = {
@@ -59,6 +75,7 @@ const DEFAULT_CONFIG: DevAgentConfig = {
   approval: DEFAULT_APPROVAL,
   budget: DEFAULT_BUDGET,
   context: DEFAULT_CONTEXT,
+  memory: DEFAULT_MEMORY,
   arkts: DEFAULT_ARKTS,
 };
 
@@ -165,6 +182,22 @@ function parseBudget(
   };
 }
 
+function parseMemory(
+  raw: Record<string, unknown>,
+): Partial<MemoryConfig> {
+  return {
+    enabled: raw["enabled"] as boolean | undefined,
+    dailyDecay: raw["daily_decay"] as number | undefined,
+    minRelevance: raw["min_relevance"] as number | undefined,
+    accessBoost: raw["access_boost"] as number | undefined,
+    recallMinRelevance: raw["recall_min_relevance"] as number | undefined,
+    recallLimit: raw["recall_limit"] as number | undefined,
+    promptMaxMemories: raw["prompt_max_memories"] as number | undefined,
+    promptMaxChars: raw["prompt_max_chars"] as number | undefined,
+    maintenanceOnStartup: raw["maintenance_on_startup"] as boolean | undefined,
+  };
+}
+
 /**
  * Load configuration from TOML files + environment.
  * Fail fast: throws on invalid env references, never silently uses defaults for provider keys.
@@ -248,6 +281,15 @@ export function loadConfig(
     ...overrides?.context,
   };
 
+  // Merge memory
+  const rawMemory = (fileConfig["memory"] ?? {}) as Record<string, unknown>;
+  const memoryPartial = parseMemory(rawMemory);
+  const memory: MemoryConfig = {
+    ...DEFAULT_MEMORY,
+    ...stripUndefined(memoryPartial),
+    ...overrides?.memory,
+  };
+
   // Merge arkts
   const rawArkts = (fileConfig["arkts"] ?? {}) as Record<string, unknown>;
   const arkts: ArkTSConfig = {
@@ -319,6 +361,7 @@ export function loadConfig(
     approval,
     budget,
     context,
+    memory,
     arkts,
     ...(checkpoints ? { checkpoints } : {}),
     ...(doubleCheck ? { doubleCheck } : {}),

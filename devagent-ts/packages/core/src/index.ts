@@ -23,6 +23,7 @@ export type {
   DevAgentConfig,
   BudgetConfig,
   ContextConfig,
+  MemoryConfig,
   ArkTSConfig,
   CheckpointConfig,
   DoubleCheckConfig,

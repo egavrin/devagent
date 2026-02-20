@@ -7,7 +7,8 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SkillRegistry, Memory } from "@devagent/core";
-import type { TaskMode } from "@devagent/engine";
+import type { TaskMode, TurnBriefing } from "@devagent/engine";
+import { formatBriefing } from "@devagent/engine";
 import { loadProjectContext } from "./project-context.js";
 
 const PROMPTS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -53,10 +54,17 @@ export interface AssemblePromptOptions {
   readonly repoRoot: string;
   readonly skills: SkillRegistry;
   readonly memories?: ReadonlyArray<Memory>;
+  /** Memory config for controlling prompt injection limits. */
+  readonly memoryConfig?: {
+    readonly promptMaxMemories: number;
+    readonly promptMaxChars: number;
+  };
   readonly approvalMode?: string;
   readonly provider?: string;
   readonly model?: string;
   readonly includeReview?: boolean;
+  /** Structured briefing from a prior turn (enables turn isolation). */
+  readonly briefing?: TurnBriefing;
 }
 
 /**
@@ -108,10 +116,10 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
     );
   }
 
-  // Cross-session memories (cap at 10 entries, ~2000 chars)
+  // Cross-session memories (configurable limits, defaults: 10 entries, ~2000 chars)
   if (opts.memories && opts.memories.length > 0) {
-    const MAX_MEMORIES = 10;
-    const MAX_CHARS = 2000;
+    const MAX_MEMORIES = opts.memoryConfig?.promptMaxMemories ?? 10;
+    const MAX_CHARS = opts.memoryConfig?.promptMaxChars ?? 2000;
     const capped = opts.memories.slice(0, MAX_MEMORIES);
     let totalChars = 0;
     const memoryLines: string[] = [];
@@ -126,6 +134,13 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
         `## Learned Patterns\n\nThe following are lessons from previous sessions. Apply them when relevant:\n\n${memoryLines.join("\n")}`,
       );
     }
+  }
+
+  // Session context briefing (turn isolation — replaces raw history)
+  if (opts.briefing) {
+    sections.push(
+      `## Session Context\n\nYou are continuing a conversation. Here is a summary of prior work:\n\n${formatBriefing(opts.briefing)}`,
+    );
   }
 
   return sections.join("\n\n");

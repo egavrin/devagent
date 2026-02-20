@@ -207,6 +207,7 @@ export interface DevAgentConfig {
   readonly approval: ApprovalPolicy;
   readonly budget: BudgetConfig;
   readonly context: ContextConfig;
+  readonly memory: MemoryConfig;
   readonly arkts: ArkTSConfig;
   readonly checkpoints?: CheckpointConfig;
   readonly doubleCheck?: DoubleCheckConfig;
@@ -236,6 +237,33 @@ export interface ContextConfig {
   readonly pruningStrategy: "sliding_window" | "summarize" | "hybrid";
   readonly triggerRatio: number;
   readonly keepRecentMessages: number;
+  /** Enable turn isolation in interactive mode (fresh TaskLoop per turn). Default: true. */
+  readonly turnIsolation?: boolean;
+  /** Iterations between midpoint briefing checkpoints (0 = disabled). Default: 15. */
+  readonly midpointBriefingInterval?: number;
+  /** Strategy for turn briefing synthesis. Default: "auto". */
+  readonly briefingStrategy?: "heuristic" | "llm" | "auto";
+}
+
+export interface MemoryConfig {
+  /** Enable cross-session memory system. Default: true. */
+  readonly enabled: boolean;
+  /** How much relevance decays per day without access. Default: 0.02. */
+  readonly dailyDecay: number;
+  /** Minimum relevance before a memory is prunable. Default: 0.1. */
+  readonly minRelevance: number;
+  /** Relevance boost when a memory is accessed. Default: 0.1. */
+  readonly accessBoost: number;
+  /** Minimum relevance threshold for recall search results. Default: 0.3. */
+  readonly recallMinRelevance: number;
+  /** Maximum results returned by recall search. Default: 10. */
+  readonly recallLimit: number;
+  /** Maximum memories injected into the system prompt. Default: 10. */
+  readonly promptMaxMemories: number;
+  /** Maximum character budget for memories in the system prompt. Default: 2000. */
+  readonly promptMaxChars: number;
+  /** Run maintenance (decay + prune + dedup) on startup. Default: true. */
+  readonly maintenanceOnStartup: boolean;
 }
 
 export interface ArkTSConfig {

@@ -8,6 +8,7 @@ export type {
   TaskCompletionStatus,
   TaskLoopOptions,
   TaskLoopResult,
+  MidpointCallback,
 } from "./task-loop.js";
 
 export { AgentRegistry, runAgent } from "./agents.js";
@@ -37,8 +38,13 @@ export type {
   TestRunner,
 } from "./double-check.js";
 
+// Turn briefing (context synthesis for turn isolation)
+export { synthesizeBriefing, extractHeuristicBriefing, formatBriefing } from "./briefing.js";
+export type { TurnBriefing, BriefingStrategy, SynthesizeBriefingOptions } from "./briefing.js";
+
 // Memory tools (LLM-callable cross-session memory)
 export { createMemoryTools } from "./memory-tools.js";
+export type { MemoryToolOptions } from "./memory-tools.js";
 
 // Tool script — batched readonly tool execution
 export { ToolScriptEngine } from "./tool-script.js";

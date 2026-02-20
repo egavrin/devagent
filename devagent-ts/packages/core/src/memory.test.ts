@@ -197,4 +197,129 @@ describe("MemoryStore", () => {
     store.store("decision", "d1", "Content");
     expect(store.size).toBe(2);
   });
+
+  // ─── Configurable Parameters ────────────────────────────────
+
+  it("uses custom dailyDecay from constructor", () => {
+    // Create store with aggressive decay (0.1/day)
+    const customStore = new MemoryStore({ dbPath: join(TEST_DIR, "custom.db"), dailyDecay: 0.1 });
+    try {
+      const id = customStore.store("pattern", "test", "Test content");
+
+      // Set updated_at to 5 days ago
+      const fiveDaysAgo = Date.now() - 5 * 24 * 60 * 60 * 1000;
+      const storeAny = customStore as unknown as { db: { prepare: (sql: string) => { run: (...args: unknown[]) => void } } };
+      storeAny.db.prepare("UPDATE memories SET updated_at = ? WHERE id = ?").run(fiveDaysAgo, id);
+
+      customStore.applyDecay();
+
+      // Read directly to check without recall boost
+      const rows = (customStore as unknown as { db: { prepare: (sql: string) => { get: (...args: unknown[]) => { relevance: number } | null } } })
+        .db.prepare("SELECT relevance FROM memories WHERE id = ?").get(id);
+      // 1.0 - (5 * 0.1) = 0.5
+      expect(rows!.relevance).toBeCloseTo(0.5, 1);
+    } finally {
+      customStore.close();
+    }
+  });
+
+  it("uses custom accessBoost on recall", () => {
+    const customStore = new MemoryStore({ dbPath: join(TEST_DIR, "boost.db"), accessBoost: 0.2 });
+    try {
+      customStore.store("pattern", "test", "Content", { relevance: 0.5 });
+      customStore.recall("pattern", "test");
+
+      // Read directly to check boosted value
+      const rows = (customStore as unknown as { db: { prepare: (sql: string) => { all: () => Array<{ relevance: number }> } } })
+        .db.prepare("SELECT relevance FROM memories WHERE key = 'test'").all();
+      // 0.5 + 0.2 = 0.7
+      expect(rows[0]!.relevance).toBeCloseTo(0.7, 1);
+    } finally {
+      customStore.close();
+    }
+  });
+
+  // ─── Deduplication ──────────────────────────────────────────
+
+  it("deduplicates similar memories within same category", () => {
+    store.store("mistake", "err-1", "Tool read_file was called repeatedly with identical failing arguments. Try different approaches.", { relevance: 0.9 });
+    store.store("mistake", "err-2", "Tool read_file was called repeatedly with identical failing arguments. Try a different approach.", { relevance: 0.5 });
+
+    const merged = store.deduplicate(0.7);
+    expect(merged).toBe(1);
+    expect(store.size).toBe(1);
+
+    // Higher relevance memory survives
+    const remaining = store.search({ category: "mistake" });
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.key).toBe("err-1");
+    // Relevance should be boosted
+    expect(remaining[0]!.relevance).toBeGreaterThan(0.9);
+  });
+
+  it("does not merge dissimilar memories", () => {
+    store.store("pattern", "p1", "Use TypeScript strict mode for all projects");
+    store.store("pattern", "p2", "Always prefer functional components in React");
+
+    const merged = store.deduplicate(0.7);
+    expect(merged).toBe(0);
+    expect(store.size).toBe(2);
+  });
+
+  it("does not merge across categories", () => {
+    store.store("pattern", "same-key", "Same exact content for testing deduplication");
+    store.store("decision", "same-key", "Same exact content for testing deduplication");
+
+    const merged = store.deduplicate(0.7);
+    expect(merged).toBe(0);
+    expect(store.size).toBe(2);
+  });
+
+  it("deduplication keeps newer content when merging", () => {
+    const id1 = store.store("mistake", "dup-1", "Old version of the advice");
+    const id2 = store.store("mistake", "dup-2", "Old version of the advice updated", { relevance: 0.5 });
+
+    // Make the lower-relevance one newer
+    const future = Date.now() + 100_000;
+    const storeAny = store as unknown as { db: { prepare: (sql: string) => { run: (...args: unknown[]) => void } } };
+    storeAny.db.prepare("UPDATE memories SET updated_at = ? WHERE id = ?").run(future, id2);
+
+    store.deduplicate(0.7);
+
+    const remaining = store.search({ category: "mistake" });
+    expect(remaining).toHaveLength(1);
+    // Survivor has the newer content
+    expect(remaining[0]!.content).toBe("Old version of the advice updated");
+  });
+
+  // ─── runMaintenance ─────────────────────────────────────────
+
+  it("runMaintenance runs decay, prune, and dedup together", () => {
+    // Old memory (will decay)
+    const id1 = store.store("pattern", "old", "Old pattern");
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const storeAny = store as unknown as { db: { prepare: (sql: string) => { run: (...args: unknown[]) => void } } };
+    storeAny.db.prepare("UPDATE memories SET updated_at = ? WHERE id = ?").run(thirtyDaysAgo, id1);
+
+    // Low-relevance memory (will be pruned)
+    store.store("mistake", "stale", "Stale mistake", { relevance: 0.05 });
+
+    // Duplicates (will be merged)
+    store.store("decision", "dup-a", "Use SQLite for storage persistence and data management", { relevance: 0.8 });
+    store.store("decision", "dup-b", "Use SQLite for storage persistence and data management always", { relevance: 0.4 });
+
+    // Good memory (should survive)
+    store.store("preference", "theme", "Dark mode preferred");
+
+    expect(store.size).toBe(5);
+
+    const { decayed, pruned, merged } = store.runMaintenance();
+
+    expect(decayed).toBeGreaterThanOrEqual(1); // old pattern decayed
+    expect(pruned).toBeGreaterThanOrEqual(1);  // stale mistake pruned
+    expect(merged).toBeGreaterThanOrEqual(1);  // duplicates merged
+
+    // Theme preference and surviving dup should remain (plus maybe the decayed one if still above threshold)
+    expect(store.size).toBeLessThanOrEqual(3);
+  });
 });

@@ -42,6 +42,16 @@ export type TaskCompletionStatus =
   | "budget_exceeded"
   | "aborted";
 
+/**
+ * Callback invoked at midpoint briefing intervals during long-running turns.
+ * Receives the current messages and iteration count. Returns replacement
+ * messages (synthesized context) or null to skip midpoint briefing.
+ */
+export type MidpointCallback = (
+  messages: ReadonlyArray<Message>,
+  iteration: number,
+) => Promise<{ continueMessages: ReadonlyArray<Message> } | null>;
+
 export interface TaskLoopOptions {
   readonly provider: LLMProvider;
   readonly tools: ToolRegistry;
@@ -56,6 +66,8 @@ export interface TaskLoopOptions {
   readonly checkpointManager?: CheckpointManager;
   readonly doubleCheck?: DoubleCheck;
   readonly initialMessages?: ReadonlyArray<Message>;
+  /** Callback for midpoint context re-synthesis during long-running turns. */
+  readonly midpointCallback?: MidpointCallback;
 }
 
 export interface TaskLoopResult {
@@ -92,6 +104,8 @@ export class TaskLoop {
   private readonly memoryStore: MemoryStore | null;
   private readonly checkpointManager: CheckpointManager | null;
   private readonly doubleCheck: DoubleCheck | null;
+  private readonly midpointCallback: MidpointCallback | null;
+  private readonly midpointInterval: number;
   private mode: TaskMode;
   private messages: Message[] = [];
   private iterations = 0;
@@ -119,6 +133,9 @@ export class TaskLoop {
     this.memoryStore = options.memoryStore ?? null;
     this.checkpointManager = options.checkpointManager ?? null;
     this.doubleCheck = options.doubleCheck ?? null;
+    this.midpointCallback = options.midpointCallback ?? null;
+    this.midpointInterval =
+      options.config.context.midpointBriefingInterval ?? DEFAULT_MIDPOINT_INTERVAL;
 
     // Initialize messages: from previous session or fresh system prompt
     if (options.initialMessages && options.initialMessages.length > 0) {
@@ -268,6 +285,10 @@ export class TaskLoop {
         // Auto-compact: check if context is approaching token budget
         await this.maybeCompactContext();
 
+        // Proactive midpoint briefing: re-synthesize context every N iterations
+        // to prevent accumulated history from degrading accuracy (paper finding)
+        await this.maybeMidpointBriefing();
+
         // Continue loop — feed tool results back to LLM
         continue;
       }
@@ -387,6 +408,27 @@ export class TaskLoop {
       this.bus.emit("context:compacted", {
         removedCount: result.removedCount,
         estimatedTokens: result.estimatedTokens,
+      });
+    }
+  }
+
+  /**
+   * Proactive midpoint briefing: at regular intervals, re-synthesize
+   * context to prevent accumulated history from degrading LLM accuracy.
+   * Unlike reactive compaction (which triggers at token budget limit),
+   * this fires proactively every N iterations regardless of token count.
+   */
+  private async maybeMidpointBriefing(): Promise<void> {
+    if (!this.midpointCallback) return;
+    if (this.midpointInterval <= 0) return;
+    if (this.iterations <= 0 || this.iterations % this.midpointInterval !== 0) return;
+
+    const result = await this.midpointCallback(this.messages, this.iterations);
+    if (result) {
+      this.messages = [...result.continueMessages];
+      this.bus.emit("context:compacted", {
+        removedCount: 0,
+        estimatedTokens: estimateMessageTokens(this.messages),
       });
     }
   }
@@ -645,8 +687,7 @@ export class TaskLoop {
   private extractLessons(): void {
     if (!this.memoryStore) return;
 
-    // Apply decay once per session
-    this.memoryStore.applyDecay();
+    // NOTE: Decay + prune now run at startup via runMaintenance(), not per-turn.
 
     // Extract lessons from doom loop warnings
     const doomMessages = this.messages.filter(
@@ -672,7 +713,7 @@ export class TaskLoop {
     )) {
       this.memoryStore.store(
         "mistake",
-        `budget-exhausted-${Date.now()}`,
+        "budget-exhausted",
         "Session hit the iteration limit. Break complex tasks into smaller steps and verify progress frequently.",
         { tags: ["budget-exhausted"] },
       );
@@ -684,6 +725,11 @@ export class TaskLoop {
 
 /** Number of identical failing tool calls (same name + same args) that triggers a doom loop warning. */
 const DOOM_LOOP_THRESHOLD = 3;
+
+// ─── Midpoint Briefing ──────────────────────────────────────
+
+/** Default iterations between midpoint briefing checkpoints. */
+const DEFAULT_MIDPOINT_INTERVAL = 15;
 
 // ─── Retry Constants ─────────────────────────────────────────
 
