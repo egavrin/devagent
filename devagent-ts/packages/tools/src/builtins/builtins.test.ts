@@ -8,6 +8,7 @@ import { writeFileTool } from "./write-file.js";
 import { replaceInFileTool } from "./replace-in-file.js";
 import { findFilesTool } from "./find-files.js";
 import { searchFilesTool } from "./search-files.js";
+import { runCommandTool } from "./run-command.js";
 import { builtinTools } from "./index.js";
 
 let tmpDir: string;
@@ -167,5 +168,52 @@ describe("search_files", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output).toContain("No matches found");
+  });
+});
+
+describe("run_command", () => {
+  it("applies env overrides from JSON string", async () => {
+    const result = await runCommandTool.handler(
+      {
+        command: "echo $DEVAGENT_TEST_CUSTOM_VAR",
+        env: JSON.stringify({ DEVAGENT_TEST_CUSTOM_VAR: "custom_value_42" }),
+      },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe("custom_value_42");
+  });
+
+  it("applies env overrides from direct object", async () => {
+    const result = await runCommandTool.handler(
+      {
+        command: "echo $DEVAGENT_OVERRIDE_TEST",
+        env: { DEVAGENT_OVERRIDE_TEST: "overridden" },
+      },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe("overridden");
+  });
+
+  it("returns error for invalid env JSON", async () => {
+    const result = await runCommandTool.handler(
+      {
+        command: "echo hello",
+        env: "not valid json",
+      },
+      ctx,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Invalid env JSON");
+  });
+
+  it("works without env parameter (backward compatible)", async () => {
+    const result = await runCommandTool.handler(
+      { command: "echo hello" },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe("hello");
   });
 });

@@ -119,6 +119,9 @@ export class TaskLoop {
   private aborted = false;
   private recentToolCalls: Array<{ name: string; argsKey: string }> = [];
   private doomLoopWarned = false;
+  // Per-tool consecutive failure counts (reset on any success of that tool)
+  private toolFailureCounts: Map<string, number> = new Map();
+  private toolFatigueWarned: Set<string> = new Set();
 
   constructor(options: TaskLoopOptions) {
     this.provider = options.provider;
@@ -229,10 +232,22 @@ export class TaskLoop {
           })),
         });
 
+        // Coalesce replace-all tool calls (e.g., multiple update_plan in one batch)
+        const { toExecute, skipped } =
+          this.coalesceReplaceAllCalls(toolCalls);
+        for (const tc of skipped) {
+          this.messages.push({
+            role: MessageRole.TOOL,
+            content:
+              "Skipped: superseded by a later update_plan call in this batch.",
+            toolCallId: tc.callId,
+          });
+        }
+
         // Execute tool calls — parallel for independent readonly, sequential for mutating.
         // Partition into batches: consecutive readonly calls form a parallel batch,
         // a mutating/workflow call is its own sequential batch.
-        const batches = this.partitionToolCalls(toolCalls, availableTools);
+        const batches = this.partitionToolCalls(toExecute, availableTools);
 
         for (const batch of batches) {
           if (this.aborted) break;
@@ -279,6 +294,15 @@ export class TaskLoop {
           this.messages.push({
             role: MessageRole.SYSTEM,
             content: doomLoopWarning,
+          });
+        }
+
+        // Tool fatigue detection: same tool failing repeatedly with different args
+        const fatigueWarning = this.checkToolFatigue(toolCalls);
+        if (fatigueWarning) {
+          this.messages.push({
+            role: MessageRole.SYSTEM,
+            content: fatigueWarning,
           });
         }
 
@@ -375,6 +399,8 @@ export class TaskLoop {
     this.aborted = false;
     this.recentToolCalls = [];
     this.doomLoopWarned = false;
+    this.toolFailureCounts.clear();
+    this.toolFatigueWarned.clear();
   }
 
   // ─── Private ────────────────────────────────────────────────
@@ -438,6 +464,42 @@ export class TaskLoop {
       return this.tools.getReadOnly();
     }
     return this.tools.getAll();
+  }
+
+  /**
+   * Coalesce replace-all tool calls: when multiple calls to the same tool
+   * with replace-all semantics (like update_plan) appear in a single LLM
+   * response batch, only execute the last one. Earlier calls are skipped
+   * with synthetic results.
+   */
+  private coalesceReplaceAllCalls(
+    toolCalls: ReadonlyArray<PendingToolCall>,
+  ): { toExecute: PendingToolCall[]; skipped: PendingToolCall[] } {
+    // Tools where only the last call in a batch matters
+    const replaceAllTools = new Set(["update_plan"]);
+
+    // Find the last index of each replace-all tool
+    const lastIndex = new Map<string, number>();
+    for (let i = toolCalls.length - 1; i >= 0; i--) {
+      const tc = toolCalls[i]!;
+      if (replaceAllTools.has(tc.name) && !lastIndex.has(tc.name)) {
+        lastIndex.set(tc.name, i);
+      }
+    }
+
+    const toExecute: PendingToolCall[] = [];
+    const skipped: PendingToolCall[] = [];
+
+    for (let i = 0; i < toolCalls.length; i++) {
+      const tc = toolCalls[i]!;
+      if (replaceAllTools.has(tc.name) && i !== lastIndex.get(tc.name)) {
+        skipped.push(tc);
+      } else {
+        toExecute.push(tc);
+      }
+    }
+
+    return { toExecute, skipped };
   }
 
   /**
@@ -597,17 +659,23 @@ export class TaskLoop {
 
     const durationMs = Date.now() - startTime;
 
-    // Track recent tool calls for doom loop detection
+    // Track recent tool calls for doom loop + tool fatigue detection
     if (result.success) {
       // Success resets doom loop tracking — the LLM found a working approach
       this.recentToolCalls = [];
       this.doomLoopWarned = false;
+      // Reset fatigue counter for this specific tool
+      this.toolFailureCounts.delete(toolCall.name);
+      this.toolFatigueWarned.delete(toolCall.name);
     } else {
       const argsKey = JSON.stringify(toolCall.arguments);
       this.recentToolCalls.push({ name: toolCall.name, argsKey });
       if (this.recentToolCalls.length > DOOM_LOOP_THRESHOLD) {
         this.recentToolCalls.shift();
       }
+      // Increment per-tool failure count (regardless of args)
+      const prevCount = this.toolFailureCounts.get(toolCall.name) ?? 0;
+      this.toolFailureCounts.set(toolCall.name, prevCount + 1);
     }
 
     // Fire tool:after event
@@ -681,6 +749,34 @@ export class TaskLoop {
   }
 
   /**
+   * Tool fatigue detection: same tool keeps failing with different arguments.
+   * Complementary to doom loop (which catches identical args).
+   * Returns an escalated warning, or null.
+   */
+  private checkToolFatigue(
+    toolCalls: ReadonlyArray<PendingToolCall>,
+  ): string | null {
+    for (const tc of toolCalls) {
+      const count = this.toolFailureCounts.get(tc.name) ?? 0;
+      if (
+        count >= TOOL_FATIGUE_THRESHOLD &&
+        !this.toolFatigueWarned.has(tc.name)
+      ) {
+        this.toolFatigueWarned.add(tc.name);
+
+        this.bus.emit("error", {
+          message: `Tool fatigue: "${tc.name}" has failed ${count} times consecutively with different arguments.`,
+          code: "TOOL_FATIGUE",
+          fatal: false,
+        });
+
+        return `ESCALATED WARNING: The tool "${tc.name}" has failed ${count} consecutive times, even with different arguments. This tool is not working for the current task. You MUST try a fundamentally different approach: use a different tool, break the problem into smaller steps, or ask the user for guidance. Do NOT call "${tc.name}" again unless you have resolved the underlying issue.`;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Extract lessons from this session into persistent memory.
    * Heuristic-based — no extra LLM call. Called once at the end of run().
    */
@@ -725,6 +821,9 @@ export class TaskLoop {
 
 /** Number of identical failing tool calls (same name + same args) that triggers a doom loop warning. */
 const DOOM_LOOP_THRESHOLD = 3;
+
+/** Number of consecutive failures of the same tool (regardless of args) that triggers a "tool fatigue" warning. */
+const TOOL_FATIGUE_THRESHOLD = 5;
 
 // ─── Midpoint Briefing ──────────────────────────────────────
 

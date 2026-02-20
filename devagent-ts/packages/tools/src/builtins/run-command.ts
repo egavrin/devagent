@@ -14,7 +14,7 @@ const MAX_OUTPUT_BYTES = 100_000;
 export const runCommandTool: ToolSpec = {
   name: "run_command",
   description:
-    "Execute a shell command. Returns stdout and stderr. Times out after 2 minutes by default. Use for builds, tests, linting. Prefer targeted test commands over running the full suite. Never run destructive git commands without user approval.",
+    "Execute a shell command. Returns stdout and stderr. Times out after 2 minutes by default. Use for builds, tests, linting. Prefer targeted test commands over running the full suite. Never run destructive git commands without user approval. Use the env parameter to set environment variables instead of embedding them in the command string.",
   category: "workflow",
   paramSchema: {
     type: "object",
@@ -27,6 +27,11 @@ export const runCommandTool: ToolSpec = {
       timeout_ms: {
         type: "number",
         description: "Timeout in milliseconds (default: 120000)",
+      },
+      env: {
+        type: "string",
+        description:
+          'JSON object of environment variable overrides. Merged with the current process environment (these values take precedence). Example: {"DYLD_LIBRARY_PATH": "/usr/local/lib"}',
       },
     },
     required: ["command"],
@@ -47,11 +52,28 @@ export const runCommandTool: ToolSpec = {
     );
     const timeoutMs =
       (params["timeout_ms"] as number | undefined) ?? DEFAULT_TIMEOUT_MS;
+    let envOverrides: Record<string, string> = {};
+    const envParam = params["env"];
+    if (typeof envParam === "string" && envParam.length > 0) {
+      try {
+        envOverrides = JSON.parse(envParam) as Record<string, string>;
+      } catch {
+        return {
+          success: false,
+          output: "",
+          error: `Invalid env JSON: ${envParam}`,
+          artifacts: [],
+        };
+      }
+    } else if (typeof envParam === "object" && envParam !== null) {
+      // Also accept a direct object (e.g., from non-OpenAI providers)
+      envOverrides = envParam as Record<string, string>;
+    }
 
     return new Promise((resolvePromise) => {
       const child = spawn("sh", ["-c", command], {
         cwd,
-        env: { ...process.env },
+        env: { ...process.env, ...envOverrides },
         stdio: ["ignore", "pipe", "pipe"],
       });
 

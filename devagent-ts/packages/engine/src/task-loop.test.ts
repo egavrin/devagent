@@ -1614,4 +1614,391 @@ describe("TaskLoop", () => {
     expect(toolMsgs[2]!.toolCallId).toBe("c3");
     expect(toolMsgs[2]!.content).toBe("Echo: third");
   });
+
+  // ─── Tool Fatigue Detection ────────────────────────────────
+
+  it("detects tool fatigue after 5 different-arg failures of same tool", async () => {
+    const failingTool: ToolSpec = {
+      name: "run_command",
+      description: "Run a command",
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: false,
+        output: "",
+        error: "Command exited with code 1",
+        artifacts: [],
+      }),
+    };
+
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "fatigue-test",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (callCount <= 5) {
+          // Same tool, DIFFERENT args each time
+          yield {
+            type: "tool_call",
+            content: JSON.stringify({ command: `attempt_${callCount}` }),
+            toolCallId: `call_${callCount}`,
+            toolName: "run_command",
+          };
+          yield { type: "done", content: "" };
+        } else {
+          yield {
+            type: "text",
+            content: "Switching to different approach.",
+          };
+          yield { type: "done", content: "" };
+        }
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    registry.register(failingTool);
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const fatigueEvents: Array<{ code: string }> = [];
+    bus.on("error", (event) => {
+      if ((event as { code?: string }).code === "TOOL_FATIGUE") {
+        fatigueEvents.push(event as { code: string });
+      }
+    });
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Try many approaches");
+    expect(result.status).toBe("success");
+
+    // Tool fatigue should have fired after 5 different-arg failures
+    expect(fatigueEvents.length).toBe(1);
+
+    // Escalated warning should be in messages
+    const fatigueMessages = result.messages.filter(
+      (m) =>
+        m.role === MessageRole.SYSTEM &&
+        m.content?.includes("ESCALATED WARNING"),
+    );
+    expect(fatigueMessages.length).toBe(1);
+    expect(fatigueMessages[0]!.content).toContain("run_command");
+  });
+
+  it("resets tool fatigue counter on success", async () => {
+    let callCount = 0;
+    const conditionalTool: ToolSpec = {
+      name: "run_command",
+      description: "Run a command",
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async (params) => {
+        const cmd = params["command"] as string;
+        if (cmd === "good") {
+          return { success: true, output: "OK", error: null, artifacts: [] };
+        }
+        return {
+          success: false,
+          output: "",
+          error: "Failed",
+          artifacts: [],
+        };
+      },
+    };
+
+    const provider: LLMProvider = {
+      id: "fatigue-reset",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (callCount <= 3) {
+          // 3 failures
+          yield {
+            type: "tool_call",
+            content: JSON.stringify({ command: `bad_${callCount}` }),
+            toolCallId: `c${callCount}`,
+            toolName: "run_command",
+          };
+          yield { type: "done", content: "" };
+        } else if (callCount === 4) {
+          // Success — resets counter
+          yield {
+            type: "tool_call",
+            content: '{"command": "good"}',
+            toolCallId: "c4",
+            toolName: "run_command",
+          };
+          yield { type: "done", content: "" };
+        } else if (callCount <= 7) {
+          // 3 more failures (total < 5 since reset)
+          yield {
+            type: "tool_call",
+            content: JSON.stringify({ command: `bad_again_${callCount}` }),
+            toolCallId: `c${callCount}`,
+            toolName: "run_command",
+          };
+          yield { type: "done", content: "" };
+        } else {
+          yield { type: "text", content: "Done" };
+          yield { type: "done", content: "" };
+        }
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    registry.register(conditionalTool);
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const fatigueEvents: Array<{ code: string }> = [];
+    bus.on("error", (event) => {
+      if ((event as { code?: string }).code === "TOOL_FATIGUE") {
+        fatigueEvents.push(event as { code: string });
+      }
+    });
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Test fatigue reset");
+    expect(result.status).toBe("success");
+
+    // No fatigue: 3 failures, then success resets, then 3 more (never hits 5)
+    expect(fatigueEvents.length).toBe(0);
+  });
+
+  it("does not repeat tool fatigue warning for same tool", async () => {
+    const failingTool: ToolSpec = {
+      name: "run_command",
+      description: "Run a command",
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: false,
+        output: "",
+        error: "Failed",
+        artifacts: [],
+      }),
+    };
+
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "fatigue-no-repeat",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (callCount <= 8) {
+          yield {
+            type: "tool_call",
+            content: JSON.stringify({ command: `try_${callCount}` }),
+            toolCallId: `c${callCount}`,
+            toolName: "run_command",
+          };
+          yield { type: "done", content: "" };
+        } else {
+          yield { type: "text", content: "Gave up" };
+          yield { type: "done", content: "" };
+        }
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    registry.register(failingTool);
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const fatigueEvents: Array<{ code: string }> = [];
+    bus.on("error", (event) => {
+      if ((event as { code?: string }).code === "TOOL_FATIGUE") {
+        fatigueEvents.push(event as { code: string });
+      }
+    });
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Fail many times");
+    expect(result.status).toBe("success");
+
+    // Fatigue warning fires once at count=5, not again at 6,7,8
+    expect(fatigueEvents.length).toBe(1);
+  });
+
+  // ─── Plan Call Coalescing ──────────────────────────────────
+
+  it("coalesces multiple update_plan calls, executing only the last", async () => {
+    let planCallCount = 0;
+    const planTool: ToolSpec = {
+      name: "update_plan",
+      description: "Update plan",
+      category: "workflow",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => {
+        planCallCount++;
+        return {
+          success: true,
+          output: `Plan updated (call #${planCallCount})`,
+          error: null,
+          artifacts: [],
+        };
+      },
+    };
+
+    const provider = createMockProvider([
+      [
+        // LLM emits 3 consecutive update_plan calls
+        {
+          type: "tool_call",
+          content: '{"steps": "step1"}',
+          toolCallId: "p1",
+          toolName: "update_plan",
+        },
+        {
+          type: "tool_call",
+          content: '{"steps": "step2"}',
+          toolCallId: "p2",
+          toolName: "update_plan",
+        },
+        {
+          type: "tool_call",
+          content: '{"steps": "step3_final"}',
+          toolCallId: "p3",
+          toolName: "update_plan",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Plan is set." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(planTool);
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Create a plan");
+    expect(result.status).toBe("success");
+
+    // Only the LAST plan call should have been executed
+    expect(planCallCount).toBe(1);
+
+    // All 3 tool call IDs should have corresponding TOOL messages
+    const toolMessages = result.messages.filter(
+      (m) => m.role === MessageRole.TOOL,
+    );
+    expect(toolMessages.length).toBe(3);
+
+    // First two should be "skipped" synthetic responses
+    expect(toolMessages[0]!.content).toContain("Skipped");
+    expect(toolMessages[0]!.toolCallId).toBe("p1");
+    expect(toolMessages[1]!.content).toContain("Skipped");
+    expect(toolMessages[1]!.toolCallId).toBe("p2");
+
+    // Third should be the real execution
+    expect(toolMessages[2]!.content).toContain("Plan updated");
+    expect(toolMessages[2]!.toolCallId).toBe("p3");
+  });
+
+  it("does not coalesce non-plan tool calls", async () => {
+    let echoCount = 0;
+    const echoTool: ToolSpec = {
+      name: "echo",
+      description: "Echo",
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async (params) => {
+        echoCount++;
+        return {
+          success: true,
+          output: `Echo #${echoCount}: ${params["text"]}`,
+          error: null,
+          artifacts: [],
+        };
+      },
+    };
+
+    const provider = createMockProvider([
+      [
+        {
+          type: "tool_call",
+          content: '{"text":"a"}',
+          toolCallId: "e1",
+          toolName: "echo",
+        },
+        {
+          type: "tool_call",
+          content: '{"text":"b"}',
+          toolCallId: "e2",
+          toolName: "echo",
+        },
+        {
+          type: "tool_call",
+          content: '{"text":"c"}',
+          toolCallId: "e3",
+          toolName: "echo",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "All echoed." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(echoTool);
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Echo three things");
+    expect(result.status).toBe("success");
+
+    // All 3 echo calls should have been executed (no coalescing)
+    expect(echoCount).toBe(3);
+  });
 });
