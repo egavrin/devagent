@@ -13,7 +13,8 @@
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean",
     "dev": "turbo run dev",
-    "install-cli": "cd packages/cli && bun link"
+    "install-cli": "cd packages/cli && bun link",
+    "install-lsp": "bash scripts/install-lsp-servers.sh"
   },
   "devDependencies": {
     "turbo": "^2.5.0",

@@ -27,6 +27,8 @@ export type {
   ArkTSConfig,
   CheckpointConfig,
   DoubleCheckConfig,
+  LSPConfig,
+  LSPServerConfig,
   Session,
   CostRecord,
   JsonSchema,

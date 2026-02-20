@@ -23,7 +23,7 @@ import {
 import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message } from "@devagent/core";
 import { ApprovalMode, MessageRole } from "@devagent/core";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
-import { createDefaultToolRegistry, McpHub } from "@devagent/tools";
+import { createDefaultToolRegistry, McpHub, createLSPTools } from "@devagent/tools";
 import {
   TaskLoop,
   createBuiltinPlugins,
@@ -36,6 +36,7 @@ import {
   synthesizeBriefing,
 } from "@devagent/engine";
 import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback } from "@devagent/engine";
+import { LSPRouter, createRoutingDiagnosticProvider, createShellTestRunner } from "./double-check-wiring.js";
 import { runDesktopBridge } from "./desktop-bridge.js";
 import { assembleSystemPrompt } from "./prompts/index.js";
 import {
@@ -407,6 +408,45 @@ export async function main(): Promise<void> {
     bus,
   );
 
+  // ─── LSP Servers (optional, multi-language) ──────────────────
+  let lspRouter: LSPRouter | null = null;
+
+  if (config.lsp?.servers && config.lsp.servers.length > 0) {
+    lspRouter = new LSPRouter(projectRoot);
+
+    for (const serverConfig of config.lsp.servers) {
+      try {
+        await lspRouter.addServer(serverConfig);
+        if (cliArgs.verbosity !== "quiet") {
+          process.stderr.write(
+            dim(`[lsp] Started: ${serverConfig.command} (${serverConfig.languages.join(", ")})`) + "\n",
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          formatError(`LSP start failed for ${serverConfig.command}: ${msg}. Skipping.`) + "\n",
+        );
+      }
+    }
+
+    // Register LSP tools from the first available client
+    const clients = lspRouter.getClients();
+    if (clients.length > 0) {
+      for (const tool of createLSPTools(clients[0]!)) {
+        toolRegistry.register(tool);
+      }
+    }
+
+    // Wire routing diagnostic provider (routes by file extension)
+    doubleCheck.setDiagnosticProvider(createRoutingDiagnosticProvider(lspRouter));
+  }
+
+  // Wire test runner (works without LSP — just needs a shell)
+  if (config.doubleCheck?.testCommand) {
+    doubleCheck.setTestRunner(createShellTestRunner(projectRoot));
+  }
+
   // ─── Context Management ────────────────────────────────────
   const contextManager = new ContextManager(config.context);
 
@@ -540,6 +580,13 @@ export async function main(): Promise<void> {
     }
 
     // Cleanup
+    if (lspRouter) {
+      try {
+        await lspRouter.stopAll();
+      } catch {
+        // Servers might already be dead
+      }
+    }
     pluginManager.destroy();
     mcpHub.dispose();
     memoryStore.close();

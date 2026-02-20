@@ -221,7 +221,7 @@ describe("memory-tools", () => {
       ctx,
     );
     await tools[0]!.handler(
-      { category: "decision", key: "d1", content: "Decision 1" },
+      { category: "decision", key: "decision_key", content: "Decision 1" },
       ctx,
     );
 
@@ -229,7 +229,7 @@ describe("memory-tools", () => {
     const result = await listTool.handler({ category: "pattern" }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain("p1");
-    expect(result.output).not.toContain("d1");
+    expect(result.output).not.toContain("decision_key");
   });
 
   it("memory_list returns empty message when no memories", async () => {

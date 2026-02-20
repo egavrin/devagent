@@ -211,6 +211,7 @@ export interface DevAgentConfig {
   readonly arkts: ArkTSConfig;
   readonly checkpoints?: CheckpointConfig;
   readonly doubleCheck?: DoubleCheckConfig;
+  readonly lsp?: LSPConfig;
 }
 
 export interface CheckpointConfig {
@@ -223,6 +224,27 @@ export interface DoubleCheckConfig {
   readonly runTests?: boolean;
   readonly testCommand?: string | null;
   readonly diagnosticTimeout?: number;
+}
+
+export interface LSPServerConfig {
+  /** LSP server command (e.g., "typescript-language-server"). */
+  readonly command: string;
+  /** Command arguments (e.g., ["--stdio"]). */
+  readonly args: ReadonlyArray<string>;
+  /** Language IDs this server handles (e.g., ["typescript", "javascript"]). */
+  readonly languages: ReadonlyArray<string>;
+  /** File extensions this server handles (e.g., [".ts", ".tsx", ".js", ".jsx"]). */
+  readonly extensions: ReadonlyArray<string>;
+  /** Timeout for LSP requests in ms. Default: 10000. */
+  readonly timeout: number;
+  /** How long to wait for diagnostics (pushed async) in ms. Default: 3000.
+   *  rust-analyzer needs 15-30s (delegates to `cargo check`). */
+  readonly diagnosticTimeout?: number;
+}
+
+export interface LSPConfig {
+  /** LSP server configurations. Each entry handles one or more languages. */
+  readonly servers: ReadonlyArray<LSPServerConfig>;
 }
 
 export interface BudgetConfig {

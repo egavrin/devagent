@@ -350,6 +350,41 @@ export function loadConfig(
       }
     : undefined;
 
+  // Parse optional LSP config — supports both legacy single-server and new multi-server format
+  const rawLsp = fileConfig["lsp"] as Record<string, unknown> | undefined;
+  let lsp: import("./types.js").LSPConfig | undefined;
+
+  if (rawLsp) {
+    if (rawLsp["servers"]) {
+      // New multi-server format: [[lsp.servers]]
+      const rawServers = rawLsp["servers"] as Array<Record<string, unknown>>;
+      lsp = {
+        servers: rawServers.map((s) => ({
+          command: s["command"] as string,
+          args: (s["args"] as string[] | undefined) ?? ["--stdio"],
+          languages: (s["languages"] as string[] | undefined) ?? ["typescript"],
+          extensions: (s["extensions"] as string[] | undefined) ?? [".ts"],
+          timeout: (s["timeout"] as number | undefined) ?? 10_000,
+          diagnosticTimeout: s["diagnostic_timeout"] as number | undefined,
+        })),
+      };
+    } else if (rawLsp["command"]) {
+      // Legacy single-server format: [lsp] command = "..."
+      const languageId = (rawLsp["language_id"] as string | undefined) ?? "typescript";
+      const defaults = getLanguageDefaults(languageId);
+      lsp = {
+        servers: [{
+          command: rawLsp["command"] as string,
+          args: (rawLsp["args"] as string[] | undefined) ?? ["--stdio"],
+          languages: [languageId],
+          extensions: defaults?.extensions ?? [".ts"],
+          timeout: (rawLsp["timeout"] as number | undefined) ?? 10_000,
+          diagnosticTimeout: rawLsp["diagnostic_timeout"] as number | undefined,
+        }],
+      };
+    }
+  }
+
   return {
     provider,
     model:
@@ -365,7 +400,29 @@ export function loadConfig(
     arkts,
     ...(checkpoints ? { checkpoints } : {}),
     ...(doubleCheck ? { doubleCheck } : {}),
+    ...(lsp ? { lsp } : {}),
   };
+}
+
+/**
+ * Get default file extensions for a language ID.
+ * Used when converting legacy single-server LSP config to multi-server format.
+ */
+function getLanguageDefaults(
+  languageId: string,
+): { extensions: string[] } | undefined {
+  const map: Record<string, string[]> = {
+    typescript: [".ts", ".tsx", ".mts", ".cts"],
+    javascript: [".js", ".jsx", ".mjs", ".cjs"],
+    python: [".py", ".pyi"],
+    c: [".c", ".h"],
+    cpp: [".cpp", ".cxx", ".cc", ".hpp", ".hxx", ".hh"],
+    rust: [".rs"],
+    shellscript: [".sh", ".bash", ".zsh"],
+    arkts: [".ets"],
+  };
+  const exts = map[languageId];
+  return exts ? { extensions: exts } : undefined;
 }
 
 /**

@@ -32,7 +32,11 @@ export interface LSPClientOptions {
   readonly args: ReadonlyArray<string>;
   readonly rootPath: string;
   readonly languageId: string;
+  /** Timeout for LSP requests (initialize, definition, etc.) in ms. Default: 10000. */
   readonly timeout?: number;
+  /** How long to wait for diagnostics (pushed asynchronously) in ms. Default: 3000.
+   *  Servers like rust-analyzer delegate to `cargo check` which can take 15-30s. */
+  readonly diagnosticTimeout?: number;
 }
 
 export interface DiagnosticResult {
@@ -69,6 +73,7 @@ export class LSPClient {
   private readonly rootPath: string;
   private readonly languageId: string;
   private readonly timeout: number;
+  private readonly diagnosticTimeout: number;
   private initialized = false;
   private diagnosticsStore = new Map<string, Diagnostic[]>();
 
@@ -78,6 +83,7 @@ export class LSPClient {
     this.rootPath = options.rootPath;
     this.languageId = options.languageId;
     this.timeout = options.timeout ?? 10_000;
+    this.diagnosticTimeout = options.diagnosticTimeout ?? 3_000;
   }
 
   async start(): Promise<void> {
@@ -152,18 +158,27 @@ export class LSPClient {
     return this.initialized;
   }
 
-  async getDiagnostics(filePath: string): Promise<DiagnosticResult> {
+  async getDiagnostics(filePath: string, languageId?: string): Promise<DiagnosticResult> {
     this.ensureRunning();
     const absPath = resolve(this.rootPath, filePath);
     const uri = `file://${absPath}`;
 
     const content = readFileSync(absPath, "utf-8");
     this.connection!.sendNotification("textDocument/didOpen", {
-      textDocument: { uri, languageId: this.languageId, version: 1, text: content },
+      textDocument: { uri, languageId: languageId ?? this.languageId, version: 1, text: content },
     });
 
-    // Wait for diagnostics to arrive via notification
-    await new Promise((r) => setTimeout(r, 500));
+    // Poll for diagnostics — servers push them asynchronously.
+    // Exit early if diagnostics arrive (saves time for fast servers like clangd).
+    // Slow servers (rust-analyzer → cargo check) may need 15-30s; use diagnosticTimeout.
+    const maxWait = this.diagnosticTimeout;
+    const pollInterval = 100;
+    const start = Date.now();
+    while (Date.now() - start < maxWait) {
+      await new Promise((r) => setTimeout(r, pollInterval));
+      const current = this.diagnosticsStore.get(uri);
+      if (current && current.length > 0) break;
+    }
     const diagnostics = this.diagnosticsStore.get(uri) ?? [];
 
     this.connection!.sendNotification("textDocument/didClose", {
@@ -185,6 +200,7 @@ export class LSPClient {
     filePath: string,
     line: number,
     character: number,
+    languageId?: string,
   ): Promise<ReadonlyArray<LocationResult>> {
     this.ensureRunning();
     const absPath = resolve(this.rootPath, filePath);
@@ -192,7 +208,7 @@ export class LSPClient {
 
     const content = readFileSync(absPath, "utf-8");
     this.connection!.sendNotification("textDocument/didOpen", {
-      textDocument: { uri, languageId: this.languageId, version: 1, text: content },
+      textDocument: { uri, languageId: languageId ?? this.languageId, version: 1, text: content },
     });
 
     const result = await this.withTimeout(
@@ -222,6 +238,7 @@ export class LSPClient {
     filePath: string,
     line: number,
     character: number,
+    languageId?: string,
   ): Promise<ReadonlyArray<LocationResult>> {
     this.ensureRunning();
     const absPath = resolve(this.rootPath, filePath);
@@ -229,7 +246,7 @@ export class LSPClient {
 
     const content = readFileSync(absPath, "utf-8");
     this.connection!.sendNotification("textDocument/didOpen", {
-      textDocument: { uri, languageId: this.languageId, version: 1, text: content },
+      textDocument: { uri, languageId: languageId ?? this.languageId, version: 1, text: content },
     });
 
     const result = await this.withTimeout(
@@ -252,14 +269,14 @@ export class LSPClient {
     }));
   }
 
-  async getSymbols(filePath: string): Promise<ReadonlyArray<SymbolResult>> {
+  async getSymbols(filePath: string, languageId?: string): Promise<ReadonlyArray<SymbolResult>> {
     this.ensureRunning();
     const absPath = resolve(this.rootPath, filePath);
     const uri = `file://${absPath}`;
 
     const content = readFileSync(absPath, "utf-8");
     this.connection!.sendNotification("textDocument/didOpen", {
-      textDocument: { uri, languageId: this.languageId, version: 1, text: content },
+      textDocument: { uri, languageId: languageId ?? this.languageId, version: 1, text: content },
     });
 
     const result = await this.withTimeout(
