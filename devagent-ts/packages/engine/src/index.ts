@@ -40,7 +40,7 @@ export type {
 
 // Turn briefing (context synthesis for turn isolation)
 export { synthesizeBriefing, extractHeuristicBriefing, formatBriefing } from "./briefing.js";
-export type { TurnBriefing, BriefingStrategy, SynthesizeBriefingOptions } from "./briefing.js";
+export type { TurnBriefing, BriefingPlanStep, BriefingStrategy, SynthesizeBriefingOptions } from "./briefing.js";
 
 // Memory tools (LLM-callable cross-session memory)
 export { createMemoryTools } from "./memory-tools.js";

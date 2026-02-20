@@ -420,19 +420,30 @@ export async function main(): Promise<void> {
 
     if (prevSession) {
       const useTurnIsolation = config.context.turnIsolation !== false;
-      if (useTurnIsolation && cliArgs.interactive) {
-        // Synthesize briefing from prior session (clean context, no raw history)
-        resumeBriefing = await synthesizeBriefing(
-          prevSession.messages, 1,
-          { strategy: config.context.briefingStrategy ?? "auto", provider },
-        );
-        if (cliArgs.verbosity !== "quiet") {
-          process.stderr.write(
-            dim(`[session] Resuming ${prevSession.id} via briefing (${prevSession.messages.length} messages → synthesized)`) + "\n",
+      if (useTurnIsolation) {
+        // Synthesize briefing from prior session (both interactive AND single-query)
+        // This prevents accumulated history from degrading LLM accuracy.
+        try {
+          resumeBriefing = await synthesizeBriefing(
+            prevSession.messages, 1,
+            { strategy: config.context.briefingStrategy ?? "auto", provider },
           );
+          if (cliArgs.verbosity !== "quiet") {
+            process.stderr.write(
+              dim(`[session] Resuming ${prevSession.id} via briefing (${prevSession.messages.length} messages → synthesized)`) + "\n",
+            );
+          }
+        } catch {
+          // Fallback to raw messages if briefing synthesis fails
+          initialMessages = [...prevSession.messages];
+          if (cliArgs.verbosity !== "quiet") {
+            process.stderr.write(
+              dim(`[session] Resuming ${prevSession.id} (${prevSession.messages.length} messages, briefing failed)`) + "\n",
+            );
+          }
         }
       } else {
-        // Raw message resume (single-query mode or turn isolation disabled)
+        // Turn isolation disabled — raw message resume
         initialMessages = [...prevSession.messages];
         if (cliArgs.verbosity !== "quiet") {
           process.stderr.write(
@@ -514,6 +525,7 @@ export async function main(): Promise<void> {
         doubleCheck,
         initialMessages,
         cliArgs.verbosity,
+        resumeBriefing,
       );
     }
   } finally {
@@ -798,6 +810,7 @@ async function runSingleQuery(
   doubleCheck: DoubleCheck,
   initialMessages: Message[] | undefined,
   verbosity: Verbosity,
+  briefing?: TurnBriefing,
 ): Promise<void> {
   const systemPrompt = assembleSystemPrompt({
     mode,
@@ -808,6 +821,7 @@ async function runSingleQuery(
     approvalMode: config.approval.mode,
     provider: config.provider,
     model: config.model,
+    briefing,
   });
 
   // Set up LLM-based summarization for context compaction

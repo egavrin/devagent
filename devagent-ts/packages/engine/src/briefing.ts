@@ -19,6 +19,11 @@ import { MessageRole } from "@devagent/core";
 
 // ─── Types ──────────────────────────────────────────────────
 
+export interface BriefingPlanStep {
+  readonly description: string;
+  readonly status: "pending" | "in_progress" | "completed";
+}
+
 export interface TurnBriefing {
   readonly turnNumber: number;
   /** Summary of what was accomplished in the prior turn. */
@@ -29,6 +34,8 @@ export interface TurnBriefing {
   readonly pendingWork: string | null;
   /** Files modified, read, or discovered (paths). */
   readonly keyArtifacts: ReadonlyArray<string>;
+  /** Structured plan steps from the last update_plan call, if any. */
+  readonly planSteps: ReadonlyArray<BriefingPlanStep> | null;
 }
 
 export type BriefingStrategy = "heuristic" | "llm" | "auto";
@@ -57,6 +64,11 @@ Important decisions made, user preferences, constraints discovered. Bullet point
 
 ## Accomplished
 What was completed. Include specific file paths and function names. Bullet points.
+
+## Plan Status
+If a multi-step plan exists, list each step with its status (pending/in_progress/completed).
+Format: - [status] description
+If no structured plan was used, say "No plan."
 
 ## Pending
 What remains to be done. Be specific about next steps. Bullet points. If everything is done, say "Nothing pending."
@@ -145,8 +157,11 @@ export function extractHeuristicBriefing(
     summaryParts.push(`Tools used: ${toolSummary}`);
   }
 
-  if (planSteps) {
-    summaryParts.push(`Plan: ${planSteps}`);
+  if (planSteps && planSteps.length > 0) {
+    const planSummary = planSteps
+      .map((s) => `[${s.status}] ${s.description}`)
+      .join("; ");
+    summaryParts.push(`Plan: ${planSummary}`);
   }
 
   if (finalResponse) {
@@ -167,6 +182,7 @@ export function extractHeuristicBriefing(
     activeContext,
     pendingWork,
     keyArtifacts: artifacts.slice(0, 20), // Cap at 20 files
+    planSteps,
   };
 }
 
@@ -286,6 +302,9 @@ function parseLLMBriefing(
   const accomplishedMatch = response.match(
     /## Accomplished\s*\n([\s\S]*?)(?=\n## |$)/,
   );
+  const planMatch = response.match(
+    /## Plan Status\s*\n([\s\S]*?)(?=\n## |$)/,
+  );
   const pendingMatch = response.match(/## Pending\s*\n([\s\S]*?)(?=\n## |$)/);
   const filesMatch = response.match(
     /## Relevant Files\s*\n([\s\S]*?)(?=\n## |$)/,
@@ -294,6 +313,7 @@ function parseLLMBriefing(
   const goal = goalMatch?.[1]?.trim() ?? "";
   const decisions = decisionsMatch?.[1]?.trim() ?? "";
   const accomplished = accomplishedMatch?.[1]?.trim() ?? "";
+  const planText = planMatch?.[1]?.trim() ?? "";
   const pending = pendingMatch?.[1]?.trim() ?? "";
   const files = filesMatch?.[1]?.trim() ?? "";
 
@@ -312,6 +332,25 @@ function parseLLMBriefing(
       ? pending
       : null;
 
+  // planSteps from LLM response, with heuristic fallback
+  let planSteps: BriefingPlanStep[] | null = null;
+  if (planText && !planText.toLowerCase().includes("no plan")) {
+    const stepLines = planText.split("\n").filter((l) => l.trim().startsWith("- ["));
+    if (stepLines.length > 0) {
+      planSteps = stepLines.map((line) => {
+        const match = line.match(/\[(pending|in_progress|completed)\]\s*(.*)/);
+        return {
+          status: (match?.[1] ?? "pending") as BriefingPlanStep["status"],
+          description: match?.[2]?.trim() ?? line.trim(),
+        };
+      });
+    }
+  }
+  // Fallback: if LLM didn't produce plan steps, try heuristic extraction
+  if (!planSteps) {
+    planSteps = extractPlanSteps(messages);
+  }
+
   // keyArtifacts from files section + heuristic extraction
   const fileArtifacts = extractFilePathsFromText(files);
   const heuristicArtifacts = extractArtifacts(messages);
@@ -325,6 +364,7 @@ function parseLLMBriefing(
     activeContext,
     pendingWork,
     keyArtifacts: allArtifacts.slice(0, 20),
+    planSteps,
   };
 }
 
@@ -397,26 +437,29 @@ function extractToolSummary(messages: ReadonlyArray<Message>): string | null {
     .join(", ");
 }
 
-function extractPlanSteps(messages: ReadonlyArray<Message>): string | null {
-  // Look for update_plan tool calls
+function extractPlanSteps(
+  messages: ReadonlyArray<Message>,
+): BriefingPlanStep[] | null {
+  // Find the LAST update_plan call (most up-to-date plan state)
+  let lastPlan: BriefingPlanStep[] | null = null;
+
   for (const msg of messages) {
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
         if (tc.name === "update_plan") {
           const steps = tc.arguments["steps"];
           if (Array.isArray(steps)) {
-            return (steps as Array<Record<string, unknown>>)
-              .map(
-                (s) =>
-                  `[${(s["status"] as string) ?? "?"}] ${(s["description"] as string) ?? ""}`,
-              )
-              .join("; ");
+            lastPlan = (steps as Array<Record<string, unknown>>).map((s) => ({
+              description: (s["description"] as string) ?? "",
+              status: ((s["status"] as string) ?? "pending") as BriefingPlanStep["status"],
+            }));
           }
         }
       }
     }
   }
-  return null;
+
+  return lastPlan;
 }
 
 function extractActiveContext(
@@ -538,6 +581,13 @@ export function formatBriefing(briefing: TurnBriefing): string {
 
   if (briefing.priorTaskSummary) {
     lines.push(`\nPrevious work:\n${briefing.priorTaskSummary}`);
+  }
+
+  if (briefing.planSteps && briefing.planSteps.length > 0) {
+    const planLines = briefing.planSteps
+      .map((s) => `- [${s.status}] ${s.description}`)
+      .join("\n");
+    lines.push(`\nPlan status:\n${planLines}`);
   }
 
   if (briefing.activeContext) {

@@ -300,6 +300,7 @@ Nothing pending.
         activeContext: "Project uses TypeScript with Bun runtime.",
         pendingWork: "Still need to update the imports.",
         keyArtifacts: ["src/main.ts", "src/config.ts"],
+        planSteps: null,
       };
 
       const formatted = formatBriefing(briefing);
@@ -310,6 +311,131 @@ Nothing pending.
       expect(formatted).toContain("update the imports");
       expect(formatted).toContain("src/main.ts");
       expect(formatted).toContain("src/config.ts");
+      expect(formatted).not.toContain("Plan status:");
+    });
+
+    it("includes plan status section when planSteps present", () => {
+      const briefing: TurnBriefing = {
+        turnNumber: 2,
+        priorTaskSummary: "Implemented feature A.",
+        activeContext: "",
+        pendingWork: null,
+        keyArtifacts: [],
+        planSteps: [
+          { description: "Write tests", status: "completed" },
+          { description: "Update docs", status: "in_progress" },
+          { description: "Deploy", status: "pending" },
+        ],
+      };
+
+      const formatted = formatBriefing(briefing);
+
+      expect(formatted).toContain("Plan status:");
+      expect(formatted).toContain("- [completed] Write tests");
+      expect(formatted).toContain("- [in_progress] Update docs");
+      expect(formatted).toContain("- [pending] Deploy");
+    });
+  });
+
+  // ─── Plan Step Extraction ──────────────────────────────────
+
+  describe("plan step extraction", () => {
+    it("extracts plan steps as structured array from last update_plan", () => {
+      const messages = makeMessages(
+        { role: "system", content: "System prompt" },
+        { role: "user", content: "Implement the feature" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              name: "update_plan",
+              arguments: {
+                steps: [
+                  { description: "Design API", status: "pending" },
+                  { description: "Write code", status: "pending" },
+                ],
+              },
+              callId: "c1",
+            },
+          ],
+        },
+        { role: "tool", content: "Plan updated", toolCallId: "c1" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              name: "update_plan",
+              arguments: {
+                steps: [
+                  { description: "Design API", status: "completed" },
+                  { description: "Write code", status: "in_progress" },
+                  { description: "Run tests", status: "pending" },
+                ],
+              },
+              callId: "c2",
+            },
+          ],
+        },
+        { role: "tool", content: "Plan updated", toolCallId: "c2" },
+        { role: "assistant", content: "Working on the code now." },
+      );
+
+      const briefing = extractHeuristicBriefing(messages, 1);
+
+      // Should use the LAST plan, not the first
+      expect(briefing.planSteps).not.toBeNull();
+      expect(briefing.planSteps).toHaveLength(3);
+      expect(briefing.planSteps![0]!.description).toBe("Design API");
+      expect(briefing.planSteps![0]!.status).toBe("completed");
+      expect(briefing.planSteps![1]!.status).toBe("in_progress");
+      expect(briefing.planSteps![2]!.description).toBe("Run tests");
+      expect(briefing.planSteps![2]!.status).toBe("pending");
+
+      // Plan should also appear in priorTaskSummary
+      expect(briefing.priorTaskSummary).toContain("[completed] Design API");
+      expect(briefing.priorTaskSummary).toContain("[in_progress] Write code");
+    });
+
+    it("returns null planSteps when no update_plan calls exist", () => {
+      const messages = makeMessages(
+        { role: "user", content: "Quick question" },
+        { role: "assistant", content: "Quick answer" },
+      );
+
+      const briefing = extractHeuristicBriefing(messages, 1);
+
+      expect(briefing.planSteps).toBeNull();
+    });
+
+    it("handles single update_plan call correctly", () => {
+      const messages = makeMessages(
+        { role: "user", content: "Plan the work" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              name: "update_plan",
+              arguments: {
+                steps: [
+                  { description: "Step A", status: "completed" },
+                  { description: "Step B", status: "pending" },
+                ],
+              },
+              callId: "c1",
+            },
+          ],
+        },
+        { role: "tool", content: "Plan updated", toolCallId: "c1" },
+      );
+
+      const briefing = extractHeuristicBriefing(messages, 1);
+
+      expect(briefing.planSteps).toHaveLength(2);
+      expect(briefing.planSteps![0]!.status).toBe("completed");
+      expect(briefing.planSteps![1]!.status).toBe("pending");
     });
   });
 });
