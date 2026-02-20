@@ -30,10 +30,11 @@ export type { DelegateToolContext } from "./delegate-tool.js";
 export { createPlanTool, getCurrentPlan, clearPlan } from "./plan-tool.js";
 export type { PlanStep, Plan } from "./plan-tool.js";
 
-export { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS } from "./double-check.js";
+export { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS, parseTestOutput } from "./double-check.js";
 export type {
   DoubleCheckOptions,
   DoubleCheckResult,
+  TestSummary,
   DiagnosticProvider,
   TestRunner,
 } from "./double-check.js";

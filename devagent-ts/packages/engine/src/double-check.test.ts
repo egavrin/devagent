@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS } from "./double-check.js";
+import { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS, parseTestOutput } from "./double-check.js";
 import type { DiagnosticProvider, TestRunner } from "./double-check.js";
 import { EventBus } from "@devagent/core";
 
@@ -173,5 +173,146 @@ describe("DoubleCheck", () => {
     expect(result.diagnosticErrors.length).toBe(0);
     expect(errors.length).toBe(1);
     expect(errors[0]).toContain("LSP crashed");
+  });
+
+  it("includes testSummary when test output is parseable", async () => {
+    const dc = new DoubleCheck(
+      {
+        ...DEFAULT_DOUBLE_CHECK_OPTIONS,
+        enabled: true,
+        runTests: true,
+        testCommand: "bun test",
+      },
+      bus,
+    );
+
+    const runner: TestRunner = async () => ({
+      success: false,
+      output: "Tests:  2 failed, 10 passed, 12 total",
+    });
+    dc.setTestRunner(runner);
+
+    const result = await dc.check([]);
+    expect(result.testPassed).toBe(false);
+    expect(result.testSummary).toBeDefined();
+    expect(result.testSummary!.framework).toBe("jest");
+    expect(result.testSummary!.failed).toBe(2);
+    expect(result.testSummary!.passed).toBe(10);
+  });
+
+  it("formats results with testSummary", () => {
+    const dc = new DoubleCheck(DEFAULT_DOUBLE_CHECK_OPTIONS, bus);
+    const formatted = dc.formatResults({
+      passed: false,
+      diagnosticErrors: [],
+      testOutput: "raw output",
+      testPassed: false,
+      testSummary: {
+        framework: "jest",
+        passed: 10,
+        failed: 2,
+        failureMessages: ["test one failed", "test two failed"],
+      },
+    });
+    expect(formatted).toContain("jest");
+    expect(formatted).toContain("2 failed");
+    expect(formatted).toContain("10 passed");
+    expect(formatted).toContain("test one failed");
+    expect(formatted).not.toContain("raw output"); // Structured summary preferred
+  });
+});
+
+describe("parseTestOutput", () => {
+  it("returns null for empty input", () => {
+    expect(parseTestOutput("")).toBeNull();
+    expect(parseTestOutput("hi")).toBeNull();
+  });
+
+  it("parses Jest output", () => {
+    const output = `
+FAIL src/foo.test.ts
+  ● test suite > should work
+    Expected: 5
+    Received: 3
+
+Tests:  1 failed, 5 passed, 6 total
+`;
+    const result = parseTestOutput(output);
+    expect(result).not.toBeNull();
+    expect(result!.framework).toBe("jest");
+    expect(result!.failed).toBe(1);
+    expect(result!.passed).toBe(5);
+    expect(result!.failureMessages.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("parses Vitest output", () => {
+    const output = `
+ ❯ src/foo.test.ts (3 tests | 1 failed)
+   ✕ should compute correctly
+
+Tests  1 failed | 2 passed (3)
+`;
+    const result = parseTestOutput(output);
+    expect(result).not.toBeNull();
+    expect(result!.framework).toBe("vitest");
+    expect(result!.failed).toBe(1);
+    expect(result!.passed).toBe(2);
+  });
+
+  it("parses pytest output", () => {
+    const output = `
+FAILED tests/test_algo.py::test_edge_case - AssertionError
+FAILED tests/test_algo.py::test_overflow - TypeError
+1 failed, 8 passed in 0.5s
+`;
+    const result = parseTestOutput(output);
+    expect(result).not.toBeNull();
+    expect(result!.framework).toBe("pytest");
+    expect(result!.failed).toBe(1);
+    expect(result!.passed).toBe(8);
+    expect(result!.failureMessages.length).toBe(2);
+  });
+
+  it("parses pytest all-pass output", () => {
+    const output = "10 passed in 1.2s";
+    const result = parseTestOutput(output);
+    expect(result).not.toBeNull();
+    expect(result!.framework).toBe("pytest");
+    expect(result!.failed).toBe(0);
+    expect(result!.passed).toBe(10);
+  });
+
+  it("parses cargo test output", () => {
+    const output = `
+running 5 tests
+test utils::test_parse ... ok
+test utils::test_format ... ok
+test utils::test_edge ... FAILED
+test utils::test_overflow ... ok
+test utils::test_basic ... ok
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+`;
+    const result = parseTestOutput(output);
+    expect(result).not.toBeNull();
+    expect(result!.framework).toBe("cargo");
+    expect(result!.passed).toBe(4);
+    expect(result!.failed).toBe(1);
+    expect(result!.failureMessages).toContain("utils::test_edge");
+  });
+
+  it("parses Go test output", () => {
+    const output = `
+--- PASS: TestBasic (0.00s)
+--- FAIL: TestEdge (0.01s)
+    main_test.go:42: expected 5, got 3
+FAIL
+`;
+    const result = parseTestOutput(output);
+    expect(result).not.toBeNull();
+    expect(result!.framework).toBe("go");
+    expect(result!.passed).toBe(1);
+    expect(result!.failed).toBe(1);
+    expect(result!.failureMessages).toContain("TestEdge");
   });
 });

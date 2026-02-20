@@ -36,7 +36,7 @@ import {
   synthesizeBriefing,
 } from "@devagent/engine";
 import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback } from "@devagent/engine";
-import { LSPRouter, createRoutingDiagnosticProvider, createShellTestRunner } from "./double-check-wiring.js";
+import { LSPRouter, createRoutingDiagnosticProvider, createCompilerFallbackProvider, createShellTestRunner, lazyUpgradeLSP } from "./double-check-wiring.js";
 import { createArkTSDiagnosticProvider } from "@devagent/arkts";
 import { runDesktopBridge } from "./desktop-bridge.js";
 import { assembleSystemPrompt } from "./prompts/index.js";
@@ -401,16 +401,22 @@ export async function main(): Promise<void> {
   });
   checkpointManager.init();
 
-  const doubleCheck = new DoubleCheck(
-    {
-      ...DEFAULT_DOUBLE_CHECK_OPTIONS,
-      ...config.doubleCheck,
-    },
-    bus,
-  );
+  // Auto-enable DoubleCheck in full-auto mode unless explicitly disabled
+  const effectiveDoubleCheck = {
+    ...DEFAULT_DOUBLE_CHECK_OPTIONS,
+    ...config.doubleCheck,
+    enabled: config.doubleCheck?.enabled ?? (config.approval.mode === ApprovalMode.FULL_AUTO),
+  };
+
+  const doubleCheck = new DoubleCheck(effectiveDoubleCheck, bus);
+
+  if (effectiveDoubleCheck.enabled && cliArgs.verbosity !== "quiet") {
+    process.stderr.write(dim("[double-check] Validation enabled") + "\n");
+  }
 
   // ─── LSP Servers (optional, multi-language) ──────────────────
   let lspRouter: LSPRouter | null = null;
+  let hasLSPDiagnostics = false;
 
   if (config.lsp?.servers && config.lsp.servers.length > 0) {
     lspRouter = new LSPRouter(projectRoot);
@@ -434,6 +440,7 @@ export async function main(): Promise<void> {
     // Register LSP tools from the first available client
     const clients = lspRouter.getClients();
     if (clients.length > 0) {
+      hasLSPDiagnostics = true;
       for (const tool of createLSPTools(clients[0]!)) {
         toolRegistry.register(tool);
       }
@@ -468,6 +475,7 @@ export async function main(): Promise<void> {
     const arktsProvider = createArkTSDiagnosticProvider(config.arkts);
     if (arktsProvider) {
       doubleCheck.setDiagnosticProvider(arktsProvider);
+      hasLSPDiagnostics = true;
       if (cliArgs.verbosity !== "quiet") {
         process.stderr.write(
           dim(`[arkts] ArkTS linter enabled (standalone, ${config.arkts.linterPath})`) + "\n",
@@ -476,8 +484,65 @@ export async function main(): Promise<void> {
     }
   }
 
+  // Wire compiler fallback when no LSP/linter diagnostics and DoubleCheck is enabled.
+  // Then schedule lazy LSP upgrade in the background — when LSP servers are found
+  // in PATH, they'll be started and the provider swapped transparently.
+  if (!hasLSPDiagnostics && effectiveDoubleCheck.enabled) {
+    doubleCheck.setDiagnosticProvider(createCompilerFallbackProvider(projectRoot));
+
+    // Prepare ArkTS provider for composition with lazy LSP (if enabled)
+    const arktsProviderForLazy = (config.arkts?.enabled && config.arkts.linterPath)
+      ? createArkTSDiagnosticProvider(config.arkts) ?? undefined
+      : undefined;
+
+    // Lazy LSP: create a router, detect servers in background, upgrade when ready
+    const lazyRouter = new LSPRouter(projectRoot);
+    lspRouter = lazyRouter; // So shutdown can clean up
+
+    // Fire-and-forget — runs in background while the session starts
+    lazyUpgradeLSP({
+      repoRoot: projectRoot,
+      doubleCheck,
+      lspRouter: lazyRouter,
+      arktsProvider: arktsProviderForLazy,
+      onServerStarted: (server) => {
+        if (cliArgs.verbosity !== "quiet") {
+          process.stderr.write(
+            dim(`[lsp] Auto-detected: ${server.command} (${server.languages.join(", ")})`) + "\n",
+          );
+        }
+      },
+      onUpgradeComplete: (count) => {
+        if (count > 0) {
+          hasLSPDiagnostics = true;
+          // Register LSP tools from first available client
+          const clients = lazyRouter.getClients();
+          if (clients.length > 0) {
+            for (const tool of createLSPTools(clients[0]!)) {
+              toolRegistry.register(tool);
+            }
+          }
+          if (cliArgs.verbosity !== "quiet") {
+            process.stderr.write(
+              dim(`[lsp] Upgraded to LSP diagnostics (${count} server(s))`) + "\n",
+            );
+          }
+        } else if (cliArgs.verbosity !== "quiet") {
+          process.stderr.write(dim("[double-check] Using compiler fallback diagnostics (no LSP servers in PATH)") + "\n");
+        }
+      },
+      onError: (err) => {
+        if (cliArgs.verbosity !== "quiet") {
+          process.stderr.write(dim(`[lsp] Lazy detection failed: ${err.message}`) + "\n");
+        }
+      },
+    }).catch(() => {
+      // Silently absorb — compiler fallback remains active
+    });
+  }
+
   // Wire test runner (works without LSP — just needs a shell)
-  if (config.doubleCheck?.testCommand) {
+  if (effectiveDoubleCheck.testCommand ?? config.doubleCheck?.testCommand) {
     doubleCheck.setTestRunner(createShellTestRunner(projectRoot));
   }
 

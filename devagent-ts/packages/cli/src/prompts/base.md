@@ -118,8 +118,9 @@ For inline code snippets, use fenced blocks with the language tag.
 - Never use destructive commands (`git reset --hard`, `git checkout .`, `git clean -fd`)
   unless explicitly asked.
 - Do not commit unless explicitly requested.
-- If the worktree is dirty with changes you didn't make, **stop and inform the user**
-  before proceeding. Do not silently overwrite their uncommitted work.
+- If the worktree is dirty with changes you didn't make, note the dirty files.
+  If none overlap with files you need to modify, proceed with the task.
+  Only stop and inform the user if dirty files directly conflict with your work.
 - Prefer non-interactive git — never use `git rebase -i` or `git add -i`.
 - When committing, stage specific files — avoid `git add .` or `git add -A`.
 

@@ -6,20 +6,53 @@
  * simultaneously, each handling different file types.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { extname } from "node:path";
 import { LSPClient } from "@devagent/tools";
 import type { LSPServerConfig } from "@devagent/core";
-import type { DiagnosticProvider, TestRunner } from "@devagent/engine";
+import type { DiagnosticProvider, TestRunner, DoubleCheck } from "@devagent/engine";
 
 // ─── Language Map ───────────────────────────────────────────
+
+export interface CompilerFallbackCheck {
+  /** Command to run (e.g. "npx", "cargo", "gcc") */
+  readonly command: string;
+  /** Arguments for the command */
+  readonly args: ReadonlyArray<string>;
+  /**
+   * Regex to parse diagnostic lines from compiler output.
+   * Must have named groups: file, line, col (optional), message.
+   */
+  readonly diagnosticPattern: RegExp;
+  /** Max time to wait for the compiler in ms */
+  readonly timeout: number;
+}
 
 export interface LanguageEntry {
   readonly languageId: string;
   readonly extensions: ReadonlyArray<string>;
   readonly defaultCommand: string;
   readonly defaultArgs: ReadonlyArray<string>;
+  /** Fallback compiler/checker when no LSP is running */
+  readonly fallbackCheck?: CompilerFallbackCheck;
 }
+
+// ─── Diagnostic patterns for compiler fallback output parsing ──
+
+/** tsc: src/foo.ts(10,5): error TS2451: Cannot redeclare block-scoped variable */
+const TSC_PATTERN = /^(?<file>.+)\((?<line>\d+),(?<col>\d+)\):\s*(?<sev>error|warning)\s+\S+:\s*(?<message>.+)$/;
+
+/** pyright: /path/file.py:10:5 - error: Message */
+const PYRIGHT_PATTERN = /^(?<file>.+):(?<line>\d+):(?<col>\d+)\s*-\s*(?<sev>error|warning|information):\s*(?<message>.+)$/;
+
+/** cargo check: error[E0382]: borrow of moved value */
+const CARGO_PATTERN = /^\s*--> (?<file>.+):(?<line>\d+):(?<col>\d+)$/;
+
+/** gcc/clang: file.c:10:5: error: message */
+const GCC_PATTERN = /^(?<file>.+):(?<line>\d+):(?<col>\d+):\s*(?<sev>error|warning):\s*(?<message>.+)$/;
+
+/** shellcheck: In file.sh line 10: SC2086: message */
+const SHELLCHECK_PATTERN = /^In (?<file>.+) line (?<line>\d+):/;
 
 /** Built-in map of supported languages with default LSP servers. */
 export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
@@ -28,48 +61,86 @@ export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
     extensions: [".ts", ".tsx", ".mts", ".cts"],
     defaultCommand: "typescript-language-server",
     defaultArgs: ["--stdio"],
+    fallbackCheck: {
+      command: "npx",
+      args: ["tsc", "--noEmit", "--pretty", "false"],
+      diagnosticPattern: TSC_PATTERN,
+      timeout: 15_000,
+    },
   },
   {
     languageId: "javascript",
     extensions: [".js", ".jsx", ".mjs", ".cjs"],
     defaultCommand: "typescript-language-server",
     defaultArgs: ["--stdio"],
+    // JS projects often lack tsconfig; tsc fallback only works with one
   },
   {
     languageId: "python",
     extensions: [".py", ".pyi"],
     defaultCommand: "pyright-langserver",
     defaultArgs: ["--stdio"],
+    fallbackCheck: {
+      command: "pyright",
+      args: [],  // file path appended at runtime
+      diagnosticPattern: PYRIGHT_PATTERN,
+      timeout: 15_000,
+    },
   },
   {
     languageId: "c",
     extensions: [".c", ".h"],
     defaultCommand: "clangd",
     defaultArgs: [],
+    fallbackCheck: {
+      command: "gcc",
+      args: ["-fsyntax-only", "-Wall"],
+      diagnosticPattern: GCC_PATTERN,
+      timeout: 10_000,
+    },
   },
   {
     languageId: "cpp",
     extensions: [".cpp", ".cxx", ".cc", ".hpp", ".hxx", ".hh"],
     defaultCommand: "clangd",
     defaultArgs: [],
+    fallbackCheck: {
+      command: "g++",
+      args: ["-fsyntax-only", "-Wall"],
+      diagnosticPattern: GCC_PATTERN,
+      timeout: 10_000,
+    },
   },
   {
     languageId: "rust",
     extensions: [".rs"],
     defaultCommand: "rust-analyzer",
     defaultArgs: [],
+    fallbackCheck: {
+      command: "cargo",
+      args: ["check", "--message-format=short"],
+      diagnosticPattern: GCC_PATTERN,  // cargo --message-format=short uses same format
+      timeout: 30_000,
+    },
   },
   {
     languageId: "shellscript",
     extensions: [".sh", ".bash", ".zsh"],
     defaultCommand: "bash-language-server",
     defaultArgs: ["start"],
+    fallbackCheck: {
+      command: "shellcheck",
+      args: ["-f", "gcc"],  // gcc output format: file:line:col: severity: message
+      diagnosticPattern: GCC_PATTERN,
+      timeout: 5_000,
+    },
   },
   {
     languageId: "arkts",
     extensions: [".ets"],
     defaultCommand: "typescript-language-server",
     defaultArgs: ["--stdio"],
+    // ArkTS uses dedicated @devagent/arkts provider, not compiler fallback
   },
 ];
 
@@ -219,71 +290,373 @@ export function createRoutingDiagnosticProvider(
   };
 }
 
+// ─── Compiler Fallback Provider ──────────────────────────────
+
+const COMPILER_MAX_OUTPUT = 50_000;
+
+/**
+ * Spawn a subprocess and capture output (used by compiler fallback).
+ */
+function spawnCapture(
+  command: string,
+  args: string[],
+  cwd: string,
+  timeout: number,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return new Promise((resolveP) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+
+    child.stdout.on("data", (data: Buffer) => {
+      const chunk = data.toString();
+      if (stdout.length < COMPILER_MAX_OUTPUT) {
+        stdout += chunk.substring(0, COMPILER_MAX_OUTPUT - stdout.length);
+      }
+    });
+
+    child.stderr.on("data", (data: Buffer) => {
+      const chunk = data.toString();
+      if (stderr.length < COMPILER_MAX_OUTPUT) {
+        stderr += chunk.substring(0, COMPILER_MAX_OUTPUT - stderr.length);
+      }
+    });
+
+    child.on("close", (code) => {
+      if (killed) return;
+      resolveP({ exitCode: code ?? 1, stdout, stderr });
+    });
+
+    child.on("error", (err) => {
+      if (killed) return;
+      resolveP({ exitCode: 1, stdout: "", stderr: err.message });
+    });
+
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill("SIGTERM");
+      resolveP({ exitCode: 1, stdout, stderr: `Timed out after ${timeout}ms` });
+    }, timeout);
+
+    child.on("close", () => clearTimeout(timer));
+  });
+}
+
+/**
+ * Create a DiagnosticProvider that runs language-specific compiler/checker
+ * commands as a fallback when no LSP server is available.
+ *
+ * Supports: tsc, pyright, cargo check, gcc/g++, shellcheck.
+ * Each language entry in LANGUAGE_MAP may define a fallbackCheck with
+ * a command, args, output pattern, and timeout.
+ */
+export function createCompilerFallbackProvider(
+  repoRoot: string,
+): DiagnosticProvider {
+  return async (filePath: string) => {
+    const lang = detectLanguage(filePath);
+    if (!lang) return [];
+
+    const entry = getLanguageEntry(lang);
+    if (!entry?.fallbackCheck) return [];
+
+    const { command, args, diagnosticPattern, timeout } = entry.fallbackCheck;
+
+    // Build final args — some compilers need the file path appended,
+    // others (like tsc --noEmit) check the whole project.
+    // For per-file compilers (gcc, pyright, shellcheck), append filePath.
+    const perFileCompilers = new Set(["gcc", "g++", "pyright", "shellcheck"]);
+    const finalArgs = perFileCompilers.has(command)
+      ? [...args, filePath]
+      : [...args];
+
+    try {
+      const result = await spawnCapture(command, finalArgs, repoRoot, timeout);
+
+      if (result.exitCode === 0) return []; // No errors
+
+      // Parse output lines for diagnostics
+      const output = result.stderr || result.stdout;
+      const diagnostics: Array<{ message: string; severity: string }> = [];
+      const seen = new Set<string>();
+
+      for (const line of output.split("\n")) {
+        const match = diagnosticPattern.exec(line.trim());
+        if (!match?.groups) continue;
+
+        const { file, line: lineNum, col, message, sev } = match.groups;
+        if (!file || !lineNum) continue;
+
+        // For project-wide compilers (tsc, cargo), filter to the modified file
+        if (!perFileCompilers.has(command)) {
+          const normFile = file.replace(/\\/g, "/");
+          const normTarget = filePath.replace(/\\/g, "/");
+          if (!normTarget.endsWith(normFile) && !normFile.endsWith(normTarget.split("/").pop()!)) {
+            continue;
+          }
+        }
+
+        const severity = sev?.toLowerCase() === "warning" ? "warning" : "error";
+        const diagMsg = `${file}:${lineNum}${col ? `:${col}` : ""}: ${message ?? line}`;
+
+        if (!seen.has(diagMsg)) {
+          seen.add(diagMsg);
+          diagnostics.push({ message: diagMsg, severity });
+        }
+      }
+
+      return diagnostics;
+    } catch {
+      // Compiler not available — silently skip (not an error)
+      return [];
+    }
+  };
+}
+
 // ─── Shell Test Runner ─────────────────────────────────────
 
 const TEST_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 50_000;
 
 /**
+ * Run a single shell command and return success/output.
+ */
+function runShellCommand(
+  command: string,
+  cwd: string,
+): Promise<{ success: boolean; output: string }> {
+  return new Promise((resolveP) => {
+    const child = spawn("sh", ["-c", command], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+
+    child.stdout.on("data", (data: Buffer) => {
+      const chunk = data.toString();
+      if (stdout.length < MAX_OUTPUT_BYTES) {
+        stdout += chunk.substring(0, MAX_OUTPUT_BYTES - stdout.length);
+      }
+    });
+
+    child.stderr.on("data", (data: Buffer) => {
+      const chunk = data.toString();
+      if (stderr.length < MAX_OUTPUT_BYTES) {
+        stderr += chunk.substring(0, MAX_OUTPUT_BYTES - stderr.length);
+      }
+    });
+
+    child.on("close", (code) => {
+      if (killed) return;
+      const combined = stderr
+        ? `${stdout}\n--- stderr ---\n${stderr}`
+        : stdout;
+      resolveP({
+        success: code === 0,
+        output: combined || "(no output)",
+      });
+    });
+
+    child.on("error", (err) => {
+      if (killed) return;
+      resolveP({
+        success: false,
+        output: `Failed to run test: ${err.message}`,
+      });
+    });
+
+    // Timeout
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill("SIGTERM");
+      resolveP({
+        success: false,
+        output: `Test command timed out after ${TEST_TIMEOUT_MS}ms`,
+      });
+    }, TEST_TIMEOUT_MS);
+
+    child.on("close", () => clearTimeout(timer));
+  });
+}
+
+/**
  * Create a TestRunner that executes a shell command and returns success/output.
  * Used by DoubleCheck to run the project's test suite after file mutations.
+ *
+ * When the primary command fails with no meaningful output (empty stdout+stderr),
+ * tries fallback commands sequentially — this handles environments where
+ * the primary test runner is broken (e.g. corepack/yarn issues).
  */
-export function createShellTestRunner(repoRoot: string): TestRunner {
-  return (command: string) => {
-    return new Promise((resolveP) => {
-      const child = spawn("sh", ["-c", command], {
-        cwd: repoRoot,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+export function createShellTestRunner(
+  repoRoot: string,
+  fallbacks?: ReadonlyArray<string>,
+): TestRunner {
+  return async (command: string) => {
+    const result = await runShellCommand(command, repoRoot);
 
-      let stdout = "";
-      let stderr = "";
-      let killed = false;
+    // If primary succeeded or produced meaningful output, return as-is
+    if (result.success || result.output.trim().length > 20) {
+      return result;
+    }
 
-      child.stdout.on("data", (data: Buffer) => {
-        const chunk = data.toString();
-        if (stdout.length < MAX_OUTPUT_BYTES) {
-          stdout += chunk.substring(0, MAX_OUTPUT_BYTES - stdout.length);
+    // Primary failed with no/minimal output — try fallbacks
+    if (fallbacks && fallbacks.length > 0) {
+      for (const fallback of fallbacks) {
+        const fbResult = await runShellCommand(fallback, repoRoot);
+        if (fbResult.success || fbResult.output.trim().length > 20) {
+          return fbResult;
         }
-      });
+      }
+    }
 
-      child.stderr.on("data", (data: Buffer) => {
-        const chunk = data.toString();
-        if (stderr.length < MAX_OUTPUT_BYTES) {
-          stderr += chunk.substring(0, MAX_OUTPUT_BYTES - stderr.length);
-        }
-      });
-
-      child.on("close", (code) => {
-        if (killed) return;
-        const combined = stderr
-          ? `${stdout}\n--- stderr ---\n${stderr}`
-          : stdout;
-        resolveP({
-          success: code === 0,
-          output: combined || "(no output)",
-        });
-      });
-
-      child.on("error", (err) => {
-        if (killed) return;
-        resolveP({
-          success: false,
-          output: `Failed to run test: ${err.message}`,
-        });
-      });
-
-      // Timeout
-      const timer = setTimeout(() => {
-        killed = true;
-        child.kill("SIGTERM");
-        resolveP({
-          success: false,
-          output: `Test command timed out after ${TEST_TIMEOUT_MS}ms`,
-        });
-      }, TEST_TIMEOUT_MS);
-
-      child.on("close", () => clearTimeout(timer));
-    });
+    return result;
   };
+}
+
+// ─── Lazy LSP Detection ─────────────────────────────────────
+
+/**
+ * Check if a binary exists in PATH.
+ * Returns true if `which <command>` succeeds, false otherwise.
+ */
+function commandExists(command: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile("which", [command], (err) => {
+      resolve(!err);
+    });
+  });
+}
+
+export interface DetectedLSPServer {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly languages: readonly string[];
+  readonly extensions: readonly string[];
+}
+
+/**
+ * Scan PATH for known LSP server binaries.
+ * Returns configs for servers that are actually installed.
+ */
+export async function detectAvailableLSPServers(): Promise<ReadonlyArray<DetectedLSPServer>> {
+  // Group languages by their default LSP command to avoid duplicate starts
+  interface MutableGroup {
+    command: string;
+    args: string[];
+    languages: string[];
+    extensions: string[];
+  }
+  const serverGroups = new Map<string, MutableGroup>();
+
+  for (const entry of LANGUAGE_MAP) {
+    const key = entry.defaultCommand;
+    const existing = serverGroups.get(key);
+    if (existing) {
+      existing.languages.push(entry.languageId);
+      existing.extensions.push(...entry.extensions);
+    } else {
+      serverGroups.set(key, {
+        command: entry.defaultCommand,
+        args: [...entry.defaultArgs],
+        languages: [entry.languageId],
+        extensions: [...entry.extensions],
+      });
+    }
+  }
+
+  // Check which server binaries exist in PATH (parallel)
+  const checks = [...serverGroups.entries()].map(async ([cmd, group]) => {
+    const exists = await commandExists(cmd);
+    return exists ? group : null;
+  });
+
+  const results = await Promise.all(checks);
+  return results.filter((r): r is MutableGroup => r !== null);
+}
+
+export interface LazyLSPUpgradeOptions {
+  readonly repoRoot: string;
+  readonly doubleCheck: DoubleCheck;
+  readonly lspRouter: LSPRouter;
+  /** Called when LSP servers start (for logging). */
+  readonly onServerStarted?: (server: DetectedLSPServer) => void;
+  /** Called when upgrade completes. */
+  readonly onUpgradeComplete?: (serverCount: number) => void;
+  /** Called on upgrade failure. */
+  readonly onError?: (error: Error) => void;
+  /** Additional ArkTS diagnostic provider to compose with LSP. */
+  readonly arktsProvider?: DiagnosticProvider;
+}
+
+/**
+ * Background lazy LSP upgrade: detect available LSP servers in PATH,
+ * start them, and swap the diagnostic provider from compiler fallback to LSP.
+ *
+ * Call this after wiring the compiler fallback — it runs asynchronously and
+ * upgrades the diagnostic provider in-place when servers are ready.
+ *
+ * Returns a promise that resolves when the upgrade attempt is complete.
+ */
+export async function lazyUpgradeLSP(
+  opts: LazyLSPUpgradeOptions,
+): Promise<void> {
+  const { repoRoot, doubleCheck, lspRouter, onServerStarted, onUpgradeComplete, onError, arktsProvider } = opts;
+
+  try {
+    const available = await detectAvailableLSPServers();
+    if (available.length === 0) {
+      onUpgradeComplete?.(0);
+      return;
+    }
+
+    let startedCount = 0;
+
+    for (const server of available) {
+      try {
+        const config: LSPServerConfig = {
+          command: server.command,
+          args: [...server.args],
+          languages: [...server.languages],
+          extensions: [...server.extensions],
+          timeout: 10_000,
+        };
+        await lspRouter.addServer(config);
+        startedCount++;
+        onServerStarted?.(server);
+      } catch {
+        // Server failed to start — skip it, keep compiler fallback for those languages
+      }
+    }
+
+    if (startedCount > 0) {
+      // Swap diagnostic provider from compiler fallback to LSP routing
+      let diagnosticProvider: DiagnosticProvider = createRoutingDiagnosticProvider(lspRouter);
+
+      // Compose with ArkTS provider if present
+      if (arktsProvider) {
+        const lspProvider = diagnosticProvider;
+        diagnosticProvider = async (filePath: string) => {
+          const [lsp, arkts] = await Promise.all([
+            lspProvider(filePath).catch(() => []),
+            arktsProvider(filePath).catch(() => []),
+          ]);
+          return [...lsp, ...arkts];
+        };
+      }
+
+      doubleCheck.setDiagnosticProvider(diagnosticProvider);
+    }
+
+    onUpgradeComplete?.(startedCount);
+  } catch (err) {
+    onError?.(err instanceof Error ? err : new Error(String(err)));
+  }
 }

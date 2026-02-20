@@ -21,3 +21,50 @@ results, not proposals.
 - Suggest concrete next steps if any (e.g., "You may want to run the full test suite").
 - Note anything you couldn't do and why (e.g., "Couldn't verify — no test coverage").
 - Keep the wrap-up to 2-3 lines max.
+
+## Test-Driven Workflow
+
+When implementing or modifying code:
+1. **Read the test file first** — understand expected behavior and edge cases
+   before writing code.
+2. After writing your implementation, **always run the test suite** to verify.
+3. If the test command fails to execute (non-zero exit with no test output):
+   - Check for environment issues (missing tools, version conflicts).
+   - Try alternative runners:
+     - JS/TS: `npx jest`, `node --experimental-vm-modules node_modules/.bin/jest`
+     - Python: `python -m pytest`, `pytest`
+     - Rust: `cargo test`
+   - If all runners fail, do a manual sanity check: import your code and
+     verify key behaviors with a small script.
+4. If tests show failures:
+   - Read the failing test carefully — understand what it expects.
+   - Fix the root cause, not the symptom.
+   - Re-run tests after each fix.
+   - Repeat until all tests pass.
+5. **Correctness over efficiency**: If tests fail, always fix and re-run.
+   Never submit code with known test failures.
+6. If you cannot run tests at all, at minimum verify the code compiles/parses:
+   - TS/JS: `npx tsc --noEmit`
+   - Python: `python -c "import your_module"`
+   - Rust: `cargo check`
+   - C/C++: `make` or `gcc -fsyntax-only`
+
+## Static Analysis and Type Checks
+
+Many projects have static analysis checks beyond runtime tests:
+- **TypeScript**: tstyche, tsd, dtslint for type-level tests.
+  Look for `__typetests__/` directories or `*.tst.ts` files.
+  Run: `npx tstyche` or the project's type-test command (e.g., `corepack yarn test:types`).
+- **Python**: mypy, pyright for type checking; ruff/pylint for linting.
+  Look for `mypy.ini`, `pyproject.toml [tool.mypy]`, or `pyrightconfig.json`.
+  Run: `mypy .` or `pyright`.
+- **Rust**: clippy for linting beyond `cargo check`.
+  Run: `cargo clippy -- -D warnings`.
+- **C/C++**: clang-tidy, cppcheck for static analysis.
+  Look for `.clang-tidy` config files.
+
+When you see test scripts that include type checks or static analysis:
+- Read the configuration to understand what is being checked.
+- Ensure your code passes both runtime tests AND static checks.
+- Pay special attention to exported type signatures, generic constraints,
+  and readonly modifiers.

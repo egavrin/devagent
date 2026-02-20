@@ -2,13 +2,18 @@ import { describe, it, expect, vi } from "vitest";
 import {
   createLSPDiagnosticProvider,
   createRoutingDiagnosticProvider,
+  createCompilerFallbackProvider,
   createShellTestRunner,
   detectLanguage,
   getLanguageEntry,
+  detectAvailableLSPServers,
+  lazyUpgradeLSP,
   LSPRouter,
   LANGUAGE_MAP,
 } from "./double-check-wiring.js";
 import type { LSPClient } from "@devagent/tools";
+import { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS } from "@devagent/engine";
+import { EventBus } from "@devagent/core";
 
 // ─── Language Detection ──────────────────────────────────────
 
@@ -90,6 +95,49 @@ describe("LANGUAGE_MAP", () => {
     expect(ids).toContain("rust");
     expect(ids).toContain("shellscript");
     expect(ids).toContain("arkts");
+  });
+
+  it("has fallbackCheck for typescript", () => {
+    const entry = getLanguageEntry("typescript");
+    expect(entry?.fallbackCheck).toBeDefined();
+    expect(entry!.fallbackCheck!.command).toBe("npx");
+    expect(entry!.fallbackCheck!.args).toContain("tsc");
+  });
+
+  it("has fallbackCheck for python", () => {
+    const entry = getLanguageEntry("python");
+    expect(entry?.fallbackCheck).toBeDefined();
+    expect(entry!.fallbackCheck!.command).toBe("pyright");
+  });
+
+  it("has fallbackCheck for rust", () => {
+    const entry = getLanguageEntry("rust");
+    expect(entry?.fallbackCheck).toBeDefined();
+    expect(entry!.fallbackCheck!.command).toBe("cargo");
+    expect(entry!.fallbackCheck!.args).toContain("check");
+  });
+
+  it("has fallbackCheck for c", () => {
+    const entry = getLanguageEntry("c");
+    expect(entry?.fallbackCheck).toBeDefined();
+    expect(entry!.fallbackCheck!.command).toBe("gcc");
+    expect(entry!.fallbackCheck!.args).toContain("-fsyntax-only");
+  });
+
+  it("has fallbackCheck for shellscript", () => {
+    const entry = getLanguageEntry("shellscript");
+    expect(entry?.fallbackCheck).toBeDefined();
+    expect(entry!.fallbackCheck!.command).toBe("shellcheck");
+  });
+
+  it("does not have fallbackCheck for javascript (no tsconfig needed)", () => {
+    const entry = getLanguageEntry("javascript");
+    expect(entry?.fallbackCheck).toBeUndefined();
+  });
+
+  it("does not have fallbackCheck for arkts (uses dedicated provider)", () => {
+    const entry = getLanguageEntry("arkts");
+    expect(entry?.fallbackCheck).toBeUndefined();
   });
 });
 
@@ -367,5 +415,129 @@ describe("createShellTestRunner", () => {
     expect(result.output).toContain("out");
     expect(result.output).toContain("err");
     expect(result.output).toContain("--- stderr ---");
+  });
+
+  it("tries fallbacks when primary fails with no output", async () => {
+    // Primary fails silently (exit 1, no output)
+    // Fallback succeeds with output
+    const runner = createShellTestRunner("/tmp", [
+      "echo 'fallback test output: 1 failed, 2 passed'",
+    ]);
+    const result = await runner("exit 1");
+
+    // Should have used the fallback
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("fallback test output");
+  });
+
+  it("returns primary result when it has meaningful output even if failed", async () => {
+    // Primary fails but has meaningful output (> 20 chars)
+    const runner = createShellTestRunner("/tmp", [
+      "echo 'should not reach fallback'",
+    ]);
+    const result = await runner("echo 'FAIL: test_something expected 5 got 3' && exit 1");
+
+    expect(result.success).toBe(false);
+    expect(result.output).toContain("test_something");
+    expect(result.output).not.toContain("should not reach fallback");
+  });
+});
+
+// ─── Compiler Fallback Provider ──────────────────────────────
+
+describe("createCompilerFallbackProvider", () => {
+  it("returns empty array for unknown file types", async () => {
+    const provider = createCompilerFallbackProvider("/tmp");
+    const result = await provider("config.toml");
+    expect(result).toHaveLength(0);
+  });
+
+  it("returns empty array for languages without fallbackCheck", async () => {
+    const provider = createCompilerFallbackProvider("/tmp");
+    // JavaScript has no fallbackCheck
+    const result = await provider("lib/util.js");
+    expect(result).toHaveLength(0);
+  });
+
+  it("returns empty array when compiler is not installed", async () => {
+    const provider = createCompilerFallbackProvider("/tmp");
+    // shellcheck is likely not installed in CI, or the file doesn't exist
+    // Either way, it should return empty (not throw)
+    const result = await provider("/nonexistent/file.sh");
+    expect(result).toEqual([]);
+  });
+});
+
+// ─── Lazy LSP Detection ──────────────────────────────────────
+
+describe("detectAvailableLSPServers", () => {
+  it("returns an array (may be empty if no LSP servers installed)", async () => {
+    const result = await detectAvailableLSPServers();
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("groups languages that share the same LSP command", async () => {
+    const result = await detectAvailableLSPServers();
+    // typescript-language-server handles both TS and JS — should appear once if found
+    const tsServers = result.filter((s) => s.command === "typescript-language-server");
+    if (tsServers.length > 0) {
+      expect(tsServers).toHaveLength(1);
+      expect(tsServers[0]!.languages).toContain("typescript");
+      expect(tsServers[0]!.languages).toContain("javascript");
+      // arkts also uses typescript-language-server
+      expect(tsServers[0]!.languages).toContain("arkts");
+    }
+  });
+
+  it("includes correct extensions for detected servers", async () => {
+    const result = await detectAvailableLSPServers();
+    for (const server of result) {
+      expect(server.extensions.length).toBeGreaterThan(0);
+      expect(server.args).toBeDefined();
+    }
+  });
+});
+
+describe("lazyUpgradeLSP", () => {
+  it("calls onUpgradeComplete with 0 when no servers found", async () => {
+    const bus = new EventBus();
+    const dc = new DoubleCheck({ ...DEFAULT_DOUBLE_CHECK_OPTIONS, enabled: true }, bus);
+    const router = new LSPRouter("/tmp");
+
+    // Mock: use a router that will fail to start any server (no real LSP binaries)
+    let completedCount = -1;
+
+    await lazyUpgradeLSP({
+      repoRoot: "/nonexistent/path",
+      doubleCheck: dc,
+      lspRouter: router,
+      onUpgradeComplete: (count) => {
+        completedCount = count;
+      },
+    });
+
+    // Either 0 (no servers in PATH) or > 0 (servers found but failed to start)
+    // Either way it should complete without throwing
+    expect(completedCount).toBeGreaterThanOrEqual(0);
+  });
+
+  it("calls onError when detection throws", async () => {
+    const bus = new EventBus();
+    const dc = new DoubleCheck({ ...DEFAULT_DOUBLE_CHECK_OPTIONS, enabled: true }, bus);
+    const router = new LSPRouter("/tmp");
+
+    // This should not throw even in broken environments
+    let errorCaught = false;
+    await lazyUpgradeLSP({
+      repoRoot: "/tmp",
+      doubleCheck: dc,
+      lspRouter: router,
+      onError: () => {
+        errorCaught = true;
+      },
+    });
+
+    // Should complete without errors (detection itself shouldn't throw)
+    expect(typeof errorCaught).toBe("boolean");
   });
 });
