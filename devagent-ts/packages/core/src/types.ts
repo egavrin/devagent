@@ -292,6 +292,8 @@ export interface ArkTSConfig {
   readonly enabled: boolean;
   readonly strictMode: boolean;
   readonly targetVersion: string;
+  /** Path to the ets2panda/linter directory (contains dist/tslinter.js after build). */
+  readonly linterPath?: string;
 }
 
 // ─── Session Types ───────────────────────────────────────────

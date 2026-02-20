@@ -170,10 +170,46 @@ install_bash() {
   fi
 }
 
+install_arkts_linter() {
+  echo ""
+  echo "── ArkTS Linter (ets2panda/linter) ──"
+  local LINTER_DIR="${ARKTS_LINTER_PATH:-$HOME/Documents/arkcompiler_ets_frontend/ets2panda/linter}"
+
+  if [ ! -d "$LINTER_DIR" ]; then
+    warn "ets2panda linter not found at $LINTER_DIR"
+    dim "Set ARKTS_LINTER_PATH env var or clone arkcompiler_ets_frontend"
+    return 1
+  fi
+
+  if [ -f "$LINTER_DIR/dist/tslinter.js" ]; then
+    ok "ets2panda linter already built ($LINTER_DIR/dist/tslinter.js)"
+    return 0
+  fi
+
+  dim "Building ets2panda linter (this may take a few minutes)..."
+  (
+    cd "$LINTER_DIR"
+    # Install ohos-typescript (patched TypeScript fork) and homecheck dependency
+    if [ -f "scripts/install-ohos-typescript-and-homecheck.mjs" ]; then
+      dim "Installing ohos-typescript and homecheck..."
+      node scripts/install-ohos-typescript-and-homecheck.mjs
+    fi
+    npm install
+    npm run build
+  )
+
+  if [ -f "$LINTER_DIR/dist/tslinter.js" ]; then
+    ok "ets2panda linter built successfully"
+  else
+    err "ets2panda linter build failed"
+    return 1
+  fi
+}
+
 # ─── Main ─────────────────────────────────────────────────
 
 TARGETS=("$@")
-ALL_TARGETS=(ts py clangd rust bash)
+ALL_TARGETS=(ts py clangd rust bash arkts)
 
 if [ ${#TARGETS[@]} -eq 0 ]; then
   TARGETS=("${ALL_TARGETS[@]}")
@@ -201,8 +237,11 @@ for target in "${TARGETS[@]}"; do
     bash|sh|shellscript)
       install_bash || ((FAILED++)) || true
       ;;
+    arkts|ets|linter)
+      install_arkts_linter || ((FAILED++)) || true
+      ;;
     *)
-      warn "Unknown target: $target (valid: ts, py, clangd, rust, bash)"
+      warn "Unknown target: $target (valid: ts, py, clangd, rust, bash, arkts)"
       ;;
   esac
 done
@@ -225,6 +264,14 @@ check_server "Python"        "pyright-langserver"
 check_server "C/C++"         "clangd"
 check_server "Rust"          "rust-analyzer"
 check_server "Bash"          "bash-language-server"
+
+# Check ArkTS linter separately (not a PATH binary)
+LINTER_DIR="${ARKTS_LINTER_PATH:-$HOME/Documents/arkcompiler_ets_frontend/ets2panda/linter}"
+if [ -f "$LINTER_DIR/dist/tslinter.js" ]; then
+  ok "ArkTS Linter: $LINTER_DIR/dist/tslinter.js"
+else
+  err "ArkTS Linter: not built"
+fi
 
 echo ""
 if [ $FAILED -eq 0 ]; then

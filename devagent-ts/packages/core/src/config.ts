@@ -300,6 +300,7 @@ export function loadConfig(
     targetVersion:
       (rawArkts["target_version"] as string) ??
       DEFAULT_ARKTS.targetVersion,
+    linterPath: rawArkts["linter_path"] as string | undefined,
     ...overrides?.arkts,
   };
 

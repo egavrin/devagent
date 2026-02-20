@@ -37,6 +37,7 @@ import {
 } from "@devagent/engine";
 import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback } from "@devagent/engine";
 import { LSPRouter, createRoutingDiagnosticProvider, createShellTestRunner } from "./double-check-wiring.js";
+import { createArkTSDiagnosticProvider } from "@devagent/arkts";
 import { runDesktopBridge } from "./desktop-bridge.js";
 import { assembleSystemPrompt } from "./prompts/index.js";
 import {
@@ -439,7 +440,40 @@ export async function main(): Promise<void> {
     }
 
     // Wire routing diagnostic provider (routes by file extension)
-    doubleCheck.setDiagnosticProvider(createRoutingDiagnosticProvider(lspRouter));
+    let diagnosticProvider = createRoutingDiagnosticProvider(lspRouter);
+
+    // Compose with ArkTS linter if enabled (adds tslinter checks for .ets files)
+    if (config.arkts?.enabled && config.arkts.linterPath) {
+      const arktsProvider = createArkTSDiagnosticProvider(config.arkts);
+      if (arktsProvider) {
+        const lspProvider = diagnosticProvider;
+        diagnosticProvider = async (filePath: string) => {
+          const [lsp, arkts] = await Promise.all([
+            lspProvider(filePath).catch(() => []),
+            arktsProvider(filePath).catch(() => []),
+          ]);
+          return [...lsp, ...arkts];
+        };
+        if (cliArgs.verbosity !== "quiet") {
+          process.stderr.write(
+            dim(`[arkts] ArkTS linter enabled (${config.arkts.linterPath})`) + "\n",
+          );
+        }
+      }
+    }
+
+    doubleCheck.setDiagnosticProvider(diagnosticProvider);
+  } else if (config.arkts?.enabled && config.arkts.linterPath) {
+    // Standalone ArkTS linting (no LSP servers configured)
+    const arktsProvider = createArkTSDiagnosticProvider(config.arkts);
+    if (arktsProvider) {
+      doubleCheck.setDiagnosticProvider(arktsProvider);
+      if (cliArgs.verbosity !== "quiet") {
+        process.stderr.write(
+          dim(`[arkts] ArkTS linter enabled (standalone, ${config.arkts.linterPath})`) + "\n",
+        );
+      }
+    }
   }
 
   // Wire test runner (works without LSP — just needs a shell)
