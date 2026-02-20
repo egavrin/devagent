@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SkillRegistry } from "@devagent/core";
+import type { SkillRegistry, Memory } from "@devagent/core";
 import type { TaskMode } from "@devagent/engine";
 import { loadProjectContext } from "./project-context.js";
 
@@ -46,6 +46,7 @@ export interface AssemblePromptOptions {
   readonly mode: TaskMode;
   readonly repoRoot: string;
   readonly skills: SkillRegistry;
+  readonly memories?: ReadonlyArray<Memory>;
 }
 
 /**
@@ -82,6 +83,26 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
     sections.push(
       `## Available Skills\n\n${skillLines}\nYou can reference these skills when the user asks about related topics.`,
     );
+  }
+
+  // Cross-session memories (cap at 10 entries, ~2000 chars)
+  if (opts.memories && opts.memories.length > 0) {
+    const MAX_MEMORIES = 10;
+    const MAX_CHARS = 2000;
+    const capped = opts.memories.slice(0, MAX_MEMORIES);
+    let totalChars = 0;
+    const memoryLines: string[] = [];
+    for (const m of capped) {
+      const line = `- [${m.category}] ${m.key}: ${m.content}`;
+      if (totalChars + line.length > MAX_CHARS) break;
+      memoryLines.push(line);
+      totalChars += line.length;
+    }
+    if (memoryLines.length > 0) {
+      sections.push(
+        `## Learned Patterns\n\nThe following are lessons from previous sessions. Apply them when relevant:\n\n${memoryLines.join("\n")}`,
+      );
+    }
   }
 
   return sections.join("\n\n");

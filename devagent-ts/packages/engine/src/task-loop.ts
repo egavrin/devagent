@@ -27,7 +27,10 @@ import {
   ContextManager,
   estimateMessageTokens,
 } from "@devagent/core";
+import type { MemoryStore } from "@devagent/core";
 import type { ToolRegistry } from "@devagent/tools";
+import type { CheckpointManager } from "./checkpoints.js";
+import type { DoubleCheck } from "./double-check.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -49,6 +52,10 @@ export interface TaskLoopOptions {
   readonly repoRoot: string;
   readonly mode?: TaskMode;
   readonly contextManager?: ContextManager;
+  readonly memoryStore?: MemoryStore;
+  readonly checkpointManager?: CheckpointManager;
+  readonly doubleCheck?: DoubleCheck;
+  readonly initialMessages?: ReadonlyArray<Message>;
 }
 
 export interface TaskLoopResult {
@@ -77,6 +84,9 @@ export class TaskLoop {
   private readonly systemPrompt: string;
   private readonly repoRoot: string;
   private readonly contextManager: ContextManager | null;
+  private readonly memoryStore: MemoryStore | null;
+  private readonly checkpointManager: CheckpointManager | null;
+  private readonly doubleCheck: DoubleCheck | null;
   private mode: TaskMode;
   private messages: Message[] = [];
   private iterations = 0;
@@ -101,12 +111,19 @@ export class TaskLoop {
     this.repoRoot = options.repoRoot;
     this.mode = options.mode ?? "act";
     this.contextManager = options.contextManager ?? null;
+    this.memoryStore = options.memoryStore ?? null;
+    this.checkpointManager = options.checkpointManager ?? null;
+    this.doubleCheck = options.doubleCheck ?? null;
 
-    // Add system prompt as first message
-    this.messages.push({
-      role: MessageRole.SYSTEM,
-      content: this.systemPrompt,
-    });
+    // Initialize messages: from previous session or fresh system prompt
+    if (options.initialMessages && options.initialMessages.length > 0) {
+      this.messages = [...options.initialMessages];
+    } else {
+      this.messages.push({
+        role: MessageRole.SYSTEM,
+        content: this.systemPrompt,
+      });
+    }
   }
 
   /**
@@ -253,6 +270,9 @@ export class TaskLoop {
     if (this.aborted && status === "success") {
       status = "aborted";
     }
+
+    // Extract lessons from this session into persistent memory
+    this.extractLessons();
 
     return {
       messages: this.messages,
@@ -475,6 +495,31 @@ export class TaskLoop {
       durationMs,
     });
 
+    // Checkpoint + double-check for successful mutating tools
+    if (result.success && tool.category === "mutating") {
+      // Create checkpoint snapshot
+      this.checkpointManager?.create(
+        `${toolCall.name}: ${(toolCall.arguments["path"] as string) ?? ""}`,
+        toolCall.name,
+      );
+
+      // Validate the edit with diagnostics/tests
+      if (this.doubleCheck?.isEnabled()) {
+        const modifiedFiles = result.artifacts
+          .filter((a): a is string => typeof a === "string");
+        if (modifiedFiles.length > 0) {
+          const checkResult = await this.doubleCheck.check(modifiedFiles);
+          if (!checkResult.passed) {
+            const feedback = this.doubleCheck.formatResults(checkResult);
+            this.messages.push({
+              role: MessageRole.SYSTEM,
+              content: `VALIDATION FAILED after ${toolCall.name}:\n${feedback}\nPlease fix the errors before continuing.`,
+            });
+          }
+        }
+      }
+    }
+
     return result;
   }
 
@@ -510,6 +555,47 @@ export class TaskLoop {
     });
 
     return `WARNING: You have called "${toolName}" ${DOOM_LOOP_THRESHOLD} times with the exact same arguments, and it keeps failing. This approach is not working. Try a completely different strategy — change the command arguments, use a different tool, or modify your approach. Do NOT repeat the same failing call.`;
+  }
+
+  /**
+   * Extract lessons from this session into persistent memory.
+   * Heuristic-based — no extra LLM call. Called once at the end of run().
+   */
+  private extractLessons(): void {
+    if (!this.memoryStore) return;
+
+    // Apply decay once per session
+    this.memoryStore.applyDecay();
+
+    // Extract lessons from doom loop warnings
+    const doomMessages = this.messages.filter(
+      (m) =>
+        m.role === MessageRole.SYSTEM &&
+        m.content?.includes("same arguments"),
+    );
+    for (const msg of doomMessages) {
+      const match = msg.content?.match(/called "([^"]+)"/);
+      if (match?.[1]) {
+        this.memoryStore.store(
+          "mistake",
+          `doom-loop-${match[1]}`,
+          `Tool "${match[1]}" was called repeatedly with identical failing arguments. Try different approaches or verify preconditions first.`,
+          { tags: ["doom-loop", match[1]] },
+        );
+      }
+    }
+
+    // Extract lessons from budget exhaustion
+    if (this.messages.some(
+      (m) => m.role === MessageRole.SYSTEM && m.content?.includes("iteration limit"),
+    )) {
+      this.memoryStore.store(
+        "mistake",
+        `budget-exhausted-${Date.now()}`,
+        "Session hit the iteration limit. Break complex tasks into smaller steps and verify progress frequently.",
+        { tags: ["budget-exhausted"] },
+      );
+    }
   }
 }
 

@@ -24,6 +24,8 @@ export type {
   BudgetConfig,
   ContextConfig,
   ArkTSConfig,
+  CheckpointConfig,
+  DoubleCheckConfig,
   Session,
   CostRecord,
   JsonSchema,

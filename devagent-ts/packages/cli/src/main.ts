@@ -12,17 +12,27 @@ import {
   PluginManager,
   SkillRegistry,
   ContextManager,
+  MemoryStore,
+  SessionStore,
   loadConfig,
   resolveProviderCredentials,
   findProjectRoot,
   loadModelRegistry,
   lookupModelCapabilities,
 } from "@devagent/core";
-import type { DevAgentConfig, ApprovalPolicy, LLMProvider } from "@devagent/core";
+import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message } from "@devagent/core";
 import { ApprovalMode, MessageRole } from "@devagent/core";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
 import { createDefaultToolRegistry, McpHub } from "@devagent/tools";
-import { TaskLoop, createBuiltinPlugins, createPlanTool } from "@devagent/engine";
+import {
+  TaskLoop,
+  createBuiltinPlugins,
+  createPlanTool,
+  createMemoryTools,
+  CheckpointManager,
+  DoubleCheck,
+  DEFAULT_DOUBLE_CHECK_OPTIONS,
+} from "@devagent/engine";
 import type { TaskMode, TaskLoopResult } from "@devagent/engine";
 import { runDesktopBridge } from "./desktop-bridge.js";
 import { assembleSystemPrompt } from "./prompts/index.js";
@@ -51,6 +61,8 @@ interface CliArgs {
   reasoning: "low" | "medium" | "high" | null;
   verbosity: Verbosity;
   authCommand: string | null;
+  resume: string | null;
+  continue_: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -66,6 +78,8 @@ function parseArgs(argv: string[]): CliArgs {
     reasoning: null,
     verbosity: "normal",
     authCommand: null,
+    resume: null,
+    continue_: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -103,6 +117,10 @@ function parseArgs(argv: string[]): CliArgs {
       if (["low", "medium", "high"].includes(val)) {
         result.reasoning = val;
       }
+    } else if (arg === "--resume" && i + 1 < args.length) {
+      result.resume = args[++i]!;
+    } else if (arg === "--continue") {
+      result.continue_ = true;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -145,6 +163,8 @@ Options:
   --model <id>          Model ID
   --max-iterations <n>  Max tool-call iterations (default: 30)
   --reasoning <level>   Reasoning effort: low, medium, high
+  --resume <id>         Resume a previous session by ID
+  --continue            Resume the most recent session
   --suggest             Suggest mode (show diffs, ask before writing)
   --auto-edit           Auto-edit mode (auto-approve file writes)
   --full-auto           Full-auto mode (auto-approve everything)
@@ -320,8 +340,86 @@ export async function main(): Promise<void> {
     process.stderr.write(dim(`[mcp] ${mcpServers.length} server(s) connected`) + "\n");
   }
 
+  // ─── Memory (cross-session learning) ──────────────────────
+  const memoryStore = new MemoryStore();
+  const memories = memoryStore.search({ minRelevance: 0.3, limit: 10 });
+
+  // Register memory tools so the agent can store/recall learnings
+  for (const tool of createMemoryTools(memoryStore)) {
+    toolRegistry.register(tool);
+  }
+
+  if (memories.length > 0 && cliArgs.verbosity !== "quiet") {
+    process.stderr.write(dim(`[memory] ${memories.length} relevant memory(s) loaded`) + "\n");
+  }
+
+  // ─── Checkpoints + Double-Check ─────────────────────────────
+  const checkpointManager = new CheckpointManager({
+    repoRoot: projectRoot,
+    bus,
+    enabled: config.checkpoints?.enabled ?? false,
+  });
+  checkpointManager.init();
+
+  const doubleCheck = new DoubleCheck(
+    {
+      ...DEFAULT_DOUBLE_CHECK_OPTIONS,
+      ...config.doubleCheck,
+    },
+    bus,
+  );
+
   // ─── Context Management ────────────────────────────────────
   const contextManager = new ContextManager(config.context);
+
+  // ─── Session Persistence ────────────────────────────────────
+  const sessionStore = new SessionStore();
+
+  // Resume previous session if requested
+  let initialMessages: Message[] | undefined;
+  if (cliArgs.resume || cliArgs.continue_) {
+    const prevSession = cliArgs.resume
+      ? sessionStore.getSession(cliArgs.resume)
+      : sessionStore.listSessions(1)[0] ?? null;
+
+    if (prevSession) {
+      initialMessages = [...prevSession.messages];
+      if (cliArgs.verbosity !== "quiet") {
+        process.stderr.write(
+          dim(`[session] Resuming ${prevSession.id} (${prevSession.messages.length} messages)`) + "\n",
+        );
+      }
+    } else {
+      const searchId = cliArgs.resume ?? "most recent";
+      process.stderr.write(
+        yellow(`[session] No session found: ${searchId}`) + "\n",
+      );
+    }
+  }
+
+  // Create session record for this run
+  const session = sessionStore.createSession({
+    query: cliArgs.query ?? "(interactive)",
+    provider: config.provider,
+    model: config.model,
+    mode: cliArgs.mode,
+  });
+
+  // Persist messages incrementally via bus events
+  bus.on("message:user", (event) => {
+    sessionStore.addMessage(session.id, {
+      role: MessageRole.USER,
+      content: event.content,
+    });
+  });
+  bus.on("message:assistant", (event) => {
+    if (!event.partial) {
+      sessionStore.addMessage(session.id, {
+        role: MessageRole.ASSISTANT,
+        content: event.content,
+      });
+    }
+  });
 
   // Set up event handlers for CLI output
   setupEventHandlers(bus, config, cliArgs.verbosity);
@@ -339,6 +437,11 @@ export async function main(): Promise<void> {
         pluginManager,
         skills,
         contextManager,
+        memoryStore,
+        memories,
+        checkpointManager,
+        doubleCheck,
+        initialMessages,
         cliArgs.verbosity,
       );
     } else if (cliArgs.query) {
@@ -353,13 +456,25 @@ export async function main(): Promise<void> {
         cliArgs.mode,
         skills,
         contextManager,
+        memoryStore,
+        memories,
+        checkpointManager,
+        doubleCheck,
+        initialMessages,
         cliArgs.verbosity,
       );
     }
   } finally {
+    // Print session ID for future resume
+    if (cliArgs.verbosity !== "quiet") {
+      process.stderr.write(dim(`[session] ${session.id}`) + "\n");
+    }
+
     // Cleanup
     pluginManager.destroy();
     mcpHub.dispose();
+    memoryStore.close();
+    sessionStore.close();
   }
 }
 
@@ -625,9 +740,14 @@ async function runSingleQuery(
   mode: TaskMode,
   skills: SkillRegistry,
   contextManager: ContextManager,
+  memoryStore: MemoryStore,
+  memories: ReadonlyArray<import("@devagent/core").Memory>,
+  checkpointManager: CheckpointManager,
+  doubleCheck: DoubleCheck,
+  initialMessages: Message[] | undefined,
   verbosity: Verbosity,
 ): Promise<void> {
-  const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills });
+  const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills, memories });
 
   // Set up LLM-based summarization for context compaction
   setupSummarizeCallback(contextManager, provider);
@@ -645,6 +765,10 @@ async function runSingleQuery(
     repoRoot,
     mode,
     contextManager,
+    memoryStore,
+    checkpointManager,
+    doubleCheck,
+    initialMessages,
   });
 
   const result = await loop.run(query);
@@ -674,6 +798,11 @@ async function runInteractive(
   pluginManager: PluginManager,
   skills: SkillRegistry,
   contextManager: ContextManager,
+  memoryStore: MemoryStore,
+  memories: ReadonlyArray<import("@devagent/core").Memory>,
+  checkpointManager: CheckpointManager,
+  doubleCheck: DoubleCheck,
+  initialMessages: Message[] | undefined,
   verbosity: Verbosity,
 ): Promise<void> {
   process.stderr.write(bold("DevAgent") + " interactive mode\n");
@@ -702,7 +831,7 @@ async function runInteractive(
     prompt: cyan("> "),
   });
 
-  const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills });
+  const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills, memories });
 
   // Set up LLM-based summarization for context compaction
   setupSummarizeCallback(contextManager, provider);
@@ -718,6 +847,10 @@ async function runInteractive(
     repoRoot,
     mode,
     contextManager,
+    memoryStore,
+    checkpointManager,
+    doubleCheck,
+    initialMessages,
   });
 
   rl.prompt();

@@ -208,6 +208,20 @@ export interface DevAgentConfig {
   readonly budget: BudgetConfig;
   readonly context: ContextConfig;
   readonly arkts: ArkTSConfig;
+  readonly checkpoints?: CheckpointConfig;
+  readonly doubleCheck?: DoubleCheckConfig;
+}
+
+export interface CheckpointConfig {
+  readonly enabled: boolean;
+}
+
+export interface DoubleCheckConfig {
+  readonly enabled: boolean;
+  readonly checkDiagnostics?: boolean;
+  readonly runTests?: boolean;
+  readonly testCommand?: string | null;
+  readonly diagnosticTimeout?: number;
 }
 
 export interface BudgetConfig {

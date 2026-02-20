@@ -995,4 +995,440 @@ describe("TaskLoop", () => {
     // After reset: only 2 consecutive "bad" calls (c4, c5), not 3
     expect(doomLoopEvents.length).toBe(0);
   });
+
+  // ─── Memory Integration Tests ──────────────────────────────
+
+  it("extracts doom-loop lesson into memory when memoryStore provided", async () => {
+    const { MemoryStore } = await import("@devagent/core");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { mkdirSync, rmSync } = await import("node:fs");
+    const { randomUUID } = await import("node:crypto");
+
+    const tmpDir = join(tmpdir(), `devagent-test-memory-${randomUUID()}`);
+    mkdirSync(tmpDir, { recursive: true });
+    const memoryStore = new MemoryStore({ dbPath: join(tmpDir, "memory.db") });
+
+    try {
+      const failingTool: ToolSpec = {
+        name: "run_command",
+        description: "Run a command",
+        category: "readonly",
+        paramSchema: { type: "object" },
+        resultSchema: { type: "object" },
+        handler: async () => ({
+          success: false,
+          output: "",
+          error: "Command exited with code 1",
+          artifacts: [],
+        }),
+      };
+
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: "doom-memory",
+        async *chat(): AsyncIterable<StreamChunk> {
+          callCount++;
+          if (callCount <= 3) {
+            yield {
+              type: "tool_call",
+              content: '{"cmd": "es2panda --input test.ets"}',
+              toolCallId: `call_${callCount}`,
+              toolName: "run_command",
+            };
+            yield { type: "done", content: "" };
+          } else {
+            yield { type: "text", content: "Switching approach." };
+            yield { type: "done", content: "" };
+          }
+        },
+        abort() {},
+      };
+
+      const registry = new ToolRegistry();
+      registry.register(failingTool);
+      const gate = new ApprovalGate(config.approval, bus);
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config,
+        systemPrompt: "Test",
+        repoRoot: "/tmp",
+        memoryStore,
+      });
+
+      await loop.run("Run the compiler");
+
+      // Check that a doom-loop lesson was extracted
+      const memories = memoryStore.search({ category: "mistake", query: "doom-loop" });
+      expect(memories.length).toBeGreaterThanOrEqual(1);
+      expect(memories[0]!.key).toContain("doom-loop-run_command");
+      expect(memories[0]!.content).toContain("repeatedly");
+    } finally {
+      memoryStore.close();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("calls applyDecay on memoryStore at session end", async () => {
+    const { MemoryStore } = await import("@devagent/core");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { mkdirSync, rmSync } = await import("node:fs");
+    const { randomUUID } = await import("node:crypto");
+
+    const tmpDir = join(tmpdir(), `devagent-test-decay-${randomUUID()}`);
+    mkdirSync(tmpDir, { recursive: true });
+    const memoryStore = new MemoryStore({ dbPath: join(tmpDir, "memory.db") });
+
+    try {
+      // Store a memory so decay has something to work on
+      memoryStore.store("pattern", "test-decay", "This is a test pattern");
+
+      const provider = createMockProvider([
+        [
+          { type: "text", content: "Done" },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const registry = new ToolRegistry();
+      const gate = new ApprovalGate(config.approval, bus);
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config,
+        systemPrompt: "Test",
+        repoRoot: "/tmp",
+        memoryStore,
+      });
+
+      const result = await loop.run("Hello");
+      expect(result.status).toBe("success");
+
+      // Verify memory still exists (applyDecay shouldn't remove fresh memories)
+      const memories = memoryStore.search({ category: "pattern" });
+      expect(memories.length).toBe(1);
+      expect(memories[0]!.key).toBe("test-decay");
+    } finally {
+      memoryStore.close();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  // ─── Checkpoint + Double-Check Tests ───────────────────────
+
+  it("creates checkpoint after mutating tool success", async () => {
+    const createCalls: Array<{ description: string; toolName: string }> = [];
+    const mockCheckpointManager = {
+      create(description: string, toolName: string) {
+        createCalls.push({ description, toolName });
+        return { id: "cp-0", commitHash: "abc", description, timestamp: Date.now(), toolName };
+      },
+      init() {},
+      list() { return []; },
+      diff() { return ""; },
+      restore() { return false; },
+    } as any;
+
+    const writeTool: ToolSpec = {
+      name: "write_file",
+      description: "Write a file",
+      category: "mutating",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: true,
+        output: "Written",
+        error: null,
+        artifacts: ["/tmp/test.ts"],
+      }),
+    };
+
+    const provider = createMockProvider([
+      [
+        {
+          type: "tool_call",
+          content: '{"path": "/tmp/test.ts", "content": "hello"}',
+          toolCallId: "call_0",
+          toolName: "write_file",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "File written." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+      checkpointManager: mockCheckpointManager,
+    });
+
+    const result = await loop.run("Write a file");
+    expect(result.status).toBe("success");
+    expect(createCalls.length).toBe(1);
+    expect(createCalls[0]!.toolName).toBe("write_file");
+    expect(createCalls[0]!.description).toContain("/tmp/test.ts");
+  });
+
+  it("injects system message when double-check fails after mutating tool", async () => {
+    const mockDoubleCheck = {
+      isEnabled: () => true,
+      async check() {
+        return {
+          passed: false,
+          diagnosticErrors: ["/tmp/test.ts: Unexpected token"],
+          testOutput: null,
+          testPassed: null,
+        };
+      },
+      formatResults(result: any) {
+        return `Diagnostic errors (${result.diagnosticErrors.length}):\n` +
+          result.diagnosticErrors.map((e: string) => `  - ${e}`).join("\n");
+      },
+    } as any;
+
+    const writeTool: ToolSpec = {
+      name: "write_file",
+      description: "Write a file",
+      category: "mutating",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: true,
+        output: "Written",
+        error: null,
+        artifacts: ["/tmp/test.ts"],
+      }),
+    };
+
+    const provider = createMockProvider([
+      [
+        {
+          type: "tool_call",
+          content: '{"path": "/tmp/test.ts"}',
+          toolCallId: "call_0",
+          toolName: "write_file",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "I see the error, fixing..." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+      doubleCheck: mockDoubleCheck,
+    });
+
+    const result = await loop.run("Write a file");
+    expect(result.status).toBe("success");
+
+    // Check that a VALIDATION FAILED system message was injected
+    const validationMessages = result.messages.filter(
+      (m) => m.role === MessageRole.SYSTEM && m.content?.includes("VALIDATION FAILED"),
+    );
+    expect(validationMessages.length).toBe(1);
+    expect(validationMessages[0]!.content).toContain("Unexpected token");
+  });
+
+  it("skips checkpoint for readonly tools", async () => {
+    const createCalls: Array<{ description: string }> = [];
+    const mockCheckpointManager = {
+      create(description: string, toolName: string) {
+        createCalls.push({ description });
+        return null;
+      },
+      init() {},
+      list() { return []; },
+      diff() { return ""; },
+      restore() { return false; },
+    } as any;
+
+    const provider = createMockProvider([
+      [
+        {
+          type: "tool_call",
+          content: '{"text": "hello"}',
+          toolCallId: "call_0",
+          toolName: "echo",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Done" },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool()); // "readonly" category
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+      checkpointManager: mockCheckpointManager,
+    });
+
+    const result = await loop.run("Echo something");
+    expect(result.status).toBe("success");
+
+    // Checkpoint should NOT have been created for readonly tool
+    expect(createCalls.length).toBe(0);
+  });
+
+  // ─── Session Resume (initialMessages) Tests ─────────────────
+
+  it("initializes with provided messages when initialMessages given", async () => {
+    const previousMessages: Message[] = [
+      { role: MessageRole.SYSTEM, content: "You are a test assistant from a previous session." },
+      { role: MessageRole.USER, content: "Previous question" },
+      { role: MessageRole.ASSISTANT, content: "Previous answer" },
+    ];
+
+    const provider = createMockProvider([
+      [
+        { type: "text", content: "Continuing from where we left off." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "This should be ignored when initialMessages provided.",
+      repoRoot: "/tmp",
+      initialMessages: previousMessages,
+    });
+
+    const result = await loop.run("Continue the conversation");
+    expect(result.status).toBe("success");
+
+    const messages = result.messages;
+
+    // First message should be the system prompt from previous session, NOT the new one
+    expect(messages[0]!.role).toBe(MessageRole.SYSTEM);
+    expect(messages[0]!.content).toBe("You are a test assistant from a previous session.");
+
+    // Previous conversation should be preserved
+    expect(messages[1]!.role).toBe(MessageRole.USER);
+    expect(messages[1]!.content).toBe("Previous question");
+    expect(messages[2]!.role).toBe(MessageRole.ASSISTANT);
+    expect(messages[2]!.content).toBe("Previous answer");
+
+    // New user query should follow
+    expect(messages[3]!.role).toBe(MessageRole.USER);
+    expect(messages[3]!.content).toBe("Continue the conversation");
+
+    // Assistant response
+    const assistantMsgs = messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT,
+    );
+    expect(assistantMsgs.length).toBe(2); // Previous + new
+    expect(assistantMsgs[1]!.content).toBe("Continuing from where we left off.");
+  });
+
+  it("defaults to system prompt when no initialMessages", async () => {
+    const provider = createMockProvider([
+      [
+        { type: "text", content: "Hello!" },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Fresh system prompt.",
+      repoRoot: "/tmp",
+      // No initialMessages — should use systemPrompt
+    });
+
+    const result = await loop.run("Hi");
+    expect(result.status).toBe("success");
+
+    const messages = result.messages;
+
+    // First message should be the system prompt
+    expect(messages[0]!.role).toBe(MessageRole.SYSTEM);
+    expect(messages[0]!.content).toBe("Fresh system prompt.");
+
+    // Followed by user query
+    expect(messages[1]!.role).toBe(MessageRole.USER);
+    expect(messages[1]!.content).toBe("Hi");
+  });
+
+  it("handles empty initialMessages array by falling back to system prompt", async () => {
+    const provider = createMockProvider([
+      [
+        { type: "text", content: "Fresh start." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Default prompt.",
+      repoRoot: "/tmp",
+      initialMessages: [], // Empty array — should fall back to system prompt
+    });
+
+    const result = await loop.run("Hello");
+    expect(result.status).toBe("success");
+
+    // Should use systemPrompt since initialMessages is empty
+    expect(result.messages[0]!.role).toBe(MessageRole.SYSTEM);
+    expect(result.messages[0]!.content).toBe("Default prompt.");
+  });
 });

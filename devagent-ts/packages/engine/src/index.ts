@@ -37,6 +37,9 @@ export type {
   TestRunner,
 } from "./double-check.js";
 
+// Memory tools (LLM-callable cross-session memory)
+export { createMemoryTools } from "./memory-tools.js";
+
 // Built-in plugins
 export {
   createCommitPlugin,

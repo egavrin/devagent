@@ -290,6 +290,24 @@ export function loadConfig(
     };
   }
 
+  // Parse optional checkpoints config
+  const rawCheckpoints = fileConfig["checkpoints"] as Record<string, unknown> | undefined;
+  const checkpoints = rawCheckpoints
+    ? { enabled: (rawCheckpoints["enabled"] as boolean) ?? false }
+    : undefined;
+
+  // Parse optional double_check config
+  const rawDoubleCheck = fileConfig["double_check"] as Record<string, unknown> | undefined;
+  const doubleCheck = rawDoubleCheck
+    ? {
+        enabled: (rawDoubleCheck["enabled"] as boolean) ?? false,
+        checkDiagnostics: rawDoubleCheck["check_diagnostics"] as boolean | undefined,
+        runTests: rawDoubleCheck["run_tests"] as boolean | undefined,
+        testCommand: rawDoubleCheck["test_command"] as string | null | undefined,
+        diagnosticTimeout: rawDoubleCheck["diagnostic_timeout"] as number | undefined,
+      }
+    : undefined;
+
   return {
     provider,
     model:
@@ -302,6 +320,8 @@ export function loadConfig(
     budget,
     context,
     arkts,
+    ...(checkpoints ? { checkpoints } : {}),
+    ...(doubleCheck ? { doubleCheck } : {}),
   };
 }
 
