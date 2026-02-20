@@ -29,6 +29,7 @@ import {
   createBuiltinPlugins,
   createPlanTool,
   createMemoryTools,
+  createToolScriptTool,
   CheckpointManager,
   DoubleCheck,
   DEFAULT_DOUBLE_CHECK_OPTIONS,
@@ -352,6 +353,11 @@ export async function main(): Promise<void> {
   if (memories.length > 0 && cliArgs.verbosity !== "quiet") {
     process.stderr.write(dim(`[memory] ${memories.length} relevant memory(s) loaded`) + "\n");
   }
+
+  // ─── Batched Readonly Tool Scripts ──────────────────────────
+  // Register after all readonly tools so the script engine can access them.
+  // Passes registry by reference — tools registered later (MCP, plugins) are also accessible.
+  toolRegistry.register(createToolScriptTool({ registry: toolRegistry, bus }));
 
   // ─── Checkpoints + Double-Check ─────────────────────────────
   const checkpointManager = new CheckpointManager({
@@ -747,7 +753,15 @@ async function runSingleQuery(
   initialMessages: Message[] | undefined,
   verbosity: Verbosity,
 ): Promise<void> {
-  const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills, memories });
+  const systemPrompt = assembleSystemPrompt({
+    mode,
+    repoRoot,
+    skills,
+    memories,
+    approvalMode: config.approval.mode,
+    provider: config.provider,
+    model: config.model,
+  });
 
   // Set up LLM-based summarization for context compaction
   setupSummarizeCallback(contextManager, provider);
@@ -831,7 +845,15 @@ async function runInteractive(
     prompt: cyan("> "),
   });
 
-  const systemPrompt = assembleSystemPrompt({ mode, repoRoot, skills, memories });
+  const systemPrompt = assembleSystemPrompt({
+    mode,
+    repoRoot,
+    skills,
+    memories,
+    approvalMode: config.approval.mode,
+    provider: config.provider,
+    model: config.model,
+  });
 
   // Set up LLM-based summarization for context compaction
   setupSummarizeCallback(contextManager, provider);

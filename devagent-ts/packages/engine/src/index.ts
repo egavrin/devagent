@@ -40,6 +40,18 @@ export type {
 // Memory tools (LLM-callable cross-session memory)
 export { createMemoryTools } from "./memory-tools.js";
 
+// Tool script — batched readonly tool execution
+export { ToolScriptEngine } from "./tool-script.js";
+export type {
+  ToolScriptStep,
+  ToolScript,
+  StepResult,
+  ToolScriptResult,
+  ToolScriptEngineOptions,
+} from "./tool-script.js";
+export { createToolScriptTool } from "./tool-script-tool.js";
+export type { ToolScriptToolContext } from "./tool-script-tool.js";
+
 // Built-in plugins
 export {
   createCommitPlugin,

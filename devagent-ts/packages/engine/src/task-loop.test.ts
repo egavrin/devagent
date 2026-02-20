@@ -1431,4 +1431,187 @@ describe("TaskLoop", () => {
     expect(result.messages[0]!.role).toBe(MessageRole.SYSTEM);
     expect(result.messages[0]!.content).toBe("Default prompt.");
   });
+
+  // ─── Parallel Execution Tests ─────────────────────────────
+
+  it("executes multiple readonly tool calls in parallel", async () => {
+    // Track execution timeline to verify concurrency
+    const executionLog: Array<{ tool: string; event: "start" | "end"; time: number }> = [];
+    const baseTime = Date.now();
+
+    const makeSlowReadonly = (name: string, delayMs: number, output: string): ToolSpec => ({
+      name,
+      description: `Slow ${name}`,
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => {
+        executionLog.push({ tool: name, event: "start", time: Date.now() - baseTime });
+        await new Promise((r) => setTimeout(r, delayMs));
+        executionLog.push({ tool: name, event: "end", time: Date.now() - baseTime });
+        return { success: true, output, error: null, artifacts: [] };
+      },
+    });
+
+    const provider = createMockProvider([
+      [
+        // LLM returns 3 readonly tool calls at once
+        { type: "tool_call", content: '{}', toolCallId: "c1", toolName: "slow_a" },
+        { type: "tool_call", content: '{}', toolCallId: "c2", toolName: "slow_b" },
+        { type: "tool_call", content: '{}', toolCallId: "c3", toolName: "slow_c" },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "All done." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeSlowReadonly("slow_a", 100, "result_a"));
+    registry.register(makeSlowReadonly("slow_b", 100, "result_b"));
+    registry.register(makeSlowReadonly("slow_c", 100, "result_c"));
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const start = Date.now();
+    const result = await loop.run("Run all three");
+    const elapsed = Date.now() - start;
+
+    expect(result.status).toBe("success");
+
+    // All 3 tool results should be in messages
+    const toolMessages = result.messages.filter((m) => m.role === MessageRole.TOOL);
+    expect(toolMessages).toHaveLength(3);
+    expect(toolMessages[0]!.content).toBe("result_a");
+    expect(toolMessages[1]!.content).toBe("result_b");
+    expect(toolMessages[2]!.content).toBe("result_c");
+
+    // Parallel execution: 3 × 100ms tools should complete in ~100-150ms, not 300ms+
+    // Be generous with the threshold to avoid flaky tests
+    expect(elapsed).toBeLessThan(500); // Sequential would take 300ms+
+
+    // Verify tools started roughly at the same time (parallel)
+    const starts = executionLog.filter((e) => e.event === "start");
+    expect(starts).toHaveLength(3);
+    const maxStartDiff = Math.max(...starts.map((s) => s.time)) - Math.min(...starts.map((s) => s.time));
+    expect(maxStartDiff).toBeLessThan(50); // All started within 50ms of each other
+  });
+
+  it("executes mutating tool calls sequentially even when mixed with readonly", async () => {
+    const executionOrder: string[] = [];
+
+    const makeTrackedTool = (name: string, category: "readonly" | "mutating"): ToolSpec => ({
+      name,
+      description: `Tracked ${name}`,
+      category,
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => {
+        executionOrder.push(name);
+        return { success: true, output: `${name} done`, error: null, artifacts: [] };
+      },
+    });
+
+    const provider = createMockProvider([
+      [
+        // LLM returns: readonly, readonly, mutating, readonly
+        { type: "tool_call", content: '{}', toolCallId: "c1", toolName: "read_a" },
+        { type: "tool_call", content: '{}', toolCallId: "c2", toolName: "read_b" },
+        { type: "tool_call", content: '{}', toolCallId: "c3", toolName: "write_c" },
+        { type: "tool_call", content: '{}', toolCallId: "c4", toolName: "read_d" },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Done." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeTrackedTool("read_a", "readonly"));
+    registry.register(makeTrackedTool("read_b", "readonly"));
+    registry.register(makeTrackedTool("write_c", "mutating"));
+    registry.register(makeTrackedTool("read_d", "readonly"));
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Do everything");
+    expect(result.status).toBe("success");
+
+    // All 4 tool results should appear
+    const toolMessages = result.messages.filter((m) => m.role === MessageRole.TOOL);
+    expect(toolMessages).toHaveLength(4);
+
+    // Mutating tool must execute AFTER the first two readonly tools complete
+    // and BEFORE the last readonly tool
+    const writeIdx = executionOrder.indexOf("write_c");
+    const readDIdx = executionOrder.indexOf("read_d");
+    expect(writeIdx).toBeLessThan(readDIdx);
+
+    // read_a and read_b should both execute before write_c
+    const readAIdx = executionOrder.indexOf("read_a");
+    const readBIdx = executionOrder.indexOf("read_b");
+    expect(readAIdx).toBeLessThan(writeIdx);
+    expect(readBIdx).toBeLessThan(writeIdx);
+  });
+
+  it("preserves tool result order matching callIds for parallel execution", async () => {
+    const provider = createMockProvider([
+      [
+        { type: "tool_call", content: '{"text":"first"}', toolCallId: "c1", toolName: "echo" },
+        { type: "tool_call", content: '{"text":"second"}', toolCallId: "c2", toolName: "echo" },
+        { type: "tool_call", content: '{"text":"third"}', toolCallId: "c3", toolName: "echo" },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Results received." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Echo three things");
+    const toolMsgs = result.messages.filter((m) => m.role === MessageRole.TOOL);
+    expect(toolMsgs).toHaveLength(3);
+
+    // Results must match the original callId order
+    expect(toolMsgs[0]!.toolCallId).toBe("c1");
+    expect(toolMsgs[0]!.content).toBe("Echo: first");
+    expect(toolMsgs[1]!.toolCallId).toBe("c2");
+    expect(toolMsgs[1]!.content).toBe("Echo: second");
+    expect(toolMsgs[2]!.toolCallId).toBe("c3");
+    expect(toolMsgs[2]!.content).toBe("Echo: third");
+  });
 });

@@ -21,6 +21,7 @@ let cachedBase: string | null = null;
 let cachedTools: string | null = null;
 let cachedModeAct: string | null = null;
 let cachedModePlan: string | null = null;
+let cachedReview: string | null = null;
 
 function getBase(): string {
   cachedBase ??= loadPromptFile("base.md");
@@ -42,11 +43,20 @@ function getModePlan(): string {
   return cachedModePlan;
 }
 
+function getReview(): string {
+  cachedReview ??= loadPromptFile("review.md");
+  return cachedReview;
+}
+
 export interface AssemblePromptOptions {
   readonly mode: TaskMode;
   readonly repoRoot: string;
   readonly skills: SkillRegistry;
   readonly memories?: ReadonlyArray<Memory>;
+  readonly approvalMode?: string;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly includeReview?: boolean;
 }
 
 /**
@@ -65,8 +75,21 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
   // Mode-specific constraints
   sections.push(opts.mode === "plan" ? getModePlan() : getModeAct());
 
+  // Review guidelines (loaded conditionally)
+  if (opts.includeReview) {
+    sections.push(getReview());
+  }
+
   // Environment context
-  sections.push(`## Environment\n\nWorking directory: ${opts.repoRoot}`);
+  const envLines = [`Working directory: ${opts.repoRoot}`];
+  if (opts.approvalMode) {
+    envLines.push(`Approval mode: ${opts.approvalMode}`);
+  }
+  if (opts.provider && opts.model) {
+    envLines.push(`Provider: ${opts.provider} / ${opts.model}`);
+  }
+  envLines.push(`Date: ${new Date().toISOString().split("T")[0]}`);
+  sections.push(`## Environment\n\n${envLines.join("\n")}`);
 
   // Project-level instructions (AGENTS.md, CLAUDE.md, etc.)
   const projectContext = loadProjectContext(opts.repoRoot);

@@ -73,6 +73,11 @@ interface PendingToolCall {
   readonly callId: string;
 }
 
+interface ToolCallBatch {
+  readonly parallel: boolean;
+  readonly calls: ReadonlyArray<PendingToolCall>;
+}
+
 // ─── Task Loop ──────────────────────────────────────────────
 
 export class TaskLoop {
@@ -207,19 +212,48 @@ export class TaskLoop {
           })),
         });
 
-        // Execute each tool call
-        for (const toolCall of toolCalls) {
-          if (this.aborted) break;
-          const result = await this.executeToolCall(toolCall, availableTools);
+        // Execute tool calls — parallel for independent readonly, sequential for mutating.
+        // Partition into batches: consecutive readonly calls form a parallel batch,
+        // a mutating/workflow call is its own sequential batch.
+        const batches = this.partitionToolCalls(toolCalls, availableTools);
 
-          // Add tool result message
-          this.messages.push({
-            role: MessageRole.TOOL,
-            content: result.success
-              ? result.output
-              : `Error: ${result.error}`,
-            toolCallId: toolCall.callId,
-          });
+        for (const batch of batches) {
+          if (this.aborted) break;
+
+          if (batch.parallel) {
+            // Run all calls in the batch concurrently
+            const promises = batch.calls.map((tc) =>
+              this.executeToolCall(tc, availableTools).then((result) => ({
+                callId: tc.callId,
+                result,
+              })),
+            );
+            const settled = await Promise.all(promises);
+
+            // Append results in original order (API requires matching order)
+            for (const { callId, result } of settled) {
+              this.messages.push({
+                role: MessageRole.TOOL,
+                content: result.success
+                  ? result.output
+                  : `Error: ${result.error}`,
+                toolCallId: callId,
+              });
+            }
+          } else {
+            // Sequential execution (mutating tools, or single call)
+            for (const tc of batch.calls) {
+              if (this.aborted) break;
+              const result = await this.executeToolCall(tc, availableTools);
+              this.messages.push({
+                role: MessageRole.TOOL,
+                content: result.success
+                  ? result.output
+                  : `Error: ${result.error}`,
+                toolCallId: tc.callId,
+              });
+            }
+          }
         }
 
         // Doom loop detection: warn the LLM if it's repeating identical failing calls
@@ -362,6 +396,53 @@ export class TaskLoop {
       return this.tools.getReadOnly();
     }
     return this.tools.getAll();
+  }
+
+  /**
+   * Partition tool calls into batches for parallel/sequential execution.
+   *
+   * Rules:
+   * - Consecutive readonly calls → single parallel batch (safe to run concurrently)
+   * - A mutating/workflow/external call → its own sequential batch (must run alone)
+   * - Unknown tools → sequential batch (fail gracefully)
+   *
+   * A single readonly call is still "parallel" (batch of 1) — no overhead.
+   */
+  private partitionToolCalls(
+    toolCalls: ReadonlyArray<PendingToolCall>,
+    availableTools: ReadonlyArray<ToolSpec>,
+  ): ToolCallBatch[] {
+    const batches: ToolCallBatch[] = [];
+    let currentReadonly: PendingToolCall[] = [];
+
+    const flushReadonly = (): void => {
+      if (currentReadonly.length > 0) {
+        batches.push({ parallel: true, calls: currentReadonly });
+        currentReadonly = [];
+      }
+    };
+
+    for (const tc of toolCalls) {
+      const isAvailable = availableTools.some((t) => t.name === tc.name);
+      if (!isAvailable) {
+        // Unknown tool — flush readonly batch, add as sequential
+        flushReadonly();
+        batches.push({ parallel: false, calls: [tc] });
+        continue;
+      }
+
+      const tool = this.tools.get(tc.name);
+      if (tool.category === "readonly") {
+        currentReadonly.push(tc);
+      } else {
+        // Mutating/workflow/external — flush readonly, add as sequential
+        flushReadonly();
+        batches.push({ parallel: false, calls: [tc] });
+      }
+    }
+
+    flushReadonly();
+    return batches;
   }
 
   private async streamLLMResponse(
