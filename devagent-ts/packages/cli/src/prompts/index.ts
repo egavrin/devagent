@@ -89,12 +89,19 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
   }
 
   // Environment context
-  const envLines = [`Working directory: ${opts.repoRoot}`];
+  const envLines = [
+    `Working directory: ${opts.repoRoot}`,
+    `Task mode: ${opts.mode}`,
+  ];
   if (opts.approvalMode) {
     envLines.push(`Approval mode: ${opts.approvalMode}`);
   }
   if (opts.provider && opts.model) {
     envLines.push(`Provider: ${opts.provider} / ${opts.model}`);
+  } else if (opts.provider) {
+    envLines.push(`Provider: ${opts.provider}`);
+  } else if (opts.model) {
+    envLines.push(`Model: ${opts.model}`);
   }
   envLines.push(`Date: ${new Date().toISOString().split("T")[0]}`);
   sections.push(`## Environment\n\n${envLines.join("\n")}`);

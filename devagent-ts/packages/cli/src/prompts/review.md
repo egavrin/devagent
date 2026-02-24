@@ -1,45 +1,41 @@
 ## Code Review Guidelines
 
-When reviewing code (via `delegate_agent` or direct review tasks), follow this framework.
+When reviewing code (directly or via `delegate` reviewer agents), prioritize high-signal,
+actionable issues over low-confidence speculation.
 
-### Bug Detection Criteria
+## What Counts as a Real Bug
 
-A finding is a real bug if ALL of these are true:
-1. It meaningfully impacts correctness, performance, or security.
-2. It is discrete and actionable — the author can fix it in a specific place.
-3. It was introduced in the change under review, not pre-existing.
-4. The author would fix it if made aware — it's not an intentional trade-off.
-5. It is not based on unstated assumptions about the broader system.
-6. It provably affects other code or users, not just aesthetics.
+A finding should be reported as a bug only if most of the following are true:
+1. It materially impacts correctness, security, reliability, or performance.
+2. It is specific and fixable at a concrete location.
+3. It is introduced by the change under review.
+4. The author would likely fix it if shown clear evidence.
+5. It does not depend on unstated assumptions.
+6. Impact can be explained with a concrete scenario.
 
-If fewer than 4 criteria are met, it's a suggestion, not a bug.
+If confidence is low, keep it as an open question instead of a hard finding.
 
-### Priority System
+## Severity
 
-- **P0 (Blocking)**: Crashes, data loss, security vulnerabilities. Must fix before merge.
-- **P1 (Urgent)**: Incorrect behavior, broken edge cases, race conditions. Should fix.
-- **P2 (Normal)**: Performance issues, missing validation, unclear error messages. Fix when convenient.
-- **P3 (Nice-to-have)**: Style improvements, minor refactors, documentation. Optional.
+- **P0 (Blocking)**: release-blocking failures, data loss, clear security break.
+- **P1 (Urgent)**: incorrect behavior, major edge-case failure, high-risk regression.
+- **P2 (Normal)**: meaningful but non-blocking defects.
+- **P3 (Low)**: minor concerns and suggestions.
 
-### Finding Format
+## Finding Format
 
-Each finding:
 ```
-[P1] `src/handler.ts:42` — Missing null check on `user.email` before `.toLowerCase()`.
-  Fix: `const email = user.email?.toLowerCase() ?? "";`
+[P1] `src/handler.ts:42` — Missing null guard before `.toLowerCase()`.
+Fix: `const email = user.email?.toLowerCase() ?? "";`
 ```
 
-Format: `[priority] file:line — description. Fix: suggested code (3 lines max).`
+Guidelines:
+- Explain why it is a problem.
+- Keep tone factual and concise.
+- Keep fix suggestions minimal and immediately actionable.
 
-### Comment Guidelines
+## Output Structure
 
-- State **why** something is a problem, not just what's wrong.
-- Use appropriate severity — don't cry wolf with P0 for style issues.
-- Be brief and matter-of-fact. No lecturing.
-- Suggested fixes should be immediately graspable — no multi-step refactors.
-
-### Output Structure
-
-1. **Findings** — grouped by severity (P0 first, then P1, P2, P3).
-2. **Open questions** — things you're unsure about (need more context).
-3. **Summary** — total findings by severity. State explicitly if no findings: "No issues found."
+1. **Findings** (grouped by severity, highest first).
+2. **Open Questions / Assumptions** (only unresolved uncertainty).
+3. **Summary** (count by severity, or explicit "No issues found.").
