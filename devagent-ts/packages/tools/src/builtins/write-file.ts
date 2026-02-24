@@ -6,6 +6,8 @@
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import type { ToolSpec } from "@devagent/core";
+import { ToolError } from "@devagent/core";
+import { FileTime } from "./file-time.js";
 
 export const writeFileTool: ToolSpec = {
   name: "write_file",
@@ -29,6 +31,14 @@ export const writeFileTool: ToolSpec = {
     const filePath = resolve(context.repoRoot, params["path"] as string);
     const content = params["content"] as string;
 
+    // For existing files, enforce pre-read (prevents overwriting content the LLM hasn't seen)
+    if (existsSync(filePath) && !FileTime.wasRead(filePath)) {
+      throw new ToolError(
+        "write_file",
+        `You must read file ${params["path"] as string} before overwriting it. Use read_file first.`,
+      );
+    }
+
     // Ensure parent directory exists
     const dir = dirname(filePath);
     if (!existsSync(dir)) {
@@ -36,6 +46,7 @@ export const writeFileTool: ToolSpec = {
     }
 
     writeFileSync(filePath, content, "utf-8");
+    FileTime.recordWrite(filePath);
 
     return {
       success: true,

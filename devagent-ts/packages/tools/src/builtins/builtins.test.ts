@@ -6,15 +6,25 @@ import type { ToolContext } from "@devagent/core";
 import { readFileTool } from "./read-file.js";
 import { writeFileTool } from "./write-file.js";
 import { replaceInFileTool } from "./replace-in-file.js";
+import {
+  fuzzyReplace,
+  levenshtein,
+  LineTrimmedReplacer,
+  BlockAnchorReplacer,
+  WhitespaceNormalizedReplacer,
+  IndentationFlexibleReplacer,
+} from "./replace-in-file.js";
 import { findFilesTool } from "./find-files.js";
 import { searchFilesTool } from "./search-files.js";
 import { runCommandTool } from "./run-command.js";
 import { builtinTools } from "./index.js";
+import { FileTime } from "./file-time.js";
 
 let tmpDir: string;
 let ctx: ToolContext;
 
 beforeEach(() => {
+  FileTime.reset();
   tmpDir = mkdtempSync(join(tmpdir(), "devagent-tools-test-"));
   ctx = {
     repoRoot: tmpDir,
@@ -93,10 +103,31 @@ describe("write_file", () => {
     const read = await readFileTool.handler({ path: "deep/nested/file.ts" }, ctx);
     expect(read.output).toContain("// deep");
   });
+
+  it("throws when overwriting existing file without pre-read", async () => {
+    await expect(
+      writeFileTool.handler(
+        { path: "src/index.ts", content: "overwritten\n" },
+        ctx,
+      ),
+    ).rejects.toThrow("must read file");
+  });
+
+  it("allows overwriting existing file after pre-read", async () => {
+    await readFileTool.handler({ path: "src/index.ts" }, ctx);
+    const result = await writeFileTool.handler(
+      { path: "src/index.ts", content: "overwritten\n" },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+  });
 });
 
 describe("replace_in_file", () => {
   it("replaces text in file", async () => {
+    // Pre-read required by FileTime enforcement
+    await readFileTool.handler({ path: "src/index.ts" }, ctx);
+
     const result = await replaceInFileTool.handler(
       { path: "src/index.ts", search: "const x = 1", replace: "const x = 42" },
       ctx,
@@ -109,12 +140,23 @@ describe("replace_in_file", () => {
   });
 
   it("throws when search string not found", async () => {
+    await readFileTool.handler({ path: "src/index.ts" }, ctx);
+
     await expect(
       replaceInFileTool.handler(
         { path: "src/index.ts", search: "nonexistent", replace: "x" },
         ctx,
       ),
     ).rejects.toThrow("Search string not found");
+  });
+
+  it("throws when file not pre-read (FileTime enforcement)", async () => {
+    await expect(
+      replaceInFileTool.handler(
+        { path: "src/index.ts", search: "const x = 1", replace: "const x = 42" },
+        ctx,
+      ),
+    ).rejects.toThrow("must read file");
   });
 });
 
@@ -215,5 +257,180 @@ describe("run_command", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output.trim()).toBe("hello");
+  });
+});
+
+// ─── Fuzzy Replacer Tests ──────────────────────────────────
+
+describe("levenshtein", () => {
+  it("returns 0 for identical strings", () => {
+    expect(levenshtein("abc", "abc")).toBe(0);
+  });
+
+  it("returns length of other string when one is empty", () => {
+    expect(levenshtein("", "abc")).toBe(3);
+    expect(levenshtein("abc", "")).toBe(3);
+  });
+
+  it("computes correct distance for simple edits", () => {
+    expect(levenshtein("kitten", "sitting")).toBe(3);
+    expect(levenshtein("cat", "car")).toBe(1);
+  });
+});
+
+describe("fuzzyReplace", () => {
+  it("performs exact replacement (SimpleReplacer)", () => {
+    const content = "const x = 1;\nconst y = 2;\n";
+    const result = fuzzyReplace(content, "const x = 1", "const x = 42", false);
+    expect(result.newContent).toBe("const x = 42;\nconst y = 2;\n");
+    expect(result.count).toBe(1);
+  });
+
+  it("matches with line-trimmed whitespace (LineTrimmedReplacer)", () => {
+    const content = "  const x = 1;\n  const y = 2;\n";
+    // Search without leading whitespace — should still match via LineTrimmedReplacer
+    const result = fuzzyReplace(content, "const x = 1;", "const x = 42;", false);
+    expect(result.newContent).toContain("const x = 42;");
+    expect(result.count).toBe(1);
+  });
+
+  it("matches with different indentation (IndentationFlexibleReplacer)", () => {
+    const content = "    function foo() {\n      return 1;\n    }\n";
+    const search = "function foo() {\n  return 1;\n}";
+    const result = fuzzyReplace(content, search, "function bar() {\n  return 2;\n}", false);
+    expect(result.newContent).toContain("bar");
+    expect(result.count).toBe(1);
+  });
+
+  it("matches with collapsed whitespace (WhitespaceNormalizedReplacer)", () => {
+    const content = "const   x   =   1;\n";
+    const result = fuzzyReplace(content, "const x = 1;", "const x = 42;", false);
+    expect(result.newContent).toContain("const x = 42;");
+    expect(result.count).toBe(1);
+  });
+
+  it("falls through replacers in order and stops at first match", () => {
+    // Exact match exists — should use SimpleReplacer (first) and not try others
+    const content = "hello world";
+    const result = fuzzyReplace(content, "hello world", "goodbye world", false);
+    expect(result.newContent).toBe("goodbye world");
+    expect(result.count).toBe(1);
+  });
+
+  it("replaceAll works with fuzzy matching", () => {
+    const content = "  foo();\n  foo();\n  foo();\n";
+    const result = fuzzyReplace(content, "foo();", "bar();", true);
+    expect(result.count).toBe(3);
+    expect(result.newContent).not.toContain("foo");
+  });
+
+  it("throws rich error with partial match hint when no replacer matches", () => {
+    const content = "function hello() {\n  return 1;\n}\n";
+    expect(() => {
+      fuzzyReplace(content, "function_completely_different_thing()", "x", false);
+    }).toThrow("Search string not found");
+  });
+
+  it("throws when multiple ambiguous matches found", () => {
+    const content = "foo\nbar\nfoo\n";
+    // "foo" appears twice — ambiguous for single replace
+    // SimpleReplacer yields "foo", indexOf != lastIndexOf → skips
+    // Other replacers also yield "foo" → same issue
+    // Should throw "multiple matches"
+    expect(() => {
+      fuzzyReplace(content, "foo", "baz", false);
+    }).toThrow("multiple matches");
+  });
+
+  it("includes partial match hint in error for near-misses", () => {
+    const content = "function calculateTotal(items) {\n  let sum = 0;\n  return sum;\n}\n";
+    try {
+      fuzzyReplace(content, "function calculateTotals(items) {\n  let total = 0;\n  return total;\n}", "x", false);
+      expect.unreachable("Should have thrown");
+    } catch (e) {
+      const msg = (e as Error).message;
+      // Should contain partial match hint because "function calculateTotal" partially matches
+      expect(msg).toContain("Search string not found");
+    }
+  });
+});
+
+describe("individual replacers", () => {
+  it("LineTrimmedReplacer yields match when line whitespace differs", () => {
+    const content = "  const x = 1;\n  const y = 2;\n";
+    const candidates = [...LineTrimmedReplacer(content, "const x = 1;\nconst y = 2;")];
+    expect(candidates.length).toBeGreaterThan(0);
+    // The yielded candidate should be the actual substring from content
+    expect(content.includes(candidates[0]!)).toBe(true);
+  });
+
+  it("BlockAnchorReplacer matches when middle lines differ slightly", () => {
+    const content = "function foo() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n";
+    const search = "function foo() {\n  const aa = 1;\n  const bb = 2;\n  return a + b;\n}";
+    const candidates = [...BlockAnchorReplacer(content, search)];
+    expect(candidates.length).toBeGreaterThan(0);
+  });
+
+  it("WhitespaceNormalizedReplacer matches collapsed whitespace", () => {
+    const content = "const   x   =   1;";
+    const candidates = [...WhitespaceNormalizedReplacer(content, "const x = 1;")];
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates[0]).toBe("const   x   =   1;");
+  });
+
+  it("IndentationFlexibleReplacer matches different indent levels", () => {
+    const content = "    if (true) {\n      doStuff();\n    }\n";
+    const search = "if (true) {\n  doStuff();\n}";
+    const candidates = [...IndentationFlexibleReplacer(content, search)];
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates[0]).toBe("    if (true) {\n      doStuff();\n    }");
+  });
+});
+
+// ─── FileTime Tests ────────────────────────────────────────
+
+describe("FileTime", () => {
+  beforeEach(() => {
+    FileTime.reset();
+  });
+
+  it("recordRead marks file as read", () => {
+    expect(FileTime.wasRead("/tmp/test.ts")).toBe(false);
+    FileTime.recordRead("/tmp/test.ts");
+    expect(FileTime.wasRead("/tmp/test.ts")).toBe(true);
+  });
+
+  it("assert throws when file not read", () => {
+    expect(() => FileTime.assert("/tmp/unread.ts")).toThrow("must read file");
+  });
+
+  it("assert succeeds after read", () => {
+    const filePath = join(tmpDir, "src", "index.ts");
+    FileTime.recordRead(filePath);
+    expect(() => FileTime.assert(filePath)).not.toThrow();
+  });
+
+  it("reset clears all tracking", () => {
+    FileTime.recordRead("/tmp/a.ts");
+    FileTime.recordWrite("/tmp/a.ts");
+    expect(FileTime.wasRead("/tmp/a.ts")).toBe(true);
+    FileTime.reset();
+    expect(FileTime.wasRead("/tmp/a.ts")).toBe(false);
+  });
+
+  it("detects external modification since last read", async () => {
+    const filePath = join(tmpDir, "src", "index.ts");
+    FileTime.recordRead(filePath);
+
+    // Simulate external modification by waiting and touching the file
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(filePath, "externally modified content\n");
+
+    // Set the mtime to future to exceed the 1s tolerance
+    const { utimesSync } = await import("node:fs");
+    const futureTime = new Date(Date.now() + 5000);
+    utimesSync(filePath, futureTime, futureTime);
+
+    expect(() => FileTime.assert(filePath)).toThrow("modified since");
   });
 });

@@ -694,7 +694,7 @@ export class TaskLoop {
         toolCall.name,
       );
 
-      // Validate the edit with diagnostics/tests
+      // Validate the edit with diagnostics/tests — inline with tool result
       if (this.doubleCheck?.isEnabled()) {
         const modifiedFiles = result.artifacts
           .filter((a): a is string => typeof a === "string");
@@ -702,10 +702,11 @@ export class TaskLoop {
           const checkResult = await this.doubleCheck.check(modifiedFiles);
           if (!checkResult.passed) {
             const feedback = this.doubleCheck.formatResults(checkResult);
-            this.messages.push({
-              role: MessageRole.SYSTEM,
-              content: `VALIDATION FAILED after ${toolCall.name}:\n${feedback}\nPlease fix the errors before continuing.`,
-            });
+            // Append validation errors inline with tool output (OpenCode pattern)
+            result = {
+              ...result,
+              output: `${result.output}\n\nVALIDATION ERRORS:\n${feedback}\nFix these errors before continuing.`,
+            };
           }
         }
       }

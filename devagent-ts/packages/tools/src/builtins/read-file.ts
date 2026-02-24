@@ -7,6 +7,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ToolSpec } from "@devagent/core";
 import { ToolError } from "@devagent/core";
+import { FileTime } from "./file-time.js";
 
 export const readFileTool: ToolSpec = {
   name: "read_file",
@@ -37,6 +38,7 @@ export const readFileTool: ToolSpec = {
     }
 
     const content = readFileSync(filePath, "utf-8");
+    FileTime.recordRead(filePath);
     const lines = content.split("\n");
     const totalLines = lines.length;
 

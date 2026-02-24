@@ -14,6 +14,7 @@ export {
   gitStatusTool,
   gitDiffTool,
   gitCommitTool,
+  FileTime,
 } from "./builtins/index.js";
 
 // LSP integration

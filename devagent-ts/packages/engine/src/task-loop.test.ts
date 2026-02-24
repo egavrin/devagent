@@ -1188,7 +1188,7 @@ describe("TaskLoop", () => {
     expect(createCalls[0]!.description).toContain("/tmp/test.ts");
   });
 
-  it("injects system message when double-check fails after mutating tool", async () => {
+  it("appends validation errors inline with tool result when double-check fails", async () => {
     const mockDoubleCheck = {
       isEnabled: () => true,
       async check() {
@@ -1253,12 +1253,20 @@ describe("TaskLoop", () => {
     const result = await loop.run("Write a file");
     expect(result.status).toBe("success");
 
-    // Check that a VALIDATION FAILED system message was injected
-    const validationMessages = result.messages.filter(
-      (m) => m.role === MessageRole.SYSTEM && m.content?.includes("VALIDATION FAILED"),
+    // Validation errors should be appended inline to tool result (not a separate SYSTEM message)
+    const toolMessages = result.messages.filter(
+      (m) => m.role === MessageRole.TOOL,
     );
-    expect(validationMessages.length).toBe(1);
-    expect(validationMessages[0]!.content).toContain("Unexpected token");
+    expect(toolMessages.length).toBe(1);
+    expect(toolMessages[0]!.content).toContain("Written");
+    expect(toolMessages[0]!.content).toContain("VALIDATION ERRORS");
+    expect(toolMessages[0]!.content).toContain("Unexpected token");
+
+    // No separate SYSTEM validation message should exist
+    const systemValidationMessages = result.messages.filter(
+      (m) => m.role === MessageRole.SYSTEM && m.content?.includes("VALIDATION"),
+    );
+    expect(systemValidationMessages.length).toBe(0);
   });
 
   it("skips checkpoint for readonly tools", async () => {
