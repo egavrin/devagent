@@ -26,6 +26,10 @@ export interface CompilerFallbackCheck {
   readonly diagnosticPattern: RegExp;
   /** Max time to wait for the compiler in ms */
   readonly timeout: number;
+  /** Retry command if primary fails (e.g. "tsc" as fallback for "npx tsc") */
+  readonly retryCommand?: string;
+  /** Args for the retry command */
+  readonly retryArgs?: ReadonlyArray<string>;
 }
 
 export interface LanguageEntry {
@@ -65,7 +69,9 @@ export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
       command: "npx",
       args: ["tsc", "--noEmit", "--pretty", "false"],
       diagnosticPattern: TSC_PATTERN,
-      timeout: 15_000,
+      timeout: 8_000,
+      retryCommand: "tsc",
+      retryArgs: ["--noEmit", "--pretty", "false"],
     },
   },
   {
@@ -358,6 +364,68 @@ function spawnCapture(
 export function createCompilerFallbackProvider(
   repoRoot: string,
 ): DiagnosticProvider {
+  // Per-file compilers need the file path appended to args
+  const perFileCompilers = new Set(["gcc", "g++", "pyright", "shellcheck"]);
+
+  /** Parse compiler output into diagnostics for a specific file. */
+  function parseDiagnostics(
+    output: string,
+    diagnosticPattern: RegExp,
+    command: string,
+    filePath: string,
+  ): Array<{ message: string; severity: string }> {
+    const diagnostics: Array<{ message: string; severity: string }> = [];
+    const seen = new Set<string>();
+
+    for (const line of output.split("\n")) {
+      const match = diagnosticPattern.exec(line.trim());
+      if (!match?.groups) continue;
+
+      const { file, line: lineNum, col, message, sev } = match.groups;
+      if (!file || !lineNum) continue;
+
+      // For project-wide compilers (tsc, cargo), filter to the modified file
+      if (!perFileCompilers.has(command)) {
+        const normFile = file.replace(/\\/g, "/");
+        const normTarget = filePath.replace(/\\/g, "/");
+        if (!normTarget.endsWith(normFile) && !normFile.endsWith(normTarget.split("/").pop()!)) {
+          continue;
+        }
+      }
+
+      const severity = sev?.toLowerCase() === "warning" ? "warning" : "error";
+      const diagMsg = `${file}:${lineNum}${col ? `:${col}` : ""}: ${message ?? line}`;
+
+      if (!seen.has(diagMsg)) {
+        seen.add(diagMsg);
+        diagnostics.push({ message: diagMsg, severity });
+      }
+    }
+    return diagnostics;
+  }
+
+  /** Run compiler and parse diagnostics. Returns null if compiler unavailable. */
+  async function tryCompiler(
+    cmd: string,
+    cmdArgs: ReadonlyArray<string>,
+    diagnosticPattern: RegExp,
+    filePath: string,
+    timeout: number,
+  ): Promise<Array<{ message: string; severity: string }> | null> {
+    const finalArgs = perFileCompilers.has(cmd)
+      ? [...cmdArgs, filePath]
+      : [...cmdArgs];
+
+    try {
+      const result = await spawnCapture(cmd, finalArgs, repoRoot, timeout);
+      if (result.exitCode === 0) return []; // No errors
+      const output = result.stderr || result.stdout;
+      return parseDiagnostics(output, diagnosticPattern, cmd, filePath);
+    } catch {
+      return null; // Compiler not available
+    }
+  }
+
   return async (filePath: string) => {
     const lang = detectLanguage(filePath);
     if (!lang) return [];
@@ -365,56 +433,25 @@ export function createCompilerFallbackProvider(
     const entry = getLanguageEntry(lang);
     if (!entry?.fallbackCheck) return [];
 
-    const { command, args, diagnosticPattern, timeout } = entry.fallbackCheck;
+    const { command, args, diagnosticPattern, timeout, retryCommand, retryArgs } = entry.fallbackCheck;
 
-    // Build final args — some compilers need the file path appended,
-    // others (like tsc --noEmit) check the whole project.
-    // For per-file compilers (gcc, pyright, shellcheck), append filePath.
-    const perFileCompilers = new Set(["gcc", "g++", "pyright", "shellcheck"]);
-    const finalArgs = perFileCompilers.has(command)
-      ? [...args, filePath]
-      : [...args];
+    // Try primary command
+    const result = await tryCompiler(command, args, diagnosticPattern, filePath, timeout);
+    if (result !== null) return result;
 
-    try {
-      const result = await spawnCapture(command, finalArgs, repoRoot, timeout);
-
-      if (result.exitCode === 0) return []; // No errors
-
-      // Parse output lines for diagnostics
-      const output = result.stderr || result.stdout;
-      const diagnostics: Array<{ message: string; severity: string }> = [];
-      const seen = new Set<string>();
-
-      for (const line of output.split("\n")) {
-        const match = diagnosticPattern.exec(line.trim());
-        if (!match?.groups) continue;
-
-        const { file, line: lineNum, col, message, sev } = match.groups;
-        if (!file || !lineNum) continue;
-
-        // For project-wide compilers (tsc, cargo), filter to the modified file
-        if (!perFileCompilers.has(command)) {
-          const normFile = file.replace(/\\/g, "/");
-          const normTarget = filePath.replace(/\\/g, "/");
-          if (!normTarget.endsWith(normFile) && !normFile.endsWith(normTarget.split("/").pop()!)) {
-            continue;
-          }
-        }
-
-        const severity = sev?.toLowerCase() === "warning" ? "warning" : "error";
-        const diagMsg = `${file}:${lineNum}${col ? `:${col}` : ""}: ${message ?? line}`;
-
-        if (!seen.has(diagMsg)) {
-          seen.add(diagMsg);
-          diagnostics.push({ message: diagMsg, severity });
-        }
-      }
-
-      return diagnostics;
-    } catch {
-      // Compiler not available — silently skip (not an error)
-      return [];
+    // Primary failed (compiler not available) — try retry command if configured
+    if (retryCommand) {
+      const retryResult = await tryCompiler(
+        retryCommand,
+        retryArgs ?? args,
+        diagnosticPattern,
+        filePath,
+        timeout,
+      );
+      if (retryResult !== null) return retryResult;
     }
+
+    return []; // No compiler available
   };
 }
 
