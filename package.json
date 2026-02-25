@@ -17,8 +17,9 @@
     "install-lsp": "bash scripts/install-lsp-servers.sh"
   },
   "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@typescript-eslint/parser": "^8.56.1",
     "turbo": "^2.5.0",
-    "typescript": "^5.7.0",
-    "@types/bun": "^1.2.0"
+    "typescript": "^5.7.0"
   }
 }

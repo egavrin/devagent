@@ -94,7 +94,6 @@ export function startCallbackServer(
     rejectCallback = reject;
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const server = (globalThis as any).Bun?.serve({
     port,
     fetch(req: Request) {
