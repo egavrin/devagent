@@ -4,6 +4,7 @@
  */
 
 import { createInterface } from "node:readline";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -49,6 +50,51 @@ import {
   formatSummary,
   formatError,
 } from "./format.js";
+
+// ─── Test Command Auto-Detection ─────────────────────────────
+
+/**
+ * Detect the project's test command from package.json scripts.
+ * Prefers targeted test scripts over generic "test" to get faster feedback.
+ * Returns null if no test command is found.
+ */
+function detectProjectTestCommand(repoRoot: string): string | null {
+  const pkgPath = join(repoRoot, "package.json");
+  if (!existsSync(pkgPath)) return null;
+
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
+      scripts?: Record<string, string>;
+      packageManager?: string;
+    };
+    const scripts = pkg.scripts;
+    if (!scripts) return null;
+
+    // Determine the package manager prefix
+    const pm = pkg.packageManager;
+    let prefix: string;
+    if (pm?.startsWith("yarn")) {
+      prefix = "corepack yarn";
+    } else if (pm?.startsWith("pnpm")) {
+      prefix = "pnpm";
+    } else {
+      prefix = "npm run";
+    }
+
+    // Prefer targeted test scripts (faster, more specific feedback)
+    // Order: test:implementation > test:unit > test
+    const candidates = ["test:implementation", "test:unit", "test"];
+    for (const name of candidates) {
+      if (scripts[name]) {
+        return `${prefix} ${name}`;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 // ─── Argument Parsing ────────────────────────────────────────
 
@@ -401,11 +447,22 @@ export async function main(): Promise<void> {
   });
   checkpointManager.init();
 
-  // Auto-enable DoubleCheck in full-auto mode unless explicitly disabled
+  // Auto-enable DoubleCheck in full-auto mode unless explicitly disabled.
+  // When enabled with no explicit test command, auto-detect from package.json
+  // and enable test running so the LLM can self-correct from test failures.
+  const isFullAuto = config.approval.mode === ApprovalMode.FULL_AUTO;
+  const dcEnabled = config.doubleCheck?.enabled ?? isFullAuto;
+  const autoTestCommand = dcEnabled && !config.doubleCheck?.testCommand
+    ? detectProjectTestCommand(projectRoot)
+    : null;
+
   const effectiveDoubleCheck = {
     ...DEFAULT_DOUBLE_CHECK_OPTIONS,
     ...config.doubleCheck,
-    enabled: config.doubleCheck?.enabled ?? (config.approval.mode === ApprovalMode.FULL_AUTO),
+    enabled: dcEnabled,
+    // Auto-enable test running when a test command is detected
+    runTests: config.doubleCheck?.runTests ?? (autoTestCommand !== null),
+    testCommand: config.doubleCheck?.testCommand ?? autoTestCommand,
   };
 
   const doubleCheck = new DoubleCheck(effectiveDoubleCheck, bus);
@@ -542,8 +599,11 @@ export async function main(): Promise<void> {
   }
 
   // Wire test runner (works without LSP — just needs a shell)
-  if (effectiveDoubleCheck.testCommand ?? config.doubleCheck?.testCommand) {
+  if (effectiveDoubleCheck.testCommand) {
     doubleCheck.setTestRunner(createShellTestRunner(projectRoot));
+    if (autoTestCommand && cliArgs.verbosity !== "quiet") {
+      process.stderr.write(dim(`[double-check] Auto-detected test command: ${autoTestCommand}`) + "\n");
+    }
   }
 
   // ─── Context Management ────────────────────────────────────

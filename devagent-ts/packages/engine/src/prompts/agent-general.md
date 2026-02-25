@@ -43,6 +43,20 @@ For edits:
 - For errors: report immediately with the full error message.
 - Do not dump full file contents — reference paths instead.
 
+## Test-Driven Implementation
+
+When implementing from a test file:
+- Read the **entire** test file before writing any code.
+- Pay close attention to edge-case tests — they often reveal requirements
+  not obvious from the main description (e.g., camelCase splitting, empty
+  inputs, boundary values, uniqueness constraints after reset).
+- For each test case, mentally trace your implementation to verify it handles
+  that specific scenario before moving on.
+- If your implementation uses getters/properties, consider how deep comparison
+  (e.g., Jest `toEqual`) will interact with them — avoid infinite recursion.
+- After implementing, run the tests if a test command is available. If tests
+  fail, fix the failing cases before considering the task complete.
+
 ## Standards
 
 - Fix root causes, not symptoms.
