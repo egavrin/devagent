@@ -160,6 +160,182 @@ describe("ContextManager", () => {
     expect(summaryMsg).toBeDefined();
   });
 
+  it("no orphaned TOOL messages when sliding window splits a tool-call pair", () => {
+    // Bug: startIdx can fall between ASSISTANT+toolCalls and its TOOL result.
+    // The ASSISTANT gets dropped but the TOOL result stays → orphaned TOOL.
+    //
+    // With keepRecentMessages=3 and 8 messages:
+    //   startIdx = max(2, 8-3) = 5
+    //   recentMessages = messages[5:] = [TOOL(A), USER, ASSISTANT]
+    //   ASSISTANT+toolCalls(A) at index 4 is DROPPED
+    //   TOOL(A) at index 5 is KEPT → orphan!
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1, // trigger immediately
+        keepRecentMessages: 3,
+      }),
+    );
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),                          // 0 (preserved)
+      msg(MessageRole.USER, "task"),                           // 1 (preserved)
+      msg(MessageRole.USER, "follow up"),                      // 2 (dropped)
+      msg(MessageRole.ASSISTANT, "answer"),                    // 3 (dropped)
+      {                                                        // 4 (dropped!)
+        role: MessageRole.ASSISTANT,
+        content: "Let me read",
+        toolCalls: [{ name: "read_file", arguments: { path: "f" }, callId: "call_SPLIT" }],
+      },
+      {                                                        // 5 (kept — startIdx lands here!)
+        role: MessageRole.TOOL,
+        content: "file contents",
+        toolCallId: "call_SPLIT",
+      },
+      msg(MessageRole.USER, "next question"),                  // 6 (kept)
+      msg(MessageRole.ASSISTANT, "next answer"),               // 7 (kept)
+    ];
+
+    // triggerRatio=0.1, so threshold=50*0.1=5 tokens. Total ≈27 > 5 → triggers truncation.
+    // After sliding window: result ≈13 tokens ≤ 50 → no further pruning.
+    const result = mgr.truncate(messages, 50);
+    expect(result.truncated).toBe(true);
+
+    // Invariant: every TOOL message must have its ASSISTANT present
+    const assistantCallIds = new Set<string>();
+    for (const m of result.messages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        for (const tc of m.toolCalls) assistantCallIds.add(tc.callId);
+      }
+    }
+    for (const m of result.messages) {
+      if (m.role === MessageRole.TOOL && m.toolCallId) {
+        expect(assistantCallIds.has(m.toolCallId)).toBe(true);
+      }
+    }
+
+    // Invariant: every ASSISTANT+toolCalls must have all TOOL results present
+    const toolResultIds = new Set<string>();
+    for (const m of result.messages) {
+      if (m.role === MessageRole.TOOL && m.toolCallId) toolResultIds.add(m.toolCallId);
+    }
+    for (const m of result.messages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        for (const tc of m.toolCalls) {
+          expect(toolResultIds.has(tc.callId)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("no orphaned TOOL messages after further-prune loop", () => {
+    // Bug: the further-prune loop removes from index preserved.length.
+    // If ASSISTANT+toolCalls gets removed but its small TOOL result stays,
+    // we get an orphaned TOOL message.
+    //
+    // Scenario:
+    //   result = [SYS, USER, USER(old), ASSISTANT+tools(A), TOOL(A small), USER, ASS]
+    //   Prune removes USER(old), then ASSISTANT+tools(A).
+    //   If removing ASSISTANT brings us under budget → TOOL(A) is orphaned.
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 20, // high keepCount so initial merge keeps everything
+      }),
+    );
+
+    // Token budget: total ≈ ceil(3/4)+ceil(4/4)+ceil(50/4)+ceil(10/4)+ceil(5/4)+ceil(10/4)+ceil(10/4)
+    //             = 1 + 1 + 13 + 3 + 2 + 3 + 3 = 26
+    // Budget of 15 forces the prune loop to remove ~11 tokens worth
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),                            // ~1 token
+      msg(MessageRole.USER, "task"),                             // ~1 token
+      msg(MessageRole.USER, "x".repeat(50)),                     // ~13 tokens — prune target
+      {                                                          // ~3 tokens — prune target
+        role: MessageRole.ASSISTANT,
+        content: "check",
+        toolCalls: [{ name: "f", arguments: { p: "x" }, callId: "call_PRUNE" }],
+      },
+      {                                                          // ~2 tokens
+        role: MessageRole.TOOL,
+        content: "ok",
+        toolCallId: "call_PRUNE",
+      },
+      msg(MessageRole.USER, "question 2"),                       // ~3 tokens
+      msg(MessageRole.ASSISTANT, "answer 22"),                   // ~3 tokens
+    ];
+
+    const result = mgr.truncate(messages, 15);
+    expect(result.truncated).toBe(true);
+
+    // Invariant check
+    const assistantCallIds = new Set<string>();
+    for (const m of result.messages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        for (const tc of m.toolCalls) assistantCallIds.add(tc.callId);
+      }
+    }
+    for (const m of result.messages) {
+      if (m.role === MessageRole.TOOL && m.toolCallId) {
+        expect(assistantCallIds.has(m.toolCallId)).toBe(true);
+      }
+    }
+  });
+
+  it("no orphaned tool messages in hybrid truncation when boundary splits a pair", async () => {
+    // Bug: hybrid truncation slices at recentStart.
+    // If the boundary falls between ASSISTANT+toolCalls and its TOOL:
+    //   middle = [..., ASSISTANT+toolCalls(A)]  → summarized away
+    //   recent = [TOOL(A), ...]                 → kept as-is → orphaned TOOL
+    const mgr = new ContextManager(
+      makeConfig({
+        pruningStrategy: "hybrid",
+        triggerRatio: 0.1,
+        keepRecentMessages: 3, // keep last 3
+      }),
+    );
+
+    mgr.setSummarizeCallback(async (msgs) => `Summary of ${msgs.length} messages`);
+
+    // 8 messages, keepRecent=3: recentStart = max(1, 8-3) = 5
+    // messages[4] = ASSISTANT+toolCalls → in middle (summarized away)
+    // messages[5] = TOOL → in recent (kept) → ORPHAN!
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),                          // 0
+      msg(MessageRole.USER, "task"),                           // 1 (middle)
+      msg(MessageRole.ASSISTANT, "answer 1"),                  // 2 (middle)
+      msg(MessageRole.USER, "question 2"),                     // 3 (middle)
+      {                                                        // 4 (middle - summarized away!)
+        role: MessageRole.ASSISTANT,
+        content: "Let me check",
+        toolCalls: [{ name: "search", arguments: { q: "x" }, callId: "call_HYBRID" }],
+      },
+      {                                                        // 5 (recent - KEPT!)
+        role: MessageRole.TOOL,
+        content: "results",
+        toolCallId: "call_HYBRID",
+      },
+      msg(MessageRole.USER, "question 3"),                     // 6 (recent)
+      msg(MessageRole.ASSISTANT, "answer 3"),                  // 7 (recent)
+    ];
+
+    // triggerRatio=0.1, threshold=50*0.1=5. Total ≈20 > 5 → triggers truncation.
+    const result = await mgr.truncateAsync(messages, 50);
+    expect(result.truncated).toBe(true);
+
+    // Invariant check
+    const assistantCallIds = new Set<string>();
+    for (const m of result.messages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        for (const tc of m.toolCalls) assistantCallIds.add(tc.callId);
+      }
+    }
+    for (const m of result.messages) {
+      if (m.role === MessageRole.TOOL && m.toolCallId) {
+        expect(assistantCallIds.has(m.toolCallId)).toBe(true);
+      }
+    }
+  });
+
   it("async truncation falls back to sliding window without callback", async () => {
     const mgr = new ContextManager(
       makeConfig({

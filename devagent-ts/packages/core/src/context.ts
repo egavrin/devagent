@@ -145,6 +145,66 @@ export class ContextManager {
   }
 
   /**
+   * Remove orphaned tool-call messages from a message array.
+   *
+   * After compaction, the message array may contain:
+   * - ASSISTANT messages with toolCalls whose TOOL results were dropped
+   * - TOOL messages whose corresponding ASSISTANT+toolCalls was dropped
+   *
+   * Both cases cause OpenAI API errors:
+   * - "No tool output found for function call call_..." (orphaned ASSISTANT)
+   * - Unexpected tool result without matching call (orphaned TOOL)
+   *
+   * Strategy: remove orphaned messages entirely. For ASSISTANT messages
+   * that also have text content, strip the toolCalls rather than removing.
+   */
+  private sanitizeToolCallPairs(messages: Message[]): Message[] {
+    // Build maps of which callIds exist for each role
+    const assistantCallIds = new Set<string>();
+    for (const m of messages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        for (const tc of m.toolCalls) {
+          assistantCallIds.add(tc.callId);
+        }
+      }
+    }
+
+    const toolResultIds = new Set<string>();
+    for (const m of messages) {
+      if (m.role === MessageRole.TOOL && m.toolCallId) {
+        toolResultIds.add(m.toolCallId);
+      }
+    }
+
+    // Filter: remove orphaned messages
+    const result: Message[] = [];
+    for (const m of messages) {
+      if (m.role === MessageRole.TOOL && m.toolCallId) {
+        // TOOL without matching ASSISTANT → drop
+        if (!assistantCallIds.has(m.toolCallId)) continue;
+      }
+
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        // Check if ALL tool results are present
+        const allPresent = m.toolCalls.every((tc) => toolResultIds.has(tc.callId));
+        if (!allPresent) {
+          // If the ASSISTANT also has text content, keep it but strip toolCalls
+          if (m.content && m.content.trim().length > 0) {
+            result.push({ role: m.role, content: m.content });
+            continue;
+          }
+          // Pure tool-call message with no text → drop entirely
+          continue;
+        }
+      }
+
+      result.push(m);
+    }
+
+    return result;
+  }
+
+  /**
    * Sliding window: keep system prompt, original user message, and N recent messages.
    */
   private slidingWindow(
@@ -203,11 +263,15 @@ export class ContextManager {
       tokens = estimateMessageTokens(result);
     }
 
+    // Sanitize: remove orphaned tool-call/tool-result messages
+    const sanitized = this.sanitizeToolCallPairs(result);
+    const finalTokens = estimateMessageTokens(sanitized);
+
     return {
-      messages: result,
-      truncated: result.length < messages.length,
-      removedCount: messages.length - result.length,
-      estimatedTokens: tokens,
+      messages: sanitized,
+      truncated: sanitized.length < messages.length,
+      removedCount: messages.length - sanitized.length,
+      estimatedTokens: finalTokens,
     };
   }
 
@@ -248,12 +312,15 @@ export class ContextManager {
     });
     result.push(...recentMessages);
 
-    const tokens = estimateMessageTokens(result);
+    // Sanitize: remove orphaned tool-call/tool-result messages
+    // (the boundary between middle and recent can split tool-call pairs)
+    const sanitized = this.sanitizeToolCallPairs(result);
+    const tokens = estimateMessageTokens(sanitized);
 
     return {
-      messages: result,
+      messages: sanitized,
       truncated: true,
-      removedCount: messages.length - result.length,
+      removedCount: messages.length - sanitized.length,
       estimatedTokens: tokens,
     };
   }
