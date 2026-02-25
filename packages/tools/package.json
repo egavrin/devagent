@@ -1,0 +1,35 @@
+{
+  "name": "@devagent/tools",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./builtins/patch-parser": {
+      "import": "./dist/builtins/patch-parser.js",
+      "types": "./dist/builtins/patch-parser.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src/",
+    "lint:arkts": "eslint --config eslint.arkts.cjs src/",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@devagent/core": "workspace:*",
+    "vscode-jsonrpc": "^8.2.1",
+    "vscode-languageserver-protocol": "^3.17.5"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0"
+  }
+}

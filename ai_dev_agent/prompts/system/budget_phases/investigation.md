@@ -1,7 +1,0 @@
-**Phase: Investigation** - Budget is moderately used. Focus on:
-- Deepening your understanding
-- Making targeted investigations
-- Starting to formulate solutions
-- Balancing thoroughness with efficiency
-
-**EDIT REMINDER**: For insertions, use empty SEARCH (appends to file). NEVER invent anchor content. ALWAYS READ files first, then COPY exact content into SEARCH.

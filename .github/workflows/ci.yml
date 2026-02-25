@@ -2,19 +2,21 @@ name: CI
 
 on:
   push:
-    branches: [main, devagent-ts-v2]
+    branches: [main]
     paths:
-      - 'devagent-ts/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'turbo.json'
+      - 'tsconfig.json'
       - '.github/workflows/ci.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'devagent-ts/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'turbo.json'
+      - 'tsconfig.json'
       - '.github/workflows/ci.yml'
-
-defaults:
-  run:
-    working-directory: devagent-ts
 
 jobs:
   check:

@@ -1,38 +1,18 @@
-# Local DevAgent configuration
-.devagent.toml
-.devagent/
-.devagent_cache/
+# Dependencies
+node_modules/
 
-# Python bytecode and caches
-__pycache__/
-*.py[cod]
-*.pyo
-
-# Build and packaging artefacts
-build/
+# Build outputs
 dist/
-.eggs/
-*.egg-info/
+*.tsbuildinfo
 
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Test and coverage outputs
-.pytest_cache/
-htmlcov/
-.coverage
-.coverage.*
+# Test and coverage
 coverage/
-coverage.xml
-coverage.json
 
-# Tool caches
-.mypy_cache/
-.ruff_cache/
-.pyre/
-.pytype/
+# Bun
+.bun/
+
+# Turbo cache
+.turbo/
 
 # Editor settings
 .vscode/
@@ -58,10 +38,11 @@ Thumbs.db
 # Local environment files
 .env
 .env.*
-.python-version
 
-# Automation reports
-reports/
+# DevAgent local config
+.devagent.toml
+.devagent/
+.devagent_cache/
 
 # Claude Code
 .claude/worktrees/
