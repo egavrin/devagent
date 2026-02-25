@@ -51,6 +51,36 @@ strict_mode = true
     }
   });
 
+  it("parses context settings from TOML", () => {
+    const dir = join(tmpdir(), `devagent-test-context-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const configPath = join(dir, ".devagent.toml");
+    writeFileSync(
+      configPath,
+      `
+[context]
+pruning_strategy = "summarize"
+trigger_ratio = 0.65
+keep_recent_messages = 22
+turn_isolation = false
+midpoint_briefing_interval = 4
+briefing_strategy = "llm"
+`,
+    );
+
+    try {
+      const config = loadConfig(dir);
+      expect(config.context.pruningStrategy).toBe("summarize");
+      expect(config.context.triggerRatio).toBe(0.65);
+      expect(config.context.keepRecentMessages).toBe(22);
+      expect(config.context.turnIsolation).toBe(false);
+      expect(config.context.midpointBriefingInterval).toBe(4);
+      expect(config.context.briefingStrategy).toBe("llm");
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
   it("parses model capabilities from TOML provider config", () => {
     const dir = join(tmpdir(), `devagent-test-caps-${Date.now()}`);
     mkdirSync(dir, { recursive: true });
@@ -122,8 +152,49 @@ api_key = "test-key"
       expect(config.provider).toBe("deepseek");
       expect(config.model).toBe("deepseek-coder");
     } finally {
-      process.env["DEVAGENT_PROVIDER"] = original["DEVAGENT_PROVIDER"];
-      process.env["DEVAGENT_MODEL"] = original["DEVAGENT_MODEL"];
+      if (original["DEVAGENT_PROVIDER"] === undefined) {
+        delete process.env["DEVAGENT_PROVIDER"];
+      } else {
+        process.env["DEVAGENT_PROVIDER"] = original["DEVAGENT_PROVIDER"];
+      }
+      if (original["DEVAGENT_MODEL"] === undefined) {
+        delete process.env["DEVAGENT_MODEL"];
+      } else {
+        process.env["DEVAGENT_MODEL"] = original["DEVAGENT_MODEL"];
+      }
+    }
+  });
+
+  it("injects resolved top-level api_key into existing provider blocks", () => {
+    const dir = join(tmpdir(), `devagent-test-provider-key-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const configPath = join(dir, ".devagent.toml");
+    writeFileSync(
+      configPath,
+      `
+provider = "custom_provider_for_test"
+model = "test-model"
+api_key = "top-level-key"
+
+[providers.custom_provider_for_test]
+model = "test-model-v2"
+base_url = "https://example.test/v1"
+`,
+    );
+
+    try {
+      const config = loadConfig(dir);
+      expect(config.providers["custom_provider_for_test"]?.model).toBe(
+        "test-model-v2",
+      );
+      expect(config.providers["custom_provider_for_test"]?.baseUrl).toBe(
+        "https://example.test/v1",
+      );
+      expect(config.providers["custom_provider_for_test"]?.apiKey).toBe(
+        "top-level-key",
+      );
+    } finally {
+      rmSync(dir, { recursive: true });
     }
   });
 

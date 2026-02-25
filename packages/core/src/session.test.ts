@@ -3,10 +3,11 @@ import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { SessionStore } from "./session.js";
+import { BUN_SQLITE_AVAILABLE } from "./bun-sqlite.js";
 import { MessageRole } from "./types.js";
 import type { Message, CostRecord } from "./types.js";
 
-describe("SessionStore", () => {
+describe.skipIf(!BUN_SQLITE_AVAILABLE)("SessionStore", () => {
   let store: SessionStore;
   let tmpDir: string;
 

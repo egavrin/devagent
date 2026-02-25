@@ -49,6 +49,7 @@ import {
   formatSummary,
   formatError,
 } from "./format.js";
+import { resolveBundledModelsDir } from "./model-registry-path.js";
 
 // ─── Test Command Auto-Detection ─────────────────────────────
 
@@ -317,7 +318,7 @@ export async function main(): Promise<void> {
   // Load model registry (models/*.toml files with per-model capabilities)
   // Search: devagent repo models/ dir, project models/ dir, ~/.config/devagent/models/
   const cliDir = dirname(fileURLToPath(import.meta.url));
-  const devagentModelsDir = join(cliDir, "..", "..", "..", "..", "models");
+  const devagentModelsDir = resolveBundledModelsDir(cliDir);
   loadModelRegistry(projectRoot, [devagentModelsDir]);
 
   // Set up providers

@@ -182,6 +182,25 @@ function parseBudget(
   };
 }
 
+function parseContext(
+  raw: Record<string, unknown>,
+): Partial<ContextConfig> {
+  return {
+    pruningStrategy: (raw["pruning_strategy"] ??
+      raw["pruningStrategy"]) as ContextConfig["pruningStrategy"] | undefined,
+    triggerRatio: (raw["trigger_ratio"] ??
+      raw["triggerRatio"]) as number | undefined,
+    keepRecentMessages: (raw["keep_recent_messages"] ??
+      raw["keepRecentMessages"]) as number | undefined,
+    turnIsolation: (raw["turn_isolation"] ??
+      raw["turnIsolation"]) as boolean | undefined,
+    midpointBriefingInterval: (raw["midpoint_briefing_interval"] ??
+      raw["midpointBriefingInterval"]) as number | undefined,
+    briefingStrategy: (raw["briefing_strategy"] ??
+      raw["briefingStrategy"]) as ContextConfig["briefingStrategy"] | undefined,
+  };
+}
+
 function parseMemory(
   raw: Record<string, unknown>,
 ): Partial<MemoryConfig> {
@@ -234,17 +253,7 @@ export function loadConfig(
     providers[key] = mergeProviderConfig(value);
   }
 
-  // Inject stored credentials into provider configs missing apiKey
-  // Priority: env var > stored credentials > TOML config
   const credentialStore = new CredentialStore();
-  for (const [key, provConfig] of Object.entries(providers)) {
-    if (!provConfig.apiKey) {
-      const stored = credentialStore.get(key);
-      if (stored?.type === "api") {
-        providers[key] = { ...provConfig, apiKey: stored.key };
-      }
-    }
-  }
 
   // Check env overrides
   const envProvider = process.env["DEVAGENT_PROVIDER"];
@@ -276,8 +285,11 @@ export function loadConfig(
   };
 
   // Merge context
+  const rawContext = (fileConfig["context"] ?? {}) as Record<string, unknown>;
+  const contextPartial = parseContext(rawContext);
   const context: ContextConfig = {
     ...DEFAULT_CONTEXT,
+    ...stripUndefined(contextPartial),
     ...overrides?.context,
   };
 
@@ -320,17 +332,34 @@ export function loadConfig(
     ? (resolveEnvValue(topLevelApiKey) as string)
     : envApiKey ?? storedApiKey;
 
-  // If we have a top-level API key, inject it into the provider config
-  if (resolvedApiKey && !providers[provider]) {
-    providers[provider] = {
-      model:
-        envModel ??
-        overrides?.model ??
-        (fileConfig["model"] as string) ??
-        DEFAULT_CONFIG.model,
-      apiKey: resolvedApiKey,
-      baseUrl: fileConfig["base_url"] as string | undefined,
-    };
+  // Apply resolved API key to active provider entry if it doesn't already define one.
+  // Priority: provider-level config > top-level/env > stored credentials.
+  if (resolvedApiKey) {
+    if (providers[provider]) {
+      if (!providers[provider].apiKey) {
+        providers[provider] = { ...providers[provider], apiKey: resolvedApiKey };
+      }
+    } else {
+      providers[provider] = {
+        model:
+          envModel ??
+          overrides?.model ??
+          (fileConfig["model"] as string) ??
+          DEFAULT_CONFIG.model,
+        apiKey: resolvedApiKey,
+        baseUrl: fileConfig["base_url"] as string | undefined,
+      };
+    }
+  }
+
+  // Inject stored credentials into any provider entries still missing apiKey.
+  for (const [key, provConfig] of Object.entries(providers)) {
+    if (!provConfig.apiKey) {
+      const stored = credentialStore.get(key);
+      if (stored?.type === "api") {
+        providers[key] = { ...provConfig, apiKey: stored.key };
+      }
+    }
   }
 
   // Parse optional checkpoints config

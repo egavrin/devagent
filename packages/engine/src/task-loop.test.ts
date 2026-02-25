@@ -8,6 +8,7 @@ import type {
   DevAgentConfig,
 } from "@devagent/core";
 import {
+  BUN_SQLITE_AVAILABLE,
   EventBus,
   ApprovalGate,
   ApprovalMode,
@@ -998,7 +999,7 @@ describe("TaskLoop", () => {
 
   // ─── Memory Integration Tests ──────────────────────────────
 
-  it("extracts doom-loop lesson into memory when memoryStore provided", async () => {
+  it.skipIf(!BUN_SQLITE_AVAILABLE)("extracts doom-loop lesson into memory when memoryStore provided", async () => {
     const { MemoryStore } = await import("@devagent/core");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
@@ -1073,7 +1074,7 @@ describe("TaskLoop", () => {
     }
   });
 
-  it("calls applyDecay on memoryStore at session end", async () => {
+  it.skipIf(!BUN_SQLITE_AVAILABLE)("calls applyDecay on memoryStore at session end", async () => {
     const { MemoryStore } = await import("@devagent/core");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");

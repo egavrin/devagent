@@ -111,6 +111,9 @@ export type {
   SummarizeCallback,
 } from "./context.js";
 
+// bun:sqlite availability flag (for test skipping in non-Bun environments)
+export { BUN_SQLITE_AVAILABLE } from "./bun-sqlite.js";
+
 // Memory (cross-session learning)
 export { MemoryStore } from "./memory.js";
 export type {

@@ -499,6 +499,9 @@ describe("detectAvailableLSPServers", () => {
 });
 
 describe("lazyUpgradeLSP", () => {
+  // These integration tests may spawn real processes (LSP server detection via
+  // `which` + potential server start with 10 s timeout), so they need a generous
+  // timeout on slow CI runners.
   it("calls onUpgradeComplete with 0 when no servers found", async () => {
     const bus = new EventBus();
     const dc = new DoubleCheck({ ...DEFAULT_DOUBLE_CHECK_OPTIONS, enabled: true }, bus);
@@ -519,7 +522,7 @@ describe("lazyUpgradeLSP", () => {
     // Either 0 (no servers in PATH) or > 0 (servers found but failed to start)
     // Either way it should complete without throwing
     expect(completedCount).toBeGreaterThanOrEqual(0);
-  });
+  }, 30_000);
 
   it("calls onError when detection throws", async () => {
     const bus = new EventBus();
@@ -539,5 +542,5 @@ describe("lazyUpgradeLSP", () => {
 
     // Should complete without errors (detection itself shouldn't throw)
     expect(typeof errorCaught).toBe("boolean");
-  });
+  }, 30_000);
 });

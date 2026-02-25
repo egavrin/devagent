@@ -11,7 +11,7 @@
  * - Agent can store & recall learnings across sessions
  */
 
-import { Database } from "bun:sqlite";
+import { Database } from "./bun-sqlite.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";

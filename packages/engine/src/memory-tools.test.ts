@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createMemoryTools } from "./memory-tools.js";
 import { MemoryStore } from "@devagent/core";
+import { BUN_SQLITE_AVAILABLE } from "@devagent/core";
 import type { ToolSpec, DevAgentConfig } from "@devagent/core";
 import { ApprovalMode } from "@devagent/core";
 import { tmpdir } from "node:os";
@@ -54,7 +55,7 @@ function makeToolContext() {
   };
 }
 
-describe("memory-tools", () => {
+describe.skipIf(!BUN_SQLITE_AVAILABLE)("memory-tools", () => {
   let memoryStore: MemoryStore;
   let tools: ToolSpec[];
   let tmpDir: string;

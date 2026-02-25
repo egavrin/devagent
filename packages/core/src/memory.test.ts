@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { MemoryStore } from "./memory.js";
+import { BUN_SQLITE_AVAILABLE } from "./bun-sqlite.js";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const TEST_DIR = "/tmp/devagent-memory-test";
 const TEST_DB = join(TEST_DIR, "memory.db");
 
-describe("MemoryStore", () => {
+describe.skipIf(!BUN_SQLITE_AVAILABLE)("MemoryStore", () => {
   let store: MemoryStore;
 
   beforeEach(() => {
