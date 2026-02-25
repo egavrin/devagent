@@ -336,6 +336,76 @@ describe("ContextManager", () => {
     }
   });
 
+  it("summarize callback receives sanitized messages (no orphaned tool-call pairs)", async () => {
+    // Root cause of: "OpenAI stream error: AI_APICallError: No tool output found
+    // for function call call_..."
+    //
+    // Bug: hybridTruncation slices middleMessages and passes them directly to the
+    // summarize callback. If recentStart falls between ASSISTANT+toolCalls and its
+    // TOOL result, middleMessages contains an ASSISTANT with toolCalls but no
+    // matching TOOL result. The callback sends these to OpenAI, which rejects them.
+    const mgr = new ContextManager(
+      makeConfig({
+        pruningStrategy: "hybrid",
+        triggerRatio: 0.1,
+        keepRecentMessages: 3,
+      }),
+    );
+
+    let receivedMessages: ReadonlyArray<Message> = [];
+    mgr.setSummarizeCallback(async (msgs) => {
+      receivedMessages = msgs;
+      return `Summary of ${msgs.length} messages`;
+    });
+
+    // 8 messages, keepRecent=3: recentStart = max(1, 8-3) = 5
+    // messages[4] = ASSISTANT+toolCalls(call_LEAK) → in middle
+    // messages[5] = TOOL(call_LEAK) → in recent
+    // Middle has ASSISTANT with toolCalls but no matching TOOL → broken if unsanitized
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),
+      msg(MessageRole.USER, "task"),
+      msg(MessageRole.ASSISTANT, "answer 1"),
+      msg(MessageRole.USER, "question 2"),
+      {
+        role: MessageRole.ASSISTANT,
+        content: "Let me check",
+        toolCalls: [{ name: "search", arguments: { q: "x" }, callId: "call_LEAK" }],
+      },
+      {
+        role: MessageRole.TOOL,
+        content: "results",
+        toolCallId: "call_LEAK",
+      },
+      msg(MessageRole.USER, "question 3"),
+      msg(MessageRole.ASSISTANT, "answer 3"),
+    ];
+
+    await mgr.truncateAsync(messages, 50);
+
+    // The summarize callback must NOT receive an ASSISTANT with toolCalls
+    // that lacks its matching TOOL result
+    const callIdsInCallback = new Set<string>();
+    const resultIdsInCallback = new Set<string>();
+    for (const m of receivedMessages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        for (const tc of m.toolCalls) callIdsInCallback.add(tc.callId);
+      }
+      if (m.role === MessageRole.TOOL && m.toolCallId) {
+        resultIdsInCallback.add(m.toolCallId);
+      }
+    }
+
+    // Every ASSISTANT toolCall must have its TOOL result present
+    for (const callId of callIdsInCallback) {
+      expect(resultIdsInCallback.has(callId)).toBe(true);
+    }
+    // Every TOOL result must have its ASSISTANT toolCall present
+    for (const resultId of resultIdsInCallback) {
+      expect(callIdsInCallback.has(resultId)).toBe(true);
+    }
+  });
+
   it("async truncation falls back to sliding window without callback", async () => {
     const mgr = new ContextManager(
       makeConfig({

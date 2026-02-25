@@ -292,12 +292,17 @@ export class ContextManager {
     const recentStart = Math.max(systemMsg ? 1 : 0, messages.length - keepCount);
     const middleStart = systemMsg ? 1 : 0;
 
-    const middleMessages = messages.slice(middleStart, recentStart);
+    const rawMiddle = messages.slice(middleStart, recentStart);
     const recentMessages = messages.slice(recentStart);
 
-    if (middleMessages.length === 0) {
+    if (rawMiddle.length === 0) {
       return this.slidingWindow(messages, maxTokens);
     }
+
+    // Sanitize middle before summarization: the recentStart boundary can split
+    // an ASSISTANT+toolCalls from its TOOL results, leaving orphaned messages.
+    // The summarize callback sends these to the LLM, which rejects broken pairs.
+    const middleMessages = this.sanitizeToolCallPairs([...rawMiddle]);
 
     // Summarize the middle portion
     const summary = await this.summarize(middleMessages);
