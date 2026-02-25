@@ -847,8 +847,15 @@ function sleep(ms: number): Promise<void> {
 
 function parseToolArgs(content: string): Record<string, unknown> {
   try {
-    return JSON.parse(content) as Record<string, unknown>;
+    const parsed = JSON.parse(content);
+    // JSON.parse can return non-objects (null, arrays, primitives) — wrap them
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { raw: content };
+    }
+    return parsed as Record<string, unknown>;
   } catch {
-    return { raw: content };
+    // Fail fast: surface the malformed JSON so the LLM can see the real error
+    // instead of silently dropping structured arguments.
+    return { _parseError: `Malformed tool arguments (invalid JSON): ${content.substring(0, 200)}` };
   }
 }

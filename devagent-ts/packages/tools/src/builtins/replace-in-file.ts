@@ -387,9 +387,15 @@ export function fuzzyReplace(
       const index = content.indexOf(candidate);
       if (index === -1) continue;
 
+      // Skip no-op: if the fuzzy candidate IS the replacement, replacing would change nothing
+      if (candidate === newString) continue;
+
       if (replaceAll) {
         const count = content.split(candidate).length - 1;
-        return { newContent: content.replaceAll(candidate, newString), count };
+        const newContent = content.replaceAll(candidate, newString);
+        // Guard against no-op even after replaceAll (e.g., candidate found but result identical)
+        if (newContent === content) continue;
+        return { newContent, count };
       }
 
       // Single replace: require unique match
@@ -468,10 +474,24 @@ export const replaceInFileTool: ToolSpec = {
     },
   },
   handler: async (params, context) => {
+    // Detect malformed arguments from JSON parse fallback
+    const parseError = params["_parseError"] as string | undefined;
+    if (parseError) {
+      throw new ToolError("replace_in_file", parseError);
+    }
+
     const filePath = resolve(context.repoRoot, params["path"] as string);
     const search = params["search"] as string;
     const replace = params["replace"] as string;
     const replaceAll = (params["all"] as boolean | undefined) ?? true;
+
+    // Guard against undefined params (from malformed JSON that parsed to {})
+    if (search === undefined || replace === undefined) {
+      throw new ToolError(
+        "replace_in_file",
+        `Missing required parameters: search=${search === undefined ? "missing" : "present"}, replace=${replace === undefined ? "missing" : "present"}. Check that tool arguments are valid JSON.`,
+      );
+    }
 
     if (!existsSync(filePath)) {
       throw new ToolError(
@@ -494,6 +514,15 @@ export const replaceInFileTool: ToolSpec = {
 
     try {
       const result = fuzzyReplace(content, search, replace, replaceAll);
+
+      // Fail fast: if fuzzyReplace returned but content is unchanged, report the no-op
+      if (result.newContent === content) {
+        throw new ToolError(
+          "replace_in_file",
+          "No-op replacement: fuzzy matching found text but replacement produced identical content. The file may already contain the target text.",
+        );
+      }
+
       writeFileSync(filePath, result.newContent, "utf-8");
       FileTime.recordWrite(filePath);
 
@@ -504,6 +533,7 @@ export const replaceInFileTool: ToolSpec = {
         artifacts: [filePath],
       };
     } catch (err) {
+      if (err instanceof ToolError) throw err;
       throw new ToolError(
         "replace_in_file",
         err instanceof Error ? err.message : String(err),
