@@ -18,9 +18,10 @@ export {
 } from "./builtins/index.js";
 
 // LSP integration
-export { LSPClient, createLSPTools } from "./lsp/index.js";
+export { LSPClient, createLSPTools, createRoutingLSPTools } from "./lsp/index.js";
 export type {
   LSPClientOptions,
+  LSPClientResolver,
   DiagnosticResult,
   SymbolResult,
   LocationResult,

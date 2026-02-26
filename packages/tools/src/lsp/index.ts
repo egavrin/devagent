@@ -10,4 +10,5 @@ export type {
   LocationResult,
 } from "./client.js";
 
-export { createLSPTools } from "./tools.js";
+export { createLSPTools, createRoutingLSPTools } from "./tools.js";
+export type { LSPClientResolver } from "./tools.js";

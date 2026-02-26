@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { McpHub } from "./client.js";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 
 const TEST_DIR = "/tmp/devagent-mcp-test";
 const CONFIG_DIR = join(TEST_DIR, ".devagent");
@@ -76,5 +77,56 @@ describe("McpHub", () => {
     await hub.init();
     expect(hub.getServers()).toHaveLength(0);
     hub.dispose();
+  });
+
+  it("clears request timeout after successful response", async () => {
+    vi.useFakeTimers();
+    const hub = new McpHub({ repoRoot: TEST_DIR });
+    const stdout = new EventEmitter();
+    const stdin = { write: vi.fn() };
+    const baselineTimers = vi.getTimerCount();
+    const baselineListeners = stdout.listenerCount("data");
+
+    const state = {
+      process: {
+        stdin,
+        stdout,
+      },
+    };
+
+    try {
+      const sendRequest = (
+        hub as unknown as {
+          sendRequest: (
+            stateArg: unknown,
+            request: Record<string, unknown>,
+          ) => Promise<Record<string, unknown>>;
+        }
+      ).sendRequest.bind(hub);
+
+      const request = {
+        jsonrpc: "2.0",
+        id: 42,
+        method: "tools/list",
+        params: {},
+      };
+
+      const responsePromise = sendRequest(state, request);
+      expect(stdin.write).toHaveBeenCalledOnce();
+
+      stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ jsonrpc: "2.0", id: 42, result: { tools: [] } })}\n`,
+        ),
+      );
+
+      const response = await responsePromise;
+      expect(response["result"]).toEqual({ tools: [] });
+      expect(stdout.listenerCount("data")).toBe(baselineListeners);
+      expect(vi.getTimerCount()).toBe(baselineTimers);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -22,7 +22,7 @@ import type {
   DocumentSymbol,
   PublishDiagnosticsParams,
 } from "vscode-languageserver-protocol";
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -76,6 +76,7 @@ export class LSPClient {
   private readonly diagnosticTimeout: number;
   private initialized = false;
   private diagnosticsStore = new Map<string, Diagnostic[]>();
+  private openDocuments = new Map<string, { version: number; content: string }>();
 
   constructor(options: LSPClientOptions) {
     this.command = options.command;
@@ -95,8 +96,19 @@ export class LSPClient {
     });
 
     if (!this.process.stdin || !this.process.stdout) {
+      this.process.kill();
+      this.process = null;
       throw new Error("Failed to create language server stdio streams");
     }
+
+    // Detect server crash and mark client as dead so callers can restart.
+    this.process.on("exit", () => {
+      this.initialized = false;
+      this.openDocuments.clear();
+      this.connection?.dispose();
+      this.connection = null;
+      this.process = null;
+    });
 
     this.connection = createMessageConnection(
       new StreamMessageReader(this.process.stdout),
@@ -113,45 +125,61 @@ export class LSPClient {
 
     this.connection.listen();
 
-    // Initialize
-    await this.withTimeout<InitializeResult>(
-      this.connection.sendRequest("initialize", {
-        processId: process.pid,
-        rootUri: `file://${this.rootPath}`,
-        capabilities: {
-          textDocument: {
-            synchronization: { dynamicRegistration: false },
-            publishDiagnostics: { relatedInformation: true },
-            definition: { dynamicRegistration: false },
-            references: { dynamicRegistration: false },
-            documentSymbol: { dynamicRegistration: false },
+    try {
+      // Initialize
+      await this.withTimeout<InitializeResult>(
+        this.connection.sendRequest("initialize", {
+          processId: process.pid,
+          rootUri: `file://${this.rootPath}`,
+          capabilities: {
+            textDocument: {
+              synchronization: { dynamicRegistration: false },
+              publishDiagnostics: { relatedInformation: true },
+              definition: { dynamicRegistration: false },
+              references: { dynamicRegistration: false },
+              documentSymbol: { dynamicRegistration: false },
+            },
           },
-        },
-        workspaceFolders: [
-          { uri: `file://${this.rootPath}`, name: "workspace" },
-        ],
-      }),
-    );
+          workspaceFolders: [
+            { uri: `file://${this.rootPath}`, name: "workspace" },
+          ],
+        }),
+      );
 
-    this.connection.sendNotification("initialized", {});
-    this.initialized = true;
+      this.connection.sendNotification("initialized", {});
+      this.initialized = true;
+    } catch (err) {
+      this.connection.dispose();
+      this.connection = null;
+      this.process?.kill();
+      this.process = null;
+      this.initialized = false;
+      this.openDocuments.clear();
+      throw err;
+    }
   }
 
   async stop(): Promise<void> {
-    if (!this.connection || !this.initialized) return;
+    const connection = this.connection;
+    const processRef = this.process;
+    if (!connection && !processRef) return;
 
     try {
-      await this.withTimeout(this.connection.sendRequest("shutdown"));
-      this.connection.sendNotification("exit");
+      if (connection && this.initialized) {
+        this.closeAllOpenDocuments();
+        await this.withTimeout(connection.sendRequest("shutdown"));
+        connection.sendNotification("exit");
+      }
     } catch {
       // Server might already be dead
     }
 
-    this.connection.dispose();
-    this.process?.kill();
+    connection?.dispose();
+    processRef?.kill();
     this.connection = null;
     this.process = null;
     this.initialized = false;
+    this.openDocuments.clear();
   }
 
   isRunning(): boolean {
@@ -160,13 +188,10 @@ export class LSPClient {
 
   async getDiagnostics(filePath: string, languageId?: string): Promise<DiagnosticResult> {
     this.ensureRunning();
-    const absPath = resolve(this.rootPath, filePath);
-    const uri = `file://${absPath}`;
+    const { uri } = await this.openOrUpdateDocument(filePath, languageId);
 
-    const content = readFileSync(absPath, "utf-8");
-    this.connection!.sendNotification("textDocument/didOpen", {
-      textDocument: { uri, languageId: languageId ?? this.languageId, version: 1, text: content },
-    });
+    // Clear stale diagnostics from previous runs for this URI.
+    this.diagnosticsStore.delete(uri);
 
     // Poll for diagnostics — servers push them asynchronously.
     // Exit early if diagnostics arrive (saves time for fast servers like clangd).
@@ -176,14 +201,9 @@ export class LSPClient {
     const start = Date.now();
     while (Date.now() - start < maxWait) {
       await new Promise((r) => setTimeout(r, pollInterval));
-      const current = this.diagnosticsStore.get(uri);
-      if (current && current.length > 0) break;
+      if (this.diagnosticsStore.has(uri)) break;
     }
     const diagnostics = this.diagnosticsStore.get(uri) ?? [];
-
-    this.connection!.sendNotification("textDocument/didClose", {
-      textDocument: { uri },
-    });
 
     return {
       file: filePath,
@@ -203,13 +223,7 @@ export class LSPClient {
     languageId?: string,
   ): Promise<ReadonlyArray<LocationResult>> {
     this.ensureRunning();
-    const absPath = resolve(this.rootPath, filePath);
-    const uri = `file://${absPath}`;
-
-    const content = readFileSync(absPath, "utf-8");
-    this.connection!.sendNotification("textDocument/didOpen", {
-      textDocument: { uri, languageId: languageId ?? this.languageId, version: 1, text: content },
-    });
+    const { uri } = await this.openOrUpdateDocument(filePath, languageId);
 
     const result = await this.withTimeout(
       this.connection!.sendRequest("textDocument/definition", {
@@ -217,10 +231,6 @@ export class LSPClient {
         position: { line: line - 1, character: character - 1 },
       }),
     );
-
-    this.connection!.sendNotification("textDocument/didClose", {
-      textDocument: { uri },
-    });
 
     if (!result) return [];
 
@@ -241,13 +251,7 @@ export class LSPClient {
     languageId?: string,
   ): Promise<ReadonlyArray<LocationResult>> {
     this.ensureRunning();
-    const absPath = resolve(this.rootPath, filePath);
-    const uri = `file://${absPath}`;
-
-    const content = readFileSync(absPath, "utf-8");
-    this.connection!.sendNotification("textDocument/didOpen", {
-      textDocument: { uri, languageId: languageId ?? this.languageId, version: 1, text: content },
-    });
+    const { uri } = await this.openOrUpdateDocument(filePath, languageId);
 
     const result = await this.withTimeout(
       this.connection!.sendRequest("textDocument/references", {
@@ -256,10 +260,6 @@ export class LSPClient {
         context: { includeDeclaration: true },
       }),
     );
-
-    this.connection!.sendNotification("textDocument/didClose", {
-      textDocument: { uri },
-    });
 
     if (!result) return [];
     return (result as Location[]).map((loc) => ({
@@ -271,23 +271,13 @@ export class LSPClient {
 
   async getSymbols(filePath: string, languageId?: string): Promise<ReadonlyArray<SymbolResult>> {
     this.ensureRunning();
-    const absPath = resolve(this.rootPath, filePath);
-    const uri = `file://${absPath}`;
-
-    const content = readFileSync(absPath, "utf-8");
-    this.connection!.sendNotification("textDocument/didOpen", {
-      textDocument: { uri, languageId: languageId ?? this.languageId, version: 1, text: content },
-    });
+    const { uri } = await this.openOrUpdateDocument(filePath, languageId);
 
     const result = await this.withTimeout(
       this.connection!.sendRequest("textDocument/documentSymbol", {
         textDocument: { uri },
       }),
     );
-
-    this.connection!.sendNotification("textDocument/didClose", {
-      textDocument: { uri },
-    });
 
     if (!result) return [];
     return flattenSymbols(result as Array<SymbolInformation | DocumentSymbol>);
@@ -301,16 +291,66 @@ export class LSPClient {
     }
   }
 
+  private async openOrUpdateDocument(
+    filePath: string,
+    languageId?: string,
+  ): Promise<{ uri: string }> {
+    this.ensureRunning();
+    const absPath = resolve(this.rootPath, filePath);
+    const uri = `file://${absPath}`;
+    const content = await readFile(absPath, "utf-8");
+    const existing = this.openDocuments.get(uri);
+
+    if (!existing) {
+      this.connection!.sendNotification("textDocument/didOpen", {
+        textDocument: {
+          uri,
+          languageId: languageId ?? this.languageId,
+          version: 1,
+          text: content,
+        },
+      });
+      this.openDocuments.set(uri, { version: 1, content });
+      return { uri };
+    }
+
+    if (existing.content !== content) {
+      const nextVersion = existing.version + 1;
+      this.connection!.sendNotification("textDocument/didChange", {
+        textDocument: { uri, version: nextVersion },
+        contentChanges: [{ text: content }],
+      });
+      this.openDocuments.set(uri, { version: nextVersion, content });
+    }
+
+    return { uri };
+  }
+
+  private closeAllOpenDocuments(): void {
+    if (!this.connection) return;
+    for (const uri of this.openDocuments.keys()) {
+      this.connection.sendNotification("textDocument/didClose", {
+        textDocument: { uri },
+      });
+    }
+    this.openDocuments.clear();
+  }
+
   private async withTimeout<T>(promise: Promise<T>): Promise<T> {
-    return Promise.race([
-      promise,
-      new Promise<T>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("LSP request timed out")),
-          this.timeout,
-        ),
-      ),
-    ]);
+    let timer: ReturnType<typeof setTimeout>;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("LSP request timed out")),
+            this.timeout,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer!);
+    }
   }
 }
 

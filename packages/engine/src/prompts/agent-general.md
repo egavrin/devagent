@@ -30,6 +30,12 @@ When exploring an unfamiliar codebase:
 2. `search_files` with `file_pattern` to locate specific symbols.
 3. `read_file` to examine relevant files. Use line ranges for large files.
 
+If LSP tools are available (`diagnostics`, `definitions`, `references`, `symbols`):
+- Use `diagnostics` to check a file for compiler errors after edits.
+- Use `symbols` to get a structural overview of a file (functions, classes, etc.).
+- Use `definitions` to jump to where a symbol is defined.
+- Use `references` to find all usages of a symbol across the codebase.
+
 For edits:
 - Use `replace_in_file` for surgical changes. Always `read_file` first.
 - Use `write_file` for new files or full rewrites.

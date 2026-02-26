@@ -7,6 +7,14 @@
 import type { ToolSpec } from "@devagent/core";
 import type { LSPClient } from "./client.js";
 
+// ─── Types ──────────────────────────────────────────────────
+
+/** Resolves the correct LSP client for a file path (e.g. by extension). */
+export type LSPClientResolver = (filePath: string) => {
+  client: LSPClient;
+  languageId: string;
+} | null;
+
 // ─── Tool Factory ───────────────────────────────────────────
 
 /**
@@ -20,6 +28,38 @@ export function createLSPTools(client: LSPClient): ReadonlyArray<ToolSpec> {
     createReferencesTool(client),
     createSymbolsTool(client),
   ];
+}
+
+/**
+ * Create LSP-backed analysis tools that route to the correct LSP client
+ * based on file path. Use this for multi-server setups where different
+ * language servers handle different file types.
+ */
+export function createRoutingLSPTools(
+  resolver: LSPClientResolver,
+): ReadonlyArray<ToolSpec> {
+  return [
+    createRoutingDiagnosticsTool(resolver),
+    createRoutingDefinitionTool(resolver),
+    createRoutingReferencesTool(resolver),
+    createRoutingSymbolsTool(resolver),
+    createRoutingDefinitionByNameTool(resolver),
+    createRoutingReferencesByNameTool(resolver),
+  ];
+}
+
+function resolveOrFail(
+  resolver: LSPClientResolver,
+  filePath: string,
+): { client: LSPClient; languageId: string } {
+  const match = resolver(filePath);
+  if (!match) {
+    throw new Error(`No LSP server available for ${filePath}`);
+  }
+  if (!match.client.isRunning()) {
+    throw new Error(`LSP client not running for ${filePath}`);
+  }
+  return match;
 }
 
 // ─── diagnostics ────────────────────────────────────────────
@@ -260,7 +300,7 @@ function createReferencesTool(client: LSPClient): ToolSpec {
   };
 }
 
-// ─── symbols ────────────────────────────────────────────────
+// ─── symbols (single-client) ─────────────────────────────────
 
 function createSymbolsTool(client: LSPClient): ToolSpec {
   return {
@@ -331,6 +371,227 @@ function createSymbolsTool(client: LSPClient): ToolSpec {
           artifacts: [],
         };
       }
+    },
+  };
+}
+
+// ─── Routing tools (multi-server) ────────────────────────────
+
+function routingHandler(
+  resolver: LSPClientResolver,
+  filePath: string,
+  fn: (client: LSPClient, filePath: string, languageId: string) => Promise<string>,
+): Promise<{ success: boolean; output: string; error: string | null; artifacts: string[] }> {
+  try {
+    const { client, languageId } = resolveOrFail(resolver, filePath);
+    return fn(client, filePath, languageId).then(
+      (output) => ({ success: true, output, error: null, artifacts: [] }),
+      (err) => ({
+        success: false,
+        output: "",
+        error: err instanceof Error ? err.message : String(err),
+        artifacts: [],
+      }),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return Promise.resolve({ success: false, output: "", error: message, artifacts: [] });
+  }
+}
+
+function createRoutingDiagnosticsTool(resolver: LSPClientResolver): ToolSpec {
+  return {
+    name: "diagnostics",
+    description:
+      "Get real compiler diagnostics (errors, warnings) for a source file. Preferred over reading a file or running grep when you need to check whether code compiles or has type errors — returns the same errors the compiler would report, not text matches.",
+    category: "readonly",
+    paramSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path relative to repo root" },
+      },
+      required: ["path"],
+    },
+    resultSchema: {
+      type: "object",
+      properties: { diagnostics: { type: "string" }, count: { type: "number" } },
+    },
+    handler: async (params) => {
+      const filePath = params["path"] as string;
+      return routingHandler(resolver, filePath, async (client, fp, langId) => {
+        const result = await client.getDiagnostics(fp, langId);
+        if (result.diagnostics.length === 0) return `No diagnostics for ${fp}. File is clean.`;
+        const lines = result.diagnostics
+          .map((d) => `${fp}:${d.line}:${d.character}: [${d.severity}] ${d.message}`)
+          .join("\n");
+        return `${result.diagnostics.length} diagnostic(s) in ${fp}:\n${lines}`;
+      });
+    },
+  };
+}
+
+function createRoutingDefinitionTool(resolver: LSPClientResolver): ToolSpec {
+  return {
+    name: "definitions",
+    description:
+      "Jump to the definition of a symbol at a given position. Preferred over grep/search_files when you know a symbol name and need its source — resolves through imports, re-exports, and type aliases accurately.",
+    category: "readonly",
+    paramSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path relative to repo root" },
+        line: { type: "number", description: "Line number (1-based)" },
+        character: { type: "number", description: "Column number (1-based)" },
+      },
+      required: ["path", "line", "character"],
+    },
+    resultSchema: {
+      type: "object",
+      properties: { locations: { type: "string" } },
+    },
+    handler: async (params) => {
+      const filePath = params["path"] as string;
+      return routingHandler(resolver, filePath, async (client, fp, langId) => {
+        const locations = await client.getDefinition(fp, params["line"] as number, params["character"] as number, langId);
+        if (locations.length === 0) return "No definition found at this position.";
+        return `Definition(s):\n${locations.map((l) => `${l.file}:${l.line}:${l.character}`).join("\n")}`;
+      });
+    },
+  };
+}
+
+function createRoutingReferencesTool(resolver: LSPClientResolver): ToolSpec {
+  return {
+    name: "references",
+    description:
+      "Find every reference to a symbol across the codebase. Preferred over grep/search_files for finding usages of a function, class, or variable — type-aware, so it won't return false-positive text matches and will catch indirect usages through aliases.",
+    category: "readonly",
+    paramSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path relative to repo root" },
+        line: { type: "number", description: "Line number (1-based)" },
+        character: { type: "number", description: "Column number (1-based)" },
+      },
+      required: ["path", "line", "character"],
+    },
+    resultSchema: {
+      type: "object",
+      properties: { references: { type: "string" }, count: { type: "number" } },
+    },
+    handler: async (params) => {
+      const filePath = params["path"] as string;
+      return routingHandler(resolver, filePath, async (client, fp, langId) => {
+        const refs = await client.getReferences(fp, params["line"] as number, params["character"] as number, langId);
+        if (refs.length === 0) return "No references found at this position.";
+        return `${refs.length} reference(s):\n${refs.map((l) => `${l.file}:${l.line}:${l.character}`).join("\n")}`;
+      });
+    },
+  };
+}
+
+function createRoutingSymbolsTool(resolver: LSPClientResolver): ToolSpec {
+  return {
+    name: "symbols",
+    description:
+      "List all symbols (functions, classes, interfaces, variables) in a file with their types and locations. Preferred over reading the whole file when you need a structural overview — faster and gives precise line numbers for each declaration.",
+    category: "readonly",
+    paramSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path relative to repo root" },
+      },
+      required: ["path"],
+    },
+    resultSchema: {
+      type: "object",
+      properties: { symbols: { type: "string" }, count: { type: "number" } },
+    },
+    handler: async (params) => {
+      const filePath = params["path"] as string;
+      return routingHandler(resolver, filePath, async (client, fp, langId) => {
+        const symbols = await client.getSymbols(fp, langId);
+        if (symbols.length === 0) return `No symbols found in ${fp}.`;
+        const lines = symbols
+          .map((s) => {
+            const container = s.containerName ? ` (in ${s.containerName})` : "";
+            return `${s.kind} ${s.name}${container} — ${fp}:${s.line}`;
+          })
+          .join("\n");
+        return `${symbols.length} symbol(s) in ${fp}:\n${lines}`;
+      });
+    },
+  };
+}
+
+// ─── Name-based wrappers (composite tools) ──────────────────
+
+function createRoutingDefinitionByNameTool(resolver: LSPClientResolver): ToolSpec {
+  return {
+    name: "definition_by_name",
+    description:
+      "Jump to where a symbol is defined, by name. Accepts a symbol name and a file where it appears — resolves through imports and re-exports. Preferred over grep when you need the exact source location of a class, function, or variable.",
+    category: "readonly",
+    paramSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path relative to repo root where the symbol appears" },
+        symbol_name: { type: "string", description: "Name of the symbol to look up (e.g. class, function, variable name)" },
+      },
+      required: ["path", "symbol_name"],
+    },
+    resultSchema: {
+      type: "object",
+      properties: { locations: { type: "string" } },
+    },
+    handler: async (params) => {
+      const filePath = params["path"] as string;
+      const symbolName = params["symbol_name"] as string;
+      return routingHandler(resolver, filePath, async (client, fp, langId) => {
+        const symbols = await client.getSymbols(fp, langId);
+        const match = symbols.find((s) => s.name === symbolName);
+        if (!match) {
+          throw new Error(`Symbol "${symbolName}" not found in ${fp}`);
+        }
+        const locations = await client.getDefinition(fp, match.line, match.character, langId);
+        if (locations.length === 0) return `No definition found for "${symbolName}".`;
+        return `Definition(s):\n${locations.map((l) => `${l.file}:${l.line}:${l.character}`).join("\n")}`;
+      });
+    },
+  };
+}
+
+function createRoutingReferencesByNameTool(resolver: LSPClientResolver): ToolSpec {
+  return {
+    name: "references_by_name",
+    description:
+      "Find every reference to a symbol across the codebase, by name. Accepts a symbol name and a file where it is declared — type-aware, catches indirect usages through aliases. Preferred over grep/search_files for finding all callers of a function or all uses of a class.",
+    category: "readonly",
+    paramSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path relative to repo root where the symbol is declared" },
+        symbol_name: { type: "string", description: "Name of the symbol to find references for" },
+      },
+      required: ["path", "symbol_name"],
+    },
+    resultSchema: {
+      type: "object",
+      properties: { references: { type: "string" }, count: { type: "number" } },
+    },
+    handler: async (params) => {
+      const filePath = params["path"] as string;
+      const symbolName = params["symbol_name"] as string;
+      return routingHandler(resolver, filePath, async (client, fp, langId) => {
+        const symbols = await client.getSymbols(fp, langId);
+        const match = symbols.find((s) => s.name === symbolName);
+        if (!match) {
+          throw new Error(`Symbol "${symbolName}" not found in ${fp}`);
+        }
+        const refs = await client.getReferences(fp, match.line, match.character, langId);
+        if (refs.length === 0) return `No references found for "${symbolName}".`;
+        return `${refs.length} reference(s):\n${refs.map((l) => `${l.file}:${l.line}:${l.character}`).join("\n")}`;
+      });
     },
   };
 }

@@ -424,17 +424,41 @@ export class TaskLoop {
 
     this.bus.emit("context:compacting", { estimatedTokens, maxTokens });
 
-    const result = await this.contextManager.truncateAsync(
-      this.messages,
-      maxTokens,
-    );
+    try {
+      const result = await this.contextManager.truncateAsync(
+        this.messages,
+        maxTokens,
+      );
 
-    if (result.truncated) {
-      this.messages = [...result.messages];
-      this.bus.emit("context:compacted", {
-        removedCount: result.removedCount,
-        estimatedTokens: result.estimatedTokens,
+      if (result.truncated) {
+        this.messages = [...result.messages];
+        this.bus.emit("context:compacted", {
+          removedCount: result.removedCount,
+          estimatedTokens: result.estimatedTokens,
+        });
+      }
+    } catch (err) {
+      // Defense-in-depth: if compaction fails (e.g., summarize callback rejects),
+      // fall back to sliding window which doesn't call the LLM. Don't crash the session.
+      this.bus.emit("error", {
+        message: `Context compaction failed: ${(err as Error).message}. Falling back to sliding window.`,
+        code: "COMPACTION_FALLBACK",
+        fatal: false,
       });
+      try {
+        const fallback = this.contextManager.truncate(this.messages, maxTokens);
+        if (fallback.truncated) {
+          this.messages = [...fallback.messages];
+          this.bus.emit("context:compacted", {
+            removedCount: fallback.removedCount,
+            estimatedTokens: fallback.estimatedTokens,
+          });
+        }
+      } catch {
+        // Even sliding window failed — continue with current messages.
+        // The next LLM call may fail due to token limits, but that's
+        // handled by the retry loop with a clear error message.
+      }
     }
   }
 

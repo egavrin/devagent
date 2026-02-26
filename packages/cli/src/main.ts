@@ -24,7 +24,7 @@ import {
 import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message } from "@devagent/core";
 import { ApprovalMode, MessageRole } from "@devagent/core";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
-import { createDefaultToolRegistry, McpHub, createLSPTools } from "@devagent/tools";
+import { createDefaultToolRegistry, McpHub, createLSPTools, createRoutingLSPTools } from "@devagent/tools";
 import {
   TaskLoop,
   createBuiltinPlugins,
@@ -419,6 +419,11 @@ export async function main(): Promise<void> {
   const toolRegistry = createDefaultToolRegistry();
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
+  const { lspToolCounts } = setupEventHandlers(bus, config, cliArgs.verbosity);
+  const trackInternalLSPDiagnostics = () => {
+    const key = "diagnostics(double-check)";
+    lspToolCounts.set(key, (lspToolCounts.get(key) ?? 0) + 1);
+  };
 
   // Register workflow tools
   toolRegistry.register(createPlanTool(bus));
@@ -561,17 +566,22 @@ export async function main(): Promise<void> {
       }
     }
 
-    // Register LSP tools from the first available client
+    // Register routing LSP tools (routes to correct server by file extension)
     const clients = lspRouter.getClients();
     if (clients.length > 0) {
       hasLSPDiagnostics = true;
-      for (const tool of createLSPTools(clients[0]!)) {
+      const router = lspRouter;
+      const resolver = (filePath: string) => router.getClientForFile(filePath);
+      for (const tool of createRoutingLSPTools(resolver)) {
         toolRegistry.register(tool);
       }
     }
 
     // Wire routing diagnostic provider (routes by file extension)
-    let diagnosticProvider = createRoutingDiagnosticProvider(lspRouter);
+    let diagnosticProvider = createRoutingDiagnosticProvider(
+      lspRouter,
+      trackInternalLSPDiagnostics,
+    );
 
     // Compose with ArkTS linter if enabled (adds tslinter checks for .ets files)
     if (config.arkts?.enabled && config.arkts.linterPath) {
@@ -629,6 +639,7 @@ export async function main(): Promise<void> {
       doubleCheck,
       lspRouter: lazyRouter,
       arktsProvider: arktsProviderForLazy,
+      onLSPDiagnostics: trackInternalLSPDiagnostics,
       onServerStarted: (server) => {
         if (cliArgs.verbosity !== "quiet") {
           process.stderr.write(
@@ -639,10 +650,11 @@ export async function main(): Promise<void> {
       onUpgradeComplete: (count) => {
         if (count > 0) {
           hasLSPDiagnostics = true;
-          // Register LSP tools from first available client
+          // Register routing LSP tools (routes to correct server by file extension)
           const clients = lazyRouter.getClients();
           if (clients.length > 0) {
-            for (const tool of createLSPTools(clients[0]!)) {
+            const resolver = (filePath: string) => lazyRouter.getClientForFile(filePath);
+            for (const tool of createRoutingLSPTools(resolver)) {
               toolRegistry.register(tool);
             }
           }
@@ -754,9 +766,6 @@ export async function main(): Promise<void> {
     }
   });
 
-  // Set up event handlers for CLI output
-  setupEventHandlers(bus, config, cliArgs.verbosity);
-
   try {
     if (cliArgs.interactive) {
       await runInteractive(
@@ -800,6 +809,14 @@ export async function main(): Promise<void> {
       );
     }
   } finally {
+    // Print LSP tool usage summary (for measuring value)
+    if (lspToolCounts.size > 0 && cliArgs.verbosity !== "quiet") {
+      const parts = [...lspToolCounts.entries()]
+        .map(([name, count]) => `${name}=${count}`)
+        .join(", ");
+      process.stderr.write(dim(`[lsp-usage] ${parts}`) + "\n");
+    }
+
     // Print session ID for future resume
     if (cliArgs.verbosity !== "quiet") {
       process.stderr.write(dim(`[session] ${session.id}`) + "\n");
@@ -853,7 +870,7 @@ function setupEventHandlers(
   bus: EventBus,
   config: DevAgentConfig,
   verbosity: Verbosity,
-): void {
+): { lspToolCounts: Map<string, number> } {
   const maxIter = config.budget.maxIterations;
 
   // ─── Tool events ──────────────────────────────────────────
@@ -909,6 +926,16 @@ function setupEventHandlers(
     // Restart spinner after tool completes (waiting for next LLM response)
     if (verbosity !== "quiet") {
       spinner.start("Thinking…");
+    }
+  });
+
+  // ─── LSP tool usage tracking ────────────────────────────────
+
+  const lspToolNames = new Set(["diagnostics", "definitions", "references", "symbols", "definition_by_name", "references_by_name"]);
+  const lspToolCounts = new Map<string, number>();
+  bus.on("tool:after", (event) => {
+    if (lspToolNames.has(event.name)) {
+      lspToolCounts.set(event.name, (lspToolCounts.get(event.name) ?? 0) + 1);
     }
   });
 
@@ -990,6 +1017,8 @@ function setupEventHandlers(
       },
     );
   });
+
+  return { lspToolCounts };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────

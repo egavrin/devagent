@@ -283,10 +283,33 @@ export function createLSPDiagnosticProvider(
  */
 export function createRoutingDiagnosticProvider(
   router: LSPRouter,
+  onLSPDiagnostics?: () => void,
 ): DiagnosticProvider {
   return async (filePath: string) => {
     const match = router.getClientForFile(filePath);
     if (!match) return []; // No LSP server for this file type
+
+    onLSPDiagnostics?.();
+
+    // Auto-restart crashed servers when runtime client supports health checks.
+    // Some unit tests stub only getDiagnostics() without lifecycle methods.
+    const lifecycle = match.client as unknown as {
+      isRunning?: () => boolean;
+      start?: () => Promise<void>;
+    };
+    if (typeof lifecycle.isRunning === "function" && !lifecycle.isRunning()) {
+      if (typeof lifecycle.start !== "function") {
+        throw new Error(
+          `LSP client for ${filePath} is not running and restart is unavailable`,
+        );
+      }
+      try {
+        await lifecycle.start();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to restart LSP client for ${filePath}: ${message}`);
+      }
+    }
 
     const result = await match.client.getDiagnostics(filePath, match.languageId);
     return result.diagnostics.map((d) => ({
@@ -631,6 +654,8 @@ export interface LazyLSPUpgradeOptions {
   readonly onError?: (error: Error) => void;
   /** Additional ArkTS diagnostic provider to compose with LSP. */
   readonly arktsProvider?: DiagnosticProvider;
+  /** Called when LSP diagnostics run in DoubleCheck via routing provider. */
+  readonly onLSPDiagnostics?: () => void;
 }
 
 /**
@@ -645,7 +670,7 @@ export interface LazyLSPUpgradeOptions {
 export async function lazyUpgradeLSP(
   opts: LazyLSPUpgradeOptions,
 ): Promise<void> {
-  const { repoRoot, doubleCheck, lspRouter, onServerStarted, onUpgradeComplete, onError, arktsProvider } = opts;
+  const { repoRoot, doubleCheck, lspRouter, onServerStarted, onUpgradeComplete, onError, arktsProvider, onLSPDiagnostics } = opts;
 
   try {
     const available = await detectAvailableLSPServers();
@@ -675,7 +700,10 @@ export async function lazyUpgradeLSP(
 
     if (startedCount > 0) {
       // Swap diagnostic provider from compiler fallback to LSP routing
-      let diagnosticProvider: DiagnosticProvider = createRoutingDiagnosticProvider(lspRouter);
+      let diagnosticProvider: DiagnosticProvider = createRoutingDiagnosticProvider(
+        lspRouter,
+        onLSPDiagnostics,
+      );
 
       // Compose with ArkTS provider if present
       if (arktsProvider) {

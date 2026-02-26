@@ -406,6 +406,206 @@ describe("ContextManager", () => {
     }
   });
 
+  it("no orphaned TOOL when ASSISTANT has multiple toolCalls and boundary splits the results", () => {
+    // ROOT CAUSE of recurring "No tool call found for function call output with call_id" error.
+    //
+    // Bug: sanitizeToolCallPairs builds assistantCallIds from ALL original ASSISTANT messages,
+    // then drops ASSISTANT messages where not ALL results are present. But TOOL messages
+    // whose callIds were in the ORIGINAL assistantCallIds survive — even though the ASSISTANT
+    // that owned them was dropped.
+    //
+    // This only manifests with MULTIPLE toolCalls per ASSISTANT. Single-toolCall cases work
+    // because when the ASSISTANT is dropped, the TOOL is also dropped (all or nothing).
+    // Multi-toolCall: ASSISTANT{A,B} dropped (B missing), but TOOL(A) survives → orphan.
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 3,
+      }),
+    );
+
+    // 9 messages, keepRecent=3: startIdx = max(2, 9-3) = 6
+    // messages[4] = ASSISTANT with toolCalls [A, B] → DROPPED by sliding window
+    // messages[5] = TOOL(A) → DROPPED by sliding window
+    // messages[6] = TOOL(B) → KEPT (in recent window)  ← startIdx lands here
+    // messages[7] = USER → KEPT
+    // messages[8] = ASSISTANT → KEPT
+    //
+    // After sliding window: [SYS, USER(task), TOOL(B), USER, ASSISTANT]
+    // sanitize should drop TOOL(B) since its ASSISTANT was removed.
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),                          // 0 (preserved)
+      msg(MessageRole.USER, "task"),                           // 1 (preserved)
+      msg(MessageRole.USER, "follow up"),                      // 2 (dropped)
+      msg(MessageRole.ASSISTANT, "ok"),                        // 3 (dropped)
+      {                                                        // 4 (dropped)
+        role: MessageRole.ASSISTANT,
+        content: "",
+        toolCalls: [
+          { name: "read_file", arguments: { path: "a.ts" }, callId: "call_A" },
+          { name: "read_file", arguments: { path: "b.ts" }, callId: "call_B" },
+        ],
+      },
+      {                                                        // 5 (dropped)
+        role: MessageRole.TOOL,
+        content: "contents of a",
+        toolCallId: "call_A",
+      },
+      {                                                        // 6 (kept — startIdx)
+        role: MessageRole.TOOL,
+        content: "contents of b",
+        toolCallId: "call_B",
+      },
+      msg(MessageRole.USER, "next question"),                  // 7 (kept)
+      msg(MessageRole.ASSISTANT, "next answer"),               // 8 (kept)
+    ];
+
+    const result = mgr.truncate(messages, 50);
+    expect(result.truncated).toBe(true);
+
+    // Invariant: every TOOL must have a surviving ASSISTANT with matching callId
+    const survivingCallIds = new Set<string>();
+    for (const m of result.messages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        for (const tc of m.toolCalls) survivingCallIds.add(tc.callId);
+      }
+    }
+    for (const m of result.messages) {
+      if (m.role === MessageRole.TOOL && m.toolCallId) {
+        expect(survivingCallIds.has(m.toolCallId)).toBe(true);
+      }
+    }
+  });
+
+  it("multi-toolCall ASSISTANT partially in middle: summarize callback gets no orphans", async () => {
+    // The hybrid boundary splits a multi-toolCall ASSISTANT's results between
+    // middle and recent. After sanitizing middle, TOOL(A) should NOT survive
+    // when its ASSISTANT{A,B} was stripped (because TOOL(B) is in recent).
+    const mgr = new ContextManager(
+      makeConfig({
+        pruningStrategy: "hybrid",
+        triggerRatio: 0.1,
+        keepRecentMessages: 3,
+      }),
+    );
+
+    let receivedMessages: ReadonlyArray<Message> = [];
+    mgr.setSummarizeCallback(async (msgs) => {
+      receivedMessages = msgs;
+      return `Summary of ${msgs.length} messages`;
+    });
+
+    // 9 messages, keepRecent=3: recentStart = max(1, 9-3) = 6
+    // rawMiddle = messages[1..5] = [USER, ASS, USER, ASSISTANT{A,B}, TOOL(A)]
+    // recent = messages[6..8] = [TOOL(B), USER, ASSISTANT]
+    //
+    // Middle contains ASSISTANT{A,B} and TOOL(A), but not TOOL(B).
+    // sanitize should drop ASSISTANT{A,B} (not allPresent) AND TOOL(A) (orphaned).
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),                          // 0
+      msg(MessageRole.USER, "task"),                           // 1 (middle)
+      msg(MessageRole.ASSISTANT, "answer 1"),                  // 2 (middle)
+      msg(MessageRole.USER, "question 2"),                     // 3 (middle)
+      {                                                        // 4 (middle)
+        role: MessageRole.ASSISTANT,
+        content: "Let me check both files",
+        toolCalls: [
+          { name: "read_file", arguments: { path: "a.ts" }, callId: "call_MULTI_A" },
+          { name: "read_file", arguments: { path: "b.ts" }, callId: "call_MULTI_B" },
+        ],
+      },
+      {                                                        // 5 (middle)
+        role: MessageRole.TOOL,
+        content: "contents of a",
+        toolCallId: "call_MULTI_A",
+      },
+      {                                                        // 6 (recent)
+        role: MessageRole.TOOL,
+        content: "contents of b",
+        toolCallId: "call_MULTI_B",
+      },
+      msg(MessageRole.USER, "question 3"),                     // 7 (recent)
+      msg(MessageRole.ASSISTANT, "answer 3"),                  // 8 (recent)
+    ];
+
+    await mgr.truncateAsync(messages, 50);
+
+    // The callback must NOT receive orphaned TOOL messages
+    const callIdsInCallback = new Set<string>();
+    const resultIdsInCallback = new Set<string>();
+    for (const m of receivedMessages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        for (const tc of m.toolCalls) callIdsInCallback.add(tc.callId);
+      }
+      if (m.role === MessageRole.TOOL && m.toolCallId) {
+        resultIdsInCallback.add(m.toolCallId);
+      }
+    }
+
+    // Every TOOL result must have its ASSISTANT toolCall present
+    for (const resultId of resultIdsInCallback) {
+      expect(callIdsInCallback.has(resultId)).toBe(true);
+    }
+    // Every ASSISTANT toolCall must have its TOOL result present
+    for (const callId of callIdsInCallback) {
+      expect(resultIdsInCallback.has(callId)).toBe(true);
+    }
+  });
+
+  it("further-prune loop with multi-toolCall: removes ASSISTANT then cleans orphaned TOOLs", () => {
+    // The further-prune loop (while tokens > maxTokens) removes one message at a time.
+    // If it removes an ASSISTANT{A,B} but leaves TOOL(A) and TOOL(B), sanitize
+    // must clean up both orphaned TOOL messages.
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 20, // high keepCount to skip initial window pruning
+      }),
+    );
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),                            // ~1 token
+      msg(MessageRole.USER, "task"),                             // ~1 token
+      msg(MessageRole.USER, "x".repeat(50)),                     // ~13 tokens — prune target
+      {                                                          // ~5 tokens — prune target
+        role: MessageRole.ASSISTANT,
+        content: "",
+        toolCalls: [
+          { name: "f", arguments: { p: "x" }, callId: "call_M1" },
+          { name: "g", arguments: { p: "y" }, callId: "call_M2" },
+        ],
+      },
+      {                                                          // ~2 tokens
+        role: MessageRole.TOOL,
+        content: "r1",
+        toolCallId: "call_M1",
+      },
+      {                                                          // ~2 tokens
+        role: MessageRole.TOOL,
+        content: "r2",
+        toolCallId: "call_M2",
+      },
+      msg(MessageRole.USER, "question 2"),                       // ~3 tokens
+      msg(MessageRole.ASSISTANT, "answer 22"),                   // ~3 tokens
+    ];
+
+    const result = mgr.truncate(messages, 15);
+    expect(result.truncated).toBe(true);
+
+    // Invariant: every TOOL must have a surviving ASSISTANT with matching callId
+    const survivingCallIds = new Set<string>();
+    for (const m of result.messages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        for (const tc of m.toolCalls) survivingCallIds.add(tc.callId);
+      }
+    }
+    for (const m of result.messages) {
+      if (m.role === MessageRole.TOOL && m.toolCallId) {
+        expect(survivingCallIds.has(m.toolCallId)).toBe(true);
+      }
+    }
+  });
+
   it("async truncation falls back to sliding window without callback", async () => {
     const mgr = new ContextManager(
       makeConfig({

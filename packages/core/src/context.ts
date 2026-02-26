@@ -159,16 +159,9 @@ export class ContextManager {
    * that also have text content, strip the toolCalls rather than removing.
    */
   private sanitizeToolCallPairs(messages: Message[]): Message[] {
-    // Build maps of which callIds exist for each role
-    const assistantCallIds = new Set<string>();
-    for (const m of messages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        for (const tc of m.toolCalls) {
-          assistantCallIds.add(tc.callId);
-        }
-      }
-    }
-
+    // Phase 1: Determine which ASSISTANT+toolCalls messages survive.
+    // An ASSISTANT survives only if ALL its tool results are present.
+    // Build survivingCallIds from surviving ASSISTANTs only.
     const toolResultIds = new Set<string>();
     for (const m of messages) {
       if (m.role === MessageRole.TOOL && m.toolCallId) {
@@ -176,16 +169,28 @@ export class ContextManager {
       }
     }
 
-    // Filter: remove orphaned messages
+    const survivingCallIds = new Set<string>();
+    for (const m of messages) {
+      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+        const allPresent = m.toolCalls.every((tc) => toolResultIds.has(tc.callId));
+        if (allPresent) {
+          for (const tc of m.toolCalls) {
+            survivingCallIds.add(tc.callId);
+          }
+        }
+      }
+    }
+
+    // Phase 2: Filter messages using survivingCallIds.
+    // TOOL messages are kept only if their callId is in survivingCallIds
+    // (i.e., the owning ASSISTANT has ALL its results present).
     const result: Message[] = [];
     for (const m of messages) {
       if (m.role === MessageRole.TOOL && m.toolCallId) {
-        // TOOL without matching ASSISTANT → drop
-        if (!assistantCallIds.has(m.toolCallId)) continue;
+        if (!survivingCallIds.has(m.toolCallId)) continue;
       }
 
       if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        // Check if ALL tool results are present
         const allPresent = m.toolCalls.every((tc) => toolResultIds.has(tc.callId));
         if (!allPresent) {
           // If the ASSISTANT also has text content, keep it but strip toolCalls

@@ -332,6 +332,52 @@ describe("createRoutingDiagnosticProvider", () => {
     expect(pyResult[0]!.message).toContain("PY error");
     expect(pyClient.getDiagnostics).toHaveBeenCalledWith("scripts/main.py", "python");
   });
+
+  it("throws when a stopped client cannot restart", async () => {
+    const router = new LSPRouter("/tmp");
+    const mockClient = {
+      isRunning: vi.fn().mockReturnValue(false),
+      getDiagnostics: vi.fn(),
+    } as unknown as LSPClient;
+
+    (router as unknown as { clients: Map<string, LSPClient> }).clients.set(
+      "typescript",
+      mockClient,
+    );
+    (router as unknown as { extensionMap: Map<string, string> }).extensionMap.set(
+      ".ts",
+      "typescript",
+    );
+
+    const provider = createRoutingDiagnosticProvider(router);
+    await expect(provider("src/app.ts")).rejects.toThrow("restart");
+    expect(mockClient.getDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it("invokes usage callback when routing to an LSP client", async () => {
+    const router = new LSPRouter("/tmp");
+    const mockClient = {
+      getDiagnostics: vi.fn().mockResolvedValue({
+        file: "src/app.ts",
+        diagnostics: [],
+      }),
+    } as unknown as LSPClient;
+
+    (router as unknown as { clients: Map<string, LSPClient> }).clients.set(
+      "typescript",
+      mockClient,
+    );
+    (router as unknown as { extensionMap: Map<string, string> }).extensionMap.set(
+      ".ts",
+      "typescript",
+    );
+
+    const onUse = vi.fn();
+    const provider = createRoutingDiagnosticProvider(router, onUse);
+    await provider("src/app.ts");
+
+    expect(onUse).toHaveBeenCalledOnce();
+  });
 });
 
 // ─── LSP Diagnostic Provider (single-client, backward compat) ─

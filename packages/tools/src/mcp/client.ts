@@ -211,15 +211,42 @@ export class McpHub {
     request: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
-      if (!state.process?.stdin || !state.process?.stdout) {
+      const stdin = state.process?.stdin;
+      const stdout = state.process?.stdout;
+      if (!stdin || !stdout) {
         reject(new Error("Server process not available"));
         return;
       }
 
       const requestId = request["id"];
       let buffer = "";
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+
+      const cleanup = () => {
+        stdout.removeListener("data", onData);
+        if (timeout) {
+          clearTimeout(timeout);
+          timeout = null;
+        }
+      };
+
+      const resolveOnce = (response: Record<string, unknown>) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(response);
+      };
+
+      const rejectOnce = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
 
       const onData = (data: Buffer) => {
+        if (settled) return;
         buffer += data.toString();
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
@@ -229,8 +256,8 @@ export class McpHub {
           try {
             const response = JSON.parse(line) as Record<string, unknown>;
             if (response["id"] === requestId) {
-              state.process?.stdout?.removeListener("data", onData);
-              resolve(response);
+              resolveOnce(response);
+              return;
             }
           } catch {
             // Not a complete JSON line, continue buffering
@@ -238,17 +265,21 @@ export class McpHub {
         }
       };
 
-      state.process.stdout.on("data", onData);
+      stdout.on("data", onData);
 
       // Timeout after 30 seconds
-      setTimeout(() => {
-        state.process?.stdout?.removeListener("data", onData);
-        reject(new Error("MCP request timed out (30s)"));
+      timeout = setTimeout(() => {
+        rejectOnce(new Error("MCP request timed out (30s)"));
       }, 30000);
 
       // Send request
-      const payload = JSON.stringify(request) + "\n";
-      state.process.stdin.write(payload);
+      try {
+        const payload = JSON.stringify(request) + "\n";
+        stdin.write(payload);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        rejectOnce(new Error(`Failed to write MCP request: ${msg}`));
+      }
     });
   }
 

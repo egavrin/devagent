@@ -44,6 +44,7 @@ further design choices:
 - Use `search_files` to trace dependencies and cross-module references.
 - Use `read_file` with line ranges for targeted analysis.
 - Use `execute_tool_script` to batch multiple reads and searches efficiently.
+- If available, use `references` to find all usages of a symbol, `definitions` to trace a symbol to its source, and `symbols` for a quick file structure overview.
 
 ## Output Style
 
