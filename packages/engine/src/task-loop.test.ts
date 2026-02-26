@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { TaskLoop } from "./task-loop.js";
 import type {
   LLMProvider,
@@ -376,6 +376,186 @@ describe("TaskLoop", () => {
     expect(events).toContain("tool:before");
     expect(events).toContain("tool:after");
     expect(events).toContain("assistant");
+  });
+
+  it("compacts context before the provider call and applies response headroom", async () => {
+    const observedCalls: ReadonlyArray<Message>[] = [];
+    const provider: LLMProvider = {
+      id: "observe-preflight",
+      async *chat(messages: ReadonlyArray<Message>): AsyncIterable<StreamChunk> {
+        observedCalls.push(messages);
+        yield { type: "text", content: "Compacted first" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const truncateAsync = vi.fn(
+      async (messages: ReadonlyArray<Message>, maxTokens: number) => ({
+        messages: [messages[0]!, messages[messages.length - 1]!],
+        truncated: true,
+        removedCount: messages.length - 2,
+        estimatedTokens: Math.max(0, maxTokens - 1),
+      }),
+    );
+    const fakeContextManager = {
+      truncateAsync,
+      truncate: vi.fn(),
+    };
+
+    const compactingConfig = makeConfig({
+      budget: {
+        ...config.budget,
+        maxContextTokens: 40,
+        responseHeadroom: 10,
+      },
+      context: {
+        ...config.context,
+        triggerRatio: 0.5,
+        keepRecentMessages: 1,
+      },
+    });
+
+    const gate = new ApprovalGate(compactingConfig.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: new ToolRegistry(),
+      bus,
+      approvalGate: gate,
+      config: compactingConfig,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+      initialMessages: [
+        { role: MessageRole.SYSTEM, content: "S".repeat(300) },
+        { role: MessageRole.USER, content: "Original task " + "U".repeat(180) },
+        { role: MessageRole.ASSISTANT, content: "Answer 1" + "A".repeat(120) },
+      ],
+      contextManager: fakeContextManager as unknown as import("@devagent/core").ContextManager,
+    });
+
+    const result = await loop.run("New question");
+    expect(result.status).toBe("success");
+    expect(truncateAsync).toHaveBeenCalledTimes(1);
+    expect(truncateAsync.mock.calls[0]?.[1]).toBe(30); // 40 maxContext - 10 headroom
+    expect(observedCalls.length).toBe(1);
+    expect(observedCalls[0]!.length).toBeLessThan(4);
+  });
+
+  it("fails fast when context compaction throws before provider call", async () => {
+    let providerCalled = false;
+    const provider: LLMProvider = {
+      id: "never-called",
+      async *chat(): AsyncIterable<StreamChunk> {
+        providerCalled = true;
+        yield { type: "text", content: "Should not happen" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const fakeContextManager = {
+      truncateAsync: vi.fn(async () => {
+        throw new Error("compact explode");
+      }),
+      truncate: vi.fn(),
+    };
+
+    const compactingConfig = makeConfig({
+      budget: {
+        ...config.budget,
+        maxContextTokens: 30,
+        responseHeadroom: 5,
+      },
+      context: {
+        ...config.context,
+        triggerRatio: 0.1,
+        keepRecentMessages: 1,
+      },
+    });
+
+    const gate = new ApprovalGate(compactingConfig.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: new ToolRegistry(),
+      bus,
+      approvalGate: gate,
+      config: compactingConfig,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+      initialMessages: [
+        { role: MessageRole.SYSTEM, content: "S".repeat(300) },
+        { role: MessageRole.USER, content: "Task " + "U".repeat(220) },
+      ],
+      contextManager: fakeContextManager as unknown as import("@devagent/core").ContextManager,
+    });
+
+    await expect(loop.run("Question")).rejects.toThrow("compact explode");
+    expect(providerCalled).toBe(false);
+  });
+
+  it("retries immediately with forced compaction on provider context overflow", async () => {
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "overflow-on-large-context",
+      async *chat(messages: ReadonlyArray<Message>): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (messages.length > 2) {
+          throw new ProviderError("maximum context length exceeded");
+        }
+        yield { type: "text", content: "Recovered after compaction" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const truncateAsync = vi.fn(
+      async (messages: ReadonlyArray<Message>) => ({
+        messages: [messages[0]!, messages[messages.length - 1]!],
+        truncated: true,
+        removedCount: messages.length - 2,
+        estimatedTokens: 1,
+      }),
+    );
+    const fakeContextManager = {
+      truncateAsync,
+      truncate: vi.fn(),
+    };
+
+    const overflowConfig = makeConfig({
+      budget: {
+        ...config.budget,
+        maxContextTokens: 200,
+        responseHeadroom: 0,
+      },
+      context: {
+        ...config.context,
+        triggerRatio: 1,
+        keepRecentMessages: 20,
+      },
+    });
+
+    const gate = new ApprovalGate(overflowConfig.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: new ToolRegistry(),
+      bus,
+      approvalGate: gate,
+      config: overflowConfig,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+      initialMessages: [
+        { role: MessageRole.SYSTEM, content: "sys" },
+        { role: MessageRole.USER, content: "task" },
+        { role: MessageRole.ASSISTANT, content: "answer" },
+      ],
+      contextManager: fakeContextManager as unknown as import("@devagent/core").ContextManager,
+    });
+
+    const result = await loop.run("follow up");
+    expect(result.status).toBe("success");
+    expect(result.lastText).toBe("Recovered after compaction");
+    expect(callCount).toBe(2);
+    expect(truncateAsync).toHaveBeenCalledTimes(1);
   });
 
   it("can switch modes", () => {

@@ -22,7 +22,6 @@ import {
   MessageRole,
   EventBus,
   ApprovalGate,
-  BudgetExceededError,
   ProviderError,
   ContextManager,
   estimateMessageTokens,
@@ -192,9 +191,13 @@ export class TaskLoop {
       // Get available tools based on mode (no tools during grace iteration)
       const availableTools = budgetGraceUsed ? [] : this.getAvailableTools();
 
+      // Preflight compaction: ensure context fits before calling the provider.
+      await this.maybeCompactContext();
+
       // Stream LLM response with retry on transient provider errors
       let textContent = "";
       let toolCalls: PendingToolCall[] = [];
+      let overflowCompactionUsed = false;
       for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
         try {
           const result = await this.streamLLMResponse(availableTools);
@@ -203,6 +206,23 @@ export class TaskLoop {
           break;
         } catch (err) {
           if (!(err instanceof ProviderError)) throw err;
+
+          // If provider reports a context overflow, force one compaction pass and retry immediately.
+          if (
+            !overflowCompactionUsed &&
+            this.contextManager &&
+            this.isContextOverflowError(err.message)
+          ) {
+            overflowCompactionUsed = true;
+            await this.maybeCompactContext({ force: true });
+            this.bus.emit("error", {
+              message: "Provider rejected prompt for context size. Forced compaction and retrying immediately.",
+              code: "CONTEXT_OVERFLOW_RETRY",
+              fatal: false,
+            });
+            continue;
+          }
+
           if (attempt >= RETRY_DELAYS.length) throw err; // Exhausted retries
           this.bus.emit("error", {
             message: `Provider error (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}): ${(err as Error).message}. Retrying in ${RETRY_DELAYS[attempt]!}ms…`,
@@ -411,16 +431,18 @@ export class TaskLoop {
    * summarization) to compress older messages while preserving the
    * system prompt and original user task.
    */
-  private async maybeCompactContext(): Promise<void> {
+  private async maybeCompactContext(
+    options?: { force?: boolean },
+  ): Promise<void> {
     if (!this.contextManager) return;
 
-    const maxTokens = this.config.budget.maxContextTokens;
+    const maxTokens = this.getEffectiveContextBudget();
     if (maxTokens <= 0) return;
 
     const estimatedTokens = estimateMessageTokens(this.messages);
     const threshold = maxTokens * this.config.context.triggerRatio;
 
-    if (estimatedTokens <= threshold) return;
+    if (!options?.force && estimatedTokens <= threshold) return;
 
     this.bus.emit("context:compacting", { estimatedTokens, maxTokens });
 
@@ -437,29 +459,44 @@ export class TaskLoop {
           estimatedTokens: result.estimatedTokens,
         });
       }
-    } catch (err) {
-      // Defense-in-depth: if compaction fails (e.g., summarize callback rejects),
-      // fall back to sliding window which doesn't call the LLM. Don't crash the session.
-      this.bus.emit("error", {
-        message: `Context compaction failed: ${(err as Error).message}. Falling back to sliding window.`,
-        code: "COMPACTION_FALLBACK",
-        fatal: false,
-      });
-      try {
-        const fallback = this.contextManager.truncate(this.messages, maxTokens);
-        if (fallback.truncated) {
-          this.messages = [...fallback.messages];
-          this.bus.emit("context:compacted", {
-            removedCount: fallback.removedCount,
-            estimatedTokens: fallback.estimatedTokens,
-          });
-        }
-      } catch {
-        // Even sliding window failed — continue with current messages.
-        // The next LLM call may fail due to token limits, but that's
-        // handled by the retry loop with a clear error message.
+      if (result.estimatedTokens > maxTokens) {
+        throw new Error(
+          `Compaction did not fit budget: ${result.estimatedTokens} > ${maxTokens}`,
+        );
       }
+    } catch (err) {
+      this.bus.emit("error", {
+        message: `Context compaction failed: ${(err as Error).message}`,
+        code: "COMPACTION_FAILED",
+        fatal: true,
+      });
+      throw err;
     }
+  }
+
+  private getEffectiveContextBudget(): number {
+    const maxContextTokens = this.config.budget.maxContextTokens;
+    if (maxContextTokens <= 0) return 0;
+    const headroom = Math.max(0, this.config.budget.responseHeadroom);
+    const effective = maxContextTokens - headroom;
+    if (effective <= 0) {
+      throw new Error(
+        `Invalid context budget: budget.maxContextTokens (${maxContextTokens}) must be greater than budget.responseHeadroom (${headroom})`,
+      );
+    }
+    return effective;
+  }
+
+  private isContextOverflowError(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes("context length") ||
+      normalized.includes("maximum context") ||
+      normalized.includes("max context") ||
+      normalized.includes("token limit") ||
+      normalized.includes("too many tokens") ||
+      normalized.includes("prompt is too long")
+    );
   }
 
   /**

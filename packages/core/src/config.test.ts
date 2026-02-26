@@ -81,6 +81,45 @@ briefing_strategy = "llm"
     }
   });
 
+  it("fails fast on invalid context.trigger_ratio", () => {
+    const dir = join(tmpdir(), `devagent-test-invalid-trigger-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const configPath = join(dir, ".devagent.toml");
+    writeFileSync(
+      configPath,
+      `
+[context]
+trigger_ratio = 1.5
+`,
+    );
+
+    try {
+      expect(() => loadConfig(dir)).toThrow("context.triggerRatio");
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it("fails fast when budget.response_headroom >= budget.max_context_tokens", () => {
+    const dir = join(tmpdir(), `devagent-test-invalid-headroom-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const configPath = join(dir, ".devagent.toml");
+    writeFileSync(
+      configPath,
+      `
+[budget]
+max_context_tokens = 1000
+response_headroom = 1000
+`,
+    );
+
+    try {
+      expect(() => loadConfig(dir)).toThrow("budget.responseHeadroom");
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
   it("parses model capabilities from TOML provider config", () => {
     const dir = join(tmpdir(), `devagent-test-caps-${Date.now()}`);
     mkdirSync(dir, { recursive: true });

@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { CredentialStore } from "./credentials.js";
+import { ConfigError } from "./errors.js";
 import type {
   DevAgentConfig,
   ApprovalPolicy,
@@ -217,6 +218,69 @@ function parseMemory(
   };
 }
 
+function validateBudgetConfig(budget: BudgetConfig): void {
+  if (!Number.isInteger(budget.maxIterations) || budget.maxIterations < 0) {
+    throw new ConfigError(
+      `Invalid budget.maxIterations: expected integer >= 0, got ${String(budget.maxIterations)}`,
+    );
+  }
+  if (!Number.isFinite(budget.maxContextTokens) || budget.maxContextTokens < 0) {
+    throw new ConfigError(
+      `Invalid budget.maxContextTokens: expected number >= 0, got ${String(budget.maxContextTokens)}`,
+    );
+  }
+  if (!Number.isFinite(budget.responseHeadroom) || budget.responseHeadroom < 0) {
+    throw new ConfigError(
+      `Invalid budget.responseHeadroom: expected number >= 0, got ${String(budget.responseHeadroom)}`,
+    );
+  }
+  if (budget.maxContextTokens > 0 && budget.responseHeadroom >= budget.maxContextTokens) {
+    throw new ConfigError(
+      `Invalid budget.responseHeadroom: must be < budget.maxContextTokens (${budget.responseHeadroom} >= ${budget.maxContextTokens})`,
+    );
+  }
+  if (!Number.isFinite(budget.costWarningThreshold) || budget.costWarningThreshold < 0) {
+    throw new ConfigError(
+      `Invalid budget.costWarningThreshold: expected number >= 0, got ${String(budget.costWarningThreshold)}`,
+    );
+  }
+}
+
+function validateContextConfig(context: ContextConfig): void {
+  const pruningStrategies = new Set(["sliding_window", "summarize", "hybrid"]);
+  if (!pruningStrategies.has(context.pruningStrategy)) {
+    throw new ConfigError(
+      `Invalid context.pruningStrategy: ${String(context.pruningStrategy)}`,
+    );
+  }
+  if (!Number.isFinite(context.triggerRatio) || context.triggerRatio <= 0 || context.triggerRatio > 1) {
+    throw new ConfigError(
+      `Invalid context.triggerRatio: expected number in (0, 1], got ${String(context.triggerRatio)}`,
+    );
+  }
+  if (!Number.isInteger(context.keepRecentMessages) || context.keepRecentMessages < 1) {
+    throw new ConfigError(
+      `Invalid context.keepRecentMessages: expected integer >= 1, got ${String(context.keepRecentMessages)}`,
+    );
+  }
+  if (
+    context.midpointBriefingInterval !== undefined &&
+    (!Number.isInteger(context.midpointBriefingInterval) || context.midpointBriefingInterval < 0)
+  ) {
+    throw new ConfigError(
+      `Invalid context.midpointBriefingInterval: expected integer >= 0, got ${String(context.midpointBriefingInterval)}`,
+    );
+  }
+  if (context.briefingStrategy !== undefined) {
+    const briefingStrategies = new Set(["heuristic", "llm", "auto"]);
+    if (!briefingStrategies.has(context.briefingStrategy)) {
+      throw new ConfigError(
+        `Invalid context.briefingStrategy: ${String(context.briefingStrategy)}`,
+      );
+    }
+  }
+}
+
 /**
  * Load configuration from TOML files + environment.
  * Fail fast: throws on invalid env references, never silently uses defaults for provider keys.
@@ -315,6 +379,9 @@ export function loadConfig(
     linterPath: rawArkts["linter_path"] as string | undefined,
     ...overrides?.arkts,
   };
+
+  validateBudgetConfig(budget);
+  validateContextConfig(context);
 
   // Resolve top-level api_key: TOML > env var > stored credentials
   const topLevelApiKey = fileConfig["api_key"] as string | undefined;

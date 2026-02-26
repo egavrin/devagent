@@ -105,7 +105,12 @@ export type {
 } from "./skills.js";
 
 // Context management
-export { ContextManager, estimateTokens, estimateMessageTokens } from "./context.js";
+export {
+  ContextManager,
+  ContextFitError,
+  estimateTokens,
+  estimateMessageTokens,
+} from "./context.js";
 export type {
   ContextTruncationResult,
   SummarizeCallback,

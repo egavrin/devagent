@@ -147,7 +147,7 @@ describe("ContextManager", () => {
       msg(MessageRole.ASSISTANT, "Answer 3"),
     ];
 
-    const result = await mgr.truncateAsync(messages, 30);
+    const result = await mgr.truncateAsync(messages, 40);
     expect(result.truncated).toBe(true);
 
     // Should have system + summary + recent messages
@@ -626,12 +626,95 @@ describe("ContextManager", () => {
       msg(MessageRole.ASSISTANT, "Here is a detailed third answer about testing and coverage."),
     ];
 
-    const result = await mgr.truncateAsync(messages, 30);
+    const result = await mgr.truncateAsync(messages, 40);
     expect(result.truncated).toBe(true);
     // Falls back to sliding window — no summary message
     const hasSummary = result.messages.some(
       (m) => m.content?.includes("[Conversation summary]"),
     );
     expect(hasSummary).toBe(false);
+  });
+
+  it("hybrid truncation preserves the original user task message", async () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        pruningStrategy: "hybrid",
+        triggerRatio: 0.1,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    mgr.setSummarizeCallback(async () => "Short summary");
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "System prompt"),
+      msg(MessageRole.USER, "Original task: keep this exact instruction"),
+      msg(MessageRole.ASSISTANT, "Answer 1"),
+      msg(MessageRole.USER, "Follow-up question"),
+      msg(MessageRole.ASSISTANT, "Answer 2"),
+      msg(MessageRole.USER, "Another follow-up"),
+      msg(MessageRole.ASSISTANT, "Answer 3"),
+    ];
+
+    const result = await mgr.truncateAsync(messages, 40);
+    expect(result.truncated).toBe(true);
+
+    const originalTaskPresent = result.messages.some(
+      (m) =>
+        m.role === MessageRole.USER &&
+        m.content === "Original task: keep this exact instruction",
+    );
+    expect(originalTaskPresent).toBe(true);
+  });
+
+  it("hybrid truncation enforces max token budget even if summary is too long", async () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        pruningStrategy: "hybrid",
+        triggerRatio: 0.1,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    // Deliberately pathological summary that would exceed small budgets if not pruned.
+    mgr.setSummarizeCallback(async () => "Y".repeat(2000));
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "System prompt"),
+      msg(MessageRole.USER, "Original task"),
+      msg(MessageRole.ASSISTANT, "Answer 1"),
+      msg(MessageRole.USER, "Question 2"),
+      msg(MessageRole.ASSISTANT, "Answer 2"),
+      msg(MessageRole.USER, "Question 3"),
+      msg(MessageRole.ASSISTANT, "Answer 3"),
+    ];
+
+    const maxTokens = 30;
+    const result = await mgr.truncateAsync(messages, maxTokens);
+    expect(result.truncated).toBe(true);
+    expect(result.estimatedTokens).toBeLessThanOrEqual(maxTokens);
+    expect(estimateMessageTokens(result.messages)).toBeLessThanOrEqual(maxTokens);
+  });
+
+  it("throws when critical preserved context alone exceeds max token budget", async () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        pruningStrategy: "sliding_window",
+        triggerRatio: 0.1,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "S".repeat(400)),
+      msg(MessageRole.USER, "Original task " + "T".repeat(400)),
+      msg(MessageRole.ASSISTANT, "Answer"),
+      msg(MessageRole.USER, "Follow-up"),
+      msg(MessageRole.ASSISTANT, "Answer 2"),
+    ];
+
+    await expect(mgr.truncateAsync(messages, 20)).rejects.toThrow(
+      "Unable to fit context within token budget",
+    );
   });
 });

@@ -60,6 +60,13 @@ export type SummarizeCallback = (
   messages: ReadonlyArray<Message>,
 ) => Promise<string>;
 
+export class ContextFitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ContextFitError";
+  }
+}
+
 export class ContextManager {
   private readonly config: ContextConfig;
   private summarize: SummarizeCallback | null = null;
@@ -88,6 +95,15 @@ export class ContextManager {
     messages: ReadonlyArray<Message>,
     maxTokens: number,
   ): ContextTruncationResult {
+    if (maxTokens <= 0) {
+      return {
+        messages,
+        truncated: false,
+        removedCount: 0,
+        estimatedTokens: estimateMessageTokens(messages),
+      };
+    }
+
     const currentTokens = estimateMessageTokens(messages);
 
     // Check if truncation is needed
@@ -120,6 +136,15 @@ export class ContextManager {
     messages: ReadonlyArray<Message>,
     maxTokens: number,
   ): Promise<ContextTruncationResult> {
+    if (maxTokens <= 0) {
+      return {
+        messages,
+        truncated: false,
+        removedCount: 0,
+        estimatedTokens: estimateMessageTokens(messages),
+      };
+    }
+
     const currentTokens = estimateMessageTokens(messages);
 
     const threshold = maxTokens * this.config.triggerRatio;
@@ -216,18 +241,10 @@ export class ContextManager {
     messages: ReadonlyArray<Message>,
     maxTokens: number,
   ): ContextTruncationResult {
-    if (messages.length <= 2) {
-      return {
-        messages,
-        truncated: false,
-        removedCount: 0,
-        estimatedTokens: estimateMessageTokens(messages),
-      };
-    }
-
     // Find critical messages to preserve
     const systemMsg = messages[0]?.role === MessageRole.SYSTEM ? messages[0] : null;
     const firstUserIdx = messages.findIndex((m) => m.role === MessageRole.USER);
+    const firstUserMsg = firstUserIdx >= 0 ? messages[firstUserIdx]! : null;
 
     // Keep recent messages
     const keepCount = this.config.keepRecentMessages;
@@ -239,15 +256,12 @@ export class ContextManager {
     }
 
     // Always keep first user message (original task)
-    if (firstUserIdx > 0) {
-      preserved.push(messages[firstUserIdx]!);
+    if (firstUserMsg && !preserved.includes(firstUserMsg)) {
+      preserved.push(firstUserMsg);
     }
 
     // Keep the N most recent messages
-    const startIdx = Math.max(
-      (systemMsg ? 1 : 0) + (firstUserIdx > 0 ? 1 : 0),
-      messages.length - keepCount,
-    );
+    const startIdx = Math.max(systemMsg ? 1 : 0, messages.length - keepCount);
     const recentMessages = messages.slice(startIdx);
 
     // Merge preserved + recent, avoiding duplicates
@@ -258,24 +272,21 @@ export class ContextManager {
       }
     }
 
-    // Further prune if still over budget
-    let tokens = estimateMessageTokens(result);
-    while (tokens > maxTokens && result.length > 2) {
-      // Remove the message right after preserved section
-      const removeIdx = preserved.length;
-      if (removeIdx >= result.length) break;
-      result.splice(removeIdx, 1);
-      tokens = estimateMessageTokens(result);
+    // Sanitize before and after additional pruning to avoid tool-call orphans.
+    const sanitized = this.sanitizeToolCallPairs(result);
+    const bounded = this.pruneToBudget(sanitized, maxTokens);
+    const finalMessages = this.sanitizeToolCallPairs(bounded);
+    const finalTokens = estimateMessageTokens(finalMessages);
+    if (finalTokens > maxTokens) {
+      throw new ContextFitError(
+        `Unable to fit context within token budget: ${finalTokens} > ${maxTokens}`,
+      );
     }
 
-    // Sanitize: remove orphaned tool-call/tool-result messages
-    const sanitized = this.sanitizeToolCallPairs(result);
-    const finalTokens = estimateMessageTokens(sanitized);
-
     return {
-      messages: sanitized,
-      truncated: sanitized.length < messages.length,
-      removedCount: messages.length - sanitized.length,
+      messages: finalMessages,
+      truncated: this.didMessagesChange(messages, finalMessages),
+      removedCount: messages.length - finalMessages.length,
       estimatedTokens: finalTokens,
     };
   }
@@ -293,11 +304,18 @@ export class ContextManager {
 
     // Split into preserved, middle (to summarize), and recent
     const systemMsg = messages[0]?.role === MessageRole.SYSTEM ? messages[0] : null;
+    const firstUserIdx = messages.findIndex((m) => m.role === MessageRole.USER);
+    const firstUserMsg = firstUserIdx >= 0 ? messages[firstUserIdx]! : null;
     const keepCount = this.config.keepRecentMessages;
     const recentStart = Math.max(systemMsg ? 1 : 0, messages.length - keepCount);
     const middleStart = systemMsg ? 1 : 0;
+    const preserved = new Set<Message>();
+    if (systemMsg) preserved.add(systemMsg);
+    if (firstUserMsg) preserved.add(firstUserMsg);
 
-    const rawMiddle = messages.slice(middleStart, recentStart);
+    const rawMiddle = messages
+      .slice(middleStart, recentStart)
+      .filter((m) => !preserved.has(m));
     const recentMessages = messages.slice(recentStart);
 
     if (rawMiddle.length === 0) {
@@ -316,22 +334,74 @@ export class ContextManager {
     if (systemMsg) {
       result.push(systemMsg);
     }
-    result.push({
-      role: MessageRole.USER,
-      content: `[Conversation summary]: ${summary}`,
-    });
-    result.push(...recentMessages);
+    if (firstUserMsg && !result.includes(firstUserMsg)) {
+      result.push(firstUserMsg);
+    }
+    if (summary.trim().length > 0) {
+      result.push({
+        role: MessageRole.ASSISTANT,
+        content: `[Conversation summary]: ${summary}`,
+      });
+    }
+    for (const msg of recentMessages) {
+      if (!result.includes(msg)) {
+        result.push(msg);
+      }
+    }
 
     // Sanitize: remove orphaned tool-call/tool-result messages
     // (the boundary between middle and recent can split tool-call pairs)
     const sanitized = this.sanitizeToolCallPairs(result);
-    const tokens = estimateMessageTokens(sanitized);
+    const bounded = this.pruneToBudget(sanitized, maxTokens);
+    const finalMessages = this.sanitizeToolCallPairs(bounded);
+    const tokens = estimateMessageTokens(finalMessages);
+    if (tokens > maxTokens) {
+      throw new ContextFitError(
+        `Unable to fit context within token budget: ${tokens} > ${maxTokens}`,
+      );
+    }
 
     return {
-      messages: sanitized,
-      truncated: true,
-      removedCount: messages.length - sanitized.length,
+      messages: finalMessages,
+      truncated: this.didMessagesChange(messages, finalMessages),
+      removedCount: messages.length - finalMessages.length,
       estimatedTokens: tokens,
     };
+  }
+
+  /**
+   * Remove oldest non-critical messages until token budget is met.
+   * Critical messages: first SYSTEM and first USER message.
+   */
+  private pruneToBudget(messages: Message[], maxTokens: number): Message[] {
+    const result = [...messages];
+    const preserved = new Set<Message>();
+
+    const systemMsg = result[0]?.role === MessageRole.SYSTEM ? result[0] : null;
+    if (systemMsg) preserved.add(systemMsg);
+
+    const firstUser = result.find((m) => m.role === MessageRole.USER) ?? null;
+    if (firstUser) preserved.add(firstUser);
+
+    let tokens = estimateMessageTokens(result);
+    while (tokens > maxTokens) {
+      const removeIdx = result.findIndex((m) => !preserved.has(m));
+      if (removeIdx < 0) break;
+      result.splice(removeIdx, 1);
+      tokens = estimateMessageTokens(result);
+    }
+
+    return result;
+  }
+
+  private didMessagesChange(
+    original: ReadonlyArray<Message>,
+    next: ReadonlyArray<Message>,
+  ): boolean {
+    if (original.length !== next.length) return true;
+    for (let i = 0; i < original.length; i++) {
+      if (original[i] !== next[i]) return true;
+    }
+    return false;
   }
 }
