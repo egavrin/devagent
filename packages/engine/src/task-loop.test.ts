@@ -1432,7 +1432,7 @@ describe("TaskLoop", () => {
     });
 
     const result = await loop.run("Write a file");
-    expect(result.status).toBe("success");
+    expect(result.status).toBe("empty_response");
 
     // Validation errors should be appended inline to tool result (not a separate SYSTEM message)
     const toolMessages = result.messages.filter(
@@ -1448,6 +1448,108 @@ describe("TaskLoop", () => {
       (m) => m.role === MessageRole.SYSTEM && m.content?.includes("VALIDATION"),
     );
     expect(systemValidationMessages.length).toBe(0);
+  });
+
+  it("does not accept final text response while double-check failures are unresolved", async () => {
+    let checkCalls = 0;
+    const mockDoubleCheck = {
+      isEnabled: () => true,
+      async check() {
+        checkCalls++;
+        if (checkCalls === 1) {
+          return {
+            passed: false,
+            diagnosticErrors: ["/tmp/test.ts: Unexpected token"],
+            testOutput: null,
+            testPassed: null,
+          };
+        }
+        return {
+          passed: true,
+          diagnosticErrors: [],
+          testOutput: null,
+          testPassed: null,
+        };
+      },
+      formatResults(result: any) {
+        if (result.passed) return "Double-check: All validations passed.";
+        return "Diagnostic errors (1):\n  - /tmp/test.ts: Unexpected token";
+      },
+    } as any;
+
+    const writeTool: ToolSpec = {
+      name: "write_file",
+      description: "Write a file",
+      category: "mutating",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: true,
+        output: "Written",
+        error: null,
+        artifacts: ["/tmp/test.ts"],
+      }),
+    };
+
+    const provider = createMockProvider([
+      [
+        {
+          type: "tool_call",
+          content: '{"path": "/tmp/test.ts"}',
+          toolCallId: "call_0",
+          toolName: "write_file",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Done." },
+        { type: "done", content: "" },
+      ],
+      [
+        {
+          type: "tool_call",
+          content: '{"path": "/tmp/test.ts"}',
+          toolCallId: "call_1",
+          toolName: "write_file",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Now fixed." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+      doubleCheck: mockDoubleCheck,
+    });
+
+    const result = await loop.run("Write a file");
+    expect(result.status).toBe("success");
+    expect(result.iterations).toBe(4);
+
+    const finalAssistant = [...result.messages]
+      .reverse()
+      .find((m) => m.role === MessageRole.ASSISTANT && (!m.toolCalls || m.toolCalls.length === 0));
+    expect(finalAssistant?.content).toBe("Now fixed.");
+
+    const unresolvedValidationMessage = result.messages.find(
+      (m) =>
+        m.role === MessageRole.SYSTEM &&
+        m.content?.includes("Double-check still failing"),
+    );
+    expect(unresolvedValidationMessage).toBeDefined();
   });
 
   it("skips checkpoint for readonly tools", async () => {

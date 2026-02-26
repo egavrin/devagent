@@ -143,11 +143,16 @@ function loadModelFile(filePath: string): void {
     // Skip if already registered (first-found wins)
     if (registry.has(key)) continue;
 
+    const defaultMaxTokens =
+      (modelDef["default_max_tokens"] as number | undefined) ??
+      (modelDef["response_headroom"] as number | undefined) ??
+      4096;
+
     const capabilities: ModelCapabilities = {
       useResponsesApi: (modelDef["use_responses_api"] as boolean | undefined) ?? false,
       reasoning: inferReasoning(modelDef),
       supportsTemperature: (modelDef["supports_temperature"] as boolean | undefined) ?? true,
-      defaultMaxTokens: (modelDef["response_headroom"] as number | undefined) ?? 4096,
+      defaultMaxTokens,
     };
 
     registry.set(key, {

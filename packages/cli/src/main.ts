@@ -4,7 +4,6 @@
  */
 
 import { createInterface } from "node:readline";
-import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -40,6 +39,7 @@ import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback } from "@
 import { LSPRouter, createRoutingDiagnosticProvider, createCompilerFallbackProvider, createShellTestRunner, lazyUpgradeLSP } from "./double-check-wiring.js";
 import { createArkTSDiagnosticProvider } from "@devagent/arkts";
 import { assembleSystemPrompt } from "./prompts/index.js";
+import { detectProjectTestCommand } from "./test-command-detect.js";
 import {
   Spinner,
   dim, red, cyan, green, yellow, bold,
@@ -50,51 +50,6 @@ import {
   formatError,
 } from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
-
-// ─── Test Command Auto-Detection ─────────────────────────────
-
-/**
- * Detect the project's test command from package.json scripts.
- * Prefers targeted test scripts over generic "test" to get faster feedback.
- * Returns null if no test command is found.
- */
-function detectProjectTestCommand(repoRoot: string): string | null {
-  const pkgPath = join(repoRoot, "package.json");
-  if (!existsSync(pkgPath)) return null;
-
-  try {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
-      scripts?: Record<string, string>;
-      packageManager?: string;
-    };
-    const scripts = pkg.scripts;
-    if (!scripts) return null;
-
-    // Determine the package manager prefix
-    const pm = pkg.packageManager;
-    let prefix: string;
-    if (pm?.startsWith("yarn")) {
-      prefix = "corepack yarn";
-    } else if (pm?.startsWith("pnpm")) {
-      prefix = "pnpm";
-    } else {
-      prefix = "npm run";
-    }
-
-    // Prefer targeted test scripts (faster, more specific feedback)
-    // Order: test:implementation > test:unit > test
-    const candidates = ["test:implementation", "test:unit", "test"];
-    for (const name of candidates) {
-      if (scripts[name]) {
-        return `${prefix} ${name}`;
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 // ─── Argument Parsing ────────────────────────────────────────
 

@@ -104,22 +104,23 @@ describe("write_file", () => {
     expect(read.output).toContain("// deep");
   });
 
-  it("throws when overwriting existing file without pre-read", async () => {
+  it("throws when overwriting existing file", async () => {
     await expect(
       writeFileTool.handler(
         { path: "src/index.ts", content: "overwritten\n" },
         ctx,
       ),
-    ).rejects.toThrow("must read file");
+    ).rejects.toThrow("Refusing to overwrite existing file");
   });
 
-  it("allows overwriting existing file after pre-read", async () => {
+  it("rejects overwriting existing file even after pre-read", async () => {
     await readFileTool.handler({ path: "src/index.ts" }, ctx);
-    const result = await writeFileTool.handler(
-      { path: "src/index.ts", content: "overwritten\n" },
-      ctx,
-    );
-    expect(result.success).toBe(true);
+    await expect(
+      writeFileTool.handler(
+        { path: "src/index.ts", content: "overwritten\n" },
+        ctx,
+      ),
+    ).rejects.toThrow("Refusing to overwrite existing file");
   });
 });
 
@@ -157,6 +158,54 @@ describe("replace_in_file", () => {
         ctx,
       ),
     ).rejects.toThrow("must read file");
+  });
+
+  it("defaults to single-replace mode and rejects ambiguous matches", async () => {
+    writeFileSync(join(tmpDir, "src", "dupe.ts"), "foo\nfoo\n");
+    await readFileTool.handler({ path: "src/dupe.ts" }, ctx);
+
+    await expect(
+      replaceInFileTool.handler(
+        { path: "src/dupe.ts", search: "foo", replace: "bar" },
+        ctx,
+      ),
+    ).rejects.toThrow("multiple matches");
+  });
+
+  it("supports all=true with expected_replacements when count matches", async () => {
+    writeFileSync(join(tmpDir, "src", "dupe2.ts"), "foo\nfoo\n");
+    await readFileTool.handler({ path: "src/dupe2.ts" }, ctx);
+
+    const result = await replaceInFileTool.handler(
+      {
+        path: "src/dupe2.ts",
+        search: "foo",
+        replace: "bar",
+        all: true,
+        expected_replacements: 2,
+      },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("2 occurrence");
+  });
+
+  it("fails when expected_replacements does not match actual replacement count", async () => {
+    writeFileSync(join(tmpDir, "src", "dupe3.ts"), "foo\nfoo\n");
+    await readFileTool.handler({ path: "src/dupe3.ts" }, ctx);
+
+    await expect(
+      replaceInFileTool.handler(
+        {
+          path: "src/dupe3.ts",
+          search: "foo",
+          replace: "bar",
+          all: true,
+          expected_replacements: 1,
+        },
+        ctx,
+      ),
+    ).rejects.toThrow("Expected 1 replacement(s), but made 2");
   });
 });
 
@@ -257,6 +306,15 @@ describe("run_command", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output.trim()).toBe("hello");
+  });
+
+  it("marks output as truncated when command output exceeds byte limit", async () => {
+    const result = await runCommandTool.handler(
+      { command: "head -c 120000 /dev/zero | tr '\\0' 'a'" },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("[output truncated");
   });
 });
 

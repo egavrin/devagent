@@ -37,8 +37,9 @@ If LSP tools are available (`diagnostics`, `definitions`, `references`, `symbols
 - Use `references` to find all usages of a symbol across the codebase.
 
 For edits:
-- Use `replace_in_file` for surgical changes. Always `read_file` first.
-- Use `write_file` for new files or full rewrites.
+- Use `replace_in_file` for existing files. Always `read_file` first.
+- Use `write_file` only for new files (it fails on existing files).
+- After `write_file`, immediately `read_file` the new file and run a relevant syntax/test/build check.
 - If `replace_in_file` fails, re-read the file before retrying.
 
 ## Output Style
@@ -60,8 +61,8 @@ When implementing from a test file:
   that specific scenario before moving on.
 - If your implementation uses getters/properties, consider how deep comparison
   (e.g., Jest `toEqual`) will interact with them — avoid infinite recursion.
-- After implementing, run the tests if a test command is available. If tests
-  fail, fix the failing cases before considering the task complete.
+- Run the targeted failing test(s) first, then run a related regression check.
+- Do not finalize while validation errors are still present.
 
 ## Standards
 

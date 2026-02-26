@@ -18,11 +18,20 @@ Before editing a file:
 ## Validation Strategy
 
 Start narrow, then broaden:
-1. Run the most targeted checks for changed behavior.
-2. Run wider suites when the change is cross-cutting.
-3. If no tests exist, run compile/lint/sanity checks where possible.
+1. Reproduce the failure with the most targeted command.
+2. Run the most targeted checks for changed behavior.
+3. Run wider related regression checks when the change could affect nearby paths.
+4. If no tests exist, run compile/lint/sanity checks where possible.
 
 Never claim verification you did not run.
+
+## Completion Gates
+
+Before finalizing:
+- If you were fixing a failing test/bug, show the failing case is now green.
+- Run at least one regression-oriented check for adjacent behavior when applicable.
+- If you used `write_file`, immediately `read_file` the new file and run a syntax/build/test check.
+- Do not conclude while validation errors are still present.
 
 ## Approval-Mode Behavior
 

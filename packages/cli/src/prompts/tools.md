@@ -43,8 +43,8 @@ Result: success — search text matches exactly.
 | Replace existing text | `replace_in_file` | `search` = exact existing text from `read_file` |
 | Insert at a location | `replace_in_file` | `search` = anchor line(s), `replace` = anchor + new content |
 | Delete text | `replace_in_file` | `search` = text to remove, `replace` = `""` |
-| Create new file | `write_file` | Full content in one call |
-| Full rewrite (>50% changed) | `write_file` | More reliable than many small replacements |
+| Create new file | `write_file` | Full content in one call (`write_file` is create-only) |
+| Full rewrite of existing file | `replace_in_file` | Use a large exact block replacement after `read_file` |
 
 ### Choosing the Right Amount of Context
 
@@ -58,8 +58,7 @@ Result: success — search text matches exactly.
 When `replace_in_file` fails:
 1. **First failure**: re-read the file with `read_file`, copy the exact current text, retry.
 2. **Second failure**: try a different anchor — use more or less surrounding context.
-3. **Third failure**: fall back to `write_file` for a full rewrite, or stop and report the
-   blocker.
+3. **Third failure**: use a broader anchored replacement on the same file, or stop and report the blocker.
 
 **Never retry with the same search text that already failed.**
 
@@ -68,7 +67,15 @@ When `replace_in_file` fails:
 - Guessing file content from memory instead of reading — always read first.
 - Using stale text after the file was modified by a prior edit — re-read between edits.
 - Copying indented text but normalizing whitespace — preserve exact indentation.
-- Trying too many small replacements on a heavily-modified file — use `write_file` instead.
+- Trying too many tiny replacements on a heavily-modified file — switch to a broader anchored replacement.
+- Using `write_file` to overwrite an existing file — this now fails by design.
+
+## Post-Write Verification
+
+After `write_file` creates a new file:
+1. `read_file` the new file immediately to verify content completeness.
+2. Run a relevant syntax/test/build command before concluding.
+3. If output is truncated or malformed, rewrite and re-verify before continuing.
 
 ## Shell Commands
 

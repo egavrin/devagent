@@ -455,7 +455,7 @@ export function fuzzyReplace(
 export const replaceInFileTool: ToolSpec = {
   name: "replace_in_file",
   description:
-    "Replace occurrences of a search string with a replacement string in a file. Uses fuzzy matching (whitespace, indentation, escape sequences) when exact match fails. Always read_file first to get text. Include enough surrounding context for a unique match.",
+    "Replace occurrences of a search string with a replacement string in a file. Uses fuzzy matching (whitespace, indentation, escape sequences) when exact match fails. Always read_file first to get text. Default mode is single replacement; set all=true for global replacement.",
   category: "mutating",
   paramSchema: {
     type: "object",
@@ -463,7 +463,11 @@ export const replaceInFileTool: ToolSpec = {
       path: { type: "string", description: "File path (relative to repo root)" },
       search: { type: "string", description: "Text to search for" },
       replace: { type: "string", description: "Replacement text" },
-      all: { type: "boolean", description: "Replace all occurrences (default: true)" },
+      all: { type: "boolean", description: "Replace all occurrences (default: false)" },
+      expected_replacements: {
+        type: "number",
+        description: "Optional safety check. Fails if the number of replacements differs from this value.",
+      },
     },
     required: ["path", "search", "replace"],
   },
@@ -483,7 +487,8 @@ export const replaceInFileTool: ToolSpec = {
     const filePath = resolve(context.repoRoot, params["path"] as string);
     const search = params["search"] as string;
     const replace = params["replace"] as string;
-    const replaceAll = (params["all"] as boolean | undefined) ?? true;
+    const replaceAll = (params["all"] as boolean | undefined) ?? false;
+    const expectedReplacements = params["expected_replacements"] as number | undefined;
 
     // Guard against undefined params (from malformed JSON that parsed to {})
     if (search === undefined || replace === undefined) {
@@ -514,6 +519,16 @@ export const replaceInFileTool: ToolSpec = {
 
     try {
       const result = fuzzyReplace(content, search, replace, replaceAll);
+
+      if (
+        expectedReplacements !== undefined &&
+        result.count !== expectedReplacements
+      ) {
+        throw new ToolError(
+          "replace_in_file",
+          `Expected ${expectedReplacements} replacement(s), but made ${result.count}. The edit was not applied.`,
+        );
+      }
 
       // Fail fast: if fuzzyReplace returned but content is unchanged, report the no-op
       if (result.newContent === content) {

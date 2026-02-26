@@ -6,10 +6,41 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import type { ToolSpec } from "@devagent/core";
-import { ToolError } from "@devagent/core";
 
 const DEFAULT_TIMEOUT_MS = 120_000; // 2 minutes
 const MAX_OUTPUT_BYTES = 100_000;
+
+function appendWithLimit(
+  current: string,
+  chunk: string,
+): { text: string; truncated: boolean } {
+  if (current.length >= MAX_OUTPUT_BYTES) {
+    return { text: current, truncated: true };
+  }
+
+  const remaining = MAX_OUTPUT_BYTES - current.length;
+  if (chunk.length <= remaining) {
+    return { text: current + chunk, truncated: false };
+  }
+
+  return {
+    text: current + chunk.substring(0, remaining),
+    truncated: true,
+  };
+}
+
+function withTruncationMarker(
+  streamName: "stdout" | "stderr",
+  text: string,
+  truncated: boolean,
+): string {
+  if (!truncated) {
+    return text;
+  }
+
+  const marker = `[output truncated: ${streamName} capped at ${MAX_OUTPUT_BYTES} bytes]`;
+  return text.length > 0 ? `${text}\n${marker}` : marker;
+}
 
 export const runCommandTool: ToolSpec = {
   name: "run_command",
@@ -79,6 +110,8 @@ export const runCommandTool: ToolSpec = {
 
       let stdout = "";
       let stderr = "";
+      let stdoutTruncated = false;
+      let stderrTruncated = false;
       let killed = false;
 
       const timer = setTimeout(() => {
@@ -88,26 +121,29 @@ export const runCommandTool: ToolSpec = {
 
       child.stdout.on("data", (data: Buffer) => {
         const chunk = data.toString();
-        if (stdout.length < MAX_OUTPUT_BYTES) {
-          stdout += chunk.substring(0, MAX_OUTPUT_BYTES - stdout.length);
-        }
+        const appended = appendWithLimit(stdout, chunk);
+        stdout = appended.text;
+        stdoutTruncated = stdoutTruncated || appended.truncated;
       });
 
       child.stderr.on("data", (data: Buffer) => {
         const chunk = data.toString();
-        if (stderr.length < MAX_OUTPUT_BYTES) {
-          stderr += chunk.substring(0, MAX_OUTPUT_BYTES - stderr.length);
-        }
+        const appended = appendWithLimit(stderr, chunk);
+        stderr = appended.text;
+        stderrTruncated = stderrTruncated || appended.truncated;
       });
 
       child.on("close", (code) => {
         clearTimeout(timer);
 
+        const safeStdout = withTruncationMarker("stdout", stdout, stdoutTruncated);
+        const safeStderr = withTruncationMarker("stderr", stderr, stderrTruncated);
+
         if (killed) {
           resolvePromise({
             success: false,
-            output: stdout,
-            error: `Command timed out after ${timeoutMs}ms\n${stderr}`,
+            output: safeStdout,
+            error: `Command timed out after ${timeoutMs}ms\n${safeStderr}`,
             artifacts: [],
           });
           return;
@@ -117,8 +153,8 @@ export const runCommandTool: ToolSpec = {
         resolvePromise({
           success: exitCode === 0,
           output: exitCode === 0
-            ? stdout || "(no output)"
-            : `Exit code: ${exitCode}\nstdout: ${stdout}\nstderr: ${stderr}`,
+            ? safeStdout || "(no output)"
+            : `Exit code: ${exitCode}\nstdout: ${safeStdout}\nstderr: ${safeStderr}`,
           error: exitCode === 0 ? null : `Command exited with code ${exitCode}`,
           artifacts: [],
         });

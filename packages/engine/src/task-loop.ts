@@ -121,6 +121,7 @@ export class TaskLoop {
   // Per-tool consecutive failure counts (reset on any success of that tool)
   private toolFailureCounts: Map<string, number> = new Map();
   private toolFatigueWarned: Set<string> = new Set();
+  private unresolvedDoubleCheckFailure = false;
 
   constructor(options: TaskLoopOptions) {
     this.provider = options.provider;
@@ -156,6 +157,8 @@ export class TaskLoop {
    * or when the budget is exceeded.
    */
   async run(userQuery: string): Promise<TaskLoopResult> {
+    this.unresolvedDoubleCheckFailure = false;
+
     // Add user message
     this.messages.push({
       role: MessageRole.USER,
@@ -339,6 +342,18 @@ export class TaskLoop {
 
       // No tool calls — LLM produced a final text response
       if (textContent) {
+        if (this.unresolvedDoubleCheckFailure) {
+          this.messages.push({
+            role: MessageRole.ASSISTANT,
+            content: textContent,
+          });
+          this.messages.push({
+            role: MessageRole.SYSTEM,
+            content: "Double-check still failing from prior edits. You must fix validation errors before finalizing.",
+          });
+          continue;
+        }
+
         this.messages.push({
           role: MessageRole.ASSISTANT,
           content: textContent,
@@ -421,6 +436,7 @@ export class TaskLoop {
     this.doomLoopWarned = false;
     this.toolFailureCounts.clear();
     this.toolFatigueWarned.clear();
+    this.unresolvedDoubleCheckFailure = false;
   }
 
   // ─── Private ────────────────────────────────────────────────
@@ -762,12 +778,15 @@ export class TaskLoop {
         if (modifiedFiles.length > 0) {
           const checkResult = await this.doubleCheck.check(modifiedFiles);
           if (!checkResult.passed) {
+            this.unresolvedDoubleCheckFailure = true;
             const feedback = this.doubleCheck.formatResults(checkResult);
             // Append validation errors inline with tool output (OpenCode pattern)
             result = {
               ...result,
               output: `${result.output}\n\nVALIDATION ERRORS:\n${feedback}\nFix these errors before continuing.`,
             };
+          } else {
+            this.unresolvedDoubleCheckFailure = false;
           }
         }
       }
