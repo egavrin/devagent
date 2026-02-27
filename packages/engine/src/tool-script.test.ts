@@ -83,6 +83,27 @@ describe("ToolScriptEngine", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it("rejects namespaced tool names in script steps", async () => {
+    registry.register(
+      makeReadonlyTool("read_file", async () => successResult("ok")),
+    );
+
+    const engine = new ToolScriptEngine({
+      registry,
+      context: defaultContext,
+      bus,
+    });
+
+    const result = await engine.execute({
+      steps: [{ id: "r1", tool: "functions.read_file", args: { path: "a.ts" } }],
+    });
+
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]!.success).toBe(false);
+    expect(result.steps[0]!.error).toContain('Invalid tool name "functions.read_file"');
+    expect(result.steps[0]!.error).toContain('"read_file"');
+  });
+
   it("executes multi-step script without references", async () => {
     registry.register(
       makeReadonlyTool("find_files", async () =>

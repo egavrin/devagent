@@ -24,7 +24,8 @@ export function createToolScriptTool(ctx: ToolScriptToolContext): ToolSpec {
       "Execute multiple readonly tools in a single batch. " +
       "Steps run sequentially; reference previous step outputs with $stepId " +
       "(full output) or $stepId.lines[N] (specific line, 0-indexed). " +
-      "Only readonly tools are allowed (find_files, read_file, search_files, git_status, etc.).",
+      "Only readonly tools are allowed (find_files, read_file, search_files, git_status, etc.). " +
+      "Tool names must be canonical (for example read_file, not functions.read_file).",
     category: "readonly",
     paramSchema: {
       type: "object",
@@ -33,7 +34,8 @@ export function createToolScriptTool(ctx: ToolScriptToolContext): ToolSpec {
           type: "string",
           description:
             'JSON array of steps: [{"id":"find","tool":"find_files","args":{"pattern":"**/*.ts"}}, ' +
-            '{"id":"read1","tool":"read_file","args":{"path":"$find.lines[0]"}}]',
+            '{"id":"read1","tool":"read_file","args":{"path":"$find.lines[0]"}}]. ' +
+            "Use canonical tool names only (no functions./function./tools. prefixes).",
         },
       },
       required: ["steps"],

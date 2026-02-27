@@ -64,6 +64,8 @@ modify", "no code changes"):
 - Avoid redundant calls — don't re-read a file you already have in context.
 - Validate results before proceeding; don't assume success.
 - Break complex objectives into smaller, verifiable actions.
+- Use exact canonical tool names from the registry (e.g., `find_files`, `read_file`).
+- Never prefix tool names with namespaces like `functions.`, `function.`, or `tools.`.
 
 ### When to Stop
 

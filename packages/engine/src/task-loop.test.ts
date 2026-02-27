@@ -183,6 +183,48 @@ describe("TaskLoop", () => {
     expect(toolMessages[0]!.content).toBe("Echo: test");
   });
 
+  it("rejects namespaced tool call names with guidance", async () => {
+    const provider = createMockProvider([
+      [
+        {
+          type: "tool_call",
+          content: '{"text": "test"}',
+          toolCallId: "call_0",
+          toolName: "functions.echo",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "done" },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "You are a test assistant.",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Run the echo tool");
+    expect(result.iterations).toBe(2);
+
+    const toolMessages = result.messages.filter(
+      (m) => m.role === MessageRole.TOOL,
+    );
+    expect(toolMessages.length).toBe(1);
+    expect(toolMessages[0]!.content).toContain("Error: Unknown tool: functions.echo");
+    expect(toolMessages[0]!.content).toContain('Try "echo"');
+  });
+
   it("handles tool errors gracefully", async () => {
     const failingTool: ToolSpec = {
       name: "fail",

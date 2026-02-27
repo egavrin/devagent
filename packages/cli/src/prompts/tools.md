@@ -10,6 +10,7 @@ Rules:
 - Do not use `run_command` (`grep`, Python scripts, etc.) for routine code search when
   `find_files` / `search_files` can do it.
 - Avoid speculative full-file reads. Search first, then read focused ranges.
+- Tool names must be exact canonical names (for example `find_files`, not `functions.find_files`).
 
 ## Editing Strategy
 
@@ -126,3 +127,7 @@ Batch patterns:
 
 Only readonly tools are allowed in `execute_tool_script`. For writes or commands, use
 individual tool calls.
+
+In `execute_tool_script` step definitions, set `tool` to canonical names only
+(for example `read_file`, `search_files`). Do not use namespace prefixes like
+`functions.`, `function.`, or `tools.`.

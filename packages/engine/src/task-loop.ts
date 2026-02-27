@@ -674,10 +674,13 @@ export class TaskLoop {
     // Check tool exists and is available in current mode
     const isAvailable = availableTools.some((t) => t.name === toolCall.name);
     if (!isAvailable) {
+      const namespaceHint = namespacedToolHint(toolCall.name, availableTools);
       return {
         success: false,
         output: "",
-        error: `Unknown tool: ${toolCall.name}`,
+        error: namespaceHint
+          ? `Unknown tool: ${toolCall.name}. ${namespaceHint}`
+          : `Unknown tool: ${toolCall.name}`,
         artifacts: [],
       };
     }
@@ -938,4 +941,22 @@ function parseToolArgs(content: string): Record<string, unknown> {
     // instead of silently dropping structured arguments.
     return { _parseError: `Malformed tool arguments (invalid JSON): ${content.substring(0, 200)}` };
   }
+}
+
+function namespacedToolHint(
+  toolName: string,
+  availableTools: ReadonlyArray<ToolSpec>,
+): string | null {
+  if (!hasDisallowedToolPrefix(toolName)) return null;
+
+  const canonical = toolName.replace(/^(?:functions|function|tools)\./, "");
+  if (availableTools.some((t) => t.name === canonical)) {
+    return `Use canonical tool names only. Try "${canonical}" (without namespace prefixes).`;
+  }
+
+  return "Use canonical tool names only (no prefixes like functions./function./tools.).";
+}
+
+function hasDisallowedToolPrefix(toolName: string): boolean {
+  return /^(?:functions|function|tools)\./.test(toolName);
 }

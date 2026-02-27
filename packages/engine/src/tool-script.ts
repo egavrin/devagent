@@ -264,6 +264,12 @@ export class ToolScriptEngine {
       }
       seenIds.add(step.id);
 
+      // Namespaced tool names are invalid — use canonical registry names.
+      const namespacedHint = namespacedToolHint(step.tool, this.registry);
+      if (namespacedHint) {
+        return namespacedHint;
+      }
+
       // Check blocked tools (recursion guard)
       if (BLOCKED_TOOLS.has(step.tool)) {
         return `Tool "${step.tool}" cannot be used inside scripts (recursion prevention)`;
@@ -384,4 +390,15 @@ export class ToolScriptEngine {
 
     return refs;
   }
+}
+
+function namespacedToolHint(toolName: string, registry: ToolRegistry): string | null {
+  if (!/^(?:functions|function|tools)\./.test(toolName)) return null;
+
+  const canonical = toolName.replace(/^(?:functions|function|tools)\./, "");
+  if (registry.has(canonical)) {
+    return `Invalid tool name "${toolName}". Use canonical tool names only: "${canonical}" (without namespace prefixes).`;
+  }
+
+  return `Invalid tool name "${toolName}". Use canonical tool names only (no prefixes like functions./function./tools.).`;
 }
