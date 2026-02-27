@@ -1,7 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
+import { execSync } from "node:child_process";
 import type { ToolContext } from "@devagent/core";
 import { readFileTool } from "./read-file.js";
 import { writeFileTool } from "./write-file.js";
@@ -17,6 +26,7 @@ import {
 import { findFilesTool } from "./find-files.js";
 import { searchFilesTool } from "./search-files.js";
 import { runCommandTool } from "./run-command.js";
+import { gitDiffTool, gitCommitTool } from "./git.js";
 import { builtinTools } from "./index.js";
 import { FileTime } from "./file-time.js";
 
@@ -77,6 +87,41 @@ describe("read_file", () => {
       readFileTool.handler({ path: "nonexistent.ts" }, ctx),
     ).rejects.toThrow("File not found");
   });
+
+  it("rejects reading files outside repo root", async () => {
+    const outsidePath = join(
+      tmpdir(),
+      `devagent-tools-outside-read-${Date.now()}.txt`,
+    );
+    writeFileSync(outsidePath, "outside secret");
+
+    try {
+      await expect(
+        readFileTool.handler({ path: outsidePath }, ctx),
+      ).rejects.toThrow(/repo root|outside/i);
+    } finally {
+      rmSync(outsidePath, { force: true });
+    }
+  });
+
+  it("rejects reading through symlinks that escape repo root", async () => {
+    const outsidePath = join(
+      tmpdir(),
+      `devagent-tools-outside-readlink-${Date.now()}.txt`,
+    );
+    writeFileSync(outsidePath, "outside secret");
+    const linkPath = join(tmpDir, "src", "outside-link.txt");
+    symlinkSync(outsidePath, linkPath);
+
+    try {
+      await expect(
+        readFileTool.handler({ path: "src/outside-link.txt" }, ctx),
+      ).rejects.toThrow(/repo root|outside/i);
+    } finally {
+      rmSync(linkPath, { force: true });
+      rmSync(outsidePath, { force: true });
+    }
+  });
 });
 
 describe("write_file", () => {
@@ -121,6 +166,23 @@ describe("write_file", () => {
         ctx,
       ),
     ).rejects.toThrow("Refusing to overwrite existing file");
+  });
+
+  it("rejects writing files outside repo root", async () => {
+    const outsidePath = join(
+      tmpdir(),
+      `devagent-tools-outside-write-${Date.now()}.txt`,
+    );
+    rmSync(outsidePath, { force: true });
+
+    try {
+      await expect(
+        writeFileTool.handler({ path: outsidePath, content: "nope\n" }, ctx),
+      ).rejects.toThrow(/repo root|outside/i);
+      expect(existsSync(outsidePath)).toBe(false);
+    } finally {
+      rmSync(outsidePath, { force: true });
+    }
   });
 });
 
@@ -207,6 +269,55 @@ describe("replace_in_file", () => {
       ),
     ).rejects.toThrow("Expected 1 replacement(s), but made 2");
   });
+
+  it("rejects replacing text outside repo root", async () => {
+    const outsidePath = join(
+      tmpdir(),
+      `devagent-tools-outside-replace-${Date.now()}.txt`,
+    );
+    writeFileSync(outsidePath, "outside value=1\n");
+    FileTime.recordRead(outsidePath);
+
+    try {
+      await expect(
+        replaceInFileTool.handler(
+          { path: outsidePath, search: "value=1", replace: "value=2" },
+          ctx,
+        ),
+      ).rejects.toThrow(/repo root|outside/i);
+      expect(readFileSync(outsidePath, "utf-8")).toContain("value=1");
+    } finally {
+      rmSync(outsidePath, { force: true });
+    }
+  });
+
+  it("rejects replacing through symlinks that escape repo root", async () => {
+    const outsidePath = join(
+      tmpdir(),
+      `devagent-tools-outside-replacelink-${Date.now()}.txt`,
+    );
+    writeFileSync(outsidePath, "outside value=1\n");
+    const linkPath = join(tmpDir, "src", "outside-replace-link.txt");
+    symlinkSync(outsidePath, linkPath);
+    FileTime.recordRead(linkPath);
+
+    try {
+      await expect(
+        replaceInFileTool.handler(
+          {
+            path: "src/outside-replace-link.txt",
+            search: "value=1",
+            replace: "value=2",
+          },
+          ctx,
+        ),
+      ).rejects.toThrow(/repo root|outside/i);
+      expect(readFileSync(outsidePath, "utf-8")).toContain("value=1");
+    } finally {
+      rmSync(linkPath, { force: true });
+      rmSync(outsidePath, { force: true });
+    }
+  });
 });
 
 describe("find_files", () => {
@@ -228,6 +339,21 @@ describe("find_files", () => {
     const result = await findFilesTool.handler({ pattern: "**/*.xyz" }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain("No files matched");
+  });
+
+  it("rejects searching directories outside repo root", async () => {
+    const outsideDir = mkdtempSync(
+      join(tmpdir(), "devagent-tools-outside-find-"),
+    );
+    writeFileSync(join(outsideDir, "outside.ts"), "export const outside = 1;\n");
+
+    try {
+      await expect(
+        findFilesTool.handler({ pattern: "**/*.ts", path: outsideDir }, ctx),
+      ).rejects.toThrow(/repo root|outside/i);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -259,6 +385,24 @@ describe("search_files", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output).toContain("No matches found");
+  });
+
+  it("rejects search paths outside repo root", async () => {
+    const outsideDir = mkdtempSync(
+      join(tmpdir(), "devagent-tools-outside-search-"),
+    );
+    writeFileSync(join(outsideDir, "outside.ts"), "export const outside = 1;\n");
+
+    try {
+      await expect(
+        searchFilesTool.handler(
+          { pattern: "outside", path: outsideDir },
+          ctx,
+        ),
+      ).rejects.toThrow(/repo root|outside/i);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -315,6 +459,91 @@ describe("run_command", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output).toContain("[output truncated");
+  });
+});
+
+describe("git tools", () => {
+  function initRepo(): void {
+    execSync("git init", { cwd: tmpDir });
+    execSync("git config user.name Test", { cwd: tmpDir });
+    execSync("git config user.email test@example.com", { cwd: tmpDir });
+    execSync("git add -A", { cwd: tmpDir });
+    execSync("git commit -m init", { cwd: tmpDir });
+  }
+
+  it("does not execute shell metacharacters from git_diff path", async () => {
+    initRepo();
+    const marker = ".git-diff-injection-marker";
+
+    await expect(
+      gitDiffTool.handler(
+        { path: `README.md; touch ${marker}` },
+        ctx,
+      ),
+    ).rejects.toThrow();
+    expect(existsSync(join(tmpDir, marker))).toBe(false);
+  });
+
+  it("rejects git_diff refs that look like options", async () => {
+    initRepo();
+    writeFileSync(join(tmpDir, "README.md"), "# changed\n");
+    const marker = join(tmpDir, "git-diff-ref-option-marker.txt");
+
+    await expect(
+      gitDiffTool.handler(
+        { ref: `--output=${marker}` },
+        ctx,
+      ),
+    ).rejects.toThrow();
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("does not execute shell metacharacters from git_commit files", async () => {
+    initRepo();
+    writeFileSync(join(tmpDir, "README.md"), "# Changed\n");
+    const marker = ".git-commit-injection-marker";
+
+    await expect(
+      gitCommitTool.handler(
+        { message: "safe", files: `README.md; touch ${marker}` },
+        ctx,
+      ),
+    ).rejects.toThrow();
+    expect(existsSync(join(tmpDir, marker))).toBe(false);
+  });
+
+  it("does not interpret git_commit files as git options", async () => {
+    initRepo();
+    writeFileSync(join(tmpDir, "src", "index.ts"), "export const x = 99;\n");
+
+    await expect(
+      gitCommitTool.handler(
+        { message: "no-option", files: "--all" },
+        ctx,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("supports quoted file paths with spaces in git_commit files", async () => {
+    initRepo();
+    writeFileSync(join(tmpDir, "space name.txt"), "first\n");
+    execSync('git add "space name.txt" && git commit -m seed-space', { cwd: tmpDir });
+
+    writeFileSync(join(tmpDir, "space name.txt"), "second\n");
+    writeFileSync(join(tmpDir, "README.md"), "# unrelated change\n");
+
+    const result = await gitCommitTool.handler(
+      { message: "update spaced file", files: '"space name.txt"' },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+
+    const committedFiles = execSync(
+      "git show --name-only --pretty=format: HEAD",
+      { cwd: tmpDir, encoding: "utf-8" },
+    );
+    expect(committedFiles).toContain("space name.txt");
+    expect(committedFiles).not.toContain("README.md");
   });
 });
 

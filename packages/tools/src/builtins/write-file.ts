@@ -4,10 +4,11 @@
  */
 
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { dirname } from "node:path";
 import type { ToolSpec } from "@devagent/core";
 import { ToolError } from "@devagent/core";
 import { FileTime } from "./file-time.js";
+import { resolvePathInRepo } from "./path-guard.js";
 
 export const writeFileTool: ToolSpec = {
   name: "write_file",
@@ -28,7 +29,11 @@ export const writeFileTool: ToolSpec = {
     },
   },
   handler: async (params, context) => {
-    const filePath = resolve(context.repoRoot, params["path"] as string);
+    const filePath = resolvePathInRepo(
+      context.repoRoot,
+      params["path"] as string,
+      "write_file",
+    );
     const content = params["content"] as string;
 
     if (existsSync(filePath)) {

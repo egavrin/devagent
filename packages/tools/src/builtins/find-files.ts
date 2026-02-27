@@ -4,8 +4,9 @@
  */
 
 import { readdirSync, statSync } from "node:fs";
-import { resolve, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import type { ToolSpec } from "@devagent/core";
+import { resolvePathInRepo } from "./path-guard.js";
 
 export const findFilesTool: ToolSpec = {
   name: "find_files",
@@ -42,7 +43,11 @@ export const findFilesTool: ToolSpec = {
     const searchPath = params["path"] as string | undefined ?? ".";
     const maxResults = (params["max_results"] as number | undefined) ?? 100;
 
-    const baseDir = resolve(context.repoRoot, searchPath);
+    const baseDir = resolvePathInRepo(
+      context.repoRoot,
+      searchPath,
+      "find_files",
+    );
     const regex = globToRegex(pattern);
     const matches: string[] = [];
 

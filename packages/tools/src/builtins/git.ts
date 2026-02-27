@@ -3,14 +3,98 @@
  * Category: readonly (status/diff) and mutating (commit).
  */
 
-import { execSync } from "node:child_process";
-import { resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 import type { ToolSpec } from "@devagent/core";
 import { ToolError } from "@devagent/core";
 
-function execGit(args: string, repoRoot: string): string {
+const DISALLOWED_ARG_CHARS = /[;&|`$<>\n\r\0]/;
+
+function assertSafeArg(
+  toolName: string,
+  field: string,
+  value: string,
+): void {
+  if (DISALLOWED_ARG_CHARS.test(value)) {
+    throw new ToolError(
+      toolName,
+      `Invalid ${field}: contains disallowed shell metacharacters.`,
+    );
+  }
+}
+
+function parseQuotedArgs(input: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+
+  for (const ch of input) {
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      escaping = true;
+      continue;
+    }
+
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+
+    if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        out.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (quote) {
+    throw new ToolError(
+      "git_commit",
+      "Invalid files: unterminated quote.",
+    );
+  }
+
+  if (escaping) {
+    current += "\\";
+  }
+
+  if (current.length > 0) {
+    out.push(current);
+  }
+
+  return out;
+}
+
+function parseFilesArg(files: string): string[] {
+  const parsed = parseQuotedArgs(files).filter((part) => part.length > 0);
+  if (parsed.length === 0) return ["."];
+  for (const file of parsed) {
+    assertSafeArg("git_commit", "files", file);
+  }
+  return parsed;
+}
+
+function execGit(args: ReadonlyArray<string>, repoRoot: string): string {
   try {
-    return execSync(`git ${args}`, {
+    return execFileSync("git", [...args], {
       cwd: repoRoot,
       encoding: "utf-8",
       maxBuffer: 1024 * 1024, // 1MB
@@ -18,7 +102,7 @@ function execGit(args: string, repoRoot: string): string {
     }).trim();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new ToolError("git", `git ${args} failed: ${message}`);
+    throw new ToolError("git", `git ${args.join(" ")} failed: ${message}`);
   }
 }
 
@@ -37,7 +121,7 @@ export const gitStatusTool: ToolSpec = {
     },
   },
   handler: async (_params, context) => {
-    const output = execGit("status --short", context.repoRoot);
+    const output = execGit(["status", "--short"], context.repoRoot);
     return {
       success: true,
       output: output || "Working tree clean",
@@ -71,10 +155,23 @@ export const gitDiffTool: ToolSpec = {
     const staged = (params["staged"] as boolean | undefined) ?? false;
     const ref = params["ref"] as string | undefined;
 
-    let args = "diff";
-    if (staged) args += " --cached";
-    if (ref) args += ` ${ref}`;
-    if (path) args += ` -- ${path}`;
+    if (path) {
+      assertSafeArg("git_diff", "path", path);
+    }
+    if (ref) {
+      assertSafeArg("git_diff", "ref", ref);
+      if (ref.startsWith("-")) {
+        throw new ToolError(
+          "git_diff",
+          "Invalid ref: option-style refs are not allowed.",
+        );
+      }
+    }
+
+    const args = ["diff"];
+    if (staged) args.push("--cached");
+    if (ref) args.push(ref);
+    if (path) args.push("--", path);
 
     const output = execGit(args, context.repoRoot);
     return {
@@ -111,18 +208,19 @@ export const gitCommitTool: ToolSpec = {
   handler: async (params, context) => {
     const message = params["message"] as string;
     const files = (params["files"] as string | undefined) ?? ".";
+    const parsedFiles = parseFilesArg(files);
 
     // Stage files
-    execGit(`add ${files}`, context.repoRoot);
+    execGit(["add", "--", ...parsedFiles], context.repoRoot);
 
     // Commit
     const output = execGit(
-      `commit -m "${message.replace(/"/g, '\\"')}"`,
+      ["commit", "-m", message],
       context.repoRoot,
     );
 
     // Get the commit hash
-    const hash = execGit("rev-parse --short HEAD", context.repoRoot);
+    const hash = execGit(["rev-parse", "--short", "HEAD"], context.repoRoot);
 
     return {
       success: true,

@@ -545,8 +545,8 @@ export async function main(): Promise<void> {
         const lspProvider = diagnosticProvider;
         diagnosticProvider = async (filePath: string) => {
           const [lsp, arkts] = await Promise.all([
-            lspProvider(filePath).catch(() => []),
-            arktsProvider(filePath).catch(() => []),
+            lspProvider(filePath),
+            arktsProvider(filePath),
           ]);
           return [...lsp, ...arkts];
         };

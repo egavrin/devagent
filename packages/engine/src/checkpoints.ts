@@ -172,8 +172,11 @@ export class CheckpointManager {
       const files = this.git(`diff --name-only ${checkpoint.commitHash} HEAD`).trim();
       if (!files) return true; // No differences
 
-      // Checkout files from the checkpoint commit into the shadow work tree
-      this.git(`checkout ${checkpoint.commitHash} -- .`);
+      // Reset shadow work tree to the exact checkpoint snapshot.
+      // `reset --hard` restores tracked files and removes tracked files that
+      // were added after the target checkpoint; `clean -fd` removes leftovers.
+      this.git(`reset --hard ${checkpoint.commitHash}`);
+      this.git("clean -fd");
 
       // Copy restored files back to the repo root
       this.syncFromShadow();
@@ -237,7 +240,7 @@ export class CheckpointManager {
   private syncFromShadow(): void {
     try {
       execSync(
-        `rsync -a --exclude='.git' "${this.shadowDir}/" "${this.repoRoot}/"`,
+        `rsync -a --delete --exclude='.git' --exclude='.devagent' --exclude='node_modules' --exclude='dist' "${this.shadowDir}/" "${this.repoRoot}/"`,
         { encoding: "utf-8", timeout: 30_000 },
       );
     } catch (err) {

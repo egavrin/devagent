@@ -254,6 +254,7 @@ export class DoubleCheck {
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          diagnosticErrors.push(`${file}: diagnostics provider failure: ${message}`);
           this.bus.emit("error", {
             message: `Double-check diagnostics failed for ${file}: ${message}`,
             code: "DOUBLE_CHECK_DIAGNOSTIC_ERROR",

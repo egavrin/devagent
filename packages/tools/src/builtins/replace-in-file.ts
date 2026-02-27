@@ -16,10 +16,10 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
-import { resolve } from "node:path";
 import type { ToolSpec } from "@devagent/core";
 import { ToolError } from "@devagent/core";
 import { FileTime } from "./file-time.js";
+import { resolvePathInRepo } from "./path-guard.js";
 
 // ─── Levenshtein Distance ───────────────────────────────────
 
@@ -484,7 +484,11 @@ export const replaceInFileTool: ToolSpec = {
       throw new ToolError("replace_in_file", parseError);
     }
 
-    const filePath = resolve(context.repoRoot, params["path"] as string);
+    const filePath = resolvePathInRepo(
+      context.repoRoot,
+      params["path"] as string,
+      "replace_in_file",
+    );
     const search = params["search"] as string;
     const replace = params["replace"] as string;
     const replaceAll = (params["all"] as boolean | undefined) ?? false;

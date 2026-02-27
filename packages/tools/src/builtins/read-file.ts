@@ -4,10 +4,10 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
 import type { ToolSpec } from "@devagent/core";
 import { ToolError } from "@devagent/core";
 import { FileTime } from "./file-time.js";
+import { resolvePathInRepo } from "./path-guard.js";
 
 export const readFileTool: ToolSpec = {
   name: "read_file",
@@ -31,7 +31,11 @@ export const readFileTool: ToolSpec = {
     },
   },
   handler: async (params, context) => {
-    const filePath = resolve(context.repoRoot, params["path"] as string);
+    const filePath = resolvePathInRepo(
+      context.repoRoot,
+      params["path"] as string,
+      "read_file",
+    );
 
     if (!existsSync(filePath)) {
       throw new ToolError("read_file", `File not found: ${params["path"] as string}`);

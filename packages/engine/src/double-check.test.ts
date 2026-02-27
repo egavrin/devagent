@@ -154,7 +154,7 @@ describe("DoubleCheck", () => {
     expect(formatted).toContain("FAIL: test1");
   });
 
-  it("handles diagnostic provider errors gracefully", async () => {
+  it("fails closed when diagnostic provider errors", async () => {
     const errors: string[] = [];
     bus.on("error", (e) => errors.push(e.message));
 
@@ -169,8 +169,9 @@ describe("DoubleCheck", () => {
     dc.setDiagnosticProvider(provider);
 
     const result = await dc.check(["file.ts"]);
-    // Should not fail — just report the error via bus
-    expect(result.diagnosticErrors.length).toBe(0);
+    expect(result.passed).toBe(false);
+    expect(result.diagnosticErrors.length).toBe(1);
+    expect(result.diagnosticErrors[0]).toContain("LSP crashed");
     expect(errors.length).toBe(1);
     expect(errors[0]).toContain("LSP crashed");
   });

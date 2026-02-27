@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { CheckpointManager } from "./checkpoints.js";
 import { EventBus } from "@devagent/core";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
@@ -145,5 +145,28 @@ describe("CheckpointManager", () => {
     const d = mgr.diff(cp1!.id, cp2!.id);
     expect(d).toContain("version 1");
     expect(d).toContain("version 2");
+  });
+
+  it("restore removes files created after target checkpoint", () => {
+    const mgr = new CheckpointManager({
+      repoRoot: testDir,
+      bus,
+      enabled: true,
+    });
+    mgr.init();
+
+    writeFileSync(join(testDir, "file.txt"), "version 1");
+    const cp1 = mgr.create("first", "write_file");
+    expect(cp1).not.toBeNull();
+
+    writeFileSync(join(testDir, "new-file.txt"), "new file");
+    const cp2 = mgr.create("second", "write_file");
+    expect(cp2).not.toBeNull();
+    expect(existsSync(join(testDir, "new-file.txt"))).toBe(true);
+
+    const restored = mgr.restore(cp1!.id);
+    expect(restored).toBe(true);
+    expect(existsSync(join(testDir, "new-file.txt"))).toBe(false);
+    expect(readFileSync(join(testDir, "file.txt"), "utf-8")).toBe("version 1");
   });
 });
