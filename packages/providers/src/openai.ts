@@ -150,7 +150,11 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
             case "tool-call":
               yield {
                 type: "tool_call",
-                content: JSON.stringify(part.args),
+                // Strip null-valued keys: our convertTools makes optional params
+                // nullable (type: ["T", "null"]) + required for strict mode.
+                // The model sends null for unused optionals — strip them so
+                // downstream tool handlers see undefined (not provided), not null.
+                content: JSON.stringify(stripNullArgs(part.args as Record<string, unknown>)),
                 toolCallId: part.toolCallId,
                 toolName: part.toolName,
               };
@@ -163,6 +167,12 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
               yield {
                 type: "done",
                 content: "",
+                usage: part.usage
+                  ? {
+                      promptTokens: part.usage.promptTokens,
+                      completionTokens: part.usage.completionTokens,
+                    }
+                  : undefined,
               };
               break;
           }
@@ -282,4 +292,18 @@ function convertTools(
   }
 
   return result;
+}
+
+/**
+ * Strip null-valued keys from tool call arguments.
+ * Our convertTools transforms optional params into nullable + required for
+ * OpenAI strict mode. The model responds with null for unused optionals.
+ * Strip them so tool handlers see undefined (absent), not null.
+ */
+export function stripNullArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const cleaned: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (v !== null) cleaned[k] = v;
+  }
+  return cleaned;
 }

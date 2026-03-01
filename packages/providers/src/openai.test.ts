@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createOpenAIProvider, resolveCapabilities } from "./openai.js";
+import { createOpenAIProvider, resolveCapabilities, stripNullArgs } from "./openai.js";
 import type { ProviderConfig, ModelCapabilities } from "@devagent/core";
 
 describe("createOpenAIProvider", () => {
@@ -78,5 +78,43 @@ describe("resolveCapabilities", () => {
     const explicit: ModelCapabilities = { defaultMaxTokens: 131072 };
     const caps = resolveCapabilities(explicit);
     expect(caps.defaultMaxTokens).toBe(131072);
+  });
+});
+
+describe("stripNullArgs", () => {
+  it("removes null-valued keys (OpenAI strict schema sends null for unused optionals)", () => {
+    const args = {
+      path: "src/x.cpp",
+      search: "std.core.",
+      replace: "std:core.",
+      replacements: null,
+      all: null,
+      expected_replacements: null,
+    };
+    const cleaned = stripNullArgs(args);
+    expect(cleaned).toEqual({
+      path: "src/x.cpp",
+      search: "std.core.",
+      replace: "std:core.",
+    });
+    expect("replacements" in cleaned).toBe(false);
+    expect("all" in cleaned).toBe(false);
+  });
+
+  it("preserves non-null values including false, 0, and empty string", () => {
+    const args = {
+      path: "file.ts",
+      all: false,
+      count: 0,
+      note: "",
+      data: [1, 2],
+    };
+    const cleaned = stripNullArgs(args);
+    expect(cleaned).toEqual(args);
+  });
+
+  it("returns empty object when all values are null", () => {
+    const cleaned = stripNullArgs({ a: null, b: null });
+    expect(cleaned).toEqual({});
   });
 });

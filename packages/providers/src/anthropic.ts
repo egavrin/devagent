@@ -71,6 +71,12 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
               yield {
                 type: "done",
                 content: "",
+                usage: part.usage
+                  ? {
+                      promptTokens: part.usage.promptTokens,
+                      completionTokens: part.usage.completionTokens,
+                    }
+                  : undefined,
               };
               break;
           }
