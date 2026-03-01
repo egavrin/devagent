@@ -16,6 +16,7 @@ import { AgentType, EventBus, ApprovalGate } from "@devagent/core";
 import { ToolRegistry } from "@devagent/tools";
 import { TaskLoop } from "./task-loop.js";
 import type { TaskMode, TaskLoopResult } from "./task-loop.js";
+import { SessionState } from "./session-state.js";
 
 // ─── Agent Definition ────────────────────────────────────────
 
@@ -37,6 +38,8 @@ export interface AgentRunOptions {
   readonly repoRoot: string;
   readonly parentId: string | null;
   readonly agentId: string;
+  /** Parent's session state — seeded into the subagent so it knows what was already read. */
+  readonly parentSessionState?: SessionState;
 }
 
 export interface AgentRunResult {
@@ -161,7 +164,15 @@ export async function runAgent(
     definition.allowedToolCategories,
   );
 
-  // Create isolated TaskLoop for this agent
+  // Create isolated TaskLoop with its own SessionState so stagnation
+  // detection, tool-output pruning, and post-compaction summaries work.
+  // Seed from parent's coverage data so the subagent doesn't re-read files
+  // that have already been examined.
+  const sessionState = new SessionState({ persist: false });
+  if (options.parentSessionState) {
+    seedSessionState(sessionState, options.parentSessionState);
+  }
+
   const loop = new TaskLoop({
     provider: options.provider,
     tools: filteredTools,
@@ -171,6 +182,7 @@ export async function runAgent(
     systemPrompt,
     repoRoot: options.repoRoot,
     mode: definition.defaultMode,
+    sessionState,
   });
 
   const result = await loop.run(query);
@@ -202,4 +214,26 @@ function filterToolsByCategories(
   }
 
   return filtered;
+}
+
+/**
+ * Seed a subagent's SessionState with the parent's readonly coverage
+ * and tool summaries so the subagent knows what files were already examined.
+ * Does NOT copy findings (those belong to the parent's analysis).
+ */
+function seedSessionState(child: SessionState, parent: SessionState): void {
+  // Copy tool summaries — tells the subagent what was already read
+  for (const summary of parent.getToolSummaries()) {
+    child.addToolSummary({ ...summary });
+  }
+  // Copy readonly coverage — prevents redundant calls
+  for (const [tool, targets] of parent.getReadonlyCoverage()) {
+    for (const target of targets) {
+      child.recordReadonlyCoverage(tool, target);
+    }
+  }
+  // Copy modified files — scope awareness
+  for (const file of parent.getModifiedFiles()) {
+    child.recordModifiedFile(file);
+  }
 }

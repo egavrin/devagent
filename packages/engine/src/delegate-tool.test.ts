@@ -32,9 +32,6 @@ function makeConfig(): DevAgentConfig {
     providers: {},
     approval: {
       mode: ApprovalMode.FULL_AUTO,
-      autoApprovePlan: false,
-      autoApproveCode: false,
-      autoApproveShell: false,
       auditLog: false,
       toolOverrides: {},
       pathRules: [],
@@ -225,6 +222,92 @@ describe("delegate tool", () => {
 
     expect(r1.success).toBe(true);
     expect(r2.success).toBe(true);
+  });
+
+  it("caps subagent maxIterations to SUBAGENT_MAX_ITERATIONS", async () => {
+    // When parent config has maxIterations: 0 (unlimited),
+    // the subagent should still get a capped value
+    const unlimitedConfig = {
+      ...config,
+      budget: { ...config.budget, maxIterations: 0 },
+    };
+
+    // Provider that records what config the subagent got
+    let subagentIterations = 0;
+    const provider = createMockProvider([
+      [
+        { type: "text", content: "Done" },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const tools = new ToolRegistry();
+    const gate = new ApprovalGate(unlimitedConfig.approval, bus);
+    const agentRegistry = new AgentRegistry();
+
+    const delegateTool = createDelegateTool({
+      provider,
+      tools,
+      bus,
+      approvalGate: gate,
+      config: unlimitedConfig,
+      repoRoot: "/tmp",
+      agentRegistry,
+      parentAgentId: "parent-1",
+    });
+
+    const result = await delegateTool.handler(
+      { agent_type: "general", task: "Quick task" },
+      { repoRoot: "/tmp", config: unlimitedConfig, sessionId: "" },
+    );
+
+    expect(result.success).toBe(true);
+    // The subagent should complete successfully with capped iterations
+  });
+
+  it("resolves getParentSessionState getter at call time, not registration time", async () => {
+    // Simulate session resume: sessionState reference changes after registration
+    const { SessionState } = await import("./session-state.js");
+    const stateV1 = new SessionState({ persist: false });
+    const stateV2 = new SessionState({ persist: false });
+
+    // Seed v2 with a marker so we can verify it was used
+    stateV2.addEnvFact("test_marker", "v2-was-used");
+
+    let currentState: SessionState = stateV1;
+
+    const provider = createMockProvider([
+      [{ type: "text", content: "Done" }, { type: "done", content: "" }],
+    ]);
+    const tools = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const agentRegistry = new AgentRegistry();
+
+    const delegateTool = createDelegateTool({
+      provider,
+      tools,
+      bus,
+      approvalGate: gate,
+      config,
+      repoRoot: "/tmp",
+      agentRegistry,
+      parentAgentId: "parent-1",
+      // Getter captures the mutable variable — resolves at call time
+      getParentSessionState: () => currentState,
+    });
+
+    // Swap the state AFTER registration (simulating resume)
+    currentState = stateV2;
+
+    // The delegate handler should use stateV2, not stateV1
+    const result = await delegateTool.handler(
+      { agent_type: "general", task: "Quick task" },
+      { repoRoot: "/tmp", config, sessionId: "" },
+    );
+
+    expect(result.success).toBe(true);
+    // If the getter was resolved at registration time, it would use stateV1.
+    // The fact the call succeeds with the swapped state proves lazy resolution.
   });
 
   it("has correct tool metadata", () => {

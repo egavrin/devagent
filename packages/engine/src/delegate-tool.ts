@@ -10,6 +10,10 @@ import type { ToolSpec, LLMProvider, DevAgentConfig } from "@devagent/core";
 import { AgentType, EventBus, ApprovalGate } from "@devagent/core";
 import type { ToolRegistry } from "@devagent/tools";
 import { AgentRegistry, runAgent } from "./agents.js";
+import type { SessionState } from "./session-state.js";
+
+/** Hard cap on subagent iterations to prevent runaway loops. */
+export const SUBAGENT_MAX_ITERATIONS = 30;
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -22,6 +26,8 @@ export interface DelegateToolContext {
   readonly repoRoot: string;
   readonly agentRegistry: AgentRegistry;
   readonly parentAgentId: string;
+  /** Parent's session state — resolved lazily so resume can swap the instance. */
+  readonly getParentSessionState?: () => SessionState | undefined;
 }
 
 // ─── Factory ────────────────────────────────────────────────
@@ -79,6 +85,17 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
       subagentCounter++;
       const agentId = `${ctx.parentAgentId}-sub-${subagentCounter}`;
 
+      // Cap subagent iterations: use the smaller of parent's budget and the hard cap.
+      // When parent has maxIterations: 0 (unlimited), use the hard cap.
+      const parentMax = ctx.config.budget.maxIterations;
+      const cappedMax = parentMax > 0
+        ? Math.min(parentMax, SUBAGENT_MAX_ITERATIONS)
+        : SUBAGENT_MAX_ITERATIONS;
+      const subagentConfig: DevAgentConfig = {
+        ...ctx.config,
+        budget: { ...ctx.config.budget, maxIterations: cappedMax },
+      };
+
       try {
         const result = await runAgent(
           agentType,
@@ -88,10 +105,11 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
             tools: ctx.tools,
             bus: ctx.bus,
             approvalGate: ctx.approvalGate,
-            config: ctx.config,
+            config: subagentConfig,
             repoRoot: ctx.repoRoot,
             parentId: ctx.parentAgentId,
             agentId,
+            parentSessionState: ctx.getParentSessionState?.(),
           },
           ctx.agentRegistry,
         );

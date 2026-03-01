@@ -2,7 +2,7 @@
  * @devagent/engine — Task loop, agents, orchestration.
  */
 
-export { TaskLoop } from "./task-loop.js";
+export { TaskLoop, summarizeDiff, truncateToolOutput, extractStructuralDigest } from "./task-loop.js";
 export type {
   TaskMode,
   TaskCompletionStatus,
@@ -27,8 +27,18 @@ export type {
 export { createDelegateTool } from "./delegate-tool.js";
 export type { DelegateToolContext } from "./delegate-tool.js";
 
-export { createPlanTool, getCurrentPlan, clearPlan } from "./plan-tool.js";
+export { createPlanTool } from "./plan-tool.js";
 export type { PlanStep, Plan } from "./plan-tool.js";
+
+export { SessionState, extractEnvFact, DEFAULT_SESSION_STATE_CONFIG, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX } from "./session-state.js";
+export type {
+  EnvFact,
+  ToolResultSummary,
+  Finding,
+  SessionStateJSON,
+  SessionStatePersistence,
+  SessionStateConfig,
+} from "./session-state.js";
 
 export { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS, parseTestOutput } from "./double-check.js";
 export type {
@@ -36,16 +46,20 @@ export type {
   DoubleCheckResult,
   TestSummary,
   DiagnosticProvider,
+  DiagnosticBaseline,
   TestRunner,
 } from "./double-check.js";
 
 // Turn briefing (context synthesis for turn isolation)
-export { synthesizeBriefing, extractHeuristicBriefing, formatBriefing } from "./briefing.js";
-export type { TurnBriefing, BriefingPlanStep, BriefingStrategy, SynthesizeBriefingOptions } from "./briefing.js";
+export { synthesizeBriefing, extractHeuristicBriefing, formatBriefing, findLastUserContent } from "./briefing.js";
+export type { TurnBriefing, BriefingStrategy, SynthesizeBriefingOptions } from "./briefing.js";
 
 // Memory tools (LLM-callable cross-session memory)
 export { createMemoryTools } from "./memory-tools.js";
 export type { MemoryToolOptions } from "./memory-tools.js";
+
+// Finding tool (LLM-callable analysis persistence)
+export { createFindingTool } from "./finding-tool.js";
 
 // Tool script — batched readonly tool execution
 export { ToolScriptEngine } from "./tool-script.js";
