@@ -26,15 +26,12 @@ import type {
 
 const DEFAULT_APPROVAL: ApprovalPolicy = {
   mode: "suggest" as ApprovalMode,
-  autoApprovePlan: false,
-  autoApproveCode: false,
-  autoApproveShell: false,
   auditLog: false,
   toolOverrides: {},
   pathRules: [],
 };
 
-const DEFAULT_BUDGET: BudgetConfig = {
+export const DEFAULT_BUDGET: BudgetConfig = {
   maxIterations: 30,
   maxContextTokens: 100_000,
   responseHeadroom: 2_000,
@@ -164,9 +161,6 @@ function parseApproval(
 ): Partial<ApprovalPolicy> {
   return {
     mode: raw["mode"] as ApprovalMode | undefined,
-    autoApprovePlan: raw["auto_approve_plan"] as boolean | undefined,
-    autoApproveCode: raw["auto_approve_code"] as boolean | undefined,
-    autoApproveShell: raw["auto_approve_shell"] as boolean | undefined,
     auditLog: raw["audit_log"] as boolean | undefined,
   };
 }
@@ -482,6 +476,33 @@ export function loadConfig(
     }
   }
 
+  // Parse optional logging config
+  const rawLogging = fileConfig["logging"] as Record<string, unknown> | undefined;
+  const logging = rawLogging
+    ? {
+        enabled: (rawLogging["enabled"] as boolean) ?? true,
+        logDir: rawLogging["log_dir"] as string | undefined,
+        retentionDays: rawLogging["retention_days"] as number | undefined,
+      }
+    : undefined;
+
+  // Parse optional session_state config
+  const rawSessionState = fileConfig["session_state"] as Record<string, unknown> | undefined;
+  const sessionState = rawSessionState
+    ? {
+        persist: rawSessionState["persist"] as boolean | undefined,
+        trackPlan: rawSessionState["track_plan"] as boolean | undefined,
+        trackFiles: rawSessionState["track_files"] as boolean | undefined,
+        trackEnv: rawSessionState["track_env"] as boolean | undefined,
+        trackToolResults: rawSessionState["track_tool_results"] as boolean | undefined,
+        trackFindings: rawSessionState["track_findings"] as boolean | undefined,
+        maxModifiedFiles: rawSessionState["max_modified_files"] as number | undefined,
+        maxEnvFacts: rawSessionState["max_env_facts"] as number | undefined,
+        maxToolSummaries: rawSessionState["max_tool_summaries"] as number | undefined,
+        maxFindings: rawSessionState["max_findings"] as number | undefined,
+      }
+    : undefined;
+
   return {
     provider,
     model:
@@ -495,9 +516,11 @@ export function loadConfig(
     context,
     memory,
     arkts,
+    ...(logging ? { logging } : {}),
     ...(checkpoints ? { checkpoints } : {}),
     ...(doubleCheck ? { doubleCheck } : {}),
     ...(lsp ? { lsp } : {}),
+    ...(sessionState ? { sessionState } : {}),
   };
 }
 

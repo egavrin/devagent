@@ -152,6 +152,8 @@ export class ApprovalGate {
     switch (category) {
       case "readonly":
         return "allow";
+      case "state":
+        return "allow"; // internal agent state, no workspace mutation
       case "mutating":
         return "ask"; // show diff, ask user
       case "workflow":
@@ -167,6 +169,8 @@ export class ApprovalGate {
     switch (category) {
       case "readonly":
         return "allow";
+      case "state":
+        return "allow"; // internal agent state, no workspace mutation
       case "mutating":
         return "allow"; // auto-approve file writes
       case "workflow":

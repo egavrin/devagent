@@ -54,7 +54,7 @@ export interface ToolSpec {
   readonly handler: ToolHandler;
 }
 
-export type ToolCategory = "readonly" | "mutating" | "workflow" | "external";
+export type ToolCategory = "readonly" | "mutating" | "workflow" | "external" | "state";
 
 export type ToolHandler = (
   params: Record<string, unknown>,
@@ -108,6 +108,11 @@ export interface StreamChunk {
   readonly content: string;
   readonly toolCallId?: string;
   readonly toolName?: string;
+  /** Token usage reported by the provider on "done" chunks. */
+  readonly usage?: {
+    readonly promptTokens: number;
+    readonly completionTokens: number;
+  };
 }
 
 // ─── Provider Types ───────────────────────────────────────────
@@ -185,9 +190,6 @@ export enum ApprovalMode {
 
 export interface ApprovalPolicy {
   readonly mode: ApprovalMode;
-  readonly autoApprovePlan: boolean;
-  readonly autoApproveCode: boolean;
-  readonly autoApproveShell: boolean;
   readonly auditLog: boolean;
   readonly toolOverrides: Record<string, "allow" | "deny" | "ask">;
   readonly pathRules: ReadonlyArray<PathRule>;
@@ -209,9 +211,25 @@ export interface DevAgentConfig {
   readonly context: ContextConfig;
   readonly memory: MemoryConfig;
   readonly arkts: ArkTSConfig;
+  readonly logging?: LoggingConfig;
   readonly checkpoints?: CheckpointConfig;
   readonly doubleCheck?: DoubleCheckConfig;
   readonly lsp?: LSPConfig;
+  readonly sessionState?: SessionStateConfigCore;
+}
+
+/** Config for session state persistence and tracking (core-level definition). */
+export interface SessionStateConfigCore {
+  readonly persist?: boolean;
+  readonly trackPlan?: boolean;
+  readonly trackFiles?: boolean;
+  readonly trackEnv?: boolean;
+  readonly trackToolResults?: boolean;
+  readonly trackFindings?: boolean;
+  readonly maxModifiedFiles?: number;
+  readonly maxEnvFacts?: number;
+  readonly maxToolSummaries?: number;
+  readonly maxFindings?: number;
 }
 
 export interface CheckpointConfig {
@@ -316,6 +334,21 @@ export interface CostRecord {
   readonly totalCost: number;
 }
 
+// ─── Logging ─────────────────────────────────────────────────
+
+export interface LoggingConfig {
+  readonly enabled: boolean;
+  readonly logDir?: string;
+  readonly retentionDays?: number;
+}
+
+// ─── Verbosity ───────────────────────────────────────────────
+
+export interface VerbosityConfig {
+  readonly base: "quiet" | "normal" | "verbose";
+  readonly categories: ReadonlySet<string>;
+}
+
 // ─── Utility Types ───────────────────────────────────────────
 
 export interface JsonSchema {
@@ -323,6 +356,8 @@ export interface JsonSchema {
   readonly properties?: Record<string, unknown>;
   readonly required?: ReadonlyArray<string>;
   readonly description?: string;
+  readonly additionalProperties?: boolean;
+  readonly items?: Record<string, unknown>;
 }
 
 // ─── Task Types ──────────────────────────────────────────────

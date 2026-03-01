@@ -8,9 +8,6 @@ import { EventBus } from "./events.js";
 function makePolicy(overrides?: Partial<ApprovalPolicy>): ApprovalPolicy {
   return {
     mode: ApprovalMode.SUGGEST,
-    autoApprovePlan: false,
-    autoApproveCode: false,
-    autoApproveShell: false,
     auditLog: false,
     toolOverrides: {},
     pathRules: [],
@@ -59,6 +56,14 @@ describe("ApprovalGate", () => {
       );
       expect(decision).toBe("deny");
     });
+
+    it("allows state tools (internal agent state)", () => {
+      const gate = new ApprovalGate(makePolicy());
+      const decision = gate.decide(
+        makeRequest({ toolCategory: "state", toolName: "update_plan" }),
+      );
+      expect(decision).toBe("allow");
+    });
   });
 
   describe("Auto-Edit mode", () => {
@@ -99,6 +104,16 @@ describe("ApprovalGate", () => {
       );
       expect(decision).toBe("deny");
     });
+
+    it("allows state tools (internal agent state)", () => {
+      const gate = new ApprovalGate(
+        makePolicy({ mode: ApprovalMode.AUTO_EDIT }),
+      );
+      const decision = gate.decide(
+        makeRequest({ toolCategory: "state", toolName: "update_plan" }),
+      );
+      expect(decision).toBe("allow");
+    });
   });
 
   describe("Full-Auto mode", () => {
@@ -118,6 +133,9 @@ describe("ApprovalGate", () => {
       ).toBe("allow");
       expect(
         gate.decide(makeRequest({ toolCategory: "external" })),
+      ).toBe("allow");
+      expect(
+        gate.decide(makeRequest({ toolCategory: "state" })),
       ).toBe("allow");
     });
   });

@@ -26,9 +26,6 @@ function makeToolContext() {
       providers: {},
       approval: {
         mode: ApprovalMode.FULL_AUTO,
-        autoApprovePlan: false,
-        autoApproveCode: false,
-        autoApproveShell: false,
         auditLog: false,
         toolOverrides: {},
         pathRules: [],

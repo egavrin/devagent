@@ -17,9 +17,6 @@ function makeContext(): PluginContext {
     providers: {},
     approval: {
       mode: ApprovalMode.SUGGEST,
-      autoApprovePlan: false,
-      autoApproveCode: false,
-      autoApproveShell: false,
       auditLog: false,
       toolOverrides: {},
       pathRules: [],

@@ -11,7 +11,6 @@ describe("loadConfig", () => {
     expect(config.provider).toBe("anthropic");
     expect(config.model).toBe("claude-sonnet-4-20250514");
     expect(config.approval.mode).toBe("suggest");
-    expect(config.approval.autoApproveCode).toBe(false);
     expect(config.budget.maxIterations).toBe(30);
     expect(config.budget.enableCostTracking).toBe(true);
     expect(config.context.pruningStrategy).toBe("hybrid");
@@ -307,6 +306,45 @@ describe("findProjectRoot", () => {
     const result = findProjectRoot("/");
     // May or may not be null depending on system, but should not throw
     expect(typeof result === "string" || result === null).toBe(true);
+  });
+
+  it("parses session_state settings including trackFindings, maxFindings, maxEnvFacts from TOML", () => {
+    const dir = join(tmpdir(), `devagent-test-ss-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const configPath = join(dir, ".devagent.toml");
+    writeFileSync(
+      configPath,
+      `
+[session_state]
+persist = false
+track_plan = true
+track_files = false
+track_env = true
+track_tool_results = false
+track_findings = false
+max_modified_files = 10
+max_env_facts = 5
+max_tool_summaries = 15
+max_findings = 8
+`,
+    );
+
+    try {
+      const config = loadConfig(dir);
+      expect(config.sessionState).toBeDefined();
+      expect(config.sessionState!.persist).toBe(false);
+      expect(config.sessionState!.trackPlan).toBe(true);
+      expect(config.sessionState!.trackFiles).toBe(false);
+      expect(config.sessionState!.trackEnv).toBe(true);
+      expect(config.sessionState!.trackToolResults).toBe(false);
+      expect(config.sessionState!.trackFindings).toBe(false);
+      expect(config.sessionState!.maxModifiedFiles).toBe(10);
+      expect(config.sessionState!.maxEnvFacts).toBe(5);
+      expect(config.sessionState!.maxToolSummaries).toBe(15);
+      expect(config.sessionState!.maxFindings).toBe(8);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
   });
 
   it("finds directory with .devagent.toml", () => {
