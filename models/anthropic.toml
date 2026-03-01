@@ -1,67 +1,158 @@
-# Anthropic Direct API models (without provider prefix)
+# Anthropic Direct API models
+# Source: https://platform.claude.com/docs/en/about-claude/models/overview
+# Pricing: https://platform.claude.com/docs/en/about-claude/pricing
+# Last updated: 2026-03-01
 provider = "anthropic"
 base_url = "https://api.anthropic.com"
 
-[claude-3-5-sonnet-20241022]
+# =============================================================================
+# Claude 4.6 Family (Latest)
+# =============================================================================
+
+[claude-opus-4-6]
+context_window = 200000
+response_headroom = 16384
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+input_price_per_million = 5
+output_price_per_million = 25
+
+[claude-sonnet-4-6]
+context_window = 200000
+response_headroom = 16384
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+input_price_per_million = 3
+output_price_per_million = 15
+
+# =============================================================================
+# Claude 4.5 Family
+# =============================================================================
+
+[claude-opus-4-5-20251101]
+context_window = 200000
+response_headroom = 16384
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+input_price_per_million = 5
+output_price_per_million = 25
+
+[claude-opus-4-5]
+context_window = 200000
+response_headroom = 16384
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+input_price_per_million = 5
+output_price_per_million = 25
+
+[claude-sonnet-4-5-20250929]
+context_window = 200000
+response_headroom = 16384
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+input_price_per_million = 3
+output_price_per_million = 15
+
+[claude-sonnet-4-5]
+context_window = 200000
+response_headroom = 16384
+tokenizer = "claude"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = true
+input_price_per_million = 3
+output_price_per_million = 15
+
+[claude-haiku-4-5-20251001]
 context_window = 200000
 response_headroom = 8192
 tokenizer = "claude"
 supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
+input_price_per_million = 1
+output_price_per_million = 5
 
-[claude-3-5-sonnet-latest]
+[claude-haiku-4-5]
 context_window = 200000
 response_headroom = 8192
 tokenizer = "claude"
 supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
+input_price_per_million = 1
+output_price_per_million = 5
 
-[claude-3-opus-20240229]
+# =============================================================================
+# Claude 4.1 / 4.0 Family (Legacy — still active)
+# =============================================================================
+
+[claude-opus-4-1-20250805]
 context_window = 200000
-response_headroom = 4096
+response_headroom = 16384
 tokenizer = "claude"
 supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
+input_price_per_million = 15
+output_price_per_million = 75
 
-[claude-3-opus-latest]
+[claude-opus-4-1]
 context_window = 200000
-response_headroom = 4096
+response_headroom = 16384
 tokenizer = "claude"
 supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
+input_price_per_million = 15
+output_price_per_million = 75
 
-[claude-3-sonnet-20240229]
+[claude-sonnet-4-20250514]
 context_window = 200000
-response_headroom = 4096
+response_headroom = 16384
 tokenizer = "claude"
 supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
+input_price_per_million = 3
+output_price_per_million = 15
 
-[claude-3-haiku-20240307]
+[claude-sonnet-4-0]
 context_window = 200000
-response_headroom = 4096
+response_headroom = 16384
 tokenizer = "claude"
 supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
+input_price_per_million = 3
+output_price_per_million = 15
 
-["claude-2.1"]
+[claude-opus-4-20250514]
 context_window = 200000
-response_headroom = 4096
+response_headroom = 16384
 tokenizer = "claude"
 supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
+input_price_per_million = 15
+output_price_per_million = 75
 
-["claude-2.0"]
-context_window = 100000
-response_headroom = 4096
+[claude-opus-4-0]
+context_window = 200000
+response_headroom = 16384
 tokenizer = "claude"
 supports_tools = true
 supports_parallel_tools = true
 supports_temperature = true
+input_price_per_million = 15
+output_price_per_million = 75

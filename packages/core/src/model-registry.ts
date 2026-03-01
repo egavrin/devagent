@@ -19,18 +19,30 @@ import type { ModelCapabilities } from "./types.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
+export interface ModelPricing {
+  readonly inputPricePerMillion: number;
+  readonly outputPricePerMillion: number;
+}
+
 export interface ModelRegistryEntry {
   readonly provider: string;
   readonly baseUrl: string | undefined;
   readonly contextWindow: number;
   readonly responseHeadroom: number;
   readonly capabilities: ModelCapabilities;
+  readonly pricing: ModelPricing | undefined;
 }
 
 // ─── Registry ───────────────────────────────────────────────
 
 const registry = new Map<string, ModelRegistryEntry>();
 let loaded = false;
+
+/** Reset registry state. Test-only — not exported from package barrel. */
+export function _resetRegistryForTesting(): void {
+  registry.clear();
+  loaded = false;
+}
 
 /**
  * Load all model TOML files from known directories.
@@ -100,6 +112,16 @@ export function getRegisteredModels(): ReadonlyArray<string> {
   return Array.from(registry.keys());
 }
 
+/**
+ * Look up pricing for a model by name.
+ * Returns undefined if the model is unknown or has no pricing data.
+ */
+export function lookupModelPricing(
+  modelName: string,
+): ModelPricing | undefined {
+  return registry.get(modelName)?.pricing;
+}
+
 // ─── Internal ───────────────────────────────────────────────
 
 function loadModelsFromDir(dir: string): void {
@@ -155,12 +177,20 @@ function loadModelFile(filePath: string): void {
       defaultMaxTokens,
     };
 
+    const inputPrice = modelDef["input_price_per_million"] as number | undefined;
+    const outputPrice = modelDef["output_price_per_million"] as number | undefined;
+    const pricing: ModelPricing | undefined =
+      inputPrice != null && outputPrice != null
+        ? { inputPricePerMillion: inputPrice, outputPricePerMillion: outputPrice }
+        : undefined;
+
     registry.set(key, {
       provider,
       baseUrl,
       contextWindow: (modelDef["context_window"] as number | undefined) ?? 128000,
       responseHeadroom: (modelDef["response_headroom"] as number | undefined) ?? 4096,
       capabilities,
+      pricing,
     });
   }
 }
