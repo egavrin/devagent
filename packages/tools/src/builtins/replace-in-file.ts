@@ -452,24 +452,62 @@ export function fuzzyReplace(
 
 // ─── Tool Definition ────────────────────────────────────────
 
+// ─── Batch-mode types ────────────────────────────────────────
+
+interface ReplacementPair {
+  readonly search: string;
+  readonly replace: string;
+}
+
+interface ReplacementResult {
+  readonly search: string;
+  readonly replace: string;
+  readonly count: number;
+  readonly success: boolean;
+  readonly error?: string;
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 3) + "..." : s;
+}
+
+// ─── Tool Definition ────────────────────────────────────────
+
 export const replaceInFileTool: ToolSpec = {
   name: "replace_in_file",
   description:
-    "Replace occurrences of a search string with a replacement string in a file. Uses fuzzy matching (whitespace, indentation, escape sequences) when exact match fails. Always read_file first to get text. Default mode is single replacement; set all=true for global replacement.",
+    "Replace text in a file using fuzzy matching. Two modes:\n" +
+    "• Single: provide search + replace (+ optional all, expected_replacements)\n" +
+    "• Batch: provide replacements array of {search, replace} pairs — " +
+    "applied sequentially with replaceAll, partial writes on failure.\n" +
+    "Always read_file first.",
   category: "mutating",
   paramSchema: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path (relative to repo root)" },
-      search: { type: "string", description: "Text to search for" },
-      replace: { type: "string", description: "Replacement text" },
-      all: { type: "boolean", description: "Replace all occurrences (default: false)" },
+      search: { type: "string", description: "Text to search for (single mode)" },
+      replace: { type: "string", description: "Replacement text (single mode)" },
+      all: { type: "boolean", description: "Replace all occurrences (single mode, default: false)" },
       expected_replacements: {
         type: "number",
-        description: "Optional safety check. Fails if the number of replacements differs from this value.",
+        description: "Optional safety check (single mode). Fails if count differs.",
+      },
+      replacements: {
+        type: "array",
+        description: "Batch mode: array of {search, replace} pairs applied sequentially. Mutually exclusive with search/replace.",
+        items: {
+          type: "object",
+          properties: {
+            search: { type: "string", description: "Text to search for" },
+            replace: { type: "string", description: "Replacement text" },
+          },
+          required: ["search", "replace"],
+          additionalProperties: false,
+        },
       },
     },
-    required: ["path", "search", "replace"],
+    required: ["path"],
   },
   resultSchema: {
     type: "object",
@@ -489,16 +527,15 @@ export const replaceInFileTool: ToolSpec = {
       params["path"] as string,
       "replace_in_file",
     );
-    const search = params["search"] as string;
-    const replace = params["replace"] as string;
-    const replaceAll = (params["all"] as boolean | undefined) ?? false;
-    const expectedReplacements = params["expected_replacements"] as number | undefined;
+    const replacements = params["replacements"] as ReplacementPair[] | undefined;
+    const search = params["search"] as string | undefined;
+    const replace = params["replace"] as string | undefined;
 
-    // Guard against undefined params (from malformed JSON that parsed to {})
-    if (search === undefined || replace === undefined) {
+    // Mutual exclusion: batch mode vs single mode
+    if (replacements !== undefined && (search !== undefined || replace !== undefined)) {
       throw new ToolError(
         "replace_in_file",
-        `Missing required parameters: search=${search === undefined ? "missing" : "present"}, replace=${replace === undefined ? "missing" : "present"}. Check that tool arguments are valid JSON.`,
+        "Cannot use both 'replacements' array and 'search'/'replace' params. Pick one mode.",
       );
     }
 
@@ -511,6 +548,94 @@ export const replaceInFileTool: ToolSpec = {
 
     // Enforce pre-read: file must have been read in this session
     FileTime.assert(filePath);
+
+    // ─── Batch mode ────────────────────────────────────────
+    if (replacements !== undefined) {
+      if (!Array.isArray(replacements) || replacements.length === 0) {
+        throw new ToolError(
+          "replace_in_file",
+          "Missing or empty 'replacements' array.",
+        );
+      }
+
+      let content = readFileSync(filePath, "utf-8");
+      const results: ReplacementResult[] = [];
+      let totalCount = 0;
+      let hasFailure = false;
+
+      for (const { search: s, replace: r } of replacements) {
+        if (s === r) {
+          results.push({ search: s, replace: r, count: 0, success: true });
+          continue;
+        }
+
+        try {
+          const result = fuzzyReplace(content, s, r, true);
+          if (result.newContent === content) {
+            results.push({
+              search: s, replace: r, count: 0, success: false,
+              error: "No-op: content unchanged after replacement",
+            });
+            hasFailure = true;
+            continue;
+          }
+          content = result.newContent;
+          totalCount += result.count;
+          results.push({ search: s, replace: r, count: result.count, success: true });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          results.push({ search: s, replace: r, count: 0, success: false, error: message });
+          hasFailure = true;
+        }
+      }
+
+      if (totalCount > 0) {
+        writeFileSync(filePath, content, "utf-8");
+        FileTime.recordWrite(filePath);
+      }
+
+      const lines: string[] = [];
+      for (const r of results) {
+        if (r.success && r.count > 0) {
+          lines.push(`  ✓ '${truncate(r.search, 50)}' → '${truncate(r.replace, 50)}' (${r.count})`);
+        } else if (r.success && r.count === 0) {
+          lines.push(`  - '${truncate(r.search, 50)}' → '${truncate(r.replace, 50)}' (no-op, identical)`);
+        } else {
+          lines.push(`  ✗ '${truncate(r.search, 50)}': ${r.error}`);
+        }
+      }
+
+      const summary = `Applied ${totalCount} replacement(s) in ${params["path"] as string}:\n${lines.join("\n")}`;
+
+      if (hasFailure) {
+        return {
+          success: false,
+          output: summary,
+          error: "Some replacements failed",
+          artifacts: totalCount > 0 ? [filePath] : [],
+        };
+      }
+
+      return {
+        success: true,
+        output: summary,
+        error: null,
+        artifacts: [filePath],
+      };
+    }
+
+    // ─── Single mode (original behavior) ───────────────────
+
+    // Guard against undefined params (from malformed JSON that parsed to {})
+    if (search === undefined || replace === undefined) {
+      throw new ToolError(
+        "replace_in_file",
+        `Missing required parameters: search=${search === undefined ? "missing" : "present"}, replace=${replace === undefined ? "missing" : "present"}. Check that tool arguments are valid JSON.`,
+      );
+    }
+
+    const replaceAll = (params["all"] as boolean | undefined) ?? false;
+    const expectedReplacements = params["expected_replacements"] as number | undefined;
 
     if (search === replace) {
       throw new ToolError(

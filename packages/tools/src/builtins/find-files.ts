@@ -3,10 +3,11 @@
  * Category: readonly.
  */
 
-import { readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { readdirSync, realpathSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import type { ToolSpec } from "@devagent/core";
 import { resolvePathInRepo } from "./path-guard.js";
+import { globToRegex, normalizeGlobPattern } from "./glob-utils.js";
 
 export const findFilesTool: ToolSpec = {
   name: "find_files",
@@ -48,10 +49,12 @@ export const findFilesTool: ToolSpec = {
       searchPath,
       "find_files",
     );
-    const regex = globToRegex(pattern);
+    const resolvedRoot = realpathSync(resolve(context.repoRoot));
+    const effectivePattern = normalizeGlobPattern(pattern);
+    const regex = globToRegex(effectivePattern);
     const matches: string[] = [];
 
-    walkDir(baseDir, context.repoRoot, regex, matches, maxResults);
+    walkDir(baseDir, resolvedRoot, regex, matches, maxResults);
 
     return {
       success: true,
@@ -111,14 +114,3 @@ function walkDir(
   }
 }
 
-function globToRegex(pattern: string): RegExp {
-  const regexStr = pattern
-    .replace(/\./g, "\\.")
-    .replace(/\*\*\//g, "{{GLOBSTARSLASH}}")
-    .replace(/\*\*/g, "{{GLOBSTAR}}")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]")
-    .replace(/\{\{GLOBSTARSLASH\}\}/g, "(.*/)?")
-    .replace(/\{\{GLOBSTAR\}\}/g, ".*");
-  return new RegExp(`^${regexStr}$`);
-}

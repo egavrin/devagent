@@ -174,9 +174,22 @@ export const gitDiffTool: ToolSpec = {
     if (path) args.push("--", path);
 
     const output = execGit(args, context.repoRoot);
+    const result = output || "No changes";
+
+    // Advisory for very large diffs: suggest per-file diffing for context efficiency
+    if (!path && result.length > 20_000) {
+      const fileCount = (result.match(/^diff --git/gm) || []).length;
+      return {
+        success: true,
+        output: result + `\n\n[ADVISORY: This diff contains ${fileCount} files (${result.length} chars). For better context efficiency, use git_diff with a specific file path to review files individually.]`,
+        error: null,
+        artifacts: [],
+      };
+    }
+
     return {
       success: true,
-      output: output || "No changes",
+      output: result,
       error: null,
       artifacts: [],
     };

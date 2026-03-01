@@ -3,10 +3,11 @@
  * Category: readonly.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import type { ToolSpec } from "@devagent/core";
 import { resolvePathInRepo } from "./path-guard.js";
+import { globToRegex, normalizeGlobPattern } from "./glob-utils.js";
 
 export interface SearchMatch {
   readonly file: string;
@@ -59,7 +60,9 @@ export const searchFilesTool: ToolSpec = {
       searchPath,
       "search_files",
     );
-    const fileRegex = filePattern ? globToRegex(filePattern) : null;
+    const resolvedRoot = realpathSync(resolve(context.repoRoot));
+    const effectivePattern = filePattern ? normalizeGlobPattern(filePattern) : null;
+    const fileRegex = effectivePattern ? globToRegex(effectivePattern) : null;
     let regex: RegExp;
 
     try {
@@ -70,7 +73,7 @@ export const searchFilesTool: ToolSpec = {
     }
 
     const matches: SearchMatch[] = [];
-    searchDir(baseDir, context.repoRoot, regex, fileRegex, matches, maxResults);
+    searchDir(baseDir, resolvedRoot, regex, fileRegex, matches, maxResults);
 
     if (matches.length === 0) {
       return {
@@ -177,18 +180,6 @@ function isBinaryPath(path: string): boolean {
   ];
   const lower = path.toLowerCase();
   return binaryExtensions.some((ext) => lower.endsWith(ext));
-}
-
-function globToRegex(pattern: string): RegExp {
-  const regexStr = pattern
-    .replace(/\./g, "\\.")
-    .replace(/\*\*\//g, "{{GLOBSTARSLASH}}")
-    .replace(/\*\*/g, "{{GLOBSTAR}}")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]")
-    .replace(/\{\{GLOBSTARSLASH\}\}/g, "(.*/)?")
-    .replace(/\{\{GLOBSTAR\}\}/g, ".*");
-  return new RegExp(`^${regexStr}$`);
 }
 
 function escapeRegex(str: string): string {

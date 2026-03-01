@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { ToolRegistry } from "./registry.js";
 import type { ToolSpec, ToolResult } from "@devagent/core";
 
-function makeTool(name: string, category: "readonly" | "mutating" = "readonly"): ToolSpec {
+function makeTool(name: string, category: "readonly" | "mutating" | "state" = "readonly"): ToolSpec {
   return {
     name,
     description: `Test tool: ${name}`,
@@ -72,5 +72,15 @@ describe("ToolRegistry", () => {
 
     const all = registry.getAll();
     expect(all.length).toBe(2);
+  });
+
+  it("getPlanModeTools() returns readonly and state tools", () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool("read", "readonly"));
+    registry.register(makeTool("plan", "state"));
+    registry.register(makeTool("write", "mutating"));
+
+    const planTools = registry.getPlanModeTools();
+    expect(planTools.map((t) => t.name)).toEqual(["read", "plan"]);
   });
 });

@@ -318,6 +318,117 @@ describe("replace_in_file", () => {
       rmSync(outsidePath, { force: true });
     }
   });
+  // ─── Batch mode (replacements array) ──────────────────────
+
+  it("batch mode: applies multiple replacements to a single file", async () => {
+    writeFileSync(
+      join(tmpDir, "src", "ani.cpp"),
+      [
+        'auto mod = env->FindModule("@ohos.data.share");',
+        'auto cls = env->FindClass("std.core.String");',
+        'auto ns  = env->FindNamespace("escompat.Array");',
+      ].join("\n") + "\n",
+    );
+    await readFileTool.handler({ path: "src/ani.cpp" }, ctx);
+
+    const result = await replaceInFileTool.handler(
+      {
+        path: "src/ani.cpp",
+        replacements: [
+          { search: "@ohos.data.share", replace: "@ohos:data.share" },
+          { search: "std.core.String", replace: "std:core.String" },
+          { search: "escompat.Array", replace: "escompat:Array" },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("3 replacement(s)");
+
+    const content = readFileSync(join(tmpDir, "src", "ani.cpp"), "utf-8");
+    expect(content).toContain("@ohos:data.share");
+    expect(content).toContain("std:core.String");
+    expect(content).toContain("escompat:Array");
+    expect(content).not.toContain("@ohos.data.share");
+  });
+
+  it("batch mode: reports per-pair status in output", async () => {
+    writeFileSync(
+      join(tmpDir, "src", "multi.cpp"),
+      'auto a = "foo.bar";\nauto b = "baz.qux";\n',
+    );
+    await readFileTool.handler({ path: "src/multi.cpp" }, ctx);
+
+    const result = await replaceInFileTool.handler(
+      {
+        path: "src/multi.cpp",
+        replacements: [
+          { search: "foo.bar", replace: "foo:bar" },
+          { search: "baz.qux", replace: "baz:qux" },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("foo.bar");
+    expect(result.output).toContain("foo:bar");
+    expect(result.output).toContain("baz.qux");
+    expect(result.output).toContain("baz:qux");
+  });
+
+  it("batch mode: partial write on mid-batch failure", async () => {
+    writeFileSync(join(tmpDir, "src", "partial.cpp"), 'auto a = "foo.bar";\n');
+    await readFileTool.handler({ path: "src/partial.cpp" }, ctx);
+
+    const result = await replaceInFileTool.handler(
+      {
+        path: "src/partial.cpp",
+        replacements: [
+          { search: "foo.bar", replace: "foo:bar" },
+          { search: "nonexistent.pattern", replace: "x:y" },
+        ],
+      },
+      ctx,
+    );
+
+    // First replacement applied, second failed → success: false but partial write
+    expect(result.success).toBe(false);
+    expect(result.output).toContain("foo:bar");
+    expect(result.output).toContain("nonexistent.pattern");
+
+    const content = readFileSync(join(tmpDir, "src", "partial.cpp"), "utf-8");
+    expect(content).toContain("foo:bar");
+  });
+
+  it("batch mode: rejects when both search and replacements provided", async () => {
+    await readFileTool.handler({ path: "src/index.ts" }, ctx);
+
+    await expect(
+      replaceInFileTool.handler(
+        {
+          path: "src/index.ts",
+          search: "const x = 1",
+          replace: "const x = 42",
+          replacements: [{ search: "a", replace: "b" }],
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/mutually exclusive|Cannot use both/i);
+  });
+
+  // Note: OpenAI strict schema sends null for unused params (e.g. replacements: null).
+  // Null stripping is handled upstream in stripNullArgs (openai.ts provider layer), so
+  // the handler never sees null — only undefined. See openai.test.ts "stripNullArgs".
+
+  it("batch mode: schema has additionalProperties: false on nested items (OpenAI compat)", () => {
+    const schema = replaceInFileTool.paramSchema as Record<string, unknown>;
+    const props = schema.properties as Record<string, Record<string, unknown>>;
+    const items = props.replacements.items as Record<string, unknown>;
+    expect(items.type).toBe("object");
+    expect(items.additionalProperties).toBe(false);
+  });
 });
 
 describe("find_files", () => {
@@ -339,6 +450,14 @@ describe("find_files", () => {
     const result = await findFilesTool.handler({ pattern: "**/*.xyz" }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain("No files matched");
+  });
+
+  it("pattern without **/ matches files in nested directories", async () => {
+    // *.ts should match src/index.ts — not just root-level .ts files
+    const result = await findFilesTool.handler({ pattern: "*.ts" }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("src/index.ts");
+    expect(result.output).toContain("src/utils.ts");
   });
 
   it("rejects searching directories outside repo root", async () => {
@@ -385,6 +504,29 @@ describe("search_files", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output).toContain("No matches found");
+  });
+
+  it("file_pattern without **/ matches files in nested directories", async () => {
+    // *.ts should match src/index.ts — not just root-level .ts files
+    const result = await searchFilesTool.handler(
+      { pattern: "export const", file_pattern: "*.ts" },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("src/index.ts");
+  });
+
+  it("file_pattern with explicit path prefix only matches that path", async () => {
+    mkdirSync(join(tmpDir, "lib"), { recursive: true });
+    writeFileSync(join(tmpDir, "lib", "helper.ts"), "export const h = 1;\n");
+
+    const result = await searchFilesTool.handler(
+      { pattern: "export const", file_pattern: "src/*.ts" },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("src/index.ts");
+    expect(result.output).not.toContain("lib/helper.ts");
   });
 
   it("rejects search paths outside repo root", async () => {
@@ -544,6 +686,29 @@ describe("git tools", () => {
     );
     expect(committedFiles).toContain("space name.txt");
     expect(committedFiles).not.toContain("README.md");
+  });
+
+  it("appends advisory when git_diff output exceeds 20K chars without a path", async () => {
+    initRepo();
+    // Create many files to produce a large diff
+    for (let i = 0; i < 30; i++) {
+      writeFileSync(join(tmpDir, `file_${i}.txt`), `${"content".repeat(200)}\n`);
+    }
+
+    const result = await gitDiffTool.handler({}, ctx);
+    expect(result.success).toBe(true);
+    if (result.output.length > 20_000) {
+      expect(result.output).toContain("[ADVISORY:");
+      expect(result.output).toContain("specific file path");
+    }
+  });
+
+  it("does not append advisory when path is specified", async () => {
+    initRepo();
+    writeFileSync(join(tmpDir, "single.txt"), "changed content\n");
+    const result = await gitDiffTool.handler({ path: "single.txt" }, ctx);
+    expect(result.success).toBe(true);
+    expect(result.output).not.toContain("[ADVISORY:");
   });
 });
 
@@ -721,3 +886,4 @@ describe("FileTime", () => {
     expect(() => FileTime.assert(filePath)).toThrow("modified since");
   });
 });
+

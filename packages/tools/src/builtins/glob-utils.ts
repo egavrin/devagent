@@ -7,6 +7,11 @@ export function globToRegex(pattern: string): RegExp {
   return new RegExp(`^${globToRegexFragment(normalized)}$`);
 }
 
+/** Auto-prepend **​/ for patterns without path separators so *.ts matches nested files. */
+export function normalizeGlobPattern(pattern: string): string {
+  return pattern.includes("/") ? pattern : `**/${pattern}`;
+}
+
 export function matchesGlob(regex: RegExp, candidates: readonly string[]): boolean {
   return candidates.some((candidate) => regex.test(candidate));
 }

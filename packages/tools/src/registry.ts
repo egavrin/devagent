@@ -46,4 +46,11 @@ export class ToolRegistry {
   getReadOnly(): ReadonlyArray<ToolSpec> {
     return this.getByCategory("readonly");
   }
+
+  /** Tools available in plan mode: readonly + state (internal agent state). */
+  getPlanModeTools(): ReadonlyArray<ToolSpec> {
+    return Array.from(this.tools.values()).filter(
+      (t) => t.category === "readonly" || t.category === "state",
+    );
+  }
 }
