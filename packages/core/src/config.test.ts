@@ -14,6 +14,8 @@ describe("loadConfig", () => {
     expect(config.budget.maxIterations).toBe(30);
     expect(config.budget.enableCostTracking).toBe(true);
     expect(config.context.pruningStrategy).toBe("hybrid");
+    expect(config.context.triggerRatio).toBe(0.9);
+    expect(config.context.keepRecentMessages).toBe(40);
     expect(config.arkts.enabled).toBe(false);
   });
 
@@ -342,6 +344,26 @@ max_findings = 8
       expect(config.sessionState!.maxEnvFacts).toBe(5);
       expect(config.sessionState!.maxToolSummaries).toBe(15);
       expect(config.sessionState!.maxFindings).toBe(8);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it("parses pruneProtectTokens from TOML context config", () => {
+    const dir = join(tmpdir(), `devagent-test-ppt-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const configPath = join(dir, ".devagent.toml");
+    writeFileSync(
+      configPath,
+      `
+[context]
+prune_protect_tokens = 90000
+`,
+    );
+
+    try {
+      const config = loadConfig(dir);
+      expect(config.context.pruneProtectTokens).toBe(90000);
     } finally {
       rmSync(dir, { recursive: true });
     }

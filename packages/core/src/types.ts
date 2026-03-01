@@ -95,6 +95,8 @@ export interface Message {
   readonly content: string | null;
   readonly toolCallId?: string;
   readonly toolCalls?: ReadonlyArray<ToolCallRequest>;
+  /** When true, this message survives context compaction (e.g., critical git diffs). */
+  readonly pinned?: boolean;
 }
 
 export interface ToolCallRequest {
@@ -283,6 +285,8 @@ export interface ContextConfig {
   readonly midpointBriefingInterval?: number;
   /** Strategy for turn briefing synthesis. Default: "auto". */
   readonly briefingStrategy?: "heuristic" | "llm" | "auto";
+  /** Tokens of recent tool output protected from Phase-1 pruning. Default: 60000. */
+  readonly pruneProtectTokens?: number;
 }
 
 export interface MemoryConfig {

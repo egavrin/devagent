@@ -4,6 +4,8 @@
  * All output goes to stderr (stdout reserved for LLM content).
  */
 
+import type { VerbosityConfig } from "@devagent/core";
+
 // ─── Color Helpers ──────────────────────────────────────────
 
 const useColor = !process.env["NO_COLOR"];
@@ -19,6 +21,44 @@ export function yellow(s: string): string { return wrap("33", s); }
 export function cyan(s: string): string { return wrap("36", s); }
 export function bold(s: string): string { return wrap("1", s); }
 export function dimBold(s: string): string { return useColor ? `\x1b[90;1m${s}\x1b[0m` : s; }
+
+// ─── Categorical Verbosity ──────────────────────────────────
+
+export function isCategoryEnabled(cat: string, config: VerbosityConfig): boolean {
+  if (config.categories.size > 0) {
+    return config.categories.has(cat);
+  }
+  return config.base === "verbose";
+}
+
+export function debugLog(cat: string, msg: string, config: VerbosityConfig): void {
+  if (!isCategoryEnabled(cat, config)) return;
+  process.stderr.write(dim(`[${cat}] ${msg}`) + "\n");
+}
+
+export function buildVerbosityConfig(
+  base: "quiet" | "normal" | "verbose",
+  verboseCategories: string | undefined,
+): VerbosityConfig {
+  const categories = new Set<string>();
+
+  if (verboseCategories) {
+    for (const c of verboseCategories.split(",")) {
+      const trimmed = c.trim();
+      if (trimmed.length > 0) categories.add(trimmed);
+    }
+  }
+
+  const envDebug = process.env["DEVAGENT_DEBUG"];
+  if (envDebug) {
+    for (const c of envDebug.split(",")) {
+      const trimmed = c.trim();
+      if (trimmed.length > 0) categories.add(trimmed);
+    }
+  }
+
+  return { base, categories };
+}
 
 // ─── Spinner ────────────────────────────────────────────────
 
@@ -49,6 +89,17 @@ export class Spinner {
     process.stderr.write("\x1b[2K\r");
     if (finalMessage) {
       process.stderr.write(finalMessage + "\n");
+    }
+  }
+
+  /** Write a line to stderr without colliding with an active spinner. */
+  log(line: string): void {
+    if (this.timer) {
+      // Clear spinner, write the line, then re-render
+      process.stderr.write(`\x1b[2K\r${line}\n`);
+      this.render();
+    } else {
+      process.stderr.write(line + "\n");
     }
   }
 
@@ -149,11 +200,13 @@ export function formatToolStart(
   params: Record<string, unknown>,
   iteration: number,
   maxIter: number,
+  gauge?: string,
 ): string {
   const counter = maxIter > 0 ? dim(`[${iteration}/${maxIter}]`) : dim(`[${iteration}]`);
   const summary = summarizeToolParams(name, params);
   const detail = summary ? ` ${dim(summary)}` : "";
-  return `${counter} ${dimBold("↳")} ${bold(name)}${detail}`;
+  const gaugeSuffix = gauge ? ` ${gauge}` : "";
+  return `${counter} ${dimBold("↳")} ${bold(name)}${detail}${gaugeSuffix}`;
 }
 
 export function formatToolEnd(
@@ -173,16 +226,20 @@ export function formatToolEnd(
 // ─── Plan Rendering ─────────────────────────────────────────
 
 export function formatPlan(
-  steps: ReadonlyArray<{ description: string; status: string }>,
+  steps: ReadonlyArray<{ description: string; status: string; lastTransitionIteration?: number }>,
+  showIteration = false,
 ): string {
   const lines = steps.map((s) => {
+    const iterSuffix = showIteration && s.lastTransitionIteration
+      ? dim(` @iter ${s.lastTransitionIteration}`)
+      : "";
     switch (s.status) {
       case "completed":
-        return `  ${green("[x]")} ${dim(s.description)}`;
+        return `  ${green("[x]")} ${dim(s.description)}${iterSuffix}`;
       case "in_progress":
-        return `  ${yellow("[>]")} ${s.description}`;
+        return `  ${yellow("[>]")} ${s.description}${iterSuffix}`;
       default:
-        return `  ${dim("[ ]")} ${dim(s.description)}`;
+        return `  ${dim("[ ]")} ${dim(s.description)}${iterSuffix}`;
     }
   });
   return lines.join("\n");
@@ -194,18 +251,256 @@ export function formatSummary(iterations: number, elapsedMs: number): string {
   return `${green("✓")} ${bold("Done")} ${dim(`(${iterations} iterations, ${formatDuration(elapsedMs)})`)}`;
 }
 
+// ─── Per-Turn Summary ───────────────────────────────────────
+
+export interface TurnStats {
+  readonly toolCallCount: number;
+  readonly iterationCount: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly costDelta: number;
+  readonly elapsedMs: number;
+}
+
+export function formatTurnSummary(stats: TurnStats): string {
+  const parts: string[] = [];
+  parts.push(`${stats.iterationCount} iterations`);
+  if (stats.toolCallCount > 0) {
+    parts.push(`${stats.toolCallCount} tool calls`);
+  }
+  if (stats.inputTokens > 0) {
+    const kIn = Math.round(stats.inputTokens / 1000);
+    parts.push(`${kIn}k input tokens`);
+  }
+  if (stats.costDelta > 0) {
+    parts.push(`$${stats.costDelta.toFixed(4)}`);
+  }
+  parts.push(formatDuration(stats.elapsedMs));
+  return `${green("✓")} ${bold("Done")} ${dim(`(${parts.join(", ")})`)}`;
+}
+
 export function formatError(message: string): string {
   return `${red("✗")} ${red(message)}`;
 }
 
+// ─── Session Summary ────────────────────────────────────────
+
+export interface SessionSummaryData {
+  readonly sessionId: string;
+  readonly totalIterations: number;
+  readonly totalToolCalls: number;
+  readonly toolUsage: ReadonlyMap<string, number>;
+  readonly filesChanged: ReadonlyArray<string>;
+  readonly planSteps?: ReadonlyArray<{ description: string; status: string }>;
+  readonly totalCost: number;
+  readonly totalInputTokens: number;
+  readonly totalOutputTokens: number;
+  readonly elapsedMs: number;
+  readonly completionReason: string;
+}
+
+export function formatSessionSummary(data: SessionSummaryData): string {
+  const lines: string[] = [];
+  lines.push("");
+  lines.push(bold("Session Summary"));
+  lines.push(dim("─".repeat(50)));
+
+  lines.push(`  Session:      ${dim(data.sessionId)}`);
+  lines.push(`  Duration:     ${formatDuration(data.elapsedMs)}`);
+  lines.push(`  Iterations:   ${data.totalIterations}`);
+  lines.push(`  Tool calls:   ${data.totalToolCalls}`);
+
+  // Tool usage sorted by count descending
+  if (data.toolUsage.size > 0) {
+    const sorted = [...data.toolUsage.entries()].sort((a, b) => b[1] - a[1]);
+    lines.push("  Tool usage:");
+    for (const [name, count] of sorted) {
+      lines.push(`    ${name}: ${count}`);
+    }
+  }
+
+  // Files changed (max 15)
+  if (data.filesChanged.length > 0) {
+    const displayFiles = data.filesChanged.slice(0, 15);
+    lines.push(`  Files changed (${data.filesChanged.length}):`);
+    for (const f of displayFiles) {
+      lines.push(`    ${f}`);
+    }
+    if (data.filesChanged.length > 15) {
+      lines.push(dim(`    ... (+${data.filesChanged.length - 15} more)`));
+    }
+  }
+
+  // Plan progress
+  if (data.planSteps && data.planSteps.length > 0) {
+    const completed = data.planSteps.filter((s) => s.status === "completed").length;
+    lines.push(`  Plan:         ${completed}/${data.planSteps.length} completed`);
+  }
+
+  // Cost
+  if (data.totalCost > 0) {
+    lines.push(`  Cost:         $${data.totalCost.toFixed(4)}`);
+  }
+
+  // Tokens
+  if (data.totalInputTokens > 0 || data.totalOutputTokens > 0) {
+    const kIn = Math.round(data.totalInputTokens / 1000);
+    const kOut = Math.round(data.totalOutputTokens / 1000);
+    lines.push(`  Tokens:       ${kIn}k in / ${kOut}k out`);
+  }
+
+  lines.push(dim("─".repeat(50)));
+  return lines.join("\n");
+}
+
+// ─── Error Enrichment ───────────────────────────────────────
+
+export interface RecentToolResult {
+  readonly name: string;
+  readonly success: boolean;
+  readonly durationMs: number;
+}
+
+export interface EnrichedErrorContext {
+  readonly message: string;
+  readonly recentTools: ReadonlyArray<RecentToolResult>;
+  readonly suggestion: string | null;
+}
+
+export function inferErrorSuggestion(
+  message: string,
+  recentTools: ReadonlyArray<RecentToolResult>,
+): string | null {
+  const lower = message.toLowerCase();
+
+  if (lower.includes("rate limit") || lower.includes("429") || lower.includes("rate_limit")) {
+    return "Rate limited — wait a moment or switch to a different provider.";
+  }
+  if (lower.includes("context length") || lower.includes("token limit") || lower.includes("maximum context")) {
+    return "Context limit reached — use /clear or reduce output length.";
+  }
+  if (lower.includes("timeout") || lower.includes("etimedout")) {
+    return "Request timed out — check network connectivity.";
+  }
+
+  // Check for repeated same-tool failures
+  const failedTools = recentTools.filter((t) => !t.success);
+  if (failedTools.length >= 2) {
+    const lastName = failedTools[failedTools.length - 1]?.name;
+    const repeatedFailures = failedTools.filter((t) => t.name === lastName);
+    if (repeatedFailures.length >= 2) {
+      return `Tool "${lastName}" has failed repeatedly. Try a different approach.`;
+    }
+  }
+
+  return null;
+}
+
+export function formatEnrichedError(ctx: EnrichedErrorContext): string {
+  const lines: string[] = [];
+  lines.push(`${red("✗")} ${red(ctx.message)}`);
+
+  if (ctx.recentTools.length > 0) {
+    lines.push(dim("  Recent tool chain:"));
+    for (const t of ctx.recentTools) {
+      const icon = t.success ? green("✓") : red("✗");
+      const dur = formatDuration(t.durationMs);
+      lines.push(`    ${icon} ${t.name} (${dur})`);
+    }
+  }
+
+  if (ctx.suggestion) {
+    lines.push(`  ${yellow("Suggestion:")} ${ctx.suggestion}`);
+  }
+
+  return lines.join("\n");
+}
+
+// ─── Turn Separators ────────────────────────────────────────
+
+export function formatTurnHeader(
+  turnNumber: number,
+  tokenInfo?: { estimated: number; max: number },
+  costInfo?: { totalCost: number },
+): string {
+  const parts: string[] = [`Turn ${turnNumber}`];
+  if (tokenInfo && tokenInfo.max > 0 && tokenInfo.estimated > 0) {
+    const kEst = Math.round(tokenInfo.estimated / 1000);
+    const kMax = Math.round(tokenInfo.max / 1000);
+    parts.push(`tokens: ${kEst}k/${kMax}k`);
+  }
+  if (costInfo && costInfo.totalCost > 0) {
+    parts.push(`cost: $${costInfo.totalCost.toFixed(4)}`);
+  }
+  const inner = parts.join(" | ");
+  const padLen = Math.max(0, 50 - inner.length - 6);
+  return dim(`── ${inner} ${"─".repeat(padLen)}`);
+}
+
+// ─── Compaction Result ──────────────────────────────────────
+
+export interface CompactionResultData {
+  readonly tokensBefore: number;
+  readonly estimatedTokens: number;
+  readonly removedCount: number;
+  readonly prunedCount?: number;
+  readonly tokensSaved?: number;
+}
+
+export function formatCompactionResult(data: CompactionResultData): string {
+  const kAfter = Math.round(data.estimatedTokens / 1000);
+  const parts: string[] = [];
+
+  // Before → after with percentage
+  if (data.tokensBefore > 0) {
+    const kBefore = Math.round(data.tokensBefore / 1000);
+    const reduction = data.tokensBefore - data.estimatedTokens;
+    if (reduction > 0) {
+      const pct = Math.round((reduction / data.tokensBefore) * 100);
+      parts.push(`${kBefore}k → ${kAfter}k tokens (${pct}% reduction)`);
+    } else {
+      parts.push(`${kBefore}k → ${kAfter}k tokens (no reduction)`);
+    }
+  } else {
+    parts.push(`~${kAfter}k tokens remaining`);
+  }
+
+  // Activity details
+  const details: string[] = [];
+  if (data.removedCount > 0) {
+    details.push(`removed ${data.removedCount} msgs`);
+  }
+  if ((data.prunedCount ?? 0) > 0) {
+    details.push(`pruned ${data.prunedCount} outputs`);
+  }
+  if (details.length > 0) {
+    parts.push(details.join(", "));
+  }
+
+  return dim(`[context] Compacted: ${parts.join(", ")}`);
+}
+
+// ─── Context Gauge ──────────────────────────────────────────
+
+export function formatContextGauge(estimatedTokens: number, maxTokens: number): string {
+  if (maxTokens <= 0 || estimatedTokens <= 0) return "";
+  const kEstimated = Math.round(estimatedTokens / 1000);
+  const kMax = Math.round(maxTokens / 1000);
+  const ratio = estimatedTokens / maxTokens;
+  const label = `[tokens: ${kEstimated}k/${kMax}k]`;
+  if (ratio > 0.8) return red(label);
+  if (ratio > 0.6) return yellow(label);
+  return dim(label);
+}
+
 // ─── Helpers ────────────────────────────────────────────────
 
-function truncate(s: string, maxLen: number): string {
+export function truncate(s: string, maxLen: number): string {
   if (s.length <= maxLen) return s;
   return s.substring(0, maxLen - 1) + "…";
 }
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   const mins = Math.floor(ms / 60000);

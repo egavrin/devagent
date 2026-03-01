@@ -45,7 +45,11 @@ function withTruncationMarker(
 export const runCommandTool: ToolSpec = {
   name: "run_command",
   description:
-    "Execute a shell command. Returns stdout and stderr. Times out after 2 minutes by default. Use for builds, tests, linting. Prefer targeted test commands over running the full suite. Never run destructive git commands without user approval. Use the env parameter to set environment variables instead of embedding them in the command string.",
+    "Execute a shell command. Returns stdout and stderr. Times out after 2 minutes by default. " +
+    "Use for builds, tests, linting. For git operations, prefer dedicated tools (git_diff, git_status) — " +
+    "they are context-optimized. Prefer targeted test commands over running the full suite. " +
+    "Never run destructive git commands without user approval. " +
+    "Use the env parameter to set environment variables instead of embedding them in the command string.",
   category: "workflow",
   paramSchema: {
     type: "object",

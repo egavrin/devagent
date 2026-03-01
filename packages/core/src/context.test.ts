@@ -763,6 +763,356 @@ describe("ContextManager", () => {
     expect(forcedResult.truncated).toBe(true);
   });
 
+  it("pinned TOOL survives sliding window outside keepRecentMessages", () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "System prompt"),
+      msg(MessageRole.USER, "Original task"),
+      {
+        role: MessageRole.ASSISTANT,
+        content: "Let me check the diff",
+        toolCalls: [{ name: "git_diff", arguments: {}, callId: "call_pinned" }],
+      },
+      {
+        role: MessageRole.TOOL,
+        content: "diff --git a/file.ts b/file.ts\n+important change",
+        toolCallId: "call_pinned",
+        pinned: true,
+      },
+      msg(MessageRole.USER, "Question 2"),
+      msg(MessageRole.ASSISTANT, "Answer 2"),
+      msg(MessageRole.USER, "Question 3"),
+      msg(MessageRole.ASSISTANT, "Answer 3"),
+    ];
+
+    // keepRecentMessages=2 would normally drop the pinned TOOL at index 3
+    const result = mgr.truncate(messages, 200);
+    expect(result.truncated).toBe(true);
+
+    // Pinned TOOL must survive
+    const pinnedTool = result.messages.find(
+      (m) => m.role === MessageRole.TOOL && m.pinned === true,
+    );
+    expect(pinnedTool).toBeDefined();
+    expect(pinnedTool!.content).toContain("important change");
+  });
+
+  it("pinned TOOL's owning ASSISTANT survives sliding window", () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "System prompt"),
+      msg(MessageRole.USER, "Original task"),
+      {
+        role: MessageRole.ASSISTANT,
+        content: "Let me check",
+        toolCalls: [{ name: "git_diff", arguments: {}, callId: "call_owner" }],
+      },
+      {
+        role: MessageRole.TOOL,
+        content: "diff content",
+        toolCallId: "call_owner",
+        pinned: true,
+      },
+      msg(MessageRole.USER, "Question 2"),
+      msg(MessageRole.ASSISTANT, "Answer 2"),
+      msg(MessageRole.USER, "Question 3"),
+      msg(MessageRole.ASSISTANT, "Answer 3"),
+    ];
+
+    const result = mgr.truncate(messages, 200);
+
+    // The ASSISTANT that owns the pinned TOOL must also survive
+    const owningAssistant = result.messages.find(
+      (m) =>
+        m.role === MessageRole.ASSISTANT &&
+        m.toolCalls?.some((tc) => tc.callId === "call_owner"),
+    );
+    expect(owningAssistant).toBeDefined();
+  });
+
+  it("pinned messages excluded from hybridTruncation middle section", async () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        pruningStrategy: "hybrid",
+        triggerRatio: 0.1,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    let middleMessages: ReadonlyArray<Message> = [];
+    mgr.setSummarizeCallback(async (msgs) => {
+      middleMessages = msgs;
+      return "Summary";
+    });
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "System prompt"),
+      msg(MessageRole.USER, "Original task"),
+      {
+        role: MessageRole.ASSISTANT,
+        content: "Checking diff",
+        toolCalls: [{ name: "git_diff", arguments: {}, callId: "call_mid" }],
+      },
+      {
+        role: MessageRole.TOOL,
+        content: "diff --git pinned content",
+        toolCallId: "call_mid",
+        pinned: true,
+      },
+      msg(MessageRole.USER, "Follow up"),
+      msg(MessageRole.ASSISTANT, "Response"),
+      msg(MessageRole.USER, "Question 3"),
+      msg(MessageRole.ASSISTANT, "Answer 3"),
+    ];
+
+    const result = await mgr.truncateAsync(messages, 200);
+
+    // Pinned messages should NOT be in the middle section sent to summarizer
+    const pinnedInMiddle = middleMessages.some(
+      (m) => m.pinned === true,
+    );
+    expect(pinnedInMiddle).toBe(false);
+
+    // Pinned TOOL must survive in the final result
+    const pinnedTool = result.messages.find(
+      (m) => m.role === MessageRole.TOOL && m.pinned === true,
+    );
+    expect(pinnedTool).toBeDefined();
+  });
+
+  it("pinned messages survive pruneToBudget", () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 20,
+      }),
+    );
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),
+      msg(MessageRole.USER, "task"),
+      {
+        role: MessageRole.ASSISTANT,
+        content: "check",
+        toolCalls: [{ name: "git_diff", arguments: {}, callId: "call_budget" }],
+      },
+      {
+        role: MessageRole.TOOL,
+        content: "x".repeat(100), // 25 tokens
+        toolCallId: "call_budget",
+        pinned: true,
+      },
+      msg(MessageRole.USER, "q2"),
+      msg(MessageRole.ASSISTANT, "a2"),
+    ];
+
+    // Budget tight enough that pruneToBudget needs to remove messages, but pinned survives
+    const result = mgr.truncate(messages, 40);
+
+    const pinnedTool = result.messages.find(
+      (m) => m.role === MessageRole.TOOL && m.pinned === true,
+    );
+    expect(pinnedTool).toBeDefined();
+  });
+
+  it("sliding window with keepRecentMessages=40 keeps at least 40 messages when budget allows", () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 40,
+      }),
+    );
+
+    // Build 50 messages (system + user + 48 alternating user/assistant)
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),
+      msg(MessageRole.USER, "original task"),
+    ];
+    for (let i = 0; i < 24; i++) {
+      messages.push(msg(MessageRole.USER, `q${i}`));
+      messages.push(msg(MessageRole.ASSISTANT, `a${i}`));
+    }
+
+    // Large budget so pruneToBudget doesn't kick in
+    const result = mgr.truncate(messages, 10000);
+    // With 50 msgs, keepRecentMessages=40 → startIdx = max(1, 50-40) = 10
+    // preserved = [SYS, USER(original)] + messages[10..49] = 2 + 40 = 42 messages
+    expect(result.messages.length).toBeGreaterThanOrEqual(40);
+  });
+
+  it("pruneToBudget enforces ceiling even with keepRecentMessages=40", () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 40,
+      }),
+    );
+
+    // Build 50 short messages
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),
+      msg(MessageRole.USER, "task"),
+    ];
+    for (let i = 0; i < 24; i++) {
+      messages.push(msg(MessageRole.USER, `q${i}`));
+      messages.push(msg(MessageRole.ASSISTANT, `a${i}`));
+    }
+
+    // Very small budget forces pruning even with keepRecentMessages=40
+    const result = mgr.truncate(messages, 20);
+    expect(result.truncated).toBe(true);
+    expect(result.estimatedTokens).toBeLessThanOrEqual(20);
+  });
+
+  it("pruneToBudget preserves owning ASSISTANT of pinned TOOL", () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    // Setup: pinned TOOL outside the recent window, budget forces pruneToBudget
+    // to consider pruning the owning ASSISTANT.
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "sys"),
+      msg(MessageRole.USER, "task"),
+      // Filler to push pinned pair outside recent window
+      msg(MessageRole.USER, "filler1"),
+      msg(MessageRole.ASSISTANT, "filler2"),
+      {
+        role: MessageRole.ASSISTANT,
+        content: null,
+        toolCalls: [{ name: "git_diff", arguments: {}, callId: "call_pbt" }],
+      },
+      {
+        role: MessageRole.TOOL,
+        content: "x".repeat(80), // 20 tokens
+        toolCallId: "call_pbt",
+        pinned: true,
+      },
+      // Recent window (keepRecentMessages=2)
+      msg(MessageRole.USER, "x".repeat(40)),  // 10 tokens
+      msg(MessageRole.ASSISTANT, "x".repeat(40)),  // 10 tokens
+    ];
+
+    // After sliding window: [SYS, USER, ASST(toolCalls), TOOL(pinned), recent_USER, recent_ASST]
+    // ~45 tokens total. Budget=42 forces pruneToBudget to remove the ASST(toolCalls)
+    // unless we properly protect it as the pinned TOOL's owner.
+    const result = mgr.truncate(messages, 42);
+
+    // The pinned TOOL must survive — if its owning ASSISTANT was pruned,
+    // sanitizeToolCallPairs would drop the orphaned pinned TOOL
+    const pinnedTool = result.messages.find(
+      (m) => m.role === MessageRole.TOOL && m.pinned === true,
+    );
+    expect(pinnedTool).toBeDefined();
+    expect(pinnedTool!.toolCallId).toBe("call_pbt");
+
+    // The owning ASSISTANT must also survive
+    const owningAssistant = result.messages.find(
+      (m) =>
+        m.role === MessageRole.ASSISTANT &&
+        m.toolCalls?.some((tc) => tc.callId === "call_pbt"),
+    );
+    expect(owningAssistant).toBeDefined();
+  });
+
+  it("pinned USER message survives slidingWindow outside keepRecentMessages", () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.1,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "System prompt"),
+      msg(MessageRole.USER, "Original task"),
+      // Pinned USER message (e.g., preloaded review diff)
+      {
+        role: MessageRole.USER,
+        content: "Review diff content that must be preserved",
+        pinned: true,
+      },
+      msg(MessageRole.ASSISTANT, "Analysis of the diff"),
+      msg(MessageRole.USER, "Follow up question"),
+      msg(MessageRole.ASSISTANT, "Follow up answer"),
+      msg(MessageRole.USER, "Question 3"),
+      msg(MessageRole.ASSISTANT, "Answer 3"),
+    ];
+
+    // keepRecentMessages=2 would normally drop the pinned USER at index 2
+    const result = mgr.truncate(messages, 200);
+    expect(result.truncated).toBe(true);
+
+    // Pinned USER must survive
+    const pinnedUser = result.messages.find(
+      (m) => m.role === MessageRole.USER && m.pinned === true,
+    );
+    expect(pinnedUser).toBeDefined();
+    expect(pinnedUser!.content).toContain("Review diff content");
+  });
+
+  it("pinned USER message excluded from hybridTruncation middle section", async () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        pruningStrategy: "hybrid",
+        triggerRatio: 0.1,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    let middleMessages: ReadonlyArray<Message> = [];
+    mgr.setSummarizeCallback(async (msgs) => {
+      middleMessages = msgs;
+      return "Summary";
+    });
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "System prompt"),
+      msg(MessageRole.USER, "Original task"),
+      // Pinned USER message in middle section
+      {
+        role: MessageRole.USER,
+        content: "Preloaded review diff that must not be summarized",
+        pinned: true,
+      },
+      msg(MessageRole.ASSISTANT, "Analysis"),
+      msg(MessageRole.USER, "Follow up"),
+      msg(MessageRole.ASSISTANT, "Response"),
+      msg(MessageRole.USER, "Question 3"),
+      msg(MessageRole.ASSISTANT, "Answer 3"),
+    ];
+
+    const result = await mgr.truncateAsync(messages, 200);
+
+    // Pinned USER should NOT be in the middle section sent to summarizer
+    const pinnedInMiddle = middleMessages.some(
+      (m) => m.pinned === true,
+    );
+    expect(pinnedInMiddle).toBe(false);
+
+    // Pinned USER must survive in the final result
+    const pinnedUser = result.messages.find(
+      (m) => m.role === MessageRole.USER && m.pinned === true,
+    );
+    expect(pinnedUser).toBeDefined();
+    expect(pinnedUser!.content).toContain("Preloaded review diff");
+  });
+
   it("throws when critical preserved context alone exceeds max token budget", async () => {
     const mgr = new ContextManager(
       makeConfig({

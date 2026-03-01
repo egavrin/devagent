@@ -41,8 +41,8 @@ export const DEFAULT_BUDGET: BudgetConfig = {
 
 const DEFAULT_CONTEXT: ContextConfig = {
   pruningStrategy: "hybrid",
-  triggerRatio: 0.8,
-  keepRecentMessages: 10,
+  triggerRatio: 0.9,
+  keepRecentMessages: 40,
   turnIsolation: true,
   midpointBriefingInterval: 15,
   briefingStrategy: "auto",
@@ -193,6 +193,8 @@ function parseContext(
       raw["midpointBriefingInterval"]) as number | undefined,
     briefingStrategy: (raw["briefing_strategy"] ??
       raw["briefingStrategy"]) as ContextConfig["briefingStrategy"] | undefined,
+    pruneProtectTokens: (raw["prune_protect_tokens"] ??
+      raw["pruneProtectTokens"]) as number | undefined,
   };
 }
 

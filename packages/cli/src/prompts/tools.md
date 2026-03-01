@@ -81,6 +81,7 @@ After `write_file` creates a new file:
 ## Shell Commands
 
 - Use `run_command` for builds, tests, linting, and other real shell operations.
+- **Use dedicated tools instead of `run_command` for git operations**: `git_diff` for diffs, `git_status` for status. These tools are optimized for context efficiency — their outputs receive higher compaction priority and deduplication.
 - Prefer targeted verification commands first, then broader suites.
 - Prefer `rg` / `rg --files` over slower alternatives for shell-based search.
 - Use non-interactive commands only.

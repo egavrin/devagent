@@ -255,27 +255,29 @@ export class ContextManager {
 
     // Keep recent messages
     const keepCount = this.config.keepRecentMessages;
-    const preserved: Message[] = [];
+    const preserved = new Set<Message>();
 
     // Always keep system message
     if (systemMsg) {
-      preserved.push(systemMsg);
+      preserved.add(systemMsg);
     }
 
     // Always keep first user message (original task)
-    if (firstUserMsg && !preserved.includes(firstUserMsg)) {
-      preserved.push(firstUserMsg);
+    if (firstUserMsg) {
+      preserved.add(firstUserMsg);
     }
+
+    this.collectPinned(messages, preserved);
 
     // Keep the N most recent messages
     const startIdx = Math.max(systemMsg ? 1 : 0, messages.length - keepCount);
-    const recentMessages = messages.slice(startIdx);
+    const recentSet = new Set(messages.slice(startIdx));
 
-    // Merge preserved + recent, avoiding duplicates
-    const result: Message[] = [...preserved];
-    for (const msg of recentMessages) {
-      if (!preserved.includes(msg)) {
-        result.push(msg);
+    // Merge preserved + recent in original order, avoiding duplicates
+    const result: Message[] = [];
+    for (const m of messages) {
+      if (preserved.has(m) || recentSet.has(m)) {
+        result.push(m);
       }
     }
 
@@ -320,6 +322,8 @@ export class ContextManager {
     if (systemMsg) preserved.add(systemMsg);
     if (firstUserMsg) preserved.add(firstUserMsg);
 
+    this.collectPinned(messages, preserved);
+
     const rawMiddle = messages
       .slice(middleStart, recentStart)
       .filter((m) => !preserved.has(m));
@@ -337,12 +341,15 @@ export class ContextManager {
     // Summarize the middle portion
     const summary = await this.summarize(middleMessages);
 
+    // Build result: preserved messages in original order, then summary, then recent
     const result: Message[] = [];
-    if (systemMsg) {
-      result.push(systemMsg);
-    }
-    if (firstUserMsg && !result.includes(firstUserMsg)) {
-      result.push(firstUserMsg);
+    const recentSet = new Set(recentMessages);
+    const added = new Set<Message>();
+    for (const m of messages) {
+      if (preserved.has(m) && !recentSet.has(m)) {
+        result.push(m);
+        added.add(m);
+      }
     }
     if (summary.trim().length > 0) {
       result.push({
@@ -350,9 +357,9 @@ export class ContextManager {
         content: `[Conversation summary]: ${summary}`,
       });
     }
-    for (const msg of recentMessages) {
-      if (!result.includes(msg)) {
-        result.push(msg);
+    for (const m of recentMessages) {
+      if (!added.has(m)) {
+        result.push(m);
       }
     }
 
@@ -390,6 +397,8 @@ export class ContextManager {
     const firstUser = result.find((m) => m.role === MessageRole.USER) ?? null;
     if (firstUser) preserved.add(firstUser);
 
+    this.collectPinned(result, preserved);
+
     let tokens = estimateMessageTokens(result);
     while (tokens > maxTokens) {
       const removeIdx = result.findIndex((m) => !preserved.has(m));
@@ -399,6 +408,31 @@ export class ContextManager {
     }
 
     return result;
+  }
+
+  /** Collect pinned messages and their owning ASSISTANT messages into `preserved`. */
+  private collectPinned(
+    messages: ReadonlyArray<Message>,
+    preserved: Set<Message>,
+  ): void {
+    const pinnedCallIds = new Set<string>();
+    for (const m of messages) {
+      if (m.pinned) {
+        preserved.add(m);
+        if (m.role === MessageRole.TOOL && m.toolCallId) {
+          pinnedCallIds.add(m.toolCallId);
+        }
+      }
+    }
+    if (pinnedCallIds.size > 0) {
+      for (const m of messages) {
+        if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
+          if (m.toolCalls.some((tc) => pinnedCallIds.has(tc.callId))) {
+            preserved.add(m);
+          }
+        }
+      }
+    }
   }
 
   private didMessagesChange(
