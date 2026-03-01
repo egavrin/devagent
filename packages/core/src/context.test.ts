@@ -696,6 +696,73 @@ describe("ContextManager", () => {
     expect(estimateMessageTokens(result.messages)).toBeLessThanOrEqual(maxTokens);
   });
 
+  it("truncateAsync with force bypasses internal threshold check", async () => {
+    // Bug: maybeCompactContext uses Math.max(charEstimate, actualTokens)
+    // to decide compaction is needed, but truncateAsync has its own
+    // threshold check using only charEstimate. If charEstimate < threshold
+    // but actualTokens > threshold, truncateAsync returns truncated: false.
+    //
+    // Fix: force option bypasses the internal threshold check.
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.8,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "System prompt"),
+      msg(MessageRole.USER, "Original task"),
+      msg(MessageRole.ASSISTANT, "Answer 1"),
+      msg(MessageRole.USER, "Question 2"),
+      msg(MessageRole.ASSISTANT, "Answer 2"),
+      msg(MessageRole.USER, "Question 3"),
+      msg(MessageRole.ASSISTANT, "Answer 3"),
+    ];
+
+    const totalTokens = estimateMessageTokens(messages);
+    // Set budget so charEstimate is UNDER the 80% threshold
+    // totalTokens ≈ 18, so threshold at 0.8 = budget * 0.8
+    // If budget = 30, threshold = 24. 18 < 24 → not truncated.
+    const budget = 30;
+
+    // Without force: under threshold → not truncated
+    const normalResult = await mgr.truncateAsync(messages, budget);
+    expect(normalResult.truncated).toBe(false);
+
+    // With force: bypasses threshold → truncated
+    const forcedResult = await mgr.truncateAsync(messages, budget, { force: true });
+    expect(forcedResult.truncated).toBe(true);
+    expect(forcedResult.removedCount).toBeGreaterThan(0);
+  });
+
+  it("truncate (sync) with force bypasses internal threshold check", () => {
+    const mgr = new ContextManager(
+      makeConfig({
+        triggerRatio: 0.8,
+        keepRecentMessages: 2,
+      }),
+    );
+
+    const messages: Message[] = [
+      msg(MessageRole.SYSTEM, "System prompt"),
+      msg(MessageRole.USER, "Original task"),
+      msg(MessageRole.ASSISTANT, "Answer 1"),
+      msg(MessageRole.USER, "Question 2"),
+      msg(MessageRole.ASSISTANT, "Answer 2"),
+      msg(MessageRole.USER, "Question 3"),
+      msg(MessageRole.ASSISTANT, "Answer 3"),
+    ];
+
+    const budget = 30;
+
+    const normalResult = mgr.truncate(messages, budget);
+    expect(normalResult.truncated).toBe(false);
+
+    const forcedResult = mgr.truncate(messages, budget, { force: true });
+    expect(forcedResult.truncated).toBe(true);
+  });
+
   it("throws when critical preserved context alone exceeds max token budget", async () => {
     const mgr = new ContextManager(
       makeConfig({

@@ -294,4 +294,112 @@ describe.skipIf(!BUN_SQLITE_AVAILABLE)("SessionStore", () => {
       expect(store.getSessionCost(session.id).inputTokens).toBe(0);
     });
   });
+
+  // ─── Compaction Log ──────────────────────────────────────────
+
+  describe("compaction log", () => {
+    it("saves and retrieves compaction events", () => {
+      const session = store.createSession();
+
+      store.saveCompactionEvent(session.id, {
+        tokensBefore: 90000,
+        tokensAfter: 45000,
+        removedCount: 12,
+        tier: "full",
+      });
+
+      store.saveCompactionEvent(session.id, {
+        tokensBefore: 80000,
+        tokensAfter: 40000,
+        removedCount: 8,
+      });
+
+      const log = store.getCompactionLog(session.id);
+      expect(log).toHaveLength(2);
+      expect(log[0]!.tokensBefore).toBe(90000);
+      expect(log[0]!.tokensAfter).toBe(45000);
+      expect(log[0]!.removedCount).toBe(12);
+      expect(log[0]!.tier).toBe("full");
+      expect(log[1]!.tier).toBe("unknown");
+      expect(log[1]!.createdAt).toBeGreaterThan(0);
+    });
+
+    it("returns empty array for session with no compaction events", () => {
+      const session = store.createSession();
+      expect(store.getCompactionLog(session.id)).toEqual([]);
+    });
+
+    it("cascade deletes compaction log when session is deleted", () => {
+      const session = store.createSession();
+      store.saveCompactionEvent(session.id, {
+        tokensBefore: 90000,
+        tokensAfter: 45000,
+        removedCount: 12,
+      });
+      store.deleteSession(session.id);
+      expect(store.getCompactionLog(session.id)).toEqual([]);
+    });
+  });
+
+  // ─── Session State Persistence ──────────────────────────────
+
+  describe("session state persistence", () => {
+    it("saveSessionState + loadSessionState round-trips", () => {
+      const session = store.createSession({ query: "test" });
+
+      const stateData = {
+        version: 1,
+        plan: [{ description: "Step 1", status: "completed" }],
+        modifiedFiles: ["/src/a.ts"],
+        envFacts: [{ key: "cmd-not-found:rg", value: "rg not installed" }],
+        toolSummaries: [],
+      };
+
+      store.saveSessionState(session.id, stateData);
+      const loaded = store.loadSessionState(session.id);
+      expect(loaded).toEqual(stateData);
+    });
+
+    it("loadSessionState returns null for nonexistent session", () => {
+      expect(store.loadSessionState("nonexistent")).toBeNull();
+    });
+
+    it("saveSessionState overwrites previous state (upsert)", () => {
+      const session = store.createSession({ query: "test" });
+
+      store.saveSessionState(session.id, {
+        version: 1,
+        plan: null,
+        modifiedFiles: [],
+        envFacts: [],
+        toolSummaries: [],
+      });
+      store.saveSessionState(session.id, {
+        version: 1,
+        plan: [{ description: "Updated", status: "in_progress" }],
+        modifiedFiles: ["/b.ts"],
+        envFacts: [],
+        toolSummaries: [],
+      });
+
+      const loaded = store.loadSessionState(session.id);
+      expect(loaded).not.toBeNull();
+      expect((loaded as Record<string, unknown>).plan).toEqual([
+        { description: "Updated", status: "in_progress" },
+      ]);
+    });
+
+    it("deleteSession cascades to session_state", () => {
+      const session = store.createSession({ query: "test" });
+      store.saveSessionState(session.id, {
+        version: 1,
+        plan: null,
+        modifiedFiles: [],
+        envFacts: [],
+        toolSummaries: [],
+      });
+      store.deleteSession(session.id);
+      expect(store.loadSessionState(session.id)).toBeNull();
+    });
+  });
 });

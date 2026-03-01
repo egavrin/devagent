@@ -33,6 +33,9 @@ export type {
   CostRecord,
   JsonSchema,
   TaskStep,
+  SessionStateConfigCore,
+  LoggingConfig,
+  VerbosityConfig,
 } from "./types.js";
 
 export {
@@ -52,6 +55,7 @@ export type {
   ToolBeforeEvent,
   ToolAfterEvent,
   AssistantMessageEvent,
+  ToolMessageEvent,
   UserMessageEvent,
   ApprovalRequestEvent,
   ApprovalResponseEvent,
@@ -62,20 +66,22 @@ export type {
   PlanUpdatedEvent,
   ContextCompactingEvent,
   ContextCompactedEvent,
+  IterationStartEvent,
   ErrorEvent,
 } from "./events.js";
 
 // Config
-export { loadConfig, findProjectRoot, resolveProviderCredentials } from "./config.js";
+export { loadConfig, findProjectRoot, resolveProviderCredentials, DEFAULT_BUDGET } from "./config.js";
 
 // Model registry
 export {
   loadModelRegistry,
   lookupModelCapabilities,
   lookupModelEntry,
+  lookupModelPricing,
   getRegisteredModels,
 } from "./model-registry.js";
-export type { ModelRegistryEntry } from "./model-registry.js";
+export type { ModelRegistryEntry, ModelPricing } from "./model-registry.js";
 
 // Session
 export { SessionStore } from "./session.js";
@@ -169,6 +175,10 @@ export type { OAuthProviderConfig } from "./oauth-providers.js";
 
 // Browser URL opener
 export { openUrl } from "./open-url.js";
+
+// Event logger
+export { EventLogger } from "./event-logger.js";
+export type { LogEntry } from "./event-logger.js";
 
 // Errors
 export {

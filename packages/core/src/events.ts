@@ -3,7 +3,7 @@
  * ArkTS-compatible: no dynamic property access, explicit types.
  */
 
-import type { ToolResult, StreamChunk, Message } from "./types.js";
+import type { ToolResult, StreamChunk, Message, ToolCallRequest } from "./types.js";
 
 // ─── Event Definitions ───────────────────────────────────────
 
@@ -11,6 +11,7 @@ export interface EventMap {
   "tool:before": ToolBeforeEvent;
   "tool:after": ToolAfterEvent;
   "message:assistant": AssistantMessageEvent;
+  "message:tool": ToolMessageEvent;
   "message:user": UserMessageEvent;
   "approval:request": ApprovalRequestEvent;
   "approval:response": ApprovalResponseEvent;
@@ -21,7 +22,26 @@ export interface EventMap {
   "plan:updated": PlanUpdatedEvent;
   "context:compacting": ContextCompactingEvent;
   "context:compacted": ContextCompactedEvent;
+  "iteration:start": IterationStartEvent;
+  "plan:regression": PlanRegressionEvent;
   "error": ErrorEvent;
+}
+
+export interface IterationStartEvent {
+  /** 1-based iteration number (LLM round-trip). */
+  readonly iteration: number;
+  /** Budget limit (0 = unlimited). */
+  readonly maxIterations: number;
+  /** Estimated input tokens used so far (0 if unknown). */
+  readonly estimatedTokens: number;
+  /** Max context tokens budget (0 if unlimited). */
+  readonly maxContextTokens: number;
+}
+
+export interface PlanRegressionEvent {
+  readonly oldCompleted: number;
+  readonly newCompleted: number;
+  readonly reverted: number;
 }
 
 export interface ToolBeforeEvent {
@@ -41,6 +61,13 @@ export interface AssistantMessageEvent {
   readonly content: string;
   readonly partial: boolean;
   readonly chunk?: StreamChunk;
+  readonly toolCalls?: ReadonlyArray<ToolCallRequest>;
+}
+
+export interface ToolMessageEvent {
+  readonly role: "tool";
+  readonly content: string;
+  readonly toolCallId: string;
 }
 
 export interface UserMessageEvent {
@@ -86,6 +113,7 @@ export interface PlanUpdatedEvent {
   readonly steps: ReadonlyArray<{
     readonly description: string;
     readonly status: string;
+    readonly lastTransitionIteration?: number;
   }>;
   readonly explanation: string | null;
 }
@@ -97,7 +125,13 @@ export interface ContextCompactingEvent {
 
 export interface ContextCompactedEvent {
   readonly removedCount: number;
+  /** Number of tool output messages that were pruned/replaced in-place. */
+  readonly prunedCount?: number;
+  /** Estimated tokens saved by in-place pruning before/without full compaction. */
+  readonly tokensSaved?: number;
   readonly estimatedTokens: number;
+  /** Pre-compaction token count (from maybeCompactContext estimate). */
+  readonly tokensBefore: number;
 }
 
 export interface ErrorEvent {

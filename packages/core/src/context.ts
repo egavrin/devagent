@@ -94,6 +94,7 @@ export class ContextManager {
   truncate(
     messages: ReadonlyArray<Message>,
     maxTokens: number,
+    options?: { force?: boolean },
   ): ContextTruncationResult {
     if (maxTokens <= 0) {
       return {
@@ -106,15 +107,17 @@ export class ContextManager {
 
     const currentTokens = estimateMessageTokens(messages);
 
-    // Check if truncation is needed
-    const threshold = maxTokens * this.config.triggerRatio;
-    if (currentTokens <= threshold) {
-      return {
-        messages,
-        truncated: false,
-        removedCount: 0,
-        estimatedTokens: currentTokens,
-      };
+    // Check if truncation is needed (skip when force=true — caller already checked)
+    if (!options?.force) {
+      const threshold = maxTokens * this.config.triggerRatio;
+      if (currentTokens <= threshold) {
+        return {
+          messages,
+          truncated: false,
+          removedCount: 0,
+          estimatedTokens: currentTokens,
+        };
+      }
     }
 
     switch (this.config.pruningStrategy) {
@@ -135,6 +138,7 @@ export class ContextManager {
   async truncateAsync(
     messages: ReadonlyArray<Message>,
     maxTokens: number,
+    options?: { force?: boolean },
   ): Promise<ContextTruncationResult> {
     if (maxTokens <= 0) {
       return {
@@ -147,14 +151,17 @@ export class ContextManager {
 
     const currentTokens = estimateMessageTokens(messages);
 
-    const threshold = maxTokens * this.config.triggerRatio;
-    if (currentTokens <= threshold) {
-      return {
-        messages,
-        truncated: false,
-        removedCount: 0,
-        estimatedTokens: currentTokens,
-      };
+    // Check if truncation is needed (skip when force=true — caller already checked)
+    if (!options?.force) {
+      const threshold = maxTokens * this.config.triggerRatio;
+      if (currentTokens <= threshold) {
+        return {
+          messages,
+          truncated: false,
+          removedCount: 0,
+          estimatedTokens: currentTokens,
+        };
+      }
     }
 
     if (

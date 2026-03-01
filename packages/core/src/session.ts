@@ -16,7 +16,29 @@ import { SessionError } from "./errors.js";
 
 // ─── Schema ──────────────────────────────────────────────────
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 3;
+
+// DDL constants — referenced in both CREATE_TABLES_STATEMENTS and migrate()
+const SESSION_STATE_DDL = `CREATE TABLE IF NOT EXISTS session_state (
+    session_id TEXT PRIMARY KEY,
+    state_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+  )`;
+
+const COMPACTION_LOG_DDL = `CREATE TABLE IF NOT EXISTS compaction_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    tokens_before INTEGER NOT NULL,
+    tokens_after INTEGER NOT NULL,
+    removed_count INTEGER NOT NULL,
+    tier TEXT NOT NULL DEFAULT 'unknown',
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+  )`;
+
+const COMPACTION_LOG_INDEX_DDL = `CREATE INDEX IF NOT EXISTS idx_compaction_session
+    ON compaction_log(session_id)`;
 
 const CREATE_TABLES_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS sessions (
@@ -50,6 +72,9 @@ const CREATE_TABLES_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_cost_session
     ON cost_records(session_id)`,
+  SESSION_STATE_DDL,
+  COMPACTION_LOG_DDL,
+  COMPACTION_LOG_INDEX_DDL,
   `CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
   )`,
@@ -101,8 +126,25 @@ export class SessionStore {
       this.db
         .prepare("INSERT INTO schema_version (version) VALUES (?)")
         .run(SCHEMA_VERSION);
+    } else if (row.version < SCHEMA_VERSION) {
+      this.migrate(row.version);
     }
-    // Future: handle migrations when SCHEMA_VERSION > row.version
+  }
+
+  private migrate(fromVersion: number): void {
+    // v1 → v2: add session_state table
+    if (fromVersion < 2) {
+      this.db.exec(SESSION_STATE_DDL);
+    }
+    // v2 → v3: add compaction_log table
+    if (fromVersion < 3) {
+      this.db.exec(COMPACTION_LOG_DDL);
+      this.db.exec(COMPACTION_LOG_INDEX_DDL);
+    }
+    // Update stored version
+    this.db
+      .prepare("UPDATE schema_version SET version = ?")
+      .run(SCHEMA_VERSION);
   }
 
   // ─── Session CRUD ────────────────────────────────────────────
@@ -264,6 +306,101 @@ export class SessionStore {
       cacheWriteTokens: row.cache_write_tokens,
       totalCost: row.total_cost,
     };
+  }
+
+  // ─── Session State Persistence ──────────────────────────────
+
+  /**
+   * Save serialized session state (upsert — creates or overwrites).
+   * Accepts any JSON-serializable object; the caller is responsible for
+   * type-checking against SessionStateJSON from @devagent/engine.
+   */
+  saveSessionState(sessionId: string, state: Record<string, unknown>): void {
+    const now = Date.now();
+    const json = JSON.stringify(state);
+    this.db
+      .prepare(
+        `INSERT INTO session_state (session_id, state_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`,
+      )
+      .run(sessionId, json, now);
+  }
+
+  /**
+   * Load serialized session state for a session.
+   * Returns null if no state has been saved for this session.
+   */
+  loadSessionState(sessionId: string): Record<string, unknown> | null {
+    const row = this.db
+      .prepare("SELECT state_json FROM session_state WHERE session_id = ?")
+      .get(sessionId) as { state_json: string } | null;
+    if (!row) return null;
+    return JSON.parse(row.state_json) as Record<string, unknown>;
+  }
+
+  // ─── Compaction Log ──────────────────────────────────────────
+
+  /**
+   * Persist a compaction event for forensic analysis.
+   */
+  saveCompactionEvent(
+    sessionId: string,
+    event: {
+      tokensBefore: number;
+      tokensAfter: number;
+      removedCount: number;
+      tier?: string;
+    },
+  ): void {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO compaction_log
+         (session_id, tokens_before, tokens_after, removed_count, tier, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sessionId,
+        event.tokensBefore,
+        event.tokensAfter,
+        event.removedCount,
+        event.tier ?? "unknown",
+        now,
+      );
+  }
+
+  /**
+   * Retrieve compaction events for a session, ordered chronologically.
+   */
+  getCompactionLog(
+    sessionId: string,
+  ): ReadonlyArray<{
+    tokensBefore: number;
+    tokensAfter: number;
+    removedCount: number;
+    tier: string;
+    createdAt: number;
+  }> {
+    const rows = this.db
+      .prepare(
+        "SELECT tokens_before, tokens_after, removed_count, tier, created_at FROM compaction_log WHERE session_id = ? ORDER BY id ASC",
+      )
+      .all(sessionId) as Array<{
+        tokens_before: number;
+        tokens_after: number;
+        removed_count: number;
+        tier: string;
+        created_at: number;
+      }>;
+
+    return rows.map((r) => ({
+      tokensBefore: r.tokens_before,
+      tokensAfter: r.tokens_after,
+      removedCount: r.removed_count,
+      tier: r.tier,
+      createdAt: r.created_at,
+    }));
   }
 
   // ─── Lifecycle ────────────────────────────────────────────────
