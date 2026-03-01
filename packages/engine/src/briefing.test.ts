@@ -220,6 +220,34 @@ describe("briefing", () => {
       expect(briefing.pendingWork).not.toBeNull();
       expect(briefing.pendingWork).toContain("still need");
     });
+
+    it("extracts plan from update_plan with string steps argument", () => {
+      const messages = makeMessages(
+        { role: "system", content: "System prompt." },
+        { role: "user", content: "Do the task." },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{
+            name: "update_plan",
+            arguments: {
+              steps: JSON.stringify([
+                { description: "Step 1", status: "completed" },
+                { description: "Step 2", status: "in_progress" },
+              ]),
+            },
+            callId: "plan-1",
+          }],
+        },
+        { role: "tool", content: "Plan updated (1/2 completed):\n[x] Step 1\n[>] Step 2", toolCallId: "plan-1" },
+      );
+
+      const briefing = extractHeuristicBriefing(messages, 1);
+      expect(briefing.planSteps).not.toBeNull();
+      expect(briefing.planSteps!).toHaveLength(2);
+      expect(briefing.planSteps![0]!.status).toBe("completed");
+      expect(briefing.planSteps![1]!.status).toBe("in_progress");
+    });
   });
 
   describe("auto strategy", () => {
@@ -402,6 +430,84 @@ Nothing pending.
       const messages = makeMessages(
         { role: "user", content: "Quick question" },
         { role: "assistant", content: "Quick answer" },
+      );
+
+      const briefing = extractHeuristicBriefing(messages, 1);
+
+      expect(briefing.planSteps).toBeNull();
+    });
+
+    it("skips denied update_plan calls and extracts only successful ones", () => {
+      const messages = makeMessages(
+        { role: "user", content: "Plan the work" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              name: "update_plan",
+              arguments: {
+                steps: [
+                  { description: "Denied step", status: "pending" },
+                ],
+              },
+              callId: "denied-1",
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: "Error: Tool execution denied: approval mode requires manual confirmation",
+          toolCallId: "denied-1",
+        },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              name: "update_plan",
+              arguments: {
+                steps: [
+                  { description: "Approved step", status: "in_progress" },
+                ],
+              },
+              callId: "ok-1",
+            },
+          ],
+        },
+        { role: "tool", content: "Plan updated (0/1 completed)", toolCallId: "ok-1" },
+      );
+
+      const briefing = extractHeuristicBriefing(messages, 1);
+
+      expect(briefing.planSteps).not.toBeNull();
+      expect(briefing.planSteps).toHaveLength(1);
+      expect(briefing.planSteps![0]!.description).toBe("Approved step");
+    });
+
+    it("returns null planSteps when all update_plan calls were denied", () => {
+      const messages = makeMessages(
+        { role: "user", content: "Plan the work" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              name: "update_plan",
+              arguments: {
+                steps: [
+                  { description: "Denied step", status: "pending" },
+                ],
+              },
+              callId: "denied-1",
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: "Error: Tool execution denied: user rejected",
+          toolCallId: "denied-1",
+        },
       );
 
       const briefing = extractHeuristicBriefing(messages, 1);

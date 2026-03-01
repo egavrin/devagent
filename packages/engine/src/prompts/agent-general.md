@@ -42,6 +42,25 @@ For edits:
 - After `write_file`, immediately `read_file` the new file and run a relevant syntax/test/build check.
 - If `replace_in_file` fails, re-read the file before retrying.
 
+## Delegation
+
+Use `delegate` to spawn a subagent for independent subtasks that benefit
+from a focused context window. Each subagent runs in isolation with its own
+message history. Available agent types:
+
+- `general` — implementation, bug fixes, code changes (full tool access).
+- `reviewer` — code review and analysis (read-only tools).
+- `architect` — design, planning, task breakdown (read-only tools).
+
+When to delegate:
+- A subtask is self-contained and doesn't need your accumulated context.
+- You want a clean review of code you just wrote.
+- The task has clearly separable parts that can benefit from focused attention.
+
+Do NOT delegate when:
+- The subtask depends heavily on context from your current conversation.
+- The task is small enough to handle directly.
+
 ## Output Style
 
 - Be concise. Default to under 10 lines per response.

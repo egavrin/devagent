@@ -16,13 +16,7 @@
 
 import type { Message, LLMProvider } from "@devagent/core";
 import { MessageRole } from "@devagent/core";
-
-// ─── Types ──────────────────────────────────────────────────
-
-export interface BriefingPlanStep {
-  readonly description: string;
-  readonly status: "pending" | "in_progress" | "completed";
-}
+import type { PlanStep } from "./plan-tool.js";
 
 export interface TurnBriefing {
   readonly turnNumber: number;
@@ -35,7 +29,7 @@ export interface TurnBriefing {
   /** Files modified, read, or discovered (paths). */
   readonly keyArtifacts: ReadonlyArray<string>;
   /** Structured plan steps from the last update_plan call, if any. */
-  readonly planSteps: ReadonlyArray<BriefingPlanStep> | null;
+  readonly planSteps: ReadonlyArray<PlanStep> | null;
 }
 
 export type BriefingStrategy = "heuristic" | "llm" | "auto";
@@ -333,14 +327,14 @@ function parseLLMBriefing(
       : null;
 
   // planSteps from LLM response, with heuristic fallback
-  let planSteps: BriefingPlanStep[] | null = null;
+  let planSteps: PlanStep[] | null = null;
   if (planText && !planText.toLowerCase().includes("no plan")) {
     const stepLines = planText.split("\n").filter((l) => l.trim().startsWith("- ["));
     if (stepLines.length > 0) {
       planSteps = stepLines.map((line) => {
         const match = line.match(/\[(pending|in_progress|completed)\]\s*(.*)/);
         return {
-          status: (match?.[1] ?? "pending") as BriefingPlanStep["status"],
+          status: (match?.[1] ?? "pending") as PlanStep["status"],
           description: match?.[2]?.trim() ?? line.trim(),
         };
       });
@@ -377,6 +371,21 @@ function findFirstUserQuery(messages: ReadonlyArray<Message>): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Find the last non-empty user message content, or a default fallback.
+ */
+export function findLastUserContent(
+  messages: ReadonlyArray<Message>,
+  fallback = "(continue)",
+): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]!.role === MessageRole.USER && messages[i]!.content?.trim()) {
+      return messages[i]!.content!;
+    }
+  }
+  return fallback;
 }
 
 function findFinalAssistantResponse(
@@ -439,19 +448,39 @@ function extractToolSummary(messages: ReadonlyArray<Message>): string | null {
 
 function extractPlanSteps(
   messages: ReadonlyArray<Message>,
-): BriefingPlanStep[] | null {
-  // Find the LAST update_plan call (most up-to-date plan state)
-  let lastPlan: BriefingPlanStep[] | null = null;
+): PlanStep[] | null {
+  // Build set of failed/denied tool call IDs so we skip those plans
+  const failedCallIds = new Set<string>();
+  for (const msg of messages) {
+    if (
+      msg.role === MessageRole.TOOL &&
+      msg.toolCallId &&
+      msg.content?.startsWith("Error: ")
+    ) {
+      failedCallIds.add(msg.toolCallId);
+    }
+  }
+
+  // Find the LAST *successful* update_plan call (most up-to-date plan state)
+  let lastPlan: PlanStep[] | null = null;
 
   for (const msg of messages) {
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
-        if (tc.name === "update_plan") {
-          const steps = tc.arguments["steps"];
+        if (tc.name === "update_plan" && !failedCallIds.has(tc.callId)) {
+          let steps = tc.arguments["steps"];
+          // Handle string-encoded JSON (common from LLM tool calls)
+          if (typeof steps === "string") {
+            try {
+              steps = JSON.parse(steps) as unknown;
+            } catch {
+              continue;
+            }
+          }
           if (Array.isArray(steps)) {
             lastPlan = (steps as Array<Record<string, unknown>>).map((s) => ({
               description: (s["description"] as string) ?? "",
-              status: ((s["status"] as string) ?? "pending") as BriefingPlanStep["status"],
+              status: ((s["status"] as string) ?? "pending") as PlanStep["status"],
             }));
           }
         }

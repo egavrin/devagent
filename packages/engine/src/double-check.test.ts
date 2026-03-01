@@ -223,6 +223,112 @@ describe("DoubleCheck", () => {
   });
 });
 
+describe("DoubleCheck baseline filtering", () => {
+  let bus: EventBus;
+
+  beforeEach(() => {
+    bus = new EventBus();
+  });
+
+  it("captureBaseline collects pre-edit error counts per file", async () => {
+    const dc = new DoubleCheck(
+      { ...DEFAULT_DOUBLE_CHECK_OPTIONS, enabled: true },
+      bus,
+    );
+
+    const provider: DiagnosticProvider = async (file) => {
+      if (file === "dirty.ts") {
+        return [
+          { message: "pre-existing error 1", severity: "error" },
+          { message: "pre-existing error 2", severity: "error" },
+          { message: "a warning", severity: "warning" },
+        ];
+      }
+      return [];
+    };
+    dc.setDiagnosticProvider(provider);
+
+    const baseline = await dc.captureBaseline(["dirty.ts", "clean.ts"]);
+    expect(baseline).toEqual({ "dirty.ts": 2, "clean.ts": 0 });
+  });
+
+  it("check with baseline filters pre-existing errors", async () => {
+    const dc = new DoubleCheck(
+      { ...DEFAULT_DOUBLE_CHECK_OPTIONS, enabled: true },
+      bus,
+    );
+
+    // File had 3 pre-existing errors before edit, still has same 3 after
+    const provider: DiagnosticProvider = async () => [
+      { message: "pre-existing error 1", severity: "error" },
+      { message: "pre-existing error 2", severity: "error" },
+      { message: "pre-existing error 3", severity: "error" },
+    ];
+    dc.setDiagnosticProvider(provider);
+
+    const baseline = { "file.ts": 3 };
+    const result = await dc.check(["file.ts"], baseline);
+    // All 3 errors existed before the edit — should pass
+    expect(result.passed).toBe(true);
+    expect(result.diagnosticErrors.length).toBe(0);
+  });
+
+  it("check with baseline detects genuinely new errors", async () => {
+    const dc = new DoubleCheck(
+      { ...DEFAULT_DOUBLE_CHECK_OPTIONS, enabled: true },
+      bus,
+    );
+
+    // File had 2 errors before, now has 4 (2 new ones introduced)
+    const provider: DiagnosticProvider = async () => [
+      { message: "pre-existing error 1", severity: "error" },
+      { message: "pre-existing error 2", severity: "error" },
+      { message: "NEW error 3", severity: "error" },
+      { message: "NEW error 4", severity: "error" },
+    ];
+    dc.setDiagnosticProvider(provider);
+
+    const baseline = { "file.ts": 2 };
+    const result = await dc.check(["file.ts"], baseline);
+    // 2 errors are pre-existing, but 2 are new — should fail
+    expect(result.passed).toBe(false);
+    // Only report the 2 NEW errors, not the 2 pre-existing ones
+    expect(result.diagnosticErrors.length).toBe(2);
+  });
+
+  it("check without baseline reports all errors (backward compatible)", async () => {
+    const dc = new DoubleCheck(
+      { ...DEFAULT_DOUBLE_CHECK_OPTIONS, enabled: true },
+      bus,
+    );
+
+    const provider: DiagnosticProvider = async () => [
+      { message: "error 1", severity: "error" },
+      { message: "error 2", severity: "error" },
+    ];
+    dc.setDiagnosticProvider(provider);
+
+    const result = await dc.check(["file.ts"]);
+    // No baseline → report all errors (backward compatible)
+    expect(result.passed).toBe(false);
+    expect(result.diagnosticErrors.length).toBe(2);
+  });
+
+  it("formats results indicating pre-existing errors were filtered", () => {
+    const dc = new DoubleCheck(DEFAULT_DOUBLE_CHECK_OPTIONS, bus);
+    const formatted = dc.formatResults({
+      passed: false,
+      diagnosticErrors: ["file.ts: NEW error"],
+      testOutput: null,
+      testPassed: null,
+      baselineFiltered: 3,
+    });
+    expect(formatted).toContain("FAILED");
+    expect(formatted).toContain("NEW error");
+    expect(formatted).toContain("3 pre-existing");
+  });
+});
+
 describe("parseTestOutput", () => {
   it("returns null for empty input", () => {
     expect(parseTestOutput("")).toBeNull();

@@ -37,7 +37,12 @@ export interface DoubleCheckResult {
   readonly testPassed: boolean | null;
   /** Parsed test failures (if test output was parseable) */
   readonly testSummary?: TestSummary;
+  /** Number of pre-existing errors that were filtered out (for display) */
+  readonly baselineFiltered?: number;
 }
+
+/** Per-file error counts captured before an edit, used to filter pre-existing errors. */
+export type DiagnosticBaseline = Record<string, number>;
 
 export type DiagnosticProvider = (filePath: string) => Promise<ReadonlyArray<{
   readonly message: string;
@@ -225,11 +230,47 @@ export class DoubleCheck {
   }
 
   /**
+   * Capture pre-edit diagnostic error counts for baseline comparison.
+   * Call this BEFORE the edit, then pass the result to check() after.
+   * Returns a map of file → error count.
+   */
+  async captureBaseline(
+    files: ReadonlyArray<string>,
+  ): Promise<DiagnosticBaseline> {
+    const baseline: Record<string, number> = {};
+    if (!this.diagnosticProvider) {
+      for (const file of files) baseline[file] = 0;
+      return baseline;
+    }
+
+    const entries = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const diagnostics = await this.diagnosticProvider!(file);
+          return [file, diagnostics.filter((d) => d.severity === "error").length] as const;
+        } catch {
+          return [file, 0] as const;
+        }
+      }),
+    );
+    for (const [file, count] of entries) {
+      baseline[file] = count;
+    }
+    return baseline;
+  }
+
+  /**
    * Run double-check validation on a file that was modified.
    * Returns structured results — the caller (TaskLoop) can feed
    * these back to the LLM for self-correction.
+   *
+   * If a baseline is provided, only errors exceeding the baseline count
+   * are reported — pre-existing errors are filtered out.
    */
-  async check(modifiedFiles: ReadonlyArray<string>): Promise<DoubleCheckResult> {
+  async check(
+    modifiedFiles: ReadonlyArray<string>,
+    baseline?: DiagnosticBaseline,
+  ): Promise<DoubleCheckResult> {
     if (!this.options.enabled) {
       return {
         passed: true,
@@ -240,6 +281,7 @@ export class DoubleCheck {
     }
 
     const diagnosticErrors: string[] = [];
+    let baselineFiltered = 0;
     let testOutput: string | null = null;
     let testPassed: boolean | null = null;
 
@@ -249,7 +291,22 @@ export class DoubleCheck {
         try {
           const diagnostics = await this.diagnosticProvider(file);
           const errors = diagnostics.filter((d) => d.severity === "error");
-          for (const err of errors) {
+
+          // If baseline provided, only report errors beyond the pre-edit count
+          const preExistingCount = baseline?.[file] ?? 0;
+          if (baseline && errors.length <= preExistingCount) {
+            // All errors are pre-existing — skip them
+            baselineFiltered += errors.length;
+            continue;
+          }
+
+          // Report only the NEW errors (beyond pre-existing count)
+          const newErrors = baseline
+            ? errors.slice(preExistingCount)
+            : errors;
+          baselineFiltered += baseline ? preExistingCount : 0;
+
+          for (const err of newErrors) {
             diagnosticErrors.push(`${file}: ${err.message}`);
           }
         } catch (err) {
@@ -293,6 +350,7 @@ export class DoubleCheck {
       testOutput,
       testPassed,
       testSummary,
+      baselineFiltered: baselineFiltered > 0 ? baselineFiltered : undefined,
     };
   }
 
@@ -301,14 +359,21 @@ export class DoubleCheck {
    */
   formatResults(result: DoubleCheckResult): string {
     if (result.passed) {
+      if (result.baselineFiltered && result.baselineFiltered > 0) {
+        return `Double-check: All validations passed (${result.baselineFiltered} pre-existing error(s) filtered).`;
+      }
       return "Double-check: All validations passed.";
     }
 
     const parts: string[] = [];
 
     if (result.diagnosticErrors.length > 0) {
+      let header = `Diagnostic errors (${result.diagnosticErrors.length})`;
+      if (result.baselineFiltered && result.baselineFiltered > 0) {
+        header += ` — ${result.baselineFiltered} pre-existing error(s) filtered`;
+      }
       parts.push(
-        `Diagnostic errors (${result.diagnosticErrors.length}):\n` +
+        `${header}:\n` +
           result.diagnosticErrors.map((e) => `  - ${e}`).join("\n"),
       );
     }
