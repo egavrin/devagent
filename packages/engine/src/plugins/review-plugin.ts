@@ -8,6 +8,7 @@
  */
 
 import type { Plugin, PluginContext, CommandHandler } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/core";
 import { execSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -56,7 +57,7 @@ const reviewCommand: CommandHandler = {
 
       return reviewFile(filePath, target!);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractErrorMessage(err);
       return `Review failed: ${msg}`;
     }
   },

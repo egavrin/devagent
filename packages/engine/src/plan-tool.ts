@@ -6,6 +6,7 @@
 
 import type { ToolSpec } from "@devagent/core";
 import type { EventBus } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/core";
 import type { SessionState } from "./session-state.js";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -75,7 +76,7 @@ export function createPlanTool(
           status: validateStatus(s.status),
         }));
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         // Surface validation errors directly; wrap parse errors with guidance
         const isValidationError = message.startsWith("Invalid plan step status:") || message.startsWith("Invalid plan step description");
         return {

@@ -6602,15 +6602,16 @@ type RunResult = string
       const errors: Array<{ code: string; message: string }> = [];
       bus.on("error", (e) => errors.push({ code: e.code, message: e.message }));
 
-      // Simulate a compaction by setting lastCompactionIteration
-      (loop as any).lastCompactionIteration = 5;
-      (loop as any).postCompactionRereadCount = 0;
-      (loop as any).iterations = 7; // within 5 iterations of compaction
+      // Access the StagnationDetector through the loop
+      const detector = (loop as any).stagnationDetector;
 
-      // Simulate 3 re-read detections
-      (loop as any).checkRereadStorm("read_file", "/tmp/test.ts");
-      (loop as any).checkRereadStorm("read_file", "/tmp/test.ts");
-      (loop as any).checkRereadStorm("git_diff", "");
+      // Simulate a compaction
+      detector.notifyCompaction(5);
+
+      // Simulate 3 re-read detections within 5 iterations of compaction
+      detector.checkRereadStorm("read_file", "/tmp/test.ts", 7);
+      detector.checkRereadStorm("read_file", "/tmp/test.ts", 7);
+      detector.checkRereadStorm("git_diff", "", 7);
 
       const stormErrors = errors.filter((e) => e.code === "COMPACTION_REREAD_STORM");
       expect(stormErrors.length).toBe(1);
@@ -6635,23 +6636,22 @@ type RunResult = string
       const errors: Array<{ code: string }> = [];
       bus.on("error", (e) => errors.push({ code: e.code }));
 
-      // Simulate first compaction
-      (loop as any).lastCompactionIteration = 5;
-      (loop as any).postCompactionRereadCount = 0;
-      (loop as any).iterations = 6;
+      // Access the StagnationDetector through the loop
+      const detector = (loop as any).stagnationDetector;
 
-      (loop as any).checkRereadStorm("read_file", "/tmp/a.ts");
-      (loop as any).checkRereadStorm("read_file", "/tmp/b.ts");
+      // Simulate first compaction
+      detector.notifyCompaction(5);
+
+      detector.checkRereadStorm("read_file", "/tmp/a.ts", 6);
+      detector.checkRereadStorm("read_file", "/tmp/b.ts", 6);
       // 2 re-reads — no storm yet
 
       // Simulate second compaction (resets counter)
-      (loop as any).lastCompactionIteration = 10;
-      (loop as any).postCompactionRereadCount = 0;
-      (loop as any).iterations = 11;
+      detector.notifyCompaction(10);
 
       // 2 more re-reads in new window — still no storm
-      (loop as any).checkRereadStorm("read_file", "/tmp/c.ts");
-      (loop as any).checkRereadStorm("read_file", "/tmp/d.ts");
+      detector.checkRereadStorm("read_file", "/tmp/c.ts", 11);
+      detector.checkRereadStorm("read_file", "/tmp/d.ts", 11);
 
       const stormErrors = errors.filter((e) => e.code === "COMPACTION_REREAD_STORM");
       expect(stormErrors.length).toBe(0);

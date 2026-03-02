@@ -9,6 +9,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { EventBus } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/core";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ export class CheckpointManager {
       this.initialized = true;
     } catch (err) {
       // Fail fast — surface the error, don't silently degrade
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       this.bus.emit("error", {
         message: `Checkpoint init failed: ${message}`,
         code: "CHECKPOINT_INIT_ERROR",
@@ -109,7 +110,7 @@ export class CheckpointManager {
 
       return checkpoint;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       this.bus.emit("error", {
         message: `Checkpoint create failed: ${message}`,
         code: "CHECKPOINT_CREATE_ERROR",
@@ -151,7 +152,7 @@ export class CheckpointManager {
       this.syncToShadow();
       return this.git(`diff ${from.commitHash}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       return `Error computing diff: ${message}`;
     }
   }
@@ -183,7 +184,7 @@ export class CheckpointManager {
 
       return true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       this.bus.emit("error", {
         message: `Checkpoint restore failed: ${message}`,
         code: "CHECKPOINT_RESTORE_ERROR",
@@ -229,7 +230,7 @@ export class CheckpointManager {
         { encoding: "utf-8", timeout: 30_000 },
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       throw new Error(`syncToShadow failed: ${message}`);
     }
   }
@@ -244,7 +245,7 @@ export class CheckpointManager {
         { encoding: "utf-8", timeout: 30_000 },
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       throw new Error(`syncFromShadow failed: ${message}`);
     }
   }

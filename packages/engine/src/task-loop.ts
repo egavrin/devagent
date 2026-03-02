@@ -27,12 +27,19 @@ import {
   estimateMessageTokens,
   estimateTokens,
   lookupModelPricing,
+  extractErrorMessage,
 } from "@devagent/core";
 import type { MemoryStore } from "@devagent/core";
 import type { ToolRegistry } from "@devagent/tools";
 import type { CheckpointManager } from "./checkpoints.js";
 import type { DoubleCheck } from "./double-check.js";
-import { SessionState, extractEnvFact, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX, SUMMARY_MAX_CHARS } from "./session-state.js";
+import { SessionState, extractEnvFact, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX } from "./session-state.js";
+import { formatToolSummary } from "./tool-summary-formatter.js";
+
+// Re-export formatter functions that were previously defined here,
+// preserving backward compatibility for external consumers.
+export { summarizeDiff, summarizeTestOutput, extractStructuralDigest } from "./tool-summary-formatter.js";
+import { StagnationDetector } from "./stagnation-detector.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -106,13 +113,6 @@ interface ToolCallBatch {
   readonly calls: ReadonlyArray<PendingToolCall>;
 }
 
-interface ProgressSnapshot {
-  readonly toolSummaries: number;
-  readonly findings: number;
-  readonly coverageTargets: number;
-  readonly completedPlan: number;
-}
-
 // ─── Tool Output Truncation ─────────────────────────────────
 
 /** Maximum chars for a single tool output in the message array (~12K tokens). */
@@ -152,10 +152,6 @@ export function truncateToolOutput(output: string, maxChars: number = MAX_TOOL_O
 
 /** Tools whose output can be safely deduplicated (readonly, replaceable). */
 const DEDUP_TOOLS = new Set(["read_file", "git_diff", "git_status"]);
-/** Max reads of the same file before injecting a stagnation nudge (sessionState-independent). */
-const PER_FILE_READ_LIMIT = 8;
-/** Hard block on reads after this many reads of the same file. */
-const PER_FILE_READ_HARD_LIMIT = 12;
 /** Readonly inspection tools to pause when no-progress loops are detected.
  *  Only category:"readonly" tools belong here — the stall lock gate
  *  (normalizeToolCall) skips non-readonly categories before checking this set. */
@@ -169,6 +165,23 @@ const STALL_LOCK_TOOLS = new Set([
   "diagnostics",
   "execute_tool_script",
 ]);
+
+// ─── Context & Pruning Thresholds ───────────────────────────
+
+/** Token budget for pinned messages — oldest unpinned when exceeded. */
+const PINNED_TOKEN_BUDGET = 80_000;
+/** Minimum token size for a tool message to be eligible for pruning. */
+const MIN_PRUNE_MSG_TOKENS = 500;
+/** After pruning, target 85% of threshold to leave headroom. */
+const PRUNE_THRESHOLD_RATIO = 0.85;
+/** Warning fires at 60% of compaction threshold so the LLM can persist findings. */
+const APPROACHING_LIMIT_RATIO = 0.6;
+/** Max chars for an inline pruned-tool summary placeholder. */
+const MAX_INLINE_SUMMARY_CHARS = 600;
+/** Max auto-pinned git_diff results per session. */
+const MAX_PINNED_DIFFS = 20;
+/** Max text-only continuations before the loop accepts a text-only response. */
+const MAX_TEXT_CONTINUATIONS = 3;
 
 // ─── Prune Priority ─────────────────────────────────────────
 /** Tool pruning priority: lower = pruned first. Tools not listed default to 1. */
@@ -211,34 +224,20 @@ export class TaskLoop {
     totalCost: 0,
   };
   private aborted = false;
-  private recentToolCalls: Array<{ name: string; argsKey: string }> = [];
-  private doomLoopWarned = false;
-  // Per-tool consecutive failure counts (reset on any success of that tool)
-  private toolFailureCounts: Map<string, number> = new Map();
-  private toolFatigueWarned: Set<string> = new Set();
+  private readonly stagnationDetector: StagnationDetector;
   private unresolvedDoubleCheckFailure = false;
   private lastReportedInputTokens = 0;
   private readonly cachedPricing;
+  /** Running estimate of total message tokens — avoids expensive full-array scans. */
+  private estimatedTokens: number = 0;
   /** Tracks message index of the last tool result for each tool:target key (for deduplication). */
   private toolResultIndices = new Map<string, number>();
   /** Readonly tool calls that already succeeded in this run (tool + normalized args). */
   private successfulReadonlyCallKeys = new Set<string>();
   /** Whether the approaching-limit warning has been injected (reset on compaction). */
   private approachingLimitWarned = false;
-  /** Consecutive readonly-only cycles with no coverage/findings progress. */
-  private stagnantReadonlyCycles = 0;
-  /** Last persisted progress snapshot for no-progress loop detection. */
-  private lastProgressSnapshot: ProgressSnapshot | null = null;
-  /** Temporarily pauses readonly inspection tools after sustained no-progress loops. */
-  private readonlyStallLock = false;
-  /** Per-file read count — catches stagnation even without sessionState. */
-  private perFileReadCount = new Map<string, number>();
   /** Number of auto-pinned git_diff results in this session. */
   private pinnedDiffCount = 0;
-  /** Iteration at which the last compaction occurred. */
-  private lastCompactionIteration = 0;
-  /** Re-read count since the last compaction. */
-  private postCompactionRereadCount = 0;
 
   constructor(options: TaskLoopOptions) {
     this.provider = options.provider;
@@ -258,6 +257,11 @@ export class TaskLoop {
       options.config.context.midpointBriefingInterval ?? DEFAULT_MIDPOINT_INTERVAL;
     this.sessionState = options.sessionState ?? null;
     this.cachedPricing = lookupModelPricing(this.config.model);
+    this.stagnationDetector = new StagnationDetector({
+      bus: this.bus,
+      sessionState: this.sessionState,
+      resolveCategory: (toolName: string) => this.tools.get(toolName).category,
+    });
 
     // Initialize messages: from previous session or fresh system prompt
     if (options.initialMessages && options.initialMessages.length > 0) {
@@ -268,6 +272,9 @@ export class TaskLoop {
         content: this.systemPrompt,
       });
     }
+
+    // Initialize running token counter from initial messages.
+    this.estimatedTokens = estimateMessageTokens(this.messages);
   }
 
   /**
@@ -279,7 +286,7 @@ export class TaskLoop {
     this.resetRunState();
 
     // Add user message
-    this.messages.push({
+    this.pushMessage({
       role: MessageRole.USER,
       content: userQuery,
     });
@@ -290,7 +297,6 @@ export class TaskLoop {
     let budgetGraceUsed = false;
     let lastNonEmptyText: string | null = null;
     let textOnlyContinuations = 0;
-    const MAX_TEXT_CONTINUATIONS = 3;
     let status: TaskCompletionStatus = "success";
 
     while (!this.aborted) {
@@ -299,7 +305,7 @@ export class TaskLoop {
         if (!budgetGraceUsed) {
           // Grace iteration: ask the model to summarize before stopping
           budgetGraceUsed = true;
-          this.messages.push({
+          this.pushMessage({
             role: MessageRole.SYSTEM,
             content: "You have reached the iteration limit. Please provide a concise summary of your progress and findings so far. Do not use any tools — respond with text only.",
           });
@@ -311,14 +317,14 @@ export class TaskLoop {
       }
 
       this.iterations++;
-      const estimatedTokens = Math.max(
-        estimateMessageTokens(this.messages),
+      const iterationTokenEstimate = Math.max(
+        this.estimatedTokens,
         this.lastReportedInputTokens,
       );
       this.bus.emit("iteration:start", {
         iteration: this.iterations,
         maxIterations: this.config.budget.maxIterations,
-        estimatedTokens,
+        estimatedTokens: iterationTokenEstimate,
         maxContextTokens: this.getEffectiveContextBudget(),
       });
 
@@ -382,7 +388,7 @@ export class TaskLoop {
           arguments: tc.arguments,
           callId: tc.callId,
         }));
-        this.messages.push({
+        this.pushMessage({
           role: MessageRole.ASSISTANT,
           content: textContent,
           toolCalls: mappedToolCalls,
@@ -398,7 +404,7 @@ export class TaskLoop {
           this.coalesceReplaceAllCalls(toolCalls);
         for (const tc of skipped) {
           const skipContent = "Skipped: superseded by a later update_plan call in this batch.";
-          this.messages.push({
+          this.pushMessage({
             role: MessageRole.TOOL,
             content: skipContent,
             toolCallId: tc.callId,
@@ -445,21 +451,27 @@ export class TaskLoop {
         }
 
         // Generic no-progress detection for readonly inspection loops.
-        this.maybeInjectNoProgressNudge(toolCalls);
+        const noProgressNudge = this.stagnationDetector.maybeInjectNoProgressNudge(toolCalls);
+        if (noProgressNudge) {
+          this.pushMessage({
+            role: MessageRole.SYSTEM,
+            content: noProgressNudge,
+          });
+        }
 
         // Doom loop detection: warn the LLM if it's repeating identical failing calls
-        const doomLoopWarning = this.checkDoomLoop(toolCalls);
+        const doomLoopWarning = this.stagnationDetector.checkDoomLoop(toolCalls);
         if (doomLoopWarning) {
-          this.messages.push({
+          this.pushMessage({
             role: MessageRole.SYSTEM,
             content: doomLoopWarning,
           });
         }
 
         // Tool fatigue detection: same tool failing repeatedly with different args
-        const fatigueWarning = this.checkToolFatigue(toolCalls);
+        const fatigueWarning = this.stagnationDetector.checkToolFatigue(toolCalls);
         if (fatigueWarning) {
-          this.messages.push({
+          this.pushMessage({
             role: MessageRole.SYSTEM,
             content: fatigueWarning,
           });
@@ -479,11 +491,11 @@ export class TaskLoop {
       // No tool calls — LLM produced a text response
       if (textContent) {
         if (this.unresolvedDoubleCheckFailure) {
-          this.messages.push({
+          this.pushMessage({
             role: MessageRole.ASSISTANT,
             content: textContent,
           });
-          this.messages.push({
+          this.pushMessage({
             role: MessageRole.SYSTEM,
             content: "Double-check still failing from prior edits. You must fix validation errors before finalizing.",
           });
@@ -506,7 +518,7 @@ export class TaskLoop {
 
         if (shouldContinue && textOnlyContinuations < MAX_TEXT_CONTINUATIONS) {
           textOnlyContinuations++;
-          this.messages.push({
+          this.pushMessage({
             role: MessageRole.ASSISTANT,
             content: textContent,
           });
@@ -517,14 +529,14 @@ export class TaskLoop {
           const nudge = hasIncompleteSteps
             ? "Your plan has incomplete steps. Continue working — use tools to make progress on the next pending step."
             : "You outlined next steps but did not use any tools. Use update_plan to create a plan, then use tools to start working.";
-          this.messages.push({
+          this.pushMessage({
             role: MessageRole.SYSTEM,
             content: nudge,
           });
           continue;
         }
 
-        this.messages.push({
+        this.pushMessage({
           role: MessageRole.ASSISTANT,
           content: textContent,
         });
@@ -539,7 +551,7 @@ export class TaskLoop {
       // Empty response — try to get a summary if work was done
       if (hadToolCalls && !summaryRequested) {
         summaryRequested = true;
-        this.messages.push({
+        this.pushMessage({
           role: MessageRole.SYSTEM,
           content: "Please provide a summary of your findings and conclusions based on the work done so far.",
         });
@@ -602,10 +614,7 @@ export class TaskLoop {
   resetIterations(): void {
     this.iterations = 0;
     this.aborted = false;
-    this.recentToolCalls = [];
-    this.doomLoopWarned = false;
-    this.toolFailureCounts.clear();
-    this.toolFatigueWarned.clear();
+    this.stagnationDetector.resetAll();
     this.resetRunState();
   }
 
@@ -613,10 +622,17 @@ export class TaskLoop {
   private resetRunState(): void {
     this.unresolvedDoubleCheckFailure = false;
     this.successfulReadonlyCallKeys.clear();
-    this.stagnantReadonlyCycles = 0;
-    this.lastProgressSnapshot = null;
-    this.readonlyStallLock = false;
-    this.perFileReadCount.clear();
+    this.stagnationDetector.resetRunState();
+  }
+
+  /**
+   * Push a message and increment the running token counter.
+   * Use this instead of `this.messages.push(msg)` in hot paths
+   * so that `this.estimatedTokens` stays in sync.
+   */
+  private pushMessage(msg: Message): void {
+    this.messages.push(msg);
+    this.estimatedTokens += estimateMessageTokens([msg]);
   }
 
   // ─── Private ────────────────────────────────────────────────
@@ -636,7 +652,7 @@ export class TaskLoop {
     if (maxTokens <= 0) return;
 
     const estimatedTokens = Math.max(
-      estimateMessageTokens(this.messages),
+      this.estimatedTokens,
       this.lastReportedInputTokens,
     );
     const threshold = maxTokens * this.config.context.triggerRatio;
@@ -645,10 +661,10 @@ export class TaskLoop {
       // Approaching-limit warning: nudge the LLM to persist findings before
       // compaction fires. Fires once at ~60% of trigger threshold to give
       // the LLM enough time to persist findings before pruning strips context.
-      const warningThreshold = threshold * 0.6;
+      const warningThreshold = threshold * APPROACHING_LIMIT_RATIO;
       if (!this.approachingLimitWarned && estimatedTokens > warningThreshold && this.sessionState) {
         this.approachingLimitWarned = true;
-        this.messages.push({
+        this.pushMessage({
           role: MessageRole.SYSTEM,
           content: "Context is filling up. You MUST persist any analysis conclusions or review findings NOW using save_finding. After context pruning, old tool outputs will be replaced with summaries. Do NOT re-read files already listed in session state — rely on the summaries and findings you've saved.",
         });
@@ -657,7 +673,6 @@ export class TaskLoop {
     }
 
     // Pre-Phase 1: enforce pinned token budget — unpin oldest when over limit
-    const PINNED_TOKEN_BUDGET = 80_000;
     let pinnedTokens = 0;
     const pinnedIndices: number[] = [];
     for (let i = 0; i < this.messages.length; i++) {
@@ -686,7 +701,7 @@ export class TaskLoop {
     // system prompt encoding, tokenizer overhead) that pruning cannot affect.
     // Compute overhead and subtract from threshold so pruning targets savings
     // based only on what it can actually remove — message content.
-    const messageTokens = estimateMessageTokens(this.messages);
+    const messageTokens = this.estimatedTokens;
     const overhead = Math.max(0, this.lastReportedInputTokens - messageTokens);
     const messageThreshold = Math.max(0, threshold - overhead);
     const pruneResult = this.pruneToolOutputs(messageTokens, messageThreshold);
@@ -695,7 +710,9 @@ export class TaskLoop {
 
       // Re-inject session state so the LLM sees updated summaries
       this.injectSessionState();
-      const postPruneTokens = estimateMessageTokens(this.messages);
+      // Full recalculation: pruning + injectSessionState mutate messages in place.
+      this.estimatedTokens = estimateMessageTokens(this.messages);
+      const postPruneTokens = this.estimatedTokens;
 
       // Account for overhead when checking whether pruning was sufficient
       if (!options?.force && (postPruneTokens + overhead) <= threshold) {
@@ -725,7 +742,9 @@ export class TaskLoop {
         this.messages = [...result.messages];
         this.injectSessionState();
         this.resetPostCompactionState(true);
-        const postCompactTokens = estimateMessageTokens(this.messages);
+        // Full recalculation: compaction replaces the entire message array.
+        this.estimatedTokens = estimateMessageTokens(this.messages);
+        const postCompactTokens = this.estimatedTokens;
         this.bus.emit("context:compacted", {
           removedCount: result.removedCount,
           prunedCount: pruneResult.prunedCount > 0 ? pruneResult.prunedCount : undefined,
@@ -768,10 +787,9 @@ export class TaskLoop {
     if (!this.sessionState) return { savedTokens: 0, prunedCount: 0 };
 
     const PRUNE_PROTECT_TOKENS = this.config.context.pruneProtectTokens ?? 60_000;
-    const MIN_PRUNE_MSG_TOKENS = 500;
 
     // Target: free enough tokens to reach 85% of threshold (headroom to avoid re-triggering).
-    const targetTokens = threshold * 0.85;
+    const targetTokens = threshold * PRUNE_THRESHOLD_RATIO;
     const targetSavings = currentTokens - targetTokens;
     if (targetSavings <= 0) return { savedTokens: 0, prunedCount: 0 };
 
@@ -831,7 +849,9 @@ export class TaskLoop {
       const replacement = this.buildPrunedToolPlaceholder(msg, msgTokens, reversedSummaries, toolCallIndex);
       const replacementTokens = estimateTokens(replacement);
       this.messages[index] = { ...msg, content: replacement };
-      savedTokens += msgTokens - replacementTokens;
+      const delta = msgTokens - replacementTokens;
+      savedTokens += delta;
+      this.estimatedTokens -= delta;
       prunedCount++;
     }
 
@@ -864,9 +884,8 @@ export class TaskLoop {
     if (!summary) return fallback;
 
     const inline = `${summary.tool}(${summary.target}): ${summary.summary}`;
-    const maxInlineChars = 600;
-    const snippet = inline.length > maxInlineChars
-      ? `${inline.slice(0, maxInlineChars - 3)}...`
+    const snippet = inline.length > MAX_INLINE_SUMMARY_CHARS
+      ? `${inline.slice(0, MAX_INLINE_SUMMARY_CHARS - 3)}...`
       : inline;
     return `${PRUNED_MARKER_PREFIX} ${snippet} (pruned from ${prunedTokens} tokens)]`;
   }
@@ -889,8 +908,7 @@ export class TaskLoop {
     this.approachingLimitWarned = false;
     if (full) {
       this.successfulReadonlyCallKeys.clear();
-      this.lastCompactionIteration = this.iterations;
-      this.postCompactionRereadCount = 0;
+      this.stagnationDetector.notifyCompaction(this.iterations);
     }
   }
 
@@ -901,7 +919,7 @@ export class TaskLoop {
     let tier: "full" | "compact" | "minimal" = "full";
     const maxBudget = this.getEffectiveContextBudget();
     if (maxBudget > 0) {
-      const totalEstimate = knownTokenEstimate ?? estimateMessageTokens(this.messages);
+      const totalEstimate = knownTokenEstimate ?? this.estimatedTokens;
       const headroom = maxBudget - totalEstimate;
       tier = headroom > 8000 ? "full"
         : headroom > 3000 ? "compact"
@@ -911,17 +929,25 @@ export class TaskLoop {
     const content = this.sessionState.toSystemMessage(tier);
     if (!content) return;
 
-    // Remove any existing session-state message
-    this.messages = this.messages.filter(
-      (m) => !(m.role === MessageRole.SYSTEM && m.content?.startsWith(SESSION_STATE_MARKER)),
-    );
+    // Remove any existing session-state message and adjust running counter
+    const prevMessages = this.messages;
+    this.messages = [];
+    for (const m of prevMessages) {
+      if (m.role === MessageRole.SYSTEM && m.content?.startsWith(SESSION_STATE_MARKER)) {
+        this.estimatedTokens -= estimateMessageTokens([m]);
+      } else {
+        this.messages.push(m);
+      }
+    }
 
     // Insert after the first SYSTEM message (the system prompt)
-    const insertIdx = this.messages[0]?.role === MessageRole.SYSTEM ? 1 : 0;
-    this.messages.splice(insertIdx, 0, {
+    const newMsg: Message = {
       role: MessageRole.SYSTEM,
       content,
-    });
+    };
+    const insertIdx = this.messages[0]?.role === MessageRole.SYSTEM ? 1 : 0;
+    this.messages.splice(insertIdx, 0, newMsg);
+    this.estimatedTokens += estimateMessageTokens([newMsg]);
   }
 
   private getEffectiveContextBudget(): number {
@@ -983,13 +1009,17 @@ export class TaskLoop {
       if (prevIdx !== undefined && prevIdx < this.messages.length) {
         const prevMsg = this.messages[prevIdx];
         if (prevMsg && prevMsg.role === MessageRole.TOOL) {
+          const replacement = `${SUPERSEDED_MARKER_PREFIX} by later ${toolName}. See recent activity in session state.]`;
+          // Adjust running counter: subtract old content, add new (shorter) content
+          this.estimatedTokens -= estimateMessageTokens([prevMsg]);
           this.messages[prevIdx] = {
             ...prevMsg,
-            content: `${SUPERSEDED_MARKER_PREFIX} by later ${toolName}. See recent activity in session state.]`,
+            content: replacement,
           };
+          this.estimatedTokens += estimateMessageTokens([this.messages[prevIdx]!]);
         }
         // Check for post-compaction re-read storm
-        this.checkRereadStorm(toolName, target);
+        this.stagnationDetector.checkRereadStorm(toolName, target, this.iterations);
       }
       // Track this result's index for future dedup
       this.toolResultIndices.set(dedupKey, this.messages.length);
@@ -1001,38 +1031,35 @@ export class TaskLoop {
     if (toolName === "read_file" && toolArgs) {
       const filePath = (toolArgs["path"] as string | undefined) ?? "";
       if (filePath) {
-        const normalizedPath = normalizeRepoPath(filePath);
-        const count = (this.perFileReadCount.get(normalizedPath) ?? 0) + 1;
-        this.perFileReadCount.set(normalizedPath, count);
-        if (count >= PER_FILE_READ_HARD_LIMIT) {
+        const readResult = this.stagnationDetector.trackFileRead(filePath);
+        if (readResult.action === "block") {
           // Hard block: replace tool content with a refusal
-          this.messages.push({
+          this.pushMessage({
             role: MessageRole.TOOL,
-            content: `Blocked: "${normalizedPath}" has been read ${count} times. Use the summaries and content you already have. Do NOT attempt to read this file again.`,
+            content: readResult.message!,
             toolCallId: callId,
           });
           this.bus.emit("message:tool", {
             role: "tool" as const,
-            content: `[blocked: ${normalizedPath} read limit exceeded]`,
+            content: `[blocked: ${filePath} read limit exceeded]`,
             toolCallId: callId,
           });
           return;
         }
-        if (count >= PER_FILE_READ_LIMIT) {
-          this.messages.push({
+        if (readResult.action === "nudge") {
+          this.pushMessage({
             role: MessageRole.SYSTEM,
-            content: `You have read "${normalizedPath}" an excessive number of reads (${count} times). You likely already have enough information from this file. Stop re-reading it and synthesize your findings from what you already know. If you need specific details, reference the content you already received.`,
+            content: readResult.message!,
           });
         }
       }
     }
 
     // Auto-pin git_diff results so they survive compaction
-    const MAX_PINNED_DIFFS = 20;
     const shouldPin = toolName === "git_diff" && result.success && this.pinnedDiffCount < MAX_PINNED_DIFFS;
     if (shouldPin) this.pinnedDiffCount++;
 
-    this.messages.push({
+    this.pushMessage({
       role: MessageRole.TOOL,
       content: toolContent,
       toolCallId: callId,
@@ -1058,28 +1085,6 @@ export class TaskLoop {
   }
 
   /**
-   * Detect post-compaction re-read storms: when the model re-reads the same
-   * readonly targets shortly after compaction, it indicates compaction was
-   * too aggressive. Emits COMPACTION_REREAD_STORM error event at 3+ re-reads.
-   */
-  private checkRereadStorm(toolName: string, target: string): void {
-    const REREAD_STORM_WINDOW = 5;
-    const REREAD_STORM_THRESHOLD = 3;
-
-    if (this.lastCompactionIteration === 0) return;
-    if (this.iterations - this.lastCompactionIteration > REREAD_STORM_WINDOW) return;
-
-    this.postCompactionRereadCount++;
-    if (this.postCompactionRereadCount === REREAD_STORM_THRESHOLD) {
-      this.bus.emit("error", {
-        message: `Post-compaction re-read storm detected: ${this.postCompactionRereadCount} readonly tool calls within ${REREAD_STORM_WINDOW} iterations of compaction. The model is re-fetching data that was pruned. Consider increasing keepRecentMessages or pruneProtectTokens.`,
-        code: "COMPACTION_REREAD_STORM",
-        fatal: false,
-      });
-    }
-  }
-
-  /**
    * Proactive midpoint briefing: at regular intervals, re-synthesize
    * context to prevent accumulated history from degrading LLM accuracy.
    * Unlike reactive compaction (which triggers at token budget limit),
@@ -1090,15 +1095,17 @@ export class TaskLoop {
     if (this.midpointInterval <= 0) return;
     if (this.iterations <= 0 || this.iterations % this.midpointInterval !== 0) return;
 
-    const tokensBefore = estimateMessageTokens(this.messages);
+    const tokensBefore = this.estimatedTokens;
     const result = await this.midpointCallback(this.messages, this.iterations);
     if (result) {
       this.messages = [...result.continueMessages];
+      // Full recalculation: midpoint briefing replaces the entire message array.
+      this.estimatedTokens = estimateMessageTokens(this.messages);
       this.injectSessionState();
       this.resetPostCompactionState(false);
       this.bus.emit("context:compacted", {
         removedCount: 0,
-        estimatedTokens: estimateMessageTokens(this.messages),
+        estimatedTokens: this.estimatedTokens,
         tokensBefore,
       });
     }
@@ -1116,7 +1123,7 @@ export class TaskLoop {
     category: ToolSpec["category"],
   ): NormalizedToolCall {
     if (category !== "readonly") return { toolCall, bypassResult: null, scriptSteps: null };
-    if (this.readonlyStallLock && STALL_LOCK_TOOLS.has(toolCall.name)) {
+    if (this.stagnationDetector.isReadonlyStallLocked() && STALL_LOCK_TOOLS.has(toolCall.name)) {
       return {
         toolCall,
         bypassResult: {
@@ -1507,7 +1514,7 @@ export class TaskLoop {
         sessionId: "", // Filled by engine wrapper
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       result = {
         success: false,
         output: "",
@@ -1519,23 +1526,7 @@ export class TaskLoop {
     const durationMs = Date.now() - startTime;
 
     // Track recent tool calls for doom loop + tool fatigue detection
-    if (result.success) {
-      // Success resets doom loop tracking — the LLM found a working approach
-      this.recentToolCalls = [];
-      this.doomLoopWarned = false;
-      // Reset fatigue counter for this specific tool
-      this.toolFailureCounts.delete(effectiveCall.name);
-      this.toolFatigueWarned.delete(effectiveCall.name);
-    } else {
-      const argsKey = JSON.stringify(effectiveCall.arguments);
-      this.recentToolCalls.push({ name: effectiveCall.name, argsKey });
-      if (this.recentToolCalls.length > DOOM_LOOP_THRESHOLD) {
-        this.recentToolCalls.shift();
-      }
-      // Increment per-tool failure count (regardless of args)
-      const prevCount = this.toolFailureCounts.get(effectiveCall.name) ?? 0;
-      this.toolFailureCounts.set(effectiveCall.name, prevCount + 1);
-    }
+    this.stagnationDetector.recordToolResult(effectiveCall.name, effectiveCall.arguments, result.success);
 
     // Fire tool:after event
     this.bus.emit("tool:after", {
@@ -1612,7 +1603,7 @@ export class TaskLoop {
           this.sessionState!.addToolSummary({
             tool: effectiveCall.name,
             target: typeof target === "string" ? target : String(target),
-            summary: this.formatToolSummary(effectiveCall, originalOutput),
+            summary: formatToolSummary(effectiveCall, originalOutput),
             iteration: this.iterations,
           });
           if (tool.category === "readonly") {
@@ -1630,11 +1621,10 @@ export class TaskLoop {
               this.sessionState!.addToolSummary({
                 tool: stepResult.step.tool,
                 target: stepTarget,
-                summary: this.formatToolSummary(
+                summary: formatToolSummary(
                   {
                     name: stepResult.step.tool,
                     arguments: stepResult.step.args,
-                    callId: `script_${stepResult.step.id}`,
                   },
                   stepResult.output,
                 ),
@@ -1714,318 +1704,6 @@ export class TaskLoop {
     }
   }
 
-  private makeProgressSnapshot(): ProgressSnapshot | null {
-    if (!this.sessionState) return null;
-    return {
-      toolSummaries: this.sessionState.getToolSummariesCount(),
-      findings: this.sessionState.getFindingsCount(),
-      coverageTargets: this.sessionState.getReadonlyCoverageTargetCount(),
-      completedPlan: this.sessionState.getPlanCompletedCount(),
-    };
-  }
-
-  private maybeInjectNoProgressNudge(
-    toolCalls: ReadonlyArray<PendingToolCall>,
-  ): void {
-    if (!this.sessionState || toolCalls.length === 0) return;
-
-    const snapshot = this.makeProgressSnapshot();
-    if (!snapshot) return;
-
-    const previous = this.lastProgressSnapshot;
-    this.lastProgressSnapshot = snapshot;
-    if (!previous) return;
-
-    const hasReadonly = toolCalls.some((tc) => this.tools.get(tc.name).category === "readonly");
-    const hasMutating = toolCalls.some((tc) => this.tools.get(tc.name).category === "mutating");
-    if (hasMutating) {
-      this.stagnantReadonlyCycles = 0;
-      this.readonlyStallLock = false;
-      return;
-    }
-    if (!hasReadonly) {
-      // State/agent-only batches should not reset readonly stagnation history.
-      return;
-    }
-
-    const progressed = snapshot.toolSummaries > previous.toolSummaries
-      || snapshot.findings > previous.findings
-      || snapshot.coverageTargets > previous.coverageTargets
-      || snapshot.completedPlan > previous.completedPlan;
-
-    if (progressed) {
-      this.stagnantReadonlyCycles = 0;
-      this.readonlyStallLock = false;
-      return;
-    }
-
-    this.stagnantReadonlyCycles++;
-    const NO_PROGRESS_THRESHOLD = 5;
-    if (this.stagnantReadonlyCycles < NO_PROGRESS_THRESHOLD) return;
-
-    this.stagnantReadonlyCycles = 0;
-    this.readonlyStallLock = true;
-    this.bus.emit("error", {
-      message: "Readonly no-progress loop detected: repeated inspections are not increasing coverage/findings.",
-      code: "NO_PROGRESS_LOOP",
-      fatal: false,
-    });
-    this.messages.push({
-      role: MessageRole.SYSTEM,
-      content:
-        "Readonly inspections are no longer increasing coverage or findings. Stop repetitive reads/diffs. If you already have enough evidence, persist remaining issues with save_finding and finalize your response. Otherwise switch to a different tool/action that produces new evidence.",
-    });
-  }
-
-  /**
-   * Format a structured summary for a tool result.
-   * For replace_in_file, includes search→replace details and count.
-   * For other tools, falls back to truncated output.
-   */
-  private formatToolSummary(
-    toolCall: PendingToolCall,
-    originalOutput: string,
-  ): string {
-
-    if (toolCall.name === "replace_in_file") {
-      const search = toolCall.arguments["search"] as string | undefined;
-      const replace = toolCall.arguments["replace"] as string | undefined;
-      const replacements = toolCall.arguments["replacements"] as unknown[] | undefined;
-      // Extract count from output like "Replaced 4 occurrence(s)" or "Applied 3 replacement(s)"
-      const countMatch = originalOutput.match(/(\d+)\s+(?:replacement|occurrence)/);
-      const count = countMatch ? countMatch[1] : "?";
-
-      if (replacements && Array.isArray(replacements)) {
-        return `batch: ${replacements.length} pairs (${count} total replacements)`;
-      }
-
-      if (search && replace) {
-        // Truncate search/replace to keep summary compact
-        const s = search.length > 40 ? search.slice(0, 37) + "..." : search;
-        const r = replace.length > 40 ? replace.slice(0, 37) + "..." : replace;
-        return `'${s}' → '${r}' (${count} occurrences)`;
-      }
-    }
-
-    if (toolCall.name === "write_file") {
-      const path = toolCall.arguments["path"] as string | undefined;
-      if (path) return `Wrote ${path}`;
-    }
-
-    // Readonly tools: compact summaries to avoid bloating session state
-    if (toolCall.name === "read_file") {
-      const lines = originalOutput.split("\n");
-      const lineCount = lines.length;
-      const startLine = toolCall.arguments["start_line"] as number | undefined;
-      const endLine = toolCall.arguments["end_line"] as number | undefined;
-      const rangeHint = startLine !== undefined || endLine !== undefined
-        ? ` (lines ${startLine ?? 1}-${endLine ?? "end"})`
-        : "";
-      const digest = extractStructuralDigest(originalOutput, 1000);
-      // Include content context: first and last non-blank lines for orientation
-      const contentSnippets = extractContentSnippets(lines, 500);
-      const parts = [`Read ${lineCount} lines${rangeHint}`];
-      if (digest) parts.push(digest);
-      if (contentSnippets) parts.push(contentSnippets);
-      return parts.join(": ");
-    }
-
-    if (toolCall.name === "search_files") {
-      return this.formatSearchFilesSummary(toolCall, originalOutput);
-    }
-
-    if (toolCall.name === "find_files") {
-      return this.formatFindFilesSummary(toolCall, originalOutput);
-    }
-
-    if (toolCall.name === "git_diff") {
-      return summarizeDiff(originalOutput);
-    }
-
-    if (toolCall.name === "git_status") {
-      return formatGitStatusSummary(originalOutput);
-    }
-
-    if (toolCall.name === "run_command") {
-      return this.formatRunCommandSummary(toolCall, originalOutput);
-    }
-
-    if (toolCall.name === "diagnostics") {
-      return formatDiagnosticsSummary(originalOutput);
-    }
-
-    if (toolCall.name === "symbols") {
-      return formatSymbolsSummary(originalOutput);
-    }
-
-    // Default: truncated original output (no DoubleCheck noise)
-    return originalOutput.slice(0, SUMMARY_MAX_CHARS);
-  }
-
-  /**
-   * Format search_files summary preserving pattern, file paths, and match lines.
-   */
-  private formatSearchFilesSummary(
-    toolCall: PendingToolCall,
-    originalOutput: string,
-  ): string {
-    const pattern = toolCall.arguments["pattern"] as string | undefined;
-    const lines = originalOutput.split("\n");
-    const nonEmpty = lines.filter((l) => l.trim());
-
-    // Extract header line (e.g., "Found 15 matches for ...")
-    const headerMatch = originalOutput.match(/^(Found \d+ match[^\n]*)/);
-    const header = headerMatch
-      ? headerMatch[1]
-      : `${nonEmpty.length} matches for "${pattern ?? "?"}"`;
-
-    // Collect file paths and match lines
-    const fileLines: string[] = [];
-    const matchLines: string[] = [];
-    for (const line of nonEmpty) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("Found ")) continue;
-      // Match lines typically start with whitespace + line number
-      if (/^\s+\d+:/.test(line)) {
-        matchLines.push(trimmed);
-      } else if (trimmed.length > 0 && !trimmed.startsWith("---")) {
-        fileLines.push(trimmed);
-      }
-    }
-
-    const parts = [header];
-    if (fileLines.length > 0) {
-      parts.push(`Files: ${fileLines.join(", ")}`);
-    }
-    for (const ml of matchLines) {
-      parts.push(ml);
-    }
-
-    return truncateToSummary(parts.join("\n"));
-  }
-
-  /**
-   * Format find_files summary preserving glob pattern and file paths.
-   */
-  private formatFindFilesSummary(
-    toolCall: PendingToolCall,
-    originalOutput: string,
-  ): string {
-    const pattern = toolCall.arguments["pattern"] as string | undefined;
-    const lines = originalOutput.split("\n").filter((l) => l.trim());
-
-    // Extract header (e.g., "Found 12 files matching ...")
-    const headerMatch = originalOutput.match(/^(Found \d+ file[^\n]*)/);
-    const filePaths = lines.filter((l) => !l.startsWith("Found "));
-    const header = headerMatch
-      ? headerMatch[1]
-      : `${filePaths.length} files matching "${pattern ?? "?"}"`;
-
-    const parts = [header, ...filePaths];
-    return truncateToSummary(parts.join("\n"));
-  }
-
-  /**
-   * Format run_command summary with head+tail and test output extraction.
-   */
-  private formatRunCommandSummary(
-    toolCall: PendingToolCall,
-    originalOutput: string,
-  ): string {
-    const cmd = toolCall.arguments["command"] as string | undefined;
-
-    // Special case: git diff
-    if (cmd && /\bgit\s+diff\b/.test(cmd)) {
-      return summarizeDiff(originalOutput);
-    }
-
-    // Special case: test/typecheck/lint commands
-    if (cmd && /\b(?:test|vitest|jest|mocha|pytest|typecheck|tsc|lint|eslint|biome)\b/.test(cmd)) {
-      const testSummary = summarizeTestOutput(originalOutput);
-      if (testSummary) {
-        const prefix = `$ ${cmd}\n`;
-        return truncateToSummary(prefix + testSummary);
-      }
-    }
-
-    // General case: head+tail with command prefix
-    const lines = originalOutput.split("\n");
-    const prefix = cmd ? `$ ${cmd}\n` : "";
-
-    if (lines.length <= 10) {
-      // Short output: keep it all
-      return truncateToSummary(prefix + originalOutput);
-    }
-
-    // Head (first 5 lines) + tail (last 3 lines)
-    const head = lines.slice(0, 5).join("\n");
-    const tail = lines.slice(-3).join("\n");
-    const omitted = lines.length - 8;
-    return truncateToSummary(`${prefix}${head}\n[... ${omitted} lines omitted ...]\n${tail}`);
-  }
-
-  /**
-   * Doom loop detection: check if the LLM keeps calling the same tool
-   * with identical arguments and it keeps failing.
-   * Returns a warning message to inject, or null if no doom loop detected.
-   *
-   * Following the OpenCode pattern (DOOM_LOOP_THRESHOLD = 3):
-   * - Does NOT kill the loop — the LLM gets to try a different approach
-   * - Warning is injected once per doom loop pattern
-   * - Resets when any tool call succeeds (see executeToolCall)
-   */
-  private checkDoomLoop(toolCalls: ReadonlyArray<PendingToolCall>): string | null {
-    if (this.recentToolCalls.length < DOOM_LOOP_THRESHOLD) return null;
-
-    // Check if all recent calls are identical (same tool + same args)
-    const first = this.recentToolCalls[0]!;
-    const isDoomLoop = this.recentToolCalls.every(
-      (tc) => tc.name === first.name && tc.argsKey === first.argsKey,
-    );
-
-    if (!isDoomLoop) return null;
-    if (this.doomLoopWarned) return null; // Only warn once per pattern
-
-    this.doomLoopWarned = true;
-    const toolName = first.name;
-
-    this.bus.emit("error", {
-      message: `Doom loop detected: "${toolName}" called ${DOOM_LOOP_THRESHOLD} times with identical arguments and keeps failing.`,
-      code: "DOOM_LOOP",
-      fatal: false,
-    });
-
-    return `WARNING: You have called "${toolName}" ${DOOM_LOOP_THRESHOLD} times with the exact same arguments, and it keeps failing. This approach is not working. Try a completely different strategy — change the command arguments, use a different tool, or modify your approach. Do NOT repeat the same failing call.`;
-  }
-
-  /**
-   * Tool fatigue detection: same tool keeps failing with different arguments.
-   * Complementary to doom loop (which catches identical args).
-   * Returns an escalated warning, or null.
-   */
-  private checkToolFatigue(
-    toolCalls: ReadonlyArray<PendingToolCall>,
-  ): string | null {
-    for (const tc of toolCalls) {
-      const count = this.toolFailureCounts.get(tc.name) ?? 0;
-      if (
-        count >= TOOL_FATIGUE_THRESHOLD &&
-        !this.toolFatigueWarned.has(tc.name)
-      ) {
-        this.toolFatigueWarned.add(tc.name);
-
-        this.bus.emit("error", {
-          message: `Tool fatigue: "${tc.name}" has failed ${count} times consecutively with different arguments.`,
-          code: "TOOL_FATIGUE",
-          fatal: false,
-        });
-
-        return `ESCALATED WARNING: The tool "${tc.name}" has failed ${count} consecutive times, even with different arguments. This tool is not working for the current task. You MUST try a fundamentally different approach: use a different tool, break the problem into smaller steps, or ask the user for guidance. Do NOT call "${tc.name}" again unless you have resolved the underlying issue.`;
-      }
-    }
-    return null;
-  }
-
   /**
    * Extract lessons from this session into persistent memory.
    * Heuristic-based — no extra LLM call. Called once at the end of run().
@@ -2067,14 +1745,6 @@ export class TaskLoop {
   }
 }
 
-// ─── Doom Loop Detection ─────────────────────────────────────
-
-/** Number of identical failing tool calls (same name + same args) that triggers a doom loop warning. */
-const DOOM_LOOP_THRESHOLD = 3;
-
-/** Number of consecutive failures of the same tool (regardless of args) that triggers a "tool fatigue" warning. */
-const TOOL_FATIGUE_THRESHOLD = 5;
-
 // ─── Midpoint Briefing ──────────────────────────────────────
 
 /** Default iterations between midpoint briefing checkpoints. */
@@ -2090,348 +1760,6 @@ const MAX_RETRY_ATTEMPTS = RETRY_DELAYS.length + 1;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// ─── Tool Summary Formatters (free functions) ────────────────
-
-/** Truncate text to SUMMARY_MAX_CHARS with trailing "..." when exceeded. */
-function truncateToSummary(text: string): string {
-  return text.length <= SUMMARY_MAX_CHARS
-    ? text
-    : text.slice(0, SUMMARY_MAX_CHARS - 3) + "...";
-}
-
-/**
- * Format git_status output into grouped status summary.
- * Groups files by status code (M, A, D, ?, etc.) for compact display.
- */
-function formatGitStatusSummary(output: string): string {
-  const lines = output.split("\n").filter((l) => l.trim());
-  const groups = new Map<string, string[]>();
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    // git status --porcelain format: XY filename
-    const match = trimmed.match(/^([MADRCU?! ]{1,2})\s+(.+)$/);
-    if (match) {
-      const statusCode = match[1]!.trim() || "M";
-      const fileName = match[2]!.split("/").pop() ?? match[2]!;
-      const key = statusCode.startsWith("?") ? "?" : statusCode.charAt(0);
-      const existing = groups.get(key) ?? [];
-      existing.push(fileName);
-      groups.set(key, existing);
-    }
-  }
-
-  if (groups.size === 0) {
-    return `${lines.length} entries`;
-  }
-
-  const parts = [`${lines.length} entries`];
-  for (const [status, files] of groups) {
-    parts.push(`[${status}] ${files.join(", ")}`);
-  }
-
-  return truncateToSummary(parts.join("\n"));
-}
-
-/**
- * Format diagnostics output with severity counts and diagnostic lines.
- * Prioritizes errors over warnings.
- */
-function formatDiagnosticsSummary(output: string): string {
-  const lines = output.split("\n").filter((l) => l.trim());
-  let errorCount = 0;
-  let warningCount = 0;
-  const errorLines: string[] = [];
-  const warningLines: string[] = [];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (/\berror\b/i.test(trimmed)) {
-      errorCount++;
-      errorLines.push(trimmed);
-    } else if (/\bwarning\b/i.test(trimmed)) {
-      warningCount++;
-      warningLines.push(trimmed);
-    }
-  }
-
-  const total = errorCount + warningCount;
-  if (total === 0) {
-    return output.slice(0, SUMMARY_MAX_CHARS);
-  }
-
-  const countParts: string[] = [];
-  if (errorCount > 0) countParts.push(`${errorCount} errors`);
-  if (warningCount > 0) countParts.push(`${warningCount} warnings`);
-  const header = `${total} diagnostics (${countParts.join(", ")})`;
-
-  // Include all diagnostic lines, errors first
-  const allDiagLines = [...errorLines, ...warningLines];
-  const parts = [header, ...allDiagLines];
-  return truncateToSummary(parts.join("\n"));
-}
-
-/**
- * Format symbols output preserving the symbol list.
- * Symbols are compact (~50 chars each), so 2000 chars fits ~35 symbols.
- */
-function formatSymbolsSummary(output: string): string {
-  const lines = output.split("\n").filter((l) => l.trim());
-  const header = `${lines.length} symbols`;
-  const parts = [header, ...lines];
-  return truncateToSummary(parts.join("\n"));
-}
-
-/**
- * Extract structured summary from test/typecheck/lint output.
- * Returns pass/fail counts, error lines, and failing test names.
- * Returns null if the output doesn't look like test/typecheck output.
- */
-export function summarizeTestOutput(output: string): string | null {
-  const parts: string[] = [];
-  let isTestOutput = false;
-
-  // Vitest/Jest pass/fail counts
-  const testCountMatch = output.match(/Tests?:\s*(.+total)/i);
-  if (testCountMatch) {
-    parts.push(testCountMatch[0]);
-    isTestOutput = true;
-  }
-
-  // Bun test counts
-  const bunTestMatch = output.match(/(\d+)\s+pass(?:ed)?.*?(\d+)\s+fail/i);
-  if (!testCountMatch && bunTestMatch) {
-    parts.push(`${bunTestMatch[1]} passed, ${bunTestMatch[2]} failed`);
-    isTestOutput = true;
-  }
-
-  // TypeScript error count
-  const tsErrorMatch = output.match(/Found (\d+) errors? in (\d+) files?\./);
-  if (tsErrorMatch) {
-    parts.push(`${tsErrorMatch[1]} errors in ${tsErrorMatch[2]} files`);
-    isTestOutput = true;
-  }
-
-  // Individual TS errors (e.g., "error TS2322:")
-  const tsErrors: string[] = [];
-  for (const line of output.split("\n")) {
-    const trimmed = line.trim();
-    if (/error TS\d+/.test(trimmed)) {
-      tsErrors.push(trimmed);
-    }
-  }
-  if (tsErrors.length > 0) {
-    isTestOutput = true;
-    for (const e of tsErrors.slice(0, 10)) {
-      parts.push(e);
-    }
-    if (tsErrors.length > 10) {
-      parts.push(`... +${tsErrors.length - 10} more errors`);
-    }
-  }
-
-  // Failing test files (FAIL lines)
-  const failLines: string[] = [];
-  for (const line of output.split("\n")) {
-    const trimmed = line.trim();
-    if (/^FAIL\s/.test(trimmed)) {
-      failLines.push(trimmed);
-    }
-  }
-  if (failLines.length > 0) {
-    isTestOutput = true;
-    for (const f of failLines.slice(0, 5)) {
-      parts.push(f);
-    }
-  }
-
-  // Error assertion lines (● test name)
-  const assertionLines: string[] = [];
-  for (const line of output.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("●") || trimmed.startsWith("✕") || trimmed.startsWith("×")) {
-      assertionLines.push(trimmed);
-    }
-  }
-  if (assertionLines.length > 0) {
-    for (const a of assertionLines.slice(0, 5)) {
-      parts.push(a);
-    }
-  }
-
-  if (!isTestOutput) return null;
-
-  return truncateToSummary(parts.join("\n"));
-}
-
-// ─── Structural Digest ───────────────────────────────────────
-
-const STRUCTURAL_LINE_PATTERNS: ReadonlyArray<RegExp> = [
-  /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+[A-Za-z_]\w*\s*\(/,
-  /^(?:export\s+)?(?:abstract\s+)?class\s+[A-Za-z_]\w*/,
-  /^(?:export\s+)?interface\s+[A-Za-z_]\w*/,
-  /^(?:export\s+)?type\s+[A-Za-z_]\w*\s*=/,
-  /^(?:export\s+)?enum\s+[A-Za-z_]\w*/,
-  /^(?:export\s+)?const\s+[A-Za-z_]\w*\s*=\s*(?:async\s*)?(?:\(|<)/,
-  /^def\s+[A-Za-z_]\w*\s*\(/,
-  /^class\s+[A-Za-z_]\w*(?:\(|:|\s|$)/,
-  /^(?:pub\s+)?fn\s+[A-Za-z_]\w*\s*\(/,
-  /^(?:pub\s+)?struct\s+[A-Za-z_]\w*/,
-  /^impl\s+[A-Za-z_]\w*/,
-  /^func\s+[A-Za-z_]\w*\s*\(/,
-];
-
-/**
- * Extract a compact structural digest from source text.
- * Captures top-level declaration-like lines so summaries retain
- * semantic anchors after compaction.
- */
-export function extractStructuralDigest(
-  source: string,
-  maxChars: number = 500,
-): string {
-  if (maxChars <= 0) return "";
-
-  const declarations: string[] = [];
-  const seen = new Set<string>();
-
-  for (const line of source.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (
-      trimmed.startsWith("//")
-      || trimmed.startsWith("#")
-      || trimmed.startsWith("/*")
-      || trimmed.startsWith("*")
-    ) {
-      continue;
-    }
-    if (!STRUCTURAL_LINE_PATTERNS.some((pattern) => pattern.test(trimmed))) continue;
-
-    const normalized = trimmed
-      .replace(/\s*\{\s*$/, "")
-      .replace(/\s+/g, " ");
-    const snippet = normalized.length > 80
-      ? `${normalized.slice(0, 77)}...`
-      : normalized;
-    if (seen.has(snippet)) continue;
-    seen.add(snippet);
-    declarations.push(snippet);
-    if (declarations.length >= 20) break;
-  }
-
-  if (declarations.length === 0) return "";
-
-  const joined = declarations.join("; ");
-  if (joined.length <= maxChars) return joined;
-  if (maxChars <= 3) return joined.slice(0, maxChars);
-  return `${joined.slice(0, maxChars - 3)}...`;
-}
-
-/**
- * Extract a few meaningful non-blank lines from source content for summary context.
- * Captures first 2 and last 2 non-blank, non-comment lines so the LLM
- * retains orientation cues (variable assignments, key logic) beyond just declarations.
- */
-function extractContentSnippets(lines: string[], maxChars: number): string {
-  const meaningful: string[] = [];
-  for (const line of lines) {
-    const trimmed = line.replace(/^\d+\t/, "").trim(); // strip line number prefix
-    if (!trimmed) continue;
-    if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("/*") || trimmed.startsWith("*")) continue;
-    if (trimmed === "{" || trimmed === "}" || trimmed === ");") continue;
-    meaningful.push(trimmed);
-  }
-  if (meaningful.length === 0) return "";
-
-  const snippets: string[] = [];
-  const firstFour = meaningful.slice(0, 4);
-  const lastFour = meaningful.length > 8 ? meaningful.slice(-4) : [];
-  for (const s of [...firstFour, ...lastFour]) {
-    const truncated = s.length > 100 ? s.slice(0, 97) + "..." : s;
-    snippets.push(truncated);
-  }
-
-  const joined = `[${snippets.join(" | ")}]`;
-  return joined.length <= maxChars ? joined : joined.slice(0, maxChars - 3) + "...";
-}
-
-// ─── Diff Summary ────────────────────────────────────────────
-
-/**
- * Extract a compact semantic summary from unified diff output.
- * Parses hunk headers to identify modified functions/methods and
- * counts additions/deletions. Returns a human-readable summary
- * that captures WHAT changed, not just how many lines.
- */
-export function summarizeDiff(diffOutput: string): string {
-  // Check for diffstat first (e.g., "3 files changed, 10 insertions(+), 5 deletions(-)")
-  const statMatch = diffOutput.match(/(\d+)\s+files?\s+changed/);
-  if (statMatch) {
-    const insertions = diffOutput.match(/(\d+)\s+insertions?\(\+\)/);
-    const deletions = diffOutput.match(/(\d+)\s+deletions?\(-\)/);
-    const parts = [`${statMatch[1]} files changed`];
-    if (insertions) parts.push(`+${insertions[1]}`);
-    if (deletions) parts.push(`-${deletions[1]}`);
-    return parts.join(", ");
-  }
-
-  // Parse unified diff: extract hunk headers and count changes
-  const lines = diffOutput.split("\n");
-  const hunks: Array<{ context: string; added: number; removed: number }> = [];
-  let currentHunk: { context: string; added: number; removed: number } | null = null;
-
-  for (const line of lines) {
-    // Hunk header: @@ -a,b +c,d @@ optional context
-    const hunkMatch = line.match(/^@@\s+[^@]+@@\s*(.*)$/);
-    if (hunkMatch) {
-      if (currentHunk) hunks.push(currentHunk);
-      currentHunk = {
-        context: hunkMatch[1]?.trim() ?? "",
-        added: 0,
-        removed: 0,
-      };
-      continue;
-    }
-
-    if (currentHunk) {
-      if (line.startsWith("+") && !line.startsWith("+++")) {
-        currentHunk.added++;
-      } else if (line.startsWith("-") && !line.startsWith("---")) {
-        currentHunk.removed++;
-      }
-    }
-  }
-  if (currentHunk) hunks.push(currentHunk);
-
-  if (hunks.length === 0) {
-    const lineCount = lines.length;
-    return `diff: ${lineCount} lines`;
-  }
-
-  // Build summary from hunks — take up to 4 most significant
-  const sorted = [...hunks].sort((a, b) =>
-    (b.added + b.removed) - (a.added + a.removed),
-  );
-  const top = sorted.slice(0, 4);
-  const totalAdded = hunks.reduce((s, h) => s + h.added, 0);
-  const totalRemoved = hunks.reduce((s, h) => s + h.removed, 0);
-
-  const parts: string[] = [];
-  for (const h of top) {
-    if (h.context) {
-      parts.push(`${h.context} +${h.added}/-${h.removed}`);
-    }
-  }
-
-  if (parts.length > 0) {
-    const extra = hunks.length > 4 ? ` (+${hunks.length - 4} more)` : "";
-    return `${parts.join("; ")}${extra} [total +${totalAdded}/-${totalRemoved}]`;
-  }
-
-  return `${hunks.length} hunks, +${totalAdded}/-${totalRemoved}`;
 }
 
 // ─── Helpers ────────────────────────────────────────────────

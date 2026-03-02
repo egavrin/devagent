@@ -6,22 +6,14 @@
  * From Cline v3.58+: Before marking a task done, verify acceptance criteria.
  */
 
-import type { EventBus } from "@devagent/core";
+import type { EventBus, DoubleCheckConfig } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/core";
 
 // ─── Types ──────────────────────────────────────────────────
 
-export interface DoubleCheckOptions {
-  /** Enable double-check validation (default: false) */
-  readonly enabled: boolean;
-  /** Run diagnostics after file writes (default: true when enabled) */
-  readonly checkDiagnostics: boolean;
-  /** Run configured test command after edits (default: false) */
-  readonly runTests: boolean;
-  /** Test command to run (e.g., "bun test") */
-  readonly testCommand: string | null;
-  /** Max time to wait for diagnostics in ms (default: 5000) */
-  readonly diagnosticTimeout: number;
-}
+/** Engine-resolved double-check options — all fields required.
+ *  Extends DoubleCheckConfig from @devagent/core. */
+export interface DoubleCheckOptions extends Required<DoubleCheckConfig> {}
 
 export interface TestSummary {
   readonly framework: string;
@@ -310,7 +302,7 @@ export class DoubleCheck {
             diagnosticErrors.push(`${file}: ${err.message}`);
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = extractErrorMessage(err);
           diagnosticErrors.push(`${file}: diagnostics provider failure: ${message}`);
           this.bus.emit("error", {
             message: `Double-check diagnostics failed for ${file}: ${message}`,
@@ -334,7 +326,7 @@ export class DoubleCheck {
           testSummary = parsed;
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         testOutput = `Test execution failed: ${message}`;
         testPassed = false;
       }

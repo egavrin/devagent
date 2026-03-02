@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { resolve, basename } from "node:path";
 import type { LLMProvider, Message } from "@devagent/core";
-import { MessageRole } from "@devagent/core";
+import { MessageRole , extractErrorMessage } from "@devagent/core";
 import { PatchParser } from "@devagent/tools/builtins/patch-parser";
 import type { FileEntry, ParsedPatch } from "@devagent/tools/builtins/patch-parser";
 
@@ -306,7 +306,7 @@ Output your findings as valid JSON matching the provided schema.`;
       for (const f of parsedFiles) allFiles.add(f);
     } catch (err) {
       // Log error but continue with other chunks
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractErrorMessage(err);
       console.error(`Review chunk ${i + 1}/${chunks.length} failed: ${msg}`);
       for (const f of chunk) allFiles.add(f.path);
     }

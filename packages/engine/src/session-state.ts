@@ -10,6 +10,7 @@
  * every mutation auto-saves when bound to a persistence backend.
  */
 
+import type { SessionStateConfigCore } from "@devagent/core";
 import type { PlanStep } from "./plan-tool.js";
 
 // ─── Constants (defaults) ──────────────────────────────────────
@@ -47,19 +48,11 @@ export interface Finding {
   readonly iteration: number;
 }
 
-/** Configuration for SessionState — controls which sections are active. */
-export interface SessionStateConfig {
-  readonly persist: boolean;
-  readonly trackPlan: boolean;
-  readonly trackFiles: boolean;
-  readonly trackEnv: boolean;
-  readonly trackToolResults: boolean;
-  readonly trackFindings: boolean;
-  readonly maxModifiedFiles: number;
-  readonly maxEnvFacts: number;
-  readonly maxToolSummaries: number;
+/** Configuration for SessionState — controls which sections are active.
+ *  Extends SessionStateConfigCore from @devagent/core with engine-specific
+ *  fields, making all inherited optional fields required. */
+export interface SessionStateConfig extends Required<SessionStateConfigCore> {
   readonly maxReadonlyCoveragePerTool: number;
-  readonly maxFindings: number;
 }
 
 export const DEFAULT_SESSION_STATE_CONFIG: SessionStateConfig = {

@@ -12,6 +12,7 @@
 
 import type { ToolSpec, ToolResult, ToolContext } from "@devagent/core";
 import type { EventBus } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/core";
 import type { ToolRegistry } from "@devagent/tools";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -205,7 +206,7 @@ export class ToolScriptEngine {
     try {
       toolResult = await tool.handler(resolvedArgs, this.context);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       toolResult = {
         success: false,
         output: "",

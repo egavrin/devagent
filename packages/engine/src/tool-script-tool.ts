@@ -8,6 +8,7 @@
 
 import type { ToolSpec, ToolContext } from "@devagent/core";
 import type { EventBus } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/core";
 import type { ToolRegistry } from "@devagent/tools";
 import { ToolScriptEngine } from "./tool-script.js";
 import type { ToolScriptStep } from "./tool-script.js";
@@ -52,7 +53,7 @@ export function createToolScriptTool(ctx: ToolScriptToolContext): ToolSpec {
       try {
         steps = JSON.parse(stepsJson) as ToolScriptStep[];
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = extractErrorMessage(err);
         return {
           success: false,
           output: "",

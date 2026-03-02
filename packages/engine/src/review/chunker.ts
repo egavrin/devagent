@@ -8,6 +8,7 @@ import type {
   Hunk,
   ParsedPatch,
 } from "@devagent/tools/builtins/patch-parser";
+import { estimateTokens } from "@devagent/core";
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -248,7 +249,7 @@ export function computeDynamicLineLimit(
   let base = configuredLimit > 0 ? configuredLimit : DEFAULT;
 
   const total = files.reduce((s, e) => s + estimateEntryLines(e), 0);
-  const ruleTokens = Math.max(Math.floor(ruleText.length / 4), 0);
+  const ruleTokens = estimateTokens(ruleText);
   const combined = ruleTokens + total * 2;
 
   if (combined > 150_000) {
@@ -275,7 +276,7 @@ export function computeDynamicFileLimit(
   let base = configuredLimit > 0 ? configuredLimit : DEFAULT;
 
   const total = files.reduce((s, e) => s + estimateEntryLines(e), 0);
-  const ruleTokens = Math.max(Math.floor(ruleText.length / 4), 0);
+  const ruleTokens = estimateTokens(ruleText);
   const combined = ruleTokens + total * 2;
 
   if (combined > 150_000) {
@@ -293,14 +294,16 @@ export function computeDynamicFileLimit(
 // ── Token estimation ─────────────────────────────────────────────────────────
 
 /**
- * Rough token count: total characters across all segments divided by 4.
+ * Estimate prompt tokens across multiple optional segments.
+ * Delegates to the canonical `estimateTokens` from `@devagent/core`
+ * (Math.ceil(length / 4)) so engine and core stay in sync.
  */
 export function estimatePromptTokens(...segments: (string | undefined | null)[]): number {
   let total = 0;
   for (const s of segments) {
-    if (s) total += s.length;
+    if (s) total += estimateTokens(s);
   }
-  return Math.max(Math.floor(total / 4), 0);
+  return total;
 }
 
 // ── Token-budget refinement ──────────────────────────────────────────────────

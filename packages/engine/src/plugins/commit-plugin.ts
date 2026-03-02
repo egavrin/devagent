@@ -5,6 +5,7 @@
  */
 
 import type { Plugin, PluginContext, CommandHandler } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/core";
 import { execSync } from "node:child_process";
 
 function generateCommitMessage(diff: string, status: string): string {
@@ -80,7 +81,7 @@ const commitCommand: CommandHandler = {
 
       return `Committed: "${message}"\n\n${output}`;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractErrorMessage(err);
       return `Commit failed: ${msg}`;
     }
   },

@@ -7,7 +7,7 @@
  */
 
 import type { ToolSpec, LLMProvider, DevAgentConfig } from "@devagent/core";
-import { AgentType, EventBus, ApprovalGate } from "@devagent/core";
+import { AgentType, EventBus, ApprovalGate , extractErrorMessage } from "@devagent/core";
 import type { ToolRegistry } from "@devagent/tools";
 import { AgentRegistry, runAgent } from "./agents.js";
 import type { SessionState } from "./session-state.js";
@@ -131,7 +131,7 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
           artifacts: [],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         return {
           success: false,
           output: "",

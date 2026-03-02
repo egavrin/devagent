@@ -11,6 +11,13 @@ export type {
   MidpointCallback,
 } from "./task-loop.js";
 
+export { StagnationDetector } from "./stagnation-detector.js";
+export type {
+  StagnationToolCall,
+  ToolCategoryResolver,
+  StagnationDetectorOptions,
+} from "./stagnation-detector.js";
+
 export { AgentRegistry, runAgent } from "./agents.js";
 export type {
   AgentDefinition,
