@@ -3,11 +3,11 @@
  * Category: readonly.
  */
 
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import type { ToolSpec } from "@devagent/core";
-import { resolvePathInRepo } from "./path-guard.js";
-import { globToRegex, normalizeGlobPattern } from "./glob-utils.js";
+import { resolvePathInRepo, resolveRepoRoot } from "./path-guard.js";
+import { escapeRegex, globToRegex, normalizeGlobPattern } from "./glob-utils.js";
+import { walkDirectory } from "./walk-directory.js";
 
 export interface SearchMatch {
   readonly file: string;
@@ -60,7 +60,7 @@ export const searchFilesTool: ToolSpec = {
       searchPath,
       "search_files",
     );
-    const resolvedRoot = realpathSync(resolve(context.repoRoot));
+    const resolvedRoot = resolveRepoRoot(context.repoRoot);
     const effectivePattern = filePattern ? normalizeGlobPattern(filePattern) : null;
     const fileRegex = effectivePattern ? globToRegex(effectivePattern) : null;
     let regex: RegExp;
@@ -73,7 +73,38 @@ export const searchFilesTool: ToolSpec = {
     }
 
     const matches: SearchMatch[] = [];
-    searchDir(baseDir, resolvedRoot, regex, fileRegex, matches, maxResults);
+
+    outer:
+    for (const entry of walkDirectory(baseDir, resolvedRoot)) {
+      if (matches.length >= maxResults) break;
+
+      if (fileRegex && !fileRegex.test(entry.relativePath)) continue;
+
+      // Skip binary files (rough heuristic: check extension)
+      if (isBinaryPath(entry.relativePath)) continue;
+
+      let content: string;
+      try {
+        content = readFileSync(entry.fullPath, "utf-8");
+      } catch {
+        continue;
+      }
+
+      const lines = content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (matches.length >= maxResults) break outer;
+        const line = lines[i]!;
+        // Reset regex lastIndex for each line
+        regex.lastIndex = 0;
+        if (regex.test(line)) {
+          matches.push({
+            file: entry.relativePath,
+            line: i + 1,
+            content: line.length > 200 ? line.substring(0, 200) + "..." : line,
+          });
+        }
+      }
+    }
 
     if (matches.length === 0) {
       return {
@@ -97,77 +128,6 @@ export const searchFilesTool: ToolSpec = {
   },
 };
 
-function searchDir(
-  dir: string,
-  repoRoot: string,
-  pattern: RegExp,
-  fileRegex: RegExp | null,
-  results: SearchMatch[],
-  maxResults: number,
-): void {
-  if (results.length >= maxResults) return;
-
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    if (results.length >= maxResults) return;
-
-    if (
-      entry === "node_modules" ||
-      entry === ".git" ||
-      entry === "dist" ||
-      entry === ".cache"
-    ) {
-      continue;
-    }
-
-    const fullPath = join(dir, entry);
-    let stat;
-    try {
-      stat = statSync(fullPath);
-    } catch {
-      continue;
-    }
-
-    if (stat.isDirectory()) {
-      searchDir(fullPath, repoRoot, pattern, fileRegex, results, maxResults);
-    } else {
-      const relPath = relative(repoRoot, fullPath);
-      if (fileRegex && !fileRegex.test(relPath)) continue;
-
-      // Skip binary files (rough heuristic: check extension)
-      if (isBinaryPath(relPath)) continue;
-
-      let content: string;
-      try {
-        content = readFileSync(fullPath, "utf-8");
-      } catch {
-        continue;
-      }
-
-      const lines = content.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        if (results.length >= maxResults) return;
-        const line = lines[i]!;
-        // Reset regex lastIndex for each line
-        pattern.lastIndex = 0;
-        if (pattern.test(line)) {
-          results.push({
-            file: relPath,
-            line: i + 1,
-            content: line.length > 200 ? line.substring(0, 200) + "..." : line,
-          });
-        }
-      }
-    }
-  }
-}
-
 function isBinaryPath(path: string): boolean {
   const binaryExtensions = [
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
@@ -180,8 +140,4 @@ function isBinaryPath(path: string): boolean {
   ];
   const lower = path.toLowerCase();
   return binaryExtensions.some((ext) => lower.endsWith(ext));
-}
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

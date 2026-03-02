@@ -13,6 +13,7 @@ import { existsSync, readFileSync, watchFile, unwatchFile } from "node:fs";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ToolSpec, ToolResult } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/core";
 
 // ─── MCP Types ───────────────────────────────────────────────
 
@@ -193,7 +194,7 @@ export class McpHub {
         artifacts: [],
       };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractErrorMessage(err);
       return {
         success: false,
         output: "",
@@ -248,21 +249,43 @@ export class McpHub {
       const onData = (data: Buffer) => {
         if (settled) return;
         buffer += data.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
 
-        for (const line of lines) {
+        // Collect lines that were not matched so they stay in the buffer.
+        const unmatchedLines: string[] = [];
+        let scanOffset = 0;
+
+        let newlineIdx: number;
+        while ((newlineIdx = buffer.indexOf("\n", scanOffset)) !== -1) {
+          const line = buffer.slice(scanOffset, newlineIdx);
+          scanOffset = newlineIdx + 1;
+
           if (!line.trim()) continue;
           try {
             const response = JSON.parse(line) as Record<string, unknown>;
             if (response["id"] === requestId) {
+              // Rebuild buffer from unmatched lines + remaining incomplete data
+              const remaining = buffer.slice(scanOffset);
+              buffer =
+                unmatchedLines.length > 0
+                  ? unmatchedLines.join("\n") + "\n" + remaining
+                  : remaining;
               resolveOnce(response);
               return;
             }
+            // Valid JSON but different id — preserve for other waiters
+            unmatchedLines.push(line);
           } catch {
-            // Not a complete JSON line, continue buffering
+            // Not valid JSON — preserve line so it is not lost
+            unmatchedLines.push(line);
           }
         }
+
+        // Rebuild buffer: unmatched complete lines + any trailing incomplete data
+        const remaining = buffer.slice(scanOffset);
+        buffer =
+          unmatchedLines.length > 0
+            ? unmatchedLines.join("\n") + "\n" + remaining
+            : remaining;
       };
 
       stdout.on("data", onData);
@@ -277,7 +300,7 @@ export class McpHub {
         const payload = JSON.stringify(request) + "\n";
         stdin.write(payload);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = extractErrorMessage(err);
         rejectOnce(new Error(`Failed to write MCP request: ${msg}`));
       }
     });
@@ -297,7 +320,8 @@ export class McpHub {
       }
     }
 
-    // Start or restart servers
+    // Start or restart servers in parallel
+    const startPromises: Array<Promise<void>> = [];
     for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
       if (serverConfig.enabled === false) {
         this.stopServer(name);
@@ -312,7 +336,16 @@ export class McpHub {
 
       // Stop existing and start fresh
       this.stopServer(name);
-      await this.startServer(name, serverConfig);
+      startPromises.push(
+        this.startServer(name, serverConfig).catch((err) => {
+          const msg = extractErrorMessage(err);
+          console.error(`[McpHub] Failed to start server "${name}": ${msg}`);
+        }),
+      );
+    }
+
+    if (startPromises.length > 0) {
+      await Promise.allSettled(startPromises);
     }
   }
 
@@ -328,7 +361,7 @@ export class McpHub {
       const content = readFileSync(this.configPath, "utf-8");
       return JSON.parse(content) as McpConfig;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractErrorMessage(err);
       console.error(`[McpHub] Failed to load config: ${msg}`);
       return null;
     }
@@ -415,12 +448,12 @@ export class McpHub {
         state.status = "running";
       } catch (err) {
         state.status = "error";
-        state.error = err instanceof Error ? err.message : String(err);
+        state.error = extractErrorMessage(err);
         proc.kill();
       }
     } catch (err) {
       state.status = "error";
-      state.error = err instanceof Error ? err.message : String(err);
+      state.error = extractErrorMessage(err);
     }
 
     this.servers.set(name, state);

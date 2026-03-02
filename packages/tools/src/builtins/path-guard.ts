@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import { resolve, relative, isAbsolute, dirname, basename } from "node:path";
-import { ToolError } from "@devagent/core";
+import { ToolError , extractErrorMessage } from "@devagent/core";
 
 function resolveWithSymlinkAwareness(
   targetPath: string,
@@ -28,7 +28,7 @@ function resolveWithSymlinkAwareness(
   try {
     realExisting = realpathSync(current);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = extractErrorMessage(err);
     throw new ToolError(
       toolName,
       `Invalid ${paramName}: ${rawInput}. Failed to resolve path: ${message}`,
@@ -36,6 +36,22 @@ function resolveWithSymlinkAwareness(
   }
 
   return resolve(realExisting, ...unresolvedTail);
+}
+
+/**
+ * Resolve `repoRoot` to its canonical absolute path (resolving symlinks).
+ * Throws a ToolError if the path cannot be resolved.
+ */
+export function resolveRepoRoot(repoRoot: string): string {
+  try {
+    return realpathSync(resolve(repoRoot));
+  } catch (err) {
+    const message = extractErrorMessage(err);
+    throw new ToolError(
+      "resolveRepoRoot",
+      `Invalid repo root: ${repoRoot}. Failed to resolve path: ${message}`,
+    );
+  }
 }
 
 /**
@@ -47,16 +63,7 @@ export function resolvePathInRepo(
   toolName: string,
   paramName = "path",
 ): string {
-  let rootReal: string;
-  try {
-    rootReal = realpathSync(resolve(repoRoot));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new ToolError(
-      toolName,
-      `Invalid repo root: ${repoRoot}. Failed to resolve path: ${message}`,
-    );
-  }
+  const rootReal = resolveRepoRoot(repoRoot);
 
   const candidatePath = resolve(rootReal, inputPath);
   const resolvedPath = resolveWithSymlinkAwareness(

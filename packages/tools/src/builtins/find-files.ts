@@ -3,11 +3,10 @@
  * Category: readonly.
  */
 
-import { readdirSync, realpathSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
 import type { ToolSpec } from "@devagent/core";
-import { resolvePathInRepo } from "./path-guard.js";
+import { resolvePathInRepo, resolveRepoRoot } from "./path-guard.js";
 import { globToRegex, normalizeGlobPattern } from "./glob-utils.js";
+import { walkDirectory } from "./walk-directory.js";
 
 export const findFilesTool: ToolSpec = {
   name: "find_files",
@@ -49,12 +48,17 @@ export const findFilesTool: ToolSpec = {
       searchPath,
       "find_files",
     );
-    const resolvedRoot = realpathSync(resolve(context.repoRoot));
+    const resolvedRoot = resolveRepoRoot(context.repoRoot);
     const effectivePattern = normalizeGlobPattern(pattern);
     const regex = globToRegex(effectivePattern);
     const matches: string[] = [];
 
-    walkDir(baseDir, resolvedRoot, regex, matches, maxResults);
+    for (const entry of walkDirectory(baseDir, resolvedRoot)) {
+      if (regex.test(entry.relativePath)) {
+        matches.push(entry.relativePath);
+        if (matches.length >= maxResults) break;
+      }
+    }
 
     return {
       success: true,
@@ -66,51 +70,4 @@ export const findFilesTool: ToolSpec = {
     };
   },
 };
-
-function walkDir(
-  dir: string,
-  repoRoot: string,
-  regex: RegExp,
-  results: string[],
-  maxResults: number,
-): void {
-  if (results.length >= maxResults) return;
-
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return; // Skip directories we can't read
-  }
-
-  for (const entry of entries) {
-    if (results.length >= maxResults) return;
-
-    // Skip common ignored directories
-    if (
-      entry === "node_modules" ||
-      entry === ".git" ||
-      entry === "dist" ||
-      entry === ".cache"
-    ) {
-      continue;
-    }
-
-    const fullPath = join(dir, entry);
-    let stat;
-    try {
-      stat = statSync(fullPath);
-    } catch {
-      continue;
-    }
-
-    const relPath = relative(repoRoot, fullPath);
-
-    if (stat.isDirectory()) {
-      walkDir(fullPath, repoRoot, regex, results, maxResults);
-    } else if (regex.test(relPath)) {
-      results.push(relPath);
-    }
-  }
-}
 

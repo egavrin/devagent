@@ -63,7 +63,72 @@ export interface LocationResult {
   readonly character: number;
 }
 
+// ─── LRU Map ────────────────────────────────────────────────
+
+/**
+ * Simple LRU cache built on a plain Map (which preserves insertion order in JS).
+ * On get/set the entry is moved to the end (most-recently-used).
+ * When the capacity is exceeded the oldest entry (first key) is evicted.
+ */
+class LRUMap<K, V> {
+  private readonly map = new Map<K, V>();
+  private readonly capacity: number;
+
+  constructor(capacity: number) {
+    if (capacity < 1) throw new Error("LRUMap capacity must be >= 1");
+    this.capacity = capacity;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.map.get(key);
+    if (value === undefined) return undefined;
+    // Move to end (most-recently-used)
+    this.map.delete(key);
+    this.map.set(key, value);
+    return value;
+  }
+
+  has(key: K): boolean {
+    return this.map.has(key);
+  }
+
+  set(key: K, value: V): void {
+    // If already present, delete first so re-insert moves to end
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.capacity) {
+      // Evict least-recently-used (first key)
+      const oldest = this.map.keys().next().value;
+      if (oldest !== undefined) {
+        this.map.delete(oldest);
+      }
+    }
+    this.map.set(key, value);
+  }
+
+  delete(key: K): boolean {
+    return this.map.delete(key);
+  }
+
+  keys(): MapIterator<K> {
+    return this.map.keys();
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+}
+
 // ─── LSP Client ─────────────────────────────────────────────
+
+/** Maximum number of entries in the diagnostics LRU cache. */
+const DIAGNOSTICS_LRU_CAP = 100;
+/** Maximum number of entries in the open-documents LRU cache. */
+const OPEN_DOCUMENTS_LRU_CAP = 100;
 
 export class LSPClient {
   private process: ChildProcess | null = null;
@@ -75,8 +140,8 @@ export class LSPClient {
   private readonly timeout: number;
   private readonly diagnosticTimeout: number;
   private initialized = false;
-  private diagnosticsStore = new Map<string, Diagnostic[]>();
-  private openDocuments = new Map<string, { version: number; content: string }>();
+  private diagnosticsStore = new LRUMap<string, Diagnostic[]>(DIAGNOSTICS_LRU_CAP);
+  private openDocuments = new LRUMap<string, { version: number; content: string }>(OPEN_DOCUMENTS_LRU_CAP);
 
   constructor(options: LSPClientOptions) {
     this.command = options.command;

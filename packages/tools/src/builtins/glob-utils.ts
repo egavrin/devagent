@@ -118,3 +118,8 @@ function splitAlternatives(value: string): string[] {
 function escapeRegexChar(char: string): string {
   return /[\\^$+?.()|[\]{}]/.test(char) ? `\\${char}` : char;
 }
+
+/** Escape a full string for use as a literal pattern in a RegExp. */
+export function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

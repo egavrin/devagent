@@ -5,6 +5,7 @@
  */
 
 import type { ToolSpec } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/core";
 import type { LSPClient } from "./client.js";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -125,7 +126,7 @@ function createDiagnosticsTool(client: LSPClient): ToolSpec {
           artifacts: [],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         return {
           success: false,
           output: "",
@@ -206,7 +207,7 @@ function createDefinitionTool(client: LSPClient): ToolSpec {
           artifacts: [],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         return {
           success: false,
           output: "",
@@ -288,7 +289,7 @@ function createReferencesTool(client: LSPClient): ToolSpec {
           artifacts: [],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         return {
           success: false,
           output: "",
@@ -363,7 +364,7 @@ function createSymbolsTool(client: LSPClient): ToolSpec {
           artifacts: [],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         return {
           success: false,
           output: "",
@@ -389,12 +390,12 @@ function routingHandler(
       (err) => ({
         success: false,
         output: "",
-        error: err instanceof Error ? err.message : String(err),
+        error: extractErrorMessage(err),
         artifacts: [],
       }),
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = extractErrorMessage(err);
     return Promise.resolve({ success: false, output: "", error: message, artifacts: [] });
   }
 }

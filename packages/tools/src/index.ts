@@ -27,6 +27,10 @@ export type {
   LocationResult,
 } from "./lsp/index.js";
 
+// Shared utilities
+export { spawnAndCapture } from "./builtins/spawn-capture.js";
+export type { SpawnCaptureOptions, SpawnCaptureResult } from "./builtins/spawn-capture.js";
+
 // MCP integration
 export { McpHub } from "./mcp/index.js";
 export type {

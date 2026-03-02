@@ -17,7 +17,7 @@
 
 import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import type { ToolSpec } from "@devagent/core";
-import { ToolError } from "@devagent/core";
+import { ToolError, extractErrorMessage } from "@devagent/core";
 import { FileTime } from "./file-time.js";
 import { resolvePathInRepo } from "./path-guard.js";
 
@@ -52,8 +52,16 @@ function levenshtein(a: string, b: string): number {
 
 // ─── Replacer Types ─────────────────────────────────────────
 
+/** Context passed to every replacer — lines are pre-split once for performance. */
+interface ReplacerCtx {
+  readonly content: string;
+  readonly lines: string[];
+  readonly find: string;
+  readonly findLines: string[];
+}
+
 /** A replacer yields candidate exact substrings from content that match the search intent. */
-type Replacer = (content: string, find: string) => Generator<string>;
+type Replacer = (ctx: ReplacerCtx) => Generator<string>;
 
 // Similarity thresholds for block-anchor matching
 const SINGLE_CANDIDATE_SIMILARITY_THRESHOLD = 0.3;
@@ -62,14 +70,13 @@ const MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD = 0.7;
 // ─── Individual Replacers ───────────────────────────────────
 
 /** 1. Exact match — yields the search string itself. */
-const SimpleReplacer: Replacer = function* (_content, find) {
+const SimpleReplacer: Replacer = function* ({ find }) {
   yield find;
 };
 
 /** 2. Line-trimmed — matches when line-level whitespace differs. */
-const LineTrimmedReplacer: Replacer = function* (content, find) {
-  const originalLines = content.split("\n");
-  const searchLines = find.split("\n");
+const LineTrimmedReplacer: Replacer = function* ({ content, lines: originalLines, findLines }) {
+  const searchLines = [...findLines];
 
   if (searchLines[searchLines.length - 1] === "") {
     searchLines.pop();
@@ -105,9 +112,8 @@ const LineTrimmedReplacer: Replacer = function* (content, find) {
 };
 
 /** 3. Block-anchor — first/last lines as anchors, Levenshtein on middle. */
-const BlockAnchorReplacer: Replacer = function* (content, find) {
-  const originalLines = content.split("\n");
-  const searchLines = find.split("\n");
+const BlockAnchorReplacer: Replacer = function* ({ content, lines: originalLines, findLines }) {
+  const searchLines = [...findLines];
 
   if (searchLines.length < 3) return;
 
@@ -192,11 +198,9 @@ const BlockAnchorReplacer: Replacer = function* (content, find) {
 };
 
 /** 4. Whitespace-normalized — collapse all whitespace and match. */
-const WhitespaceNormalizedReplacer: Replacer = function* (content, find) {
+const WhitespaceNormalizedReplacer: Replacer = function* ({ find, lines, findLines }) {
   const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
   const normalizedFind = normalize(find);
-
-  const lines = content.split("\n");
 
   // Single-line matches
   for (const line of lines) {
@@ -220,7 +224,6 @@ const WhitespaceNormalizedReplacer: Replacer = function* (content, find) {
   }
 
   // Multi-line matches
-  const findLines = find.split("\n");
   if (findLines.length > 1) {
     for (let i = 0; i <= lines.length - findLines.length; i++) {
       const block = lines.slice(i, i + findLines.length);
@@ -232,10 +235,10 @@ const WhitespaceNormalizedReplacer: Replacer = function* (content, find) {
 };
 
 /** 5. Indentation-flexible — matches when indent level differs. */
-const IndentationFlexibleReplacer: Replacer = function* (content, find) {
+const IndentationFlexibleReplacer: Replacer = function* ({ find, lines: contentLines, findLines }) {
   const removeIndentation = (text: string) => {
-    const lines = text.split("\n");
-    const nonEmpty = lines.filter((l) => l.trim().length > 0);
+    const textLines = text.split("\n");
+    const nonEmpty = textLines.filter((l) => l.trim().length > 0);
     if (nonEmpty.length === 0) return text;
 
     const minIndent = Math.min(
@@ -245,12 +248,10 @@ const IndentationFlexibleReplacer: Replacer = function* (content, find) {
       }),
     );
 
-    return lines.map((l) => (l.trim().length === 0 ? l : l.slice(minIndent))).join("\n");
+    return textLines.map((l) => (l.trim().length === 0 ? l : l.slice(minIndent))).join("\n");
   };
 
   const normalizedFind = removeIndentation(find);
-  const contentLines = content.split("\n");
-  const findLines = find.split("\n");
 
   for (let i = 0; i <= contentLines.length - findLines.length; i++) {
     const block = contentLines.slice(i, i + findLines.length).join("\n");
@@ -261,7 +262,7 @@ const IndentationFlexibleReplacer: Replacer = function* (content, find) {
 };
 
 /** 6. Escape-normalized — handle escape sequence differences. */
-const EscapeNormalizedReplacer: Replacer = function* (content, find) {
+const EscapeNormalizedReplacer: Replacer = function* ({ content, lines, find }) {
   const unescape = (str: string): string =>
     str.replace(/\\(n|t|r|'|"|`|\\|\n|\$)/g, (_match, ch: string) => {
       switch (ch) {
@@ -284,11 +285,10 @@ const EscapeNormalizedReplacer: Replacer = function* (content, find) {
     yield unescapedFind;
   }
 
-  const lines = content.split("\n");
-  const findLines = unescapedFind.split("\n");
+  const unescapedFindLines = unescapedFind.split("\n");
 
-  for (let i = 0; i <= lines.length - findLines.length; i++) {
-    const block = lines.slice(i, i + findLines.length).join("\n");
+  for (let i = 0; i <= lines.length - unescapedFindLines.length; i++) {
+    const block = lines.slice(i, i + unescapedFindLines.length).join("\n");
     if (unescape(block) === unescapedFind) {
       yield block;
     }
@@ -296,16 +296,13 @@ const EscapeNormalizedReplacer: Replacer = function* (content, find) {
 };
 
 /** 7. Trimmed-boundary — leading/trailing whitespace on the overall block. */
-const TrimmedBoundaryReplacer: Replacer = function* (content, find) {
+const TrimmedBoundaryReplacer: Replacer = function* ({ content, lines, find, findLines }) {
   const trimmedFind = find.trim();
   if (trimmedFind === find) return; // Already trimmed
 
   if (content.includes(trimmedFind)) {
     yield trimmedFind;
   }
-
-  const lines = content.split("\n");
-  const findLines = find.split("\n");
 
   for (let i = 0; i <= lines.length - findLines.length; i++) {
     const block = lines.slice(i, i + findLines.length).join("\n");
@@ -316,17 +313,16 @@ const TrimmedBoundaryReplacer: Replacer = function* (content, find) {
 };
 
 /** 8. Context-aware — block anchors + 50% middle-line similarity. */
-const ContextAwareReplacer: Replacer = function* (content, find) {
-  const findLines = find.split("\n");
-  if (findLines.length < 3) return;
+const ContextAwareReplacer: Replacer = function* ({ lines: contentLines, findLines }) {
+  const searchLines = [...findLines];
+  if (searchLines.length < 3) return;
 
-  if (findLines[findLines.length - 1] === "") {
-    findLines.pop();
+  if (searchLines[searchLines.length - 1] === "") {
+    searchLines.pop();
   }
 
-  const contentLines = content.split("\n");
-  const firstLine = findLines[0]!.trim();
-  const lastLine = findLines[findLines.length - 1]!.trim();
+  const firstLine = searchLines[0]!.trim();
+  const lastLine = searchLines[searchLines.length - 1]!.trim();
 
   for (let i = 0; i < contentLines.length; i++) {
     if (contentLines[i]!.trim() !== firstLine) continue;
@@ -336,13 +332,13 @@ const ContextAwareReplacer: Replacer = function* (content, find) {
 
       const blockLines = contentLines.slice(i, j + 1);
 
-      if (blockLines.length === findLines.length) {
+      if (blockLines.length === searchLines.length) {
         let matchingLines = 0;
         let totalNonEmpty = 0;
 
         for (let k = 1; k < blockLines.length - 1; k++) {
           const blockLine = blockLines[k]!.trim();
-          const findLine = findLines[k]!.trim();
+          const findLine = searchLines[k]!.trim();
           if (blockLine.length > 0 || findLine.length > 0) {
             totalNonEmpty++;
             if (blockLine === findLine) matchingLines++;
@@ -372,6 +368,16 @@ const REPLACERS: ReadonlyArray<Replacer> = [
   ContextAwareReplacer,
 ];
 
+/** Build a ReplacerCtx from content and find strings, pre-splitting lines once. */
+function makeCtx(content: string, find: string): ReplacerCtx {
+  return {
+    content,
+    lines: content.split("\n"),
+    find,
+    findLines: find.split("\n"),
+  };
+}
+
 /**
  * Try each replacer in order. The first one that yields a match found in content wins.
  * Returns `{ newContent, count }` or throws if no replacer matches.
@@ -382,8 +388,10 @@ export function fuzzyReplace(
   newString: string,
   replaceAll: boolean,
 ): { newContent: string; count: number } {
+  const ctx = makeCtx(content, oldString);
+
   for (const replacer of REPLACERS) {
-    for (const candidate of replacer(content, oldString)) {
+    for (const candidate of replacer(ctx)) {
       const index = content.indexOf(candidate);
       if (index === -1) continue;
 
@@ -410,8 +418,8 @@ export function fuzzyReplace(
   }
 
   // All replacers exhausted — build rich error context
-  const lines = content.split("\n");
-  const firstSearchLine = oldString.split("\n")[0]!.trim();
+  const { lines } = ctx;
+  const firstSearchLine = ctx.findLines[0]!.trim();
   let hint = "";
 
   if (firstSearchLine.length > 5) {
@@ -434,7 +442,7 @@ export function fuzzyReplace(
 
   // Distinguish: no match at all vs. multiple ambiguous matches
   for (const replacer of REPLACERS) {
-    for (const candidate of replacer(content, oldString)) {
+    for (const candidate of replacer(ctx)) {
       const index = content.indexOf(candidate);
       if (index !== -1) {
         const lastIndex = content.lastIndexOf(candidate);
@@ -583,7 +591,7 @@ export const replaceInFileTool: ToolSpec = {
           totalCount += result.count;
           results.push({ search: s, replace: r, count: result.count, success: true });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = extractErrorMessage(err);
           results.push({ search: s, replace: r, count: 0, success: false, error: message });
           hasFailure = true;
         }
@@ -680,7 +688,7 @@ export const replaceInFileTool: ToolSpec = {
       if (err instanceof ToolError) throw err;
       throw new ToolError(
         "replace_in_file",
-        err instanceof Error ? err.message : String(err),
+        extractErrorMessage(err),
       );
     }
   },
@@ -689,6 +697,7 @@ export const replaceInFileTool: ToolSpec = {
 // Export replacers and helpers for testing
 export {
   levenshtein,
+  makeCtx,
   SimpleReplacer,
   LineTrimmedReplacer,
   BlockAnchorReplacer,
@@ -698,4 +707,4 @@ export {
   TrimmedBoundaryReplacer,
   ContextAwareReplacer,
 };
-export type { Replacer };
+export type { Replacer, ReplacerCtx };

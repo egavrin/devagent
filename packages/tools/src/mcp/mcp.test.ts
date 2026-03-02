@@ -129,4 +129,125 @@ describe("McpHub", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not discard interleaved responses for other request IDs", async () => {
+    vi.useFakeTimers();
+    const hub = new McpHub({ repoRoot: TEST_DIR });
+    const stdout = new EventEmitter();
+    const stdin = { write: vi.fn() };
+
+    const state = {
+      process: {
+        stdin,
+        stdout,
+      },
+    };
+
+    try {
+      const sendRequest = (
+        hub as unknown as {
+          sendRequest: (
+            stateArg: unknown,
+            request: Record<string, unknown>,
+          ) => Promise<Record<string, unknown>>;
+        }
+      ).sendRequest.bind(hub);
+
+      // Fire two concurrent requests with different IDs
+      const promiseA = sendRequest(state, {
+        jsonrpc: "2.0",
+        id: 100,
+        method: "tools/call",
+        params: { name: "a" },
+      });
+
+      const promiseB = sendRequest(state, {
+        jsonrpc: "2.0",
+        id: 200,
+        method: "tools/call",
+        params: { name: "b" },
+      });
+
+      // Both listeners are registered. Emit a single chunk containing
+      // both responses interleaved (response for 200 arrives first).
+      const lineB = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 200,
+        result: { value: "b-result" },
+      });
+      const lineA = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 100,
+        result: { value: "a-result" },
+      });
+      stdout.emit("data", Buffer.from(`${lineB}\n${lineA}\n`));
+
+      const [responseA, responseB] = await Promise.all([promiseA, promiseB]);
+
+      expect(
+        (responseA["result"] as Record<string, unknown>)["value"],
+      ).toBe("a-result");
+      expect(
+        (responseB["result"] as Record<string, unknown>)["value"],
+      ).toBe("b-result");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves unmatched lines across multiple data events", async () => {
+    vi.useFakeTimers();
+    const hub = new McpHub({ repoRoot: TEST_DIR });
+    const stdout = new EventEmitter();
+    const stdin = { write: vi.fn() };
+
+    const state = {
+      process: {
+        stdin,
+        stdout,
+      },
+    };
+
+    try {
+      const sendRequest = (
+        hub as unknown as {
+          sendRequest: (
+            stateArg: unknown,
+            request: Record<string, unknown>,
+          ) => Promise<Record<string, unknown>>;
+        }
+      ).sendRequest.bind(hub);
+
+      // Start a request that is waiting for id=300
+      const promise = sendRequest(state, {
+        jsonrpc: "2.0",
+        id: 300,
+        method: "tools/call",
+        params: {},
+      });
+
+      // First data event: an unrelated response line (id=999) only
+      const unrelated = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 999,
+        result: { ignored: true },
+      });
+      stdout.emit("data", Buffer.from(`${unrelated}\n`));
+
+      // Second data event: the matching response for id=300
+      const matching = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 300,
+        result: { value: "found" },
+      });
+      stdout.emit("data", Buffer.from(`${matching}\n`));
+
+      const response = await promise;
+      expect(
+        (response["result"] as Record<string, unknown>)["value"],
+      ).toBe("found");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

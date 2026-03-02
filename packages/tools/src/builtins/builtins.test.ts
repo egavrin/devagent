@@ -18,6 +18,7 @@ import { replaceInFileTool } from "./replace-in-file.js";
 import {
   fuzzyReplace,
   levenshtein,
+  makeCtx,
   LineTrimmedReplacer,
   BlockAnchorReplacer,
   WhitespaceNormalizedReplacer,
@@ -810,7 +811,7 @@ describe("fuzzyReplace", () => {
 describe("individual replacers", () => {
   it("LineTrimmedReplacer yields match when line whitespace differs", () => {
     const content = "  const x = 1;\n  const y = 2;\n";
-    const candidates = [...LineTrimmedReplacer(content, "const x = 1;\nconst y = 2;")];
+    const candidates = [...LineTrimmedReplacer(makeCtx(content, "const x = 1;\nconst y = 2;"))];
     expect(candidates.length).toBeGreaterThan(0);
     // The yielded candidate should be the actual substring from content
     expect(content.includes(candidates[0]!)).toBe(true);
@@ -819,13 +820,13 @@ describe("individual replacers", () => {
   it("BlockAnchorReplacer matches when middle lines differ slightly", () => {
     const content = "function foo() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n";
     const search = "function foo() {\n  const aa = 1;\n  const bb = 2;\n  return a + b;\n}";
-    const candidates = [...BlockAnchorReplacer(content, search)];
+    const candidates = [...BlockAnchorReplacer(makeCtx(content, search))];
     expect(candidates.length).toBeGreaterThan(0);
   });
 
   it("WhitespaceNormalizedReplacer matches collapsed whitespace", () => {
     const content = "const   x   =   1;";
-    const candidates = [...WhitespaceNormalizedReplacer(content, "const x = 1;")];
+    const candidates = [...WhitespaceNormalizedReplacer(makeCtx(content, "const x = 1;"))];
     expect(candidates.length).toBeGreaterThan(0);
     expect(candidates[0]).toBe("const   x   =   1;");
   });
@@ -833,7 +834,7 @@ describe("individual replacers", () => {
   it("IndentationFlexibleReplacer matches different indent levels", () => {
     const content = "    if (true) {\n      doStuff();\n    }\n";
     const search = "if (true) {\n  doStuff();\n}";
-    const candidates = [...IndentationFlexibleReplacer(content, search)];
+    const candidates = [...IndentationFlexibleReplacer(makeCtx(content, search))];
     expect(candidates.length).toBeGreaterThan(0);
     expect(candidates[0]).toBe("    if (true) {\n      doStuff();\n    }");
   });

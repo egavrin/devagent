@@ -5,7 +5,7 @@
 
 import { execFileSync } from "node:child_process";
 import type { ToolSpec } from "@devagent/core";
-import { ToolError } from "@devagent/core";
+import { ToolError , extractErrorMessage } from "@devagent/core";
 
 const DISALLOWED_ARG_CHARS = /[;&|`$<>\n\r\0]/;
 
@@ -101,7 +101,7 @@ function execGit(args: ReadonlyArray<string>, repoRoot: string): string {
       timeout: 30_000,
     }).trim();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = extractErrorMessage(err);
     throw new ToolError("git", `git ${args.join(" ")} failed: ${message}`);
   }
 }
