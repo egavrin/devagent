@@ -4,9 +4,10 @@
  */
 
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { streamText, tool as aiTool, jsonSchema, type CoreMessage } from "ai";
+import { streamText } from "ai";
 import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/core";
-import { MessageRole, ProviderError } from "@devagent/core";
+import { ProviderError } from "@devagent/core";
+import { convertMessages, convertTools, processProviderStream } from "./shared.js";
 
 export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
   if (!config.apiKey) {
@@ -46,49 +47,11 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
           abortSignal: abortController.signal,
         });
 
-        for await (const part of result.fullStream) {
-          switch (part.type) {
-            case "text-delta":
-              yield {
-                type: "text",
-                content: part.textDelta,
-              };
-              break;
-
-            case "tool-call":
-              yield {
-                type: "tool_call",
-                content: JSON.stringify(part.args),
-                toolCallId: part.toolCallId,
-                toolName: part.toolName,
-              };
-              break;
-
-            case "error":
-              throw new ProviderError(`Anthropic stream error: ${String(part.error)}`);
-
-            case "finish":
-              yield {
-                type: "done",
-                content: "",
-                usage: part.usage
-                  ? {
-                      promptTokens: part.usage.promptTokens,
-                      completionTokens: part.usage.completionTokens,
-                    }
-                  : undefined,
-              };
-              break;
-          }
-        }
-      } catch (err) {
-        if (abortController.signal.aborted) {
-          yield { type: "done", content: "" };
-          return;
-        }
-        if (err instanceof ProviderError) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new ProviderError(`Anthropic API error: ${msg}`);
+        yield* processProviderStream({
+          providerName: "Anthropic",
+          fullStream: result.fullStream,
+          abortController,
+        });
       } finally {
         abortController = null;
       }
@@ -100,77 +63,3 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
   };
 }
 
-// ─── Message Conversion ──────────────────────────────────────
-
-function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[] {
-  const result: CoreMessage[] = [];
-
-  for (const msg of messages) {
-    switch (msg.role) {
-      case MessageRole.SYSTEM:
-        result.push({ role: "system", content: msg.content ?? "" });
-        break;
-      case MessageRole.USER:
-        result.push({ role: "user", content: msg.content ?? "" });
-        break;
-      case MessageRole.ASSISTANT:
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
-          const parts: Array<
-            | { type: "text"; text: string }
-            | { type: "tool-call"; toolCallId: string; toolName: string; args: Record<string, unknown> }
-          > = [];
-          if (msg.content) {
-            parts.push({ type: "text" as const, text: msg.content });
-          }
-          for (const tc of msg.toolCalls) {
-            parts.push({
-              type: "tool-call" as const,
-              toolCallId: tc.callId,
-              toolName: tc.name,
-              args: tc.arguments,
-            });
-          }
-          result.push({ role: "assistant", content: parts });
-        } else {
-          result.push({ role: "assistant", content: msg.content ?? "" });
-        }
-        break;
-      case MessageRole.TOOL:
-        result.push({
-          role: "tool",
-          content: [
-            {
-              type: "tool-result" as const,
-              toolCallId: msg.toolCallId ?? "",
-              toolName: "", // Name resolved by SDK via toolCallId
-              result: msg.content ?? "",
-            },
-          ],
-        });
-        break;
-    }
-  }
-
-  return result;
-}
-
-// ─── Tool Conversion ────────────────────────────────────────
-
-function convertTools(
-  tools: ReadonlyArray<ToolSpec>,
-): Record<string, ReturnType<typeof aiTool>> {
-  const result: Record<string, ReturnType<typeof aiTool>> = {};
-
-  for (const t of tools) {
-    result[t.name] = aiTool({
-      description: t.description,
-      parameters: jsonSchema({
-        type: t.paramSchema.type as "object",
-        properties: (t.paramSchema.properties ?? {}) as Record<string, Record<string, unknown>>,
-        required: [...(t.paramSchema.required ?? [])],
-      }),
-    });
-  }
-
-  return result;
-}

@@ -7,9 +7,13 @@
  */
 
 import { createOpenAI } from "@ai-sdk/openai";
-import { streamText, tool as aiTool, jsonSchema, type CoreMessage } from "ai";
-import type { LLMProvider, ProviderConfig, ModelCapabilities, Message, ToolSpec, StreamChunk } from "@devagent/core";
-import { MessageRole, ProviderError } from "@devagent/core";
+import { streamText } from "ai";
+import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/core";
+import { ProviderError } from "@devagent/core";
+import { convertMessages, convertTools, processProviderStream, resolveCapabilities, stripNullArgs } from "./shared.js";
+
+// Re-export shared utilities so existing consumers (tests, index.ts) don't break.
+export { resolveCapabilities, stripNullArgs } from "./shared.js";
 
 /**
  * ChatGPT Codex-specific request body fields.
@@ -23,20 +27,6 @@ export interface ChatGPTCodexOptions {
   readonly include?: ReadonlyArray<string>;
   /** System-level instructions sent as top-level `instructions` field. */
   readonly instructions?: string;
-}
-
-/**
- * Resolve model capabilities from explicit config.
- * No heuristics — if capabilities aren't configured, safe defaults apply.
- * Configure via TOML or ProviderConfig.capabilities.
- */
-export function resolveCapabilities(explicit: ModelCapabilities | undefined): Required<ModelCapabilities> {
-  return {
-    useResponsesApi: explicit?.useResponsesApi ?? false,
-    reasoning: explicit?.reasoning ?? false,
-    supportsTemperature: explicit?.supportsTemperature ?? true,
-    defaultMaxTokens: explicit?.defaultMaxTokens ?? 4096,
-  };
 }
 
 export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
@@ -103,7 +93,7 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
       abortController = new AbortController();
 
       const aiMessages = convertMessages(messages);
-      const aiTools = tools ? convertTools(tools) : undefined;
+      const aiTools = tools ? convertTools(tools, { strict: true }) : undefined;
 
       try {
         // Resolve capabilities from explicit config (no heuristics)
@@ -138,53 +128,16 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
             : {}),
         });
 
-        for await (const part of result.fullStream) {
-          switch (part.type) {
-            case "text-delta":
-              yield {
-                type: "text",
-                content: part.textDelta,
-              };
-              break;
-
-            case "tool-call":
-              yield {
-                type: "tool_call",
-                // Strip null-valued keys: our convertTools makes optional params
-                // nullable (type: ["T", "null"]) + required for strict mode.
-                // The model sends null for unused optionals — strip them so
-                // downstream tool handlers see undefined (not provided), not null.
-                content: JSON.stringify(stripNullArgs(part.args as Record<string, unknown>)),
-                toolCallId: part.toolCallId,
-                toolName: part.toolName,
-              };
-              break;
-
-            case "error":
-              throw new ProviderError(`OpenAI stream error: ${String(part.error)}`);
-
-            case "finish":
-              yield {
-                type: "done",
-                content: "",
-                usage: part.usage
-                  ? {
-                      promptTokens: part.usage.promptTokens,
-                      completionTokens: part.usage.completionTokens,
-                    }
-                  : undefined,
-              };
-              break;
-          }
-        }
-      } catch (err) {
-        if (abortController.signal.aborted) {
-          yield { type: "done", content: "" };
-          return;
-        }
-        if (err instanceof ProviderError) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new ProviderError(`OpenAI API error: ${msg}`);
+        yield* processProviderStream({
+          providerName: "OpenAI",
+          fullStream: result.fullStream,
+          abortController,
+          // Strip null-valued keys: our convertTools makes optional params
+          // nullable (type: ["T", "null"]) + required for strict mode.
+          // The model sends null for unused optionals — strip them so
+          // downstream tool handlers see undefined (not provided), not null.
+          transformArgs: stripNullArgs,
+        });
       } finally {
         abortController = null;
       }
@@ -196,114 +149,4 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
   };
 }
 
-// ─── Message Conversion ──────────────────────────────────────
 
-function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[] {
-  const result: CoreMessage[] = [];
-
-  for (const msg of messages) {
-    switch (msg.role) {
-      case MessageRole.SYSTEM:
-        result.push({ role: "system", content: msg.content ?? "" });
-        break;
-      case MessageRole.USER:
-        result.push({ role: "user", content: msg.content ?? "" });
-        break;
-      case MessageRole.ASSISTANT:
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
-          // Assistant message with tool calls — use content parts format
-          const parts: Array<
-            | { type: "text"; text: string }
-            | { type: "tool-call"; toolCallId: string; toolName: string; args: Record<string, unknown> }
-          > = [];
-          if (msg.content) {
-            parts.push({ type: "text" as const, text: msg.content });
-          }
-          for (const tc of msg.toolCalls) {
-            parts.push({
-              type: "tool-call" as const,
-              toolCallId: tc.callId,
-              toolName: tc.name,
-              args: tc.arguments,
-            });
-          }
-          result.push({ role: "assistant", content: parts });
-        } else {
-          result.push({ role: "assistant", content: msg.content ?? "" });
-        }
-        break;
-      case MessageRole.TOOL:
-        result.push({
-          role: "tool",
-          content: [
-            {
-              type: "tool-result" as const,
-              toolCallId: msg.toolCallId ?? "",
-              toolName: "", // Name resolved by SDK via toolCallId
-              result: msg.content ?? "",
-            },
-          ],
-        });
-        break;
-    }
-  }
-
-  return result;
-}
-
-// ─── Tool Conversion ────────────────────────────────────────
-
-function convertTools(
-  tools: ReadonlyArray<ToolSpec>,
-): Record<string, ReturnType<typeof aiTool>> {
-  const result: Record<string, ReturnType<typeof aiTool>> = {};
-
-  for (const t of tools) {
-    // OpenAI strict mode requires all properties in `required` and `additionalProperties: false`.
-    // Optional properties must be made nullable (type: ["string", "null"]) instead.
-    const rawProps = (t.paramSchema.properties ?? {}) as Record<string, Record<string, unknown>>;
-    const requiredSet = new Set(t.paramSchema.required ?? []);
-    const allPropertyNames = Object.keys(rawProps);
-
-    // Make non-required properties nullable
-    const strictProps: Record<string, Record<string, unknown>> = {};
-    for (const [key, schema] of Object.entries(rawProps)) {
-      if (!requiredSet.has(key)) {
-        // Convert to nullable: type becomes ["originalType", "null"]
-        const origType = schema["type"] as string | undefined;
-        strictProps[key] = {
-          ...schema,
-          type: origType ? [origType, "null"] : ["string", "null"],
-        };
-      } else {
-        strictProps[key] = schema;
-      }
-    }
-
-    result[t.name] = aiTool({
-      description: t.description,
-      parameters: jsonSchema({
-        type: t.paramSchema.type as "object",
-        properties: strictProps,
-        required: allPropertyNames,
-        additionalProperties: false,
-      }),
-    });
-  }
-
-  return result;
-}
-
-/**
- * Strip null-valued keys from tool call arguments.
- * Our convertTools transforms optional params into nullable + required for
- * OpenAI strict mode. The model responds with null for unused optionals.
- * Strip them so tool handlers see undefined (absent), not null.
- */
-export function stripNullArgs(args: Record<string, unknown>): Record<string, unknown> {
-  const cleaned: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(args)) {
-    if (v !== null) cleaned[k] = v;
-  }
-  return cleaned;
-}
