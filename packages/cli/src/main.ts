@@ -25,7 +25,7 @@ import {
   EventLogger,
 } from "@devagent/core";
 import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, Memory, VerbosityConfig } from "@devagent/core";
-import { ApprovalMode, MessageRole } from "@devagent/core";
+import { ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/core";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
 import { createDefaultToolRegistry, McpHub, createLSPTools, createRoutingLSPTools, ToolRegistry } from "@devagent/tools";
 import {
@@ -70,6 +70,7 @@ import {
   formatCompactionResult,
 } from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
+import { OutputState } from "./output-state.js";
 
 // ─── Argument Parsing ────────────────────────────────────────
 
@@ -292,41 +293,19 @@ Installation:
 `.trim());
 }
 
-// ─── Main ──────────────────────────────────────────────────
+// ─── Setup Helpers ─────────────────────────────────────────
 
-export async function main(): Promise<void> {
-  const cliArgs = parseArgs(process.argv);
+/** Result of config setup: resolved config and project root. */
+interface ConfigSetupResult {
+  readonly config: DevAgentConfig;
+  readonly projectRoot: string;
+}
 
-  // Auth commands — handle before config loading (doesn't need provider setup)
-  if (cliArgs.authCommand) {
-    const { runAuthCommand } = await import("./auth.js");
-    await runAuthCommand(cliArgs.authCommand);
-    return;
-  }
-
-  // Session commands — handle before full setup
-  if (cliArgs.sessionCommand) {
-    if (cliArgs.sessionCommand.action === "inspect") {
-      const { buildTimeline, renderTimeline } = await import("./session-inspect.js");
-      const sessionId = cliArgs.sessionCommand.sessionId;
-      if (!sessionId) {
-        process.stderr.write(red("Usage: devagent session inspect <session-id>") + "\n");
-        process.exit(1);
-      }
-      const config = loadConfig(findProjectRoot() ?? undefined);
-      const entries = EventLogger.readLog(sessionId, config.logging?.logDir);
-      if (entries.length === 0) {
-        process.stderr.write(dim(`No log found for session "${sessionId}".`) + "\n");
-        process.exit(1);
-      }
-      const timeline = buildTimeline(entries);
-      process.stdout.write(renderTimeline(timeline) + "\n");
-      return;
-    }
-    process.stderr.write(red(`Unknown session command: ${cliArgs.sessionCommand.action}`) + "\n");
-    process.exit(1);
-  }
-
+/**
+ * Parse CLI overrides, load config from disk, resolve OAuth credentials,
+ * load the model registry, and auto-size the context budget.
+ */
+async function setupConfig(cliArgs: CliArgs): Promise<ConfigSetupResult> {
   const projectRoot = findProjectRoot() ?? process.cwd();
 
   // Load config with CLI overrides
@@ -343,7 +322,7 @@ export async function main(): Promise<void> {
   try {
     config = await resolveProviderCredentials(config);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = extractErrorMessage(err);
     process.stderr.write(formatError(`OAuth credential error: ${msg}`) + "\n");
     process.stderr.write(dim('Run "devagent auth login" to re-authenticate.') + "\n");
     process.exit(1);
@@ -377,7 +356,19 @@ export async function main(): Promise<void> {
     };
   }
 
-  // Set up providers
+  return { config, projectRoot };
+}
+
+/** Result of provider setup: the LLM provider instance. */
+interface ProviderSetupResult {
+  readonly provider: LLMProvider;
+}
+
+/**
+ * Create the LLM provider from config, resolving capabilities from the model
+ * registry and validating API keys.
+ */
+function setupProvider(config: DevAgentConfig, cliArgs: CliArgs): ProviderSetupResult {
   const providerRegistry = createDefaultRegistry();
   const baseProviderConfig = config.providers[config.provider] ?? {
     model: config.model,
@@ -408,70 +399,41 @@ export async function main(): Promise<void> {
 
   const provider = providerRegistry.get(config.provider, providerConfig);
 
-  // ─── Review Command ──────────────────────────────────────────
-  if (cliArgs.review) {
-    const { runReviewPipeline } = await import("@devagent/engine");
-    const reviewArgs = cliArgs.review;
+  return { provider };
+}
 
-    if (!reviewArgs.patchFile) {
-      process.stderr.write(formatError("Usage: devagent review <file> [--rule <rule_file>] [--json]") + "\n");
-      process.exit(1);
-    }
+/** Result of tools setup: all registries, bus, gate, and supporting objects. */
+interface ToolsSetupResult {
+  readonly toolRegistry: ToolRegistry;
+  readonly bus: EventBus;
+  readonly gate: ApprovalGate;
+  readonly verbosityConfig: VerbosityConfig;
+  readonly lspToolCounts: Map<string, number>;
+  readonly trackInternalLSPDiagnostics: () => void;
+  /** Mutable — may be swapped on resume. Access via getter closure. */
+  sessionState: SessionState;
+  readonly skills: SkillRegistry;
+  readonly pluginManager: PluginManager;
+  readonly mcpHub: McpHub;
+  readonly memoryStore: MemoryStore;
+  readonly loadFreshMemories: () => ReadonlyArray<import("@devagent/core").Memory>;
+  readonly initialMemories: ReadonlyArray<import("@devagent/core").Memory>;
+  readonly checkpointManager: CheckpointManager;
+  readonly doubleCheck: DoubleCheck;
+  readonly contextManager: ContextManager;
+}
 
-    if (!reviewArgs.ruleFile) {
-      process.stderr.write(formatError("Rule file required: devagent review <file> --rule <rule_file>") + "\n");
-      process.exit(1);
-    }
-
-    try {
-      const result = await runReviewPipeline(
-        { provider, workspaceRoot: projectRoot },
-        { patchFile: reviewArgs.patchFile, ruleFile: reviewArgs.ruleFile },
-      );
-
-      if (reviewArgs.jsonOutput) {
-        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-      } else {
-        // Human-readable output
-        const { violations, summary } = result;
-        if (violations.length === 0) {
-          console.log(green("No violations found."));
-        } else {
-          console.log(bold(`Found ${violations.length} violation(s) in ${summary.filesReviewed} file(s):\n`));
-          for (const v of violations) {
-            const sevColor = v.severity === "error" ? red : v.severity === "warning" ? yellow : dim;
-            console.log(`  ${sevColor(v.severity.toUpperCase().padEnd(7))} ${dim(v.file)}:${v.line}`);
-            console.log(`           ${v.message}`);
-            if (v.codeSnippet) {
-              console.log(`           ${dim(v.codeSnippet)}`);
-            }
-            console.log();
-          }
-        }
-        console.log(dim(`Rule: ${summary.ruleName} | Files: ${summary.filesReviewed} | Violations: ${summary.totalViolations}`));
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(formatError(`Review failed: ${msg}`) + "\n");
-      process.exit(1);
-    }
-
-    return;
-  }
-
-  // Pre-flight: validate Ollama model availability before session setup
-  if (config.provider === "ollama") {
-    try {
-      const ollamaBaseUrl = providerConfig.baseUrl ?? "http://localhost:11434/v1";
-      await validateOllamaModel(config.model, ollamaBaseUrl);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(formatError(msg) + "\n");
-      process.exit(1);
-    }
-  }
-
-  // Set up tools, bus, approval
+/**
+ * Wire up the tool registry, event bus, approval gate, session state, skills,
+ * plugins, MCP, memory store, delegate tool, checkpoints, double-check, and
+ * context manager.
+ */
+async function setupTools(
+  config: DevAgentConfig,
+  cliArgs: CliArgs,
+  projectRoot: string,
+  provider: LLMProvider,
+): Promise<ToolsSetupResult> {
   const toolRegistry = createDefaultToolRegistry();
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
@@ -488,7 +450,7 @@ export async function main(): Promise<void> {
   let sessionState = new SessionState(config.sessionState);
 
   // Register state tools (getter indirection so resume can swap the instance)
-  toolRegistry.register(createPlanTool(bus, () => sessionState, () => currentIteration));
+  toolRegistry.register(createPlanTool(bus, () => sessionState, () => outputState.currentIteration));
   // Finding tool: tracks iteration via tool:after event count
   let findingToolCallCount = 0;
   bus.on("tool:after", () => { findingToolCallCount++; });
@@ -542,7 +504,7 @@ export async function main(): Promise<void> {
 
   // Run startup maintenance (decay + prune + dedup)
   if (config.memory.maintenanceOnStartup) {
-    const maint = memoryStore.runMaintenance();
+    const maint = memoryStore.runMaintenance(config.memory.dedupEveryStartups);
     if ((maint.decayed > 0 || maint.pruned > 0 || maint.merged > 0) && cliArgs.verbosity !== "quiet") {
       process.stderr.write(
         dim(`[memory] Maintenance: ${maint.decayed} decayed, ${maint.pruned} pruned, ${maint.merged} merged`) + "\n",
@@ -623,28 +585,77 @@ export async function main(): Promise<void> {
     process.stderr.write(dim("[double-check] Validation enabled") + "\n");
   }
 
-  // ─── LSP Servers (optional, multi-language) ──────────────────
+  // Wire test runner (works without LSP — just needs a shell)
+  if (effectiveDoubleCheck.testCommand) {
+    doubleCheck.setTestRunner(createShellTestRunner(projectRoot));
+    if (autoTestCommand && cliArgs.verbosity !== "quiet") {
+      process.stderr.write(dim(`[double-check] Auto-detected test command: ${autoTestCommand}`) + "\n");
+    }
+  }
+
+  // ─── Context Management ────────────────────────────────────
+  const contextManager = new ContextManager(config.context);
+
+  return {
+    toolRegistry,
+    bus,
+    gate,
+    verbosityConfig,
+    lspToolCounts,
+    trackInternalLSPDiagnostics,
+    sessionState,
+    skills,
+    pluginManager,
+    mcpHub,
+    memoryStore,
+    loadFreshMemories,
+    initialMemories,
+    checkpointManager,
+    doubleCheck,
+    contextManager,
+  };
+}
+
+/** Result of LSP setup: the router (for shutdown) and whether diagnostics are available. */
+interface LSPSetupResult {
+  lspRouter: LSPRouter | null;
+  hasLSPDiagnostics: boolean;
+}
+
+/**
+ * Start LSP servers, register routing tools, wire diagnostic providers
+ * (including ArkTS and compiler fallback), and schedule lazy LSP upgrade.
+ */
+async function setupLSP(
+  config: DevAgentConfig,
+  cliArgs: CliArgs,
+  projectRoot: string,
+  toolRegistry: ToolRegistry,
+  doubleCheck: DoubleCheck,
+  trackInternalLSPDiagnostics: () => void,
+): Promise<LSPSetupResult> {
   let lspRouter: LSPRouter | null = null;
   let hasLSPDiagnostics = false;
 
   if (config.lsp?.servers && config.lsp.servers.length > 0) {
     lspRouter = new LSPRouter(projectRoot);
 
-    for (const serverConfig of config.lsp.servers) {
+    const lspStartPromises = config.lsp.servers.map(async (serverConfig) => {
       try {
-        await lspRouter.addServer(serverConfig);
+        await lspRouter!.addServer(serverConfig);
         if (cliArgs.verbosity !== "quiet") {
           process.stderr.write(
             dim(`[lsp] Started: ${serverConfig.command} (${serverConfig.languages.join(", ")})`) + "\n",
           );
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = extractErrorMessage(err);
         process.stderr.write(
           formatError(`LSP start failed for ${serverConfig.command}: ${msg}. Skipping.`) + "\n",
         );
       }
-    }
+    });
+    await Promise.allSettled(lspStartPromises);
 
     // Register routing LSP tools (routes to correct server by file extension)
     const clients = lspRouter.getClients();
@@ -701,7 +712,8 @@ export async function main(): Promise<void> {
   // Wire compiler fallback when no LSP/linter diagnostics and DoubleCheck is enabled.
   // Then schedule lazy LSP upgrade in the background — when LSP servers are found
   // in PATH, they'll be started and the provider swapped transparently.
-  if (!hasLSPDiagnostics && effectiveDoubleCheck.enabled) {
+  const effectiveEnabled = doubleCheck.isEnabled();
+  if (!hasLSPDiagnostics && effectiveEnabled) {
     doubleCheck.setDiagnosticProvider(createCompilerFallbackProvider(projectRoot));
 
     // Prepare ArkTS provider for composition with lazy LSP (if enabled)
@@ -757,18 +769,32 @@ export async function main(): Promise<void> {
     });
   }
 
-  // Wire test runner (works without LSP — just needs a shell)
-  if (effectiveDoubleCheck.testCommand) {
-    doubleCheck.setTestRunner(createShellTestRunner(projectRoot));
-    if (autoTestCommand && cliArgs.verbosity !== "quiet") {
-      process.stderr.write(dim(`[double-check] Auto-detected test command: ${autoTestCommand}`) + "\n");
-    }
-  }
+  return { lspRouter, hasLSPDiagnostics };
+}
 
-  // ─── Context Management ────────────────────────────────────
-  const contextManager = new ContextManager(config.context);
+/** Result of session persistence setup. */
+interface SessionPersistenceResult {
+  readonly sessionStore: SessionStore;
+  readonly session: import("@devagent/core").Session;
+  readonly initialMessages: Message[] | undefined;
+  readonly resumeBriefing: TurnBriefing | undefined;
+  readonly eventLogger: EventLogger | null;
+  /** Possibly updated sessionState (swapped on resume). */
+  sessionState: SessionState;
+}
 
-  // ─── Session Persistence ────────────────────────────────────
+/**
+ * Create or resume a session: load prior messages/briefing, create session
+ * record, bind session state to disk, set up event logger and bus-based
+ * message persistence.
+ */
+async function setupSessionPersistence(
+  config: DevAgentConfig,
+  cliArgs: CliArgs,
+  provider: LLMProvider,
+  bus: EventBus,
+  sessionState: SessionState,
+): Promise<SessionPersistenceResult> {
   const sessionStore = new SessionStore();
 
   // Resume previous session if requested
@@ -832,11 +858,11 @@ export async function main(): Promise<void> {
   });
 
   // ─── Disk-backed SessionState ────────────────────────────────
-  // Adapter: bridge SessionStore's Record<string,unknown> methods with
+  // Adapter: bridge SessionStore's object-typed methods with
   // the typed SessionStatePersistence interface from @devagent/engine.
   const sessionStatePersistence: SessionStatePersistence = {
     save: (id: string, state: SessionStateJSON) =>
-      sessionStore.saveSessionState(id, state as unknown as Record<string, unknown>),
+      sessionStore.saveSessionState(id, state),
     load: (id: string) => {
       const raw = sessionStore.loadSessionState(id);
       return raw as SessionStateJSON | null;
@@ -844,10 +870,11 @@ export async function main(): Promise<void> {
   };
 
   // On resume: load accumulated state from the prior session
+  let effectiveSessionState = sessionState;
   if ((cliArgs.resume || cliArgs.continue_) && prevSession) {
     const prevData = sessionStatePersistence.load(prevSession.id);
     if (prevData) {
-      sessionState = SessionState.fromJSON(prevData, config.sessionState);
+      effectiveSessionState = SessionState.fromJSON(prevData, config.sessionState);
       if (cliArgs.verbosity !== "quiet") {
         const planLen = prevData.plan?.length ?? 0;
         const fileLen = prevData.modifiedFiles?.length ?? 0;
@@ -858,7 +885,7 @@ export async function main(): Promise<void> {
     }
   }
   // Bind to current session for ongoing auto-save
-  sessionState.bind(session.id, sessionStatePersistence);
+  effectiveSessionState.bind(session.id, sessionStatePersistence);
 
   // ─── Event Logger (JSONL persistence) ─────────────────────
   let eventLogger: EventLogger | null = null;
@@ -921,65 +948,196 @@ export async function main(): Promise<void> {
     });
   });
 
+  return {
+    sessionStore,
+    session,
+    initialMessages,
+    resumeBriefing,
+    eventLogger,
+    sessionState: effectiveSessionState,
+  };
+}
+
+// ─── Main ──────────────────────────────────────────────────
+
+export async function main(): Promise<void> {
+  const cliArgs = parseArgs(process.argv);
+
+  // Auth commands — handle before config loading (doesn't need provider setup)
+  if (cliArgs.authCommand) {
+    const { runAuthCommand } = await import("./auth.js");
+    await runAuthCommand(cliArgs.authCommand);
+    return;
+  }
+
+  // Session commands — handle before full setup
+  if (cliArgs.sessionCommand) {
+    if (cliArgs.sessionCommand.action === "inspect") {
+      const { buildTimeline, renderTimeline } = await import("./session-inspect.js");
+      const sessionId = cliArgs.sessionCommand.sessionId;
+      if (!sessionId) {
+        process.stderr.write(red("Usage: devagent session inspect <session-id>") + "\n");
+        process.exit(1);
+      }
+      const config = loadConfig(findProjectRoot() ?? undefined);
+      const entries = EventLogger.readLog(sessionId, config.logging?.logDir);
+      if (entries.length === 0) {
+        process.stderr.write(dim(`No log found for session "${sessionId}".`) + "\n");
+        process.exit(1);
+      }
+      const timeline = buildTimeline(entries);
+      process.stdout.write(renderTimeline(timeline) + "\n");
+      return;
+    }
+    process.stderr.write(red(`Unknown session command: ${cliArgs.sessionCommand.action}`) + "\n");
+    process.exit(1);
+  }
+
+  // ─── 1. Config ─────────────────────────────────────────────
+  const { config, projectRoot } = await setupConfig(cliArgs);
+
+  // ─── 2. Provider ───────────────────────────────────────────
+  const { provider } = setupProvider(config, cliArgs);
+
+  // ─── Review Command (needs provider but not full tool setup) ──
+  if (cliArgs.review) {
+    const { runReviewPipeline } = await import("@devagent/engine");
+    const reviewArgs = cliArgs.review;
+
+    if (!reviewArgs.patchFile) {
+      process.stderr.write(formatError("Usage: devagent review <file> [--rule <rule_file>] [--json]") + "\n");
+      process.exit(1);
+    }
+
+    if (!reviewArgs.ruleFile) {
+      process.stderr.write(formatError("Rule file required: devagent review <file> --rule <rule_file>") + "\n");
+      process.exit(1);
+    }
+
+    try {
+      const result = await runReviewPipeline(
+        { provider, workspaceRoot: projectRoot },
+        { patchFile: reviewArgs.patchFile, ruleFile: reviewArgs.ruleFile },
+      );
+
+      if (reviewArgs.jsonOutput) {
+        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      } else {
+        // Human-readable output
+        const { violations, summary } = result;
+        if (violations.length === 0) {
+          console.log(green("No violations found."));
+        } else {
+          console.log(bold(`Found ${violations.length} violation(s) in ${summary.filesReviewed} file(s):\n`));
+          for (const v of violations) {
+            const sevColor = v.severity === "error" ? red : v.severity === "warning" ? yellow : dim;
+            console.log(`  ${sevColor(v.severity.toUpperCase().padEnd(7))} ${dim(v.file)}:${v.line}`);
+            console.log(`           ${v.message}`);
+            if (v.codeSnippet) {
+              console.log(`           ${dim(v.codeSnippet)}`);
+            }
+            console.log();
+          }
+        }
+        console.log(dim(`Rule: ${summary.ruleName} | Files: ${summary.filesReviewed} | Violations: ${summary.totalViolations}`));
+      }
+    } catch (err) {
+      const msg = extractErrorMessage(err);
+      process.stderr.write(formatError(`Review failed: ${msg}`) + "\n");
+      process.exit(1);
+    }
+
+    return;
+  }
+
+  // Pre-flight: validate Ollama model availability before session setup
+  if (config.provider === "ollama") {
+    try {
+      const ollamaConfig = config.providers[config.provider];
+      const ollamaBaseUrl = ollamaConfig?.baseUrl ?? "http://localhost:11434/v1";
+      await validateOllamaModel(config.model, ollamaBaseUrl);
+    } catch (err) {
+      const msg = extractErrorMessage(err);
+      process.stderr.write(formatError(msg) + "\n");
+      process.exit(1);
+    }
+  }
+
+  // ─── 3. Tools, bus, gate, plugins, MCP, memory, checkpoints ──
+  const tools = await setupTools(config, cliArgs, projectRoot, provider);
+
+  // ─── 4. LSP ────────────────────────────────────────────────
+  const lsp = await setupLSP(
+    config, cliArgs, projectRoot,
+    tools.toolRegistry, tools.doubleCheck, tools.trackInternalLSPDiagnostics,
+  );
+
+  // ─── 5. Session persistence ────────────────────────────────
+  const persistence = await setupSessionPersistence(
+    config, cliArgs, provider, tools.bus, tools.sessionState,
+  );
+  // If session state was swapped on resume, propagate back so closures see it
+  tools.sessionState = persistence.sessionState;
+
   const sessionStartTime = Date.now();
   try {
     const commonOptions = {
       provider,
-      toolRegistry,
-      bus,
-      gate,
+      toolRegistry: tools.toolRegistry,
+      bus: tools.bus,
+      gate: tools.gate,
       config,
       repoRoot: projectRoot,
       mode: cliArgs.mode,
-      skills,
-      contextManager,
-      memoryStore,
-      checkpointManager,
-      doubleCheck,
-      initialMessages,
+      skills: tools.skills,
+      contextManager: tools.contextManager,
+      memoryStore: tools.memoryStore,
+      checkpointManager: tools.checkpointManager,
+      doubleCheck: tools.doubleCheck,
+      initialMessages: persistence.initialMessages,
       verbosity: cliArgs.verbosity,
-      verbosityConfig,
-      sessionState,
-      briefing: resumeBriefing,
+      verbosityConfig: tools.verbosityConfig,
+      sessionState: tools.sessionState,
+      briefing: persistence.resumeBriefing,
     };
 
     if (cliArgs.interactive) {
       await runInteractive({
         ...commonOptions,
-        pluginManager,
-        loadMemories: loadFreshMemories,
+        pluginManager: tools.pluginManager,
+        loadMemories: tools.loadFreshMemories,
       });
     } else if (cliArgs.query) {
       await runSingleQuery({
         ...commonOptions,
         query: cliArgs.query,
-        memories: loadFreshMemories(),
+        memories: tools.loadFreshMemories(),
       });
     }
   } finally {
     // Print LSP tool usage summary (for measuring value)
-    if (lspToolCounts.size > 0 && cliArgs.verbosity !== "quiet") {
-      const parts = [...lspToolCounts.entries()]
+    if (tools.lspToolCounts.size > 0 && cliArgs.verbosity !== "quiet") {
+      const parts = [...tools.lspToolCounts.entries()]
         .map(([name, count]) => `${name}=${count}`)
         .join(", ");
       process.stderr.write(dim(`[lsp-usage] ${parts}`) + "\n");
     }
 
     // Session summary (interactive mode or verbose)
-    if (cliArgs.verbosity !== "quiet" && (cliArgs.interactive || isCategoryEnabled("session", verbosityConfig))) {
-      const planSteps = sessionState.getPlan();
+    if (cliArgs.verbosity !== "quiet" && (cliArgs.interactive || isCategoryEnabled("session", tools.verbosityConfig))) {
+      const planSteps = tools.sessionState.getPlan();
       process.stderr.write(formatSessionSummary({
-        sessionId: session.id,
-        totalIterations: sessionTotalIterations,
-        totalToolCalls: sessionTotalToolCalls,
-        toolUsage: sessionToolUsage,
-        filesChanged: sessionState.getModifiedFiles(),
+        sessionId: persistence.session.id,
+        totalIterations: outputState.sessionTotalIterations,
+        totalToolCalls: outputState.sessionTotalToolCalls,
+        toolUsage: outputState.sessionToolUsage,
+        filesChanged: tools.sessionState.getModifiedFiles(),
         planSteps: planSteps
           ? planSteps.map((s) => ({ description: s.description, status: s.status }))
           : undefined,
-        totalCost: sessionTotalCost,
-        totalInputTokens: sessionTotalInputTokens,
-        totalOutputTokens: sessionTotalOutputTokens,
+        totalCost: outputState.sessionTotalCost,
+        totalInputTokens: outputState.sessionTotalInputTokens,
+        totalOutputTokens: outputState.sessionTotalOutputTokens,
         elapsedMs: Date.now() - sessionStartTime,
         completionReason: "completed",
       }) + "\n");
@@ -987,22 +1145,22 @@ export async function main(): Promise<void> {
 
     // Print session ID for future resume
     if (cliArgs.verbosity !== "quiet") {
-      process.stderr.write(dim(`[session] ${session.id}`) + "\n");
+      process.stderr.write(dim(`[session] ${persistence.session.id}`) + "\n");
     }
 
     // Cleanup
-    if (lspRouter) {
+    if (lsp.lspRouter) {
       try {
-        await lspRouter.stopAll();
+        await lsp.lspRouter.stopAll();
       } catch {
         // Servers might already be dead
       }
     }
-    pluginManager.destroy();
-    mcpHub.dispose();
-    memoryStore.close();
-    eventLogger?.close();
-    sessionStore.close();
+    tools.pluginManager.destroy();
+    tools.mcpHub.dispose();
+    tools.memoryStore.close();
+    persistence.eventLogger?.close();
+    persistence.sessionStore.close();
   }
 }
 
@@ -1011,59 +1169,15 @@ export async function main(): Promise<void> {
 /** Shared spinner instance — started during LLM thinking, stopped on tool/text events. */
 const spinner = new Spinner();
 
-/** Mutable iteration counter — updated by iteration:start events from the task loop, reset per query turn. */
-let currentIteration = 0;
-
-/** Tracks whether any tool was called this turn — for visual separator before final response. */
-let hadToolCalls = false;
-
-/** Current token gauge info — updated by iteration:start events. */
-let currentTokens = 0;
-let maxContextTokens = 0;
-
-/** Per-turn accumulators — reset at start of each turn. */
-let turnToolCallCount = 0;
-let turnInputTokens = 0;
-let turnOutputTokens = 0;
-let turnCostDelta = 0;
-
-/** Session-level accumulators — accumulate across all turns. */
-let sessionTotalIterations = 0;
-let sessionTotalToolCalls = 0;
-let sessionTotalInputTokens = 0;
-let sessionTotalOutputTokens = 0;
-let sessionTotalCost = 0;
-const sessionToolUsage = new Map<string, number>();
-
-/**
- * Buffer for streamed assistant text. Text is buffered during each LLM iteration.
- * If tool calls follow (tool:before fires), the buffer is discarded (it was thinking text).
- * If no tool calls follow (final response), the buffer is flushed to stdout.
- */
-let textBuffer = "";
-
-/** Whether we're currently buffering text (between first partial text and tool:before/end). */
-let isBufferingText = false;
-
-/** Reset per query turn so formatToolStart shows correct [n/max] counter. */
-export function resetOutputIteration(): void {
-  currentIteration = 0;
-  hadToolCalls = false;
-  currentTokens = 0;
-  maxContextTokens = 0;
-  turnToolCallCount = 0;
-  turnInputTokens = 0;
-  turnOutputTokens = 0;
-  turnCostDelta = 0;
-  textBuffer = "";
-  isBufferingText = false;
-}
+/** Centralized mutable output state — replaces former module-level `let` declarations. */
+const outputState = new OutputState();
 
 function setupEventHandlers(
   bus: EventBus,
   config: DevAgentConfig,
   verbosity: Verbosity,
   verbosityConfig?: VerbosityConfig,
+  os: OutputState = outputState,
 ): { lspToolCounts: Map<string, number> } {
   const maxIter = config.budget.maxIterations;
   const vc = verbosityConfig ?? buildVerbosityConfig(verbosity, undefined);
@@ -1071,9 +1185,9 @@ function setupEventHandlers(
   // ─── Iteration tracking ─────────────────────────────────────
 
   bus.on("iteration:start", (event) => {
-    currentIteration = event.iteration;
-    currentTokens = event.estimatedTokens;
-    maxContextTokens = event.maxContextTokens;
+    os.currentIteration = event.iteration;
+    os.currentTokens = event.estimatedTokens;
+    os.maxContextTokens = event.maxContextTokens;
   });
 
   // ─── Tool events ──────────────────────────────────────────
@@ -1085,27 +1199,27 @@ function setupEventHandlers(
     spinner.stop();
 
     // Discard any buffered thinking text that preceded these tool calls
-    textBuffer = "";
-    isBufferingText = false;
+    os.textBuffer = "";
+    os.isBufferingText = false;
 
-    hadToolCalls = true;
-    turnToolCallCount++;
+    os.hadToolCalls = true;
+    os.turnToolCallCount++;
 
     if (verbosity === "quiet" && !isCategoryEnabled("tools", vc)) return;
 
     const gauge = isCategoryEnabled("context", vc)
-      ? formatContextGauge(currentTokens, maxContextTokens)
+      ? formatContextGauge(os.currentTokens, os.maxContextTokens)
       : undefined;
 
     if (isCategoryEnabled("tools", vc)) {
       // Verbose tools: show full params as JSON
-      const line = formatToolStart(event.name, event.params, currentIteration, maxIter, gauge);
+      const line = formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge);
       process.stderr.write(line + "\n");
       process.stderr.write(dim(`  params: ${JSON.stringify(event.params, null, 2)}`) + "\n");
     } else if (verbosity !== "quiet") {
       // Normal: concise summary
       process.stderr.write(
-        formatToolStart(event.name, event.params, currentIteration, maxIter, gauge) + "\n",
+        formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge) + "\n",
       );
     }
   });
@@ -1176,8 +1290,8 @@ function setupEventHandlers(
       // Buffer the text — it might be thinking text before tool calls,
       // or it might be the final response. We'll know when tool:before
       // fires (discard buffer) or the loop ends (flush buffer to stdout).
-      textBuffer += event.content;
-      isBufferingText = true;
+      os.textBuffer += event.content;
+      os.isBufferingText = true;
     }
   });
 
@@ -1211,22 +1325,22 @@ function setupEventHandlers(
   // ─── Per-turn and session cost/token tracking ──────────────
 
   bus.on("cost:update", (event) => {
-    turnInputTokens += event.inputTokens;
-    turnOutputTokens += event.outputTokens;
-    turnCostDelta += event.totalCost;
-    sessionTotalInputTokens += event.inputTokens;
-    sessionTotalOutputTokens += event.outputTokens;
-    sessionTotalCost += event.totalCost;
+    os.turnInputTokens += event.inputTokens;
+    os.turnOutputTokens += event.outputTokens;
+    os.turnCostDelta += event.totalCost;
+    os.sessionTotalInputTokens += event.inputTokens;
+    os.sessionTotalOutputTokens += event.outputTokens;
+    os.sessionTotalCost += event.totalCost;
   });
 
   // Session-level iteration and tool tracking
   bus.on("iteration:start", () => {
-    sessionTotalIterations++;
+    os.sessionTotalIterations++;
   });
   bus.on("tool:before", (event) => {
     if (!event.name.startsWith("audit:")) {
-      sessionTotalToolCalls++;
-      sessionToolUsage.set(event.name, (sessionToolUsage.get(event.name) ?? 0) + 1);
+      os.sessionTotalToolCalls++;
+      os.sessionToolUsage.set(event.name, (os.sessionToolUsage.get(event.name) ?? 0) + 1);
     }
   });
 
@@ -1341,10 +1455,10 @@ Be concise and structured.${stateContext}`,
  * Flush buffered output and handle TaskCompletionStatus.
  * Falls back to result.lastText when the final response is empty.
  */
-function flushOutput(result: TaskLoopResult, verbosity: Verbosity): void {
-  if (textBuffer.trim()) {
-    if (hadToolCalls) process.stderr.write("\n");
-    process.stdout.write(textBuffer + "\n");
+function flushOutput(result: TaskLoopResult, verbosity: Verbosity, os: OutputState = outputState): void {
+  if (os.textBuffer.trim()) {
+    if (os.hadToolCalls) process.stderr.write("\n");
+    process.stdout.write(os.textBuffer + "\n");
   } else if (result.lastText?.trim()) {
     // No final response, but the LLM produced text earlier in the session
     if (verbosity !== "quiet") {
@@ -1359,7 +1473,7 @@ function flushOutput(result: TaskLoopResult, verbosity: Verbosity): void {
   if (verbosity !== "quiet") {
     switch (result.status) {
       case "empty_response":
-        if (!textBuffer.trim() && !result.lastText?.trim()) {
+        if (!os.textBuffer.trim() && !result.lastText?.trim()) {
           process.stderr.write(
             yellow("[warning] Agent completed but produced no output.") + "\n",
           );
@@ -1505,7 +1619,7 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     }
   }
 
-  resetOutputIteration();
+  outputState.resetTurn();
   const startTime = Date.now();
 
   const loop = new TaskLoop({
@@ -1538,10 +1652,10 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     const elapsed = Date.now() - startTime;
     process.stderr.write(formatTurnSummary({
       iterationCount: result.iterations,
-      toolCallCount: turnToolCallCount,
-      inputTokens: turnInputTokens,
-      outputTokens: turnOutputTokens,
-      costDelta: turnCostDelta,
+      toolCallCount: outputState.turnToolCallCount,
+      inputTokens: outputState.turnInputTokens,
+      outputTokens: outputState.turnOutputTokens,
+      costDelta: outputState.turnCostDelta,
       elapsedMs: elapsed,
     }) + "\n");
   }
@@ -1737,7 +1851,7 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
             process.stderr.write(yellow(`No changes to restore (workspace matches ${cpId}).`) + "\n");
           }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = extractErrorMessage(err);
           process.stderr.write(formatError(`Checkpoint restore failed: ${msg}`) + "\n");
         }
         rl.prompt();
@@ -1755,7 +1869,7 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
             process.stderr.write(diffOutput + "\n");
           }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = extractErrorMessage(err);
           process.stderr.write(formatError(`Checkpoint diff failed: ${msg}`) + "\n");
         }
         rl.prompt();
@@ -1810,7 +1924,7 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
           const result = await pluginManager.executeCommand(cmdName, cmdArgs);
           process.stderr.write(result + "\n");
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = extractErrorMessage(err);
           process.stderr.write(formatError(`Command error: ${msg}`) + "\n");
         }
         rl.prompt();
@@ -1827,7 +1941,7 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
 
     // ─── LLM Query ────────────────────────────────────────
     try {
-      resetOutputIteration();
+      outputState.resetTurn();
       const turnStart = Date.now();
       let result: TaskLoopResult;
 
@@ -1839,8 +1953,8 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
 
         // Turn separator header
         if (verbosity !== "quiet") {
-          const tokenInfo = currentTokens > 0
-            ? { estimated: currentTokens, max: maxContextTokens }
+          const tokenInfo = outputState.currentTokens > 0
+            ? { estimated: outputState.currentTokens, max: outputState.maxContextTokens }
             : undefined;
           const costInfoData = cumulativeCost > 0
             ? { totalCost: cumulativeCost }
@@ -1917,16 +2031,16 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
         const elapsed = Date.now() - turnStart;
         process.stderr.write(formatTurnSummary({
           iterationCount: result.iterations,
-          toolCallCount: turnToolCallCount,
-          inputTokens: turnInputTokens,
-          outputTokens: turnOutputTokens,
-          costDelta: turnCostDelta,
+          toolCallCount: outputState.turnToolCallCount,
+          inputTokens: outputState.turnInputTokens,
+          outputTokens: outputState.turnOutputTokens,
+          costDelta: outputState.turnCostDelta,
           elapsedMs: elapsed,
         }) + "\n");
       }
     } catch (err) {
       spinner.stop();
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractErrorMessage(err);
       process.stderr.write(formatError(msg) + "\n");
     }
 

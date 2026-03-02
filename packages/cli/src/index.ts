@@ -10,8 +10,9 @@
  */
 
 import { main } from "./main.js";
+import { extractErrorMessage } from "@devagent/core";
 
 main().catch((err) => {
-  console.error(err instanceof Error ? err.message : String(err));
+  console.error(extractErrorMessage(err));
   process.exit(1);
 });

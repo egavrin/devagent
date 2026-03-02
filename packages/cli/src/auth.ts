@@ -23,6 +23,7 @@ import {
   pollDeviceCodeToken,
   extractAccountIdFromIdToken,
   openUrl,
+  extractErrorMessage,
 } from "@devagent/core";
 import type { OAuthProviderConfig, CredentialInfo } from "@devagent/core";
 import { bold, cyan, dim, green, red, yellow } from "./format.js";
@@ -313,14 +314,9 @@ async function authLoginBrowserOAuth(
     // 8. Store credential
     storeOAuthCredential(providerId, tokens, accountId);
 
-    process.stderr.write("\n" + green("\u2713 Authentication successful!") + "\n");
-    if (accountId) {
-      process.stderr.write(dim("Account ID: " + accountId) + "\n");
-    }
-    process.stderr.write(dim("Use with: devagent --provider " + providerId + ' "your query"') + "\n");
+    showAuthSuccess(providerId, accountId);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write("\n" + red("\u2717 Authentication failed: " + msg) + "\n");
+    showAuthFailure(err);
   } finally {
     server.shutdown();
   }
@@ -383,14 +379,9 @@ async function authLoginChatGPTDeviceCode(
     // Step 6: Store credential
     storeOAuthCredential(providerId, tokens, accountId);
 
-    process.stderr.write("\n" + green("\u2713 Authentication successful!") + "\n");
-    if (accountId) {
-      process.stderr.write(dim("Account ID: " + accountId) + "\n");
-    }
-    process.stderr.write(dim("Use with: devagent --provider " + providerId + ' "your query"') + "\n");
+    showAuthSuccess(providerId, accountId);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write("\n" + red("\u2717 Authentication failed: " + msg) + "\n");
+    showAuthFailure(err);
   }
 }
 
@@ -443,14 +434,9 @@ async function authLoginDeviceCode(
     // 5. Store credential
     storeOAuthCredential(providerId, tokens, accountId);
 
-    process.stderr.write("\n" + green("\u2713 Authentication successful!") + "\n");
-    if (accountId) {
-      process.stderr.write(dim("Account ID: " + accountId) + "\n");
-    }
-    process.stderr.write(dim("Use with: devagent --provider " + providerId + ' "your query"') + "\n");
+    showAuthSuccess(providerId, accountId);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write("\n" + red("\u2717 Authentication failed: " + msg) + "\n");
+    showAuthFailure(err);
   }
 }
 
@@ -587,6 +573,23 @@ async function authLogout(): Promise<void> {
   } finally {
     rl.close();
   }
+}
+
+// ─── Auth Result Display ────────────────────────────────────
+
+/** Shared success message for all OAuth and device-code auth flows. */
+function showAuthSuccess(providerId: string, accountId?: string): void {
+  process.stderr.write("\n" + green("\u2713 Authentication successful!") + "\n");
+  if (accountId) {
+    process.stderr.write(dim("Account ID: " + accountId) + "\n");
+  }
+  process.stderr.write(dim("Use with: devagent --provider " + providerId + ' "your query"') + "\n");
+}
+
+/** Shared error message for all OAuth and device-code auth flows. */
+function showAuthFailure(err: unknown): void {
+  const msg = extractErrorMessage(err);
+  process.stderr.write("\n" + red("\u2717 Authentication failed: " + msg) + "\n");
 }
 
 // ─── Helpers ────────────────────────────────────────────────

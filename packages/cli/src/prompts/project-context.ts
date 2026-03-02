@@ -11,6 +11,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { extractErrorMessage } from "@devagent/core";
 
 interface InstructionFileSpec {
   readonly filename: string;
@@ -113,7 +114,7 @@ export function loadProjectContext(repoRoot: string): string | null {
     try {
       content = readFileSync(filePath, "utf-8");
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = extractErrorMessage(error);
       throw new Error(`Failed to read project instruction file "${filename}": ${message}`);
     }
 

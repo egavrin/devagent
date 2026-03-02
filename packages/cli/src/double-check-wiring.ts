@@ -6,10 +6,11 @@
  * simultaneously, each handling different file types.
  */
 
-import { spawn, execFile } from "node:child_process";
+import { execFile } from "node:child_process";
 import { extname } from "node:path";
-import { LSPClient } from "@devagent/tools";
+import { LSPClient, spawnAndCapture } from "@devagent/tools";
 import type { LSPServerConfig } from "@devagent/core";
+import { extractErrorMessage, LANGUAGE_EXTENSIONS } from "@devagent/core";
 import type { DiagnosticProvider, TestRunner, DoubleCheck } from "@devagent/engine";
 
 // ─── Language Map ───────────────────────────────────────────
@@ -62,7 +63,7 @@ const SHELLCHECK_PATTERN = /^In (?<file>.+) line (?<line>\d+):/;
 export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
   {
     languageId: "typescript",
-    extensions: [".ts", ".tsx", ".mts", ".cts"],
+    extensions: LANGUAGE_EXTENSIONS.typescript,
     defaultCommand: "typescript-language-server",
     defaultArgs: ["--stdio"],
     fallbackCheck: {
@@ -76,14 +77,14 @@ export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
   },
   {
     languageId: "javascript",
-    extensions: [".js", ".jsx", ".mjs", ".cjs"],
+    extensions: LANGUAGE_EXTENSIONS.javascript,
     defaultCommand: "typescript-language-server",
     defaultArgs: ["--stdio"],
     // JS projects often lack tsconfig; tsc fallback only works with one
   },
   {
     languageId: "python",
-    extensions: [".py", ".pyi"],
+    extensions: LANGUAGE_EXTENSIONS.python,
     defaultCommand: "pyright-langserver",
     defaultArgs: ["--stdio"],
     fallbackCheck: {
@@ -95,7 +96,7 @@ export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
   },
   {
     languageId: "c",
-    extensions: [".c", ".h"],
+    extensions: LANGUAGE_EXTENSIONS.c,
     defaultCommand: "clangd",
     defaultArgs: [],
     fallbackCheck: {
@@ -107,7 +108,7 @@ export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
   },
   {
     languageId: "cpp",
-    extensions: [".cpp", ".cxx", ".cc", ".hpp", ".hxx", ".hh"],
+    extensions: LANGUAGE_EXTENSIONS.cpp,
     defaultCommand: "clangd",
     defaultArgs: [],
     fallbackCheck: {
@@ -119,7 +120,7 @@ export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
   },
   {
     languageId: "rust",
-    extensions: [".rs"],
+    extensions: LANGUAGE_EXTENSIONS.rust,
     defaultCommand: "rust-analyzer",
     defaultArgs: [],
     fallbackCheck: {
@@ -131,7 +132,7 @@ export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
   },
   {
     languageId: "shellscript",
-    extensions: [".sh", ".bash", ".zsh"],
+    extensions: LANGUAGE_EXTENSIONS.shellscript,
     defaultCommand: "bash-language-server",
     defaultArgs: ["start"],
     fallbackCheck: {
@@ -143,7 +144,7 @@ export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
   },
   {
     languageId: "arkts",
-    extensions: [".ets"],
+    extensions: LANGUAGE_EXTENSIONS.arkts,
     defaultCommand: "typescript-language-server",
     defaultArgs: ["--stdio"],
     // ArkTS uses dedicated @devagent/arkts provider, not compiler fallback
@@ -306,7 +307,7 @@ export function createRoutingDiagnosticProvider(
       try {
         await lifecycle.start();
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         throw new Error(`Failed to restart LSP client for ${filePath}: ${message}`);
       }
     }
@@ -322,59 +323,6 @@ export function createRoutingDiagnosticProvider(
 // ─── Compiler Fallback Provider ──────────────────────────────
 
 const COMPILER_MAX_OUTPUT = 50_000;
-
-/**
- * Spawn a subprocess and capture output (used by compiler fallback).
- */
-function spawnCapture(
-  command: string,
-  args: string[],
-  cwd: string,
-  timeout: number,
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolveP) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let killed = false;
-
-    child.stdout.on("data", (data: Buffer) => {
-      const chunk = data.toString();
-      if (stdout.length < COMPILER_MAX_OUTPUT) {
-        stdout += chunk.substring(0, COMPILER_MAX_OUTPUT - stdout.length);
-      }
-    });
-
-    child.stderr.on("data", (data: Buffer) => {
-      const chunk = data.toString();
-      if (stderr.length < COMPILER_MAX_OUTPUT) {
-        stderr += chunk.substring(0, COMPILER_MAX_OUTPUT - stderr.length);
-      }
-    });
-
-    child.on("close", (code) => {
-      if (killed) return;
-      resolveP({ exitCode: code ?? 1, stdout, stderr });
-    });
-
-    child.on("error", (err) => {
-      if (killed) return;
-      resolveP({ exitCode: 1, stdout: "", stderr: err.message });
-    });
-
-    const timer = setTimeout(() => {
-      killed = true;
-      child.kill("SIGTERM");
-      resolveP({ exitCode: 1, stdout, stderr: `Timed out after ${timeout}ms` });
-    }, timeout);
-
-    child.on("close", () => clearTimeout(timer));
-  });
-}
 
 /**
  * Create a DiagnosticProvider that runs language-specific compiler/checker
@@ -440,7 +388,11 @@ export function createCompilerFallbackProvider(
       : [...cmdArgs];
 
     try {
-      const result = await spawnCapture(cmd, finalArgs, repoRoot, timeout);
+      const result = await spawnAndCapture(cmd, finalArgs, {
+        cwd: repoRoot,
+        timeout,
+        maxBytes: COMPILER_MAX_OUTPUT,
+      });
       if (result.exitCode === 0) return []; // No errors
       const output = result.stderr || result.stdout;
       return parseDiagnostics(output, diagnosticPattern, cmd, filePath);
@@ -481,70 +433,36 @@ export function createCompilerFallbackProvider(
 // ─── Shell Test Runner ─────────────────────────────────────
 
 const TEST_TIMEOUT_MS = 60_000;
-const MAX_OUTPUT_BYTES = 50_000;
+const TEST_MAX_OUTPUT_BYTES = 50_000;
 
 /**
  * Run a single shell command and return success/output.
  */
-function runShellCommand(
+async function runShellCommand(
   command: string,
   cwd: string,
 ): Promise<{ success: boolean; output: string }> {
-  return new Promise((resolveP) => {
-    const child = spawn("sh", ["-c", command], {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let killed = false;
-
-    child.stdout.on("data", (data: Buffer) => {
-      const chunk = data.toString();
-      if (stdout.length < MAX_OUTPUT_BYTES) {
-        stdout += chunk.substring(0, MAX_OUTPUT_BYTES - stdout.length);
-      }
-    });
-
-    child.stderr.on("data", (data: Buffer) => {
-      const chunk = data.toString();
-      if (stderr.length < MAX_OUTPUT_BYTES) {
-        stderr += chunk.substring(0, MAX_OUTPUT_BYTES - stderr.length);
-      }
-    });
-
-    child.on("close", (code) => {
-      if (killed) return;
-      const combined = stderr
-        ? `${stdout}\n--- stderr ---\n${stderr}`
-        : stdout;
-      resolveP({
-        success: code === 0,
-        output: combined || "(no output)",
-      });
-    });
-
-    child.on("error", (err) => {
-      if (killed) return;
-      resolveP({
-        success: false,
-        output: `Failed to run test: ${err.message}`,
-      });
-    });
-
-    // Timeout
-    const timer = setTimeout(() => {
-      killed = true;
-      child.kill("SIGTERM");
-      resolveP({
-        success: false,
-        output: `Test command timed out after ${TEST_TIMEOUT_MS}ms`,
-      });
-    }, TEST_TIMEOUT_MS);
-
-    child.on("close", () => clearTimeout(timer));
+  const result = await spawnAndCapture("sh", ["-c", command], {
+    cwd,
+    timeout: TEST_TIMEOUT_MS,
+    maxBytes: TEST_MAX_OUTPUT_BYTES,
   });
+
+  if (result.timedOut) {
+    return {
+      success: false,
+      output: `Test command timed out after ${TEST_TIMEOUT_MS}ms`,
+    };
+  }
+
+  const combined = result.stderr
+    ? `${result.stdout}\n--- stderr ---\n${result.stderr}`
+    : result.stdout;
+
+  return {
+    success: result.exitCode === 0,
+    output: combined || "(no output)",
+  };
 }
 
 /**
