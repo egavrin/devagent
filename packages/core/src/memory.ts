@@ -80,9 +80,13 @@ const MEMORY_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS memory_schema_version (
     version INTEGER PRIMARY KEY
   )`,
+  `CREATE TABLE IF NOT EXISTS maintenance_meta (
+    key TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+  )`,
 ];
 
-const MEMORY_SCHEMA_VERSION = 1;
+const MEMORY_SCHEMA_VERSION = 2;
 
 // ─── Decay Config ────────────────────────────────────────────
 
@@ -131,10 +135,38 @@ export class MemoryStore {
       .get() as { version: number } | null;
 
     if (!row) {
+      // Fresh database — all tables already created above, just record the version.
       this.db
         .prepare("INSERT INTO memory_schema_version (version) VALUES (?)")
         .run(MEMORY_SCHEMA_VERSION);
+    } else if (row.version < MEMORY_SCHEMA_VERSION) {
+      // Run migrations for older schema versions.
+      this.migrateSchema(row.version);
     }
+  }
+
+  /**
+   * Apply incremental migrations from `fromVersion` up to MEMORY_SCHEMA_VERSION.
+   */
+  private migrateSchema(fromVersion: number): void {
+    let v = fromVersion;
+
+    if (v < 2) {
+      // v1 -> v2: add maintenance_meta table (already created via CREATE TABLE IF NOT EXISTS
+      // in the schema array above, but we need to bump the recorded version).
+      this.db.exec(
+        `CREATE TABLE IF NOT EXISTS maintenance_meta (
+          key TEXT PRIMARY KEY,
+          value INTEGER NOT NULL
+        )`,
+      );
+      v = 2;
+    }
+
+    // Record the new version.
+    this.db
+      .prepare("UPDATE memory_schema_version SET version = ?")
+      .run(v);
   }
 
   // ─── Store / Update ──────────────────────────────────────────
@@ -422,16 +454,61 @@ export class MemoryStore {
     return mergedCount;
   }
 
+  // ─── Startup Counter ─────────────────────────────────────
+
+  /**
+   * Increment the startup counter stored in the DB and return the new value.
+   */
+  private incrementStartupCount(): number {
+    const row = this.db
+      .prepare("SELECT value FROM maintenance_meta WHERE key = 'startup_count'")
+      .get() as { value: number } | null;
+
+    const next = (row?.value ?? 0) + 1;
+
+    this.db
+      .prepare(
+        `INSERT INTO maintenance_meta (key, value) VALUES ('startup_count', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(next);
+
+    return next;
+  }
+
+  /**
+   * Reset the startup counter to zero (called after dedup runs).
+   */
+  private resetStartupCount(): void {
+    this.db
+      .prepare(
+        `INSERT INTO maintenance_meta (key, value) VALUES ('startup_count', 0)
+         ON CONFLICT(key) DO UPDATE SET value = 0`,
+      )
+      .run();
+  }
+
   // ─── Maintenance ──────────────────────────────────────────
 
   /**
-   * Run startup maintenance: apply decay, prune stale memories, deduplicate.
-   * Call once at process start, not per-turn.
+   * Run startup maintenance: always apply decay + prune (cheap).
+   * Only run deduplicate() when the startup counter reaches `dedupEveryStartups`.
+   *
+   * @param dedupEveryStartups - Run dedup every N startups. 0 or 1 means every time. Default: 10.
    */
-  runMaintenance(): { decayed: number; pruned: number; merged: number } {
+  runMaintenance(dedupEveryStartups: number = 10): { decayed: number; pruned: number; merged: number } {
     const decayed = this.applyDecay();
     const pruned = this.prune();
-    const merged = this.deduplicate();
+
+    const threshold = Math.max(1, dedupEveryStartups);
+    const count = this.incrementStartupCount();
+
+    let merged = 0;
+    if (count >= threshold) {
+      merged = this.deduplicate();
+      this.resetStartupCount();
+    }
+
     return { decayed, pruned, merged };
   }
 

@@ -9,7 +9,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { CredentialStore } from "./credentials.js";
-import { ConfigError } from "./errors.js";
+import { ConfigError , extractErrorMessage } from "./errors.js";
+import { LANGUAGE_EXTENSIONS } from "./languages.js";
 import type {
   DevAgentConfig,
   ApprovalPolicy,
@@ -58,6 +59,7 @@ const DEFAULT_MEMORY: MemoryConfig = {
   promptMaxMemories: 10,
   promptMaxChars: 2000,
   maintenanceOnStartup: true,
+  dedupEveryStartups: 10,
 };
 
 const DEFAULT_ARKTS: ArkTSConfig = {
@@ -211,6 +213,8 @@ function parseMemory(
     promptMaxMemories: raw["prompt_max_memories"] as number | undefined,
     promptMaxChars: raw["prompt_max_chars"] as number | undefined,
     maintenanceOnStartup: raw["maintenance_on_startup"] as boolean | undefined,
+    dedupEveryStartups: (raw["dedup_every_startups"] ??
+      raw["dedupEveryStartups"]) as number | undefined,
   };
 }
 
@@ -295,7 +299,7 @@ export function loadConfig(
         fileConfig = readTomlFile(configPath);
         break; // Use first found config file
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         throw new Error(
           `Failed to parse config file "${configPath}": ${message}`,
         );
@@ -533,18 +537,8 @@ export function loadConfig(
 function getLanguageDefaults(
   languageId: string,
 ): { extensions: string[] } | undefined {
-  const map: Record<string, string[]> = {
-    typescript: [".ts", ".tsx", ".mts", ".cts"],
-    javascript: [".js", ".jsx", ".mjs", ".cjs"],
-    python: [".py", ".pyi"],
-    c: [".c", ".h"],
-    cpp: [".cpp", ".cxx", ".cc", ".hpp", ".hxx", ".hh"],
-    rust: [".rs"],
-    shellscript: [".sh", ".bash", ".zsh"],
-    arkts: [".ets"],
-  };
-  const exts = map[languageId];
-  return exts ? { extensions: exts } : undefined;
+  const exts = LANGUAGE_EXTENSIONS[languageId];
+  return exts ? { extensions: [...exts] } : undefined;
 }
 
 /**
@@ -563,43 +557,46 @@ function stripUndefined<T extends Record<string, unknown>>(
 }
 
 /**
- * Resolve the project root by searching for .devagent.toml or .git upward.
+ * Resolve the project root by walking upward once, checking ALL markers at
+ * each directory level. Priority order (highest first):
+ *   1. .devagent.toml / devagent.toml  — immediate return
+ *   2. package.json (start dir only)   — remembered as fallback
+ *   3. .git                            — first match remembered as fallback
  */
 export function findProjectRoot(startDir?: string): string | null {
-  let dir = resolve(startDir ?? process.cwd());
+  const start = resolve(startDir ?? process.cwd());
   const root = resolve("/");
 
-  // First pass: look for devagent config (highest priority)
-  let searchDir = dir;
-  while (searchDir !== root) {
+  let gitFallback: string | null = null;
+  let packageJsonFallback: string | null = null;
+  let dir = start;
+
+  while (dir !== root) {
+    // Highest priority: devagent config — return immediately
     if (
-      existsSync(join(searchDir, ".devagent.toml")) ||
-      existsSync(join(searchDir, "devagent.toml"))
+      existsSync(join(dir, ".devagent.toml")) ||
+      existsSync(join(dir, "devagent.toml"))
     ) {
-      return searchDir;
+      return dir;
     }
-    const parent = resolve(searchDir, "..");
-    if (parent === searchDir) break;
-    searchDir = parent;
-  }
 
-  // Second pass: use cwd if it has package.json (monorepo workspace root)
-  if (existsSync(join(dir, "package.json"))) {
-    return dir;
-  }
-
-  // Third pass: walk up for .git
-  searchDir = dir;
-  while (searchDir !== root) {
-    if (existsSync(join(searchDir, ".git"))) {
-      return searchDir;
+    // package.json fallback — only at the starting directory
+    if (dir === start && packageJsonFallback === null && existsSync(join(dir, "package.json"))) {
+      packageJsonFallback = dir;
     }
-    const parent = resolve(searchDir, "..");
-    if (parent === searchDir) break;
-    searchDir = parent;
+
+    // .git fallback — keep the first (closest) match
+    if (gitFallback === null && existsSync(join(dir, ".git"))) {
+      gitFallback = dir;
+    }
+
+    const parent = resolve(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
   }
 
-  return null;
+  // Fall back: package.json at start dir takes priority over .git
+  return packageJsonFallback ?? gitFallback ?? null;
 }
 
 // ─── OAuth Credential Resolution ────────────────────────────
@@ -662,7 +659,7 @@ export async function resolveProviderCredentials(
         credentialStore.set(key, updated);
         accessToken = updated.accessToken;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = extractErrorMessage(err);
         throw new OAuthError(
           `Failed to refresh OAuth token for "${key}": ${msg}. Run "devagent auth login" to re-authenticate.`,
         );
@@ -687,7 +684,7 @@ export async function resolveProviderCredentials(
           baseUrl: session.endpoint ?? existingConfig.baseUrl,
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = extractErrorMessage(err);
         throw new OAuthError(
           `Failed to obtain Copilot session token: ${msg}. Run "devagent auth login" to re-authenticate.`,
         );

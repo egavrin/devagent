@@ -4,6 +4,7 @@
  */
 
 import type { ToolResult, StreamChunk, Message, ToolCallRequest } from "./types.js";
+import { extractErrorMessage } from "./errors.js";
 
 // ─── Event Definitions ───────────────────────────────────────
 
@@ -182,7 +183,7 @@ export class EventBus {
         // Fail fast: surface handler errors immediately.
         // Don't swallow — log and re-throw if fatal.
         const message =
-          err instanceof Error ? err.message : String(err);
+          extractErrorMessage(err);
         console.error(
           `[EventBus] Handler error on "${key}": ${message}`,
         );

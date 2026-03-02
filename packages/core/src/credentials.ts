@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { CredentialError } from "./errors.js";
+import { CredentialError , extractErrorMessage } from "./errors.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -72,7 +72,7 @@ export class CredentialStore {
     try {
       raw = readFileSync(this.filePath, "utf-8");
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractErrorMessage(err);
       throw new CredentialError(`Failed to read credentials file: ${msg}`);
     }
 
@@ -139,7 +139,7 @@ export class CredentialStore {
         mode: 0o600,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractErrorMessage(err);
       throw new CredentialError(`Failed to write credentials file: ${msg}`);
     }
   }

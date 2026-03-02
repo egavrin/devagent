@@ -180,6 +180,9 @@ export { openUrl } from "./open-url.js";
 export { EventLogger } from "./event-logger.js";
 export type { LogEntry } from "./event-logger.js";
 
+// Language extensions
+export { LANGUAGE_EXTENSIONS, detectLanguageFromExtension } from "./languages.js";
+
 // Errors
 export {
   DevAgentError,
@@ -197,4 +200,5 @@ export {
   SessionError,
   CredentialError,
   OAuthError,
+  extractErrorMessage,
 } from "./errors.js";

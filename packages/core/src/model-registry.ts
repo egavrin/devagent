@@ -16,6 +16,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ModelCapabilities } from "./types.js";
+import { extractErrorMessage } from "./errors.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -140,7 +141,7 @@ function loadModelsFromDir(dir: string): void {
     try {
       loadModelFile(filePath);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       console.error(`[model-registry] Failed to load ${filePath}: ${message}`);
     }
   }

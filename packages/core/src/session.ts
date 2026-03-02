@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { Session, Message, CostRecord } from "./types.js";
 import { MessageRole } from "./types.js";
-import { SessionError } from "./errors.js";
+import { SessionError , extractErrorMessage } from "./errors.js";
 
 // ─── Schema ──────────────────────────────────────────────────
 
@@ -101,7 +101,7 @@ export class SessionStore {
     try {
       this.db = new Database(dbPath);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractErrorMessage(err);
       throw new SessionError(`Failed to open session database: ${msg}`);
     }
 
@@ -315,7 +315,7 @@ export class SessionStore {
    * Accepts any JSON-serializable object; the caller is responsible for
    * type-checking against SessionStateJSON from @devagent/engine.
    */
-  saveSessionState(sessionId: string, state: Record<string, unknown>): void {
+  saveSessionState(sessionId: string, state: object): void {
     const now = Date.now();
     const json = JSON.stringify(state);
     this.db

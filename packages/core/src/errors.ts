@@ -136,3 +136,10 @@ export class OAuthError extends CredentialError {
     this.name = "OAuthError";
   }
 }
+
+// ─── Utility ────────────────────────────────────────────────
+
+/** Extract a human-readable message from an unknown catch value. */
+export function extractErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

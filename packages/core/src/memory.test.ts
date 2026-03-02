@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { MemoryStore } from "./memory.js";
-import { BUN_SQLITE_AVAILABLE } from "./bun-sqlite.js";
+import { BUN_SQLITE_AVAILABLE, Database } from "./bun-sqlite.js";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
@@ -295,7 +295,7 @@ describe.skipIf(!BUN_SQLITE_AVAILABLE)("MemoryStore", () => {
 
   // ─── runMaintenance ─────────────────────────────────────────
 
-  it("runMaintenance runs decay, prune, and dedup together", () => {
+  it("runMaintenance runs decay, prune, and dedup together when dedupEveryStartups=1", () => {
     // Old memory (will decay)
     const id1 = store.store("pattern", "old", "Old pattern");
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
@@ -314,7 +314,8 @@ describe.skipIf(!BUN_SQLITE_AVAILABLE)("MemoryStore", () => {
 
     expect(store.size).toBe(5);
 
-    const { decayed, pruned, merged } = store.runMaintenance();
+    // Pass dedupEveryStartups=1 so dedup runs on every call
+    const { decayed, pruned, merged } = store.runMaintenance(1);
 
     expect(decayed).toBeGreaterThanOrEqual(1); // old pattern decayed
     expect(pruned).toBeGreaterThanOrEqual(1);  // stale mistake pruned
@@ -322,5 +323,116 @@ describe.skipIf(!BUN_SQLITE_AVAILABLE)("MemoryStore", () => {
 
     // Theme preference and surviving dup should remain (plus maybe the decayed one if still above threshold)
     expect(store.size).toBeLessThanOrEqual(3);
+  });
+
+  // ─── Dedup Frequency Gating ─────────────────────────────────
+
+  it("runMaintenance skips dedup before startup threshold is reached", () => {
+    // Insert duplicates that would be merged
+    store.store("decision", "dup-a", "Use SQLite for storage persistence and data management", { relevance: 0.8 });
+    store.store("decision", "dup-b", "Use SQLite for storage persistence and data management always", { relevance: 0.4 });
+
+    expect(store.size).toBe(2);
+
+    // With threshold=3, the first two calls should NOT trigger dedup
+    const r1 = store.runMaintenance(3);
+    expect(r1.merged).toBe(0);
+    expect(store.size).toBe(2); // both still present
+
+    const r2 = store.runMaintenance(3);
+    expect(r2.merged).toBe(0);
+    expect(store.size).toBe(2);
+
+    // Third call hits the threshold — dedup should fire
+    const r3 = store.runMaintenance(3);
+    expect(r3.merged).toBe(1);
+    expect(store.size).toBe(1);
+  });
+
+  it("runMaintenance resets counter after dedup runs", () => {
+    // Insert duplicates
+    store.store("decision", "dup-a", "Use SQLite for storage persistence and data management", { relevance: 0.8 });
+    store.store("decision", "dup-b", "Use SQLite for storage persistence and data management always", { relevance: 0.4 });
+
+    // Trigger dedup at threshold=1 (runs immediately)
+    const r1 = store.runMaintenance(1);
+    expect(r1.merged).toBe(1);
+
+    // Re-insert duplicates with distinct content (unrelated to round-1 survivor)
+    store.store("pattern", "dup-c", "Always prefer functional React components with hooks and composition", { relevance: 0.7 });
+    store.store("pattern", "dup-d", "Always prefer functional React components with hooks and composition patterns", { relevance: 0.3 });
+
+    // Counter was reset — with threshold=2, the next call should NOT dedup
+    const r2 = store.runMaintenance(2);
+    expect(r2.merged).toBe(0);
+
+    // Second call hits the threshold — dedup fires
+    const r3 = store.runMaintenance(2);
+    expect(r3.merged).toBe(1);
+  });
+
+  // ─── Schema Migration ──────────────────────────────────────
+
+  it("migrates a v1 database (no maintenance_meta) to v2 and runMaintenance works", () => {
+    // Close the store created by beforeEach — we will set up a v1 DB manually
+    store.close();
+
+    const v1DbPath = join(TEST_DIR, "v1-migration.db");
+
+    // Create a v1-era database: has memories table + indexes + schema_version, but NO maintenance_meta
+    const rawDb = new Database(v1DbPath);
+    rawDb.exec("PRAGMA journal_mode = WAL");
+    rawDb.exec("PRAGMA foreign_keys = ON");
+    rawDb.exec(`CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      key TEXT NOT NULL,
+      content TEXT NOT NULL,
+      relevance REAL NOT NULL DEFAULT 1.0,
+      tags TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      access_count INTEGER NOT NULL DEFAULT 0,
+      session_id TEXT
+    )`);
+    rawDb.exec(`CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)`);
+    rawDb.exec(`CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key)`);
+    rawDb.exec(`CREATE INDEX IF NOT EXISTS idx_memories_relevance ON memories(relevance DESC)`);
+    rawDb.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_category_key ON memories(category, key)`);
+    rawDb.exec(`CREATE TABLE IF NOT EXISTS memory_schema_version (version INTEGER PRIMARY KEY)`);
+    rawDb.exec(`INSERT INTO memory_schema_version (version) VALUES (1)`);
+
+    // Seed a memory so the DB is non-empty
+    rawDb.exec(
+      `INSERT INTO memories (id, category, key, content, relevance, tags, created_at, updated_at, access_count, session_id)
+       VALUES ('test-id-1', 'pattern', 'v1-pattern', 'old v1 content', 1.0, '[]', ${Date.now()}, ${Date.now()}, 0, NULL)`,
+    );
+    rawDb.close();
+
+    // Now open with MemoryStore — migration should create maintenance_meta and bump version to 2
+    const migratedStore = new MemoryStore({ dbPath: v1DbPath });
+
+    try {
+      // Verify old data survived
+      const mem = migratedStore.recall("pattern", "v1-pattern");
+      expect(mem).not.toBeNull();
+      expect(mem!.content).toBe("old v1 content");
+
+      // Verify runMaintenance works (would crash on "no such table: maintenance_meta" before fix)
+      const result = migratedStore.runMaintenance(1);
+      expect(result.decayed).toBeGreaterThanOrEqual(0);
+      expect(result.pruned).toBeGreaterThanOrEqual(0);
+      expect(result.merged).toBeGreaterThanOrEqual(0);
+
+      // Verify schema version was bumped to 2
+      const rawCheck = migratedStore as unknown as {
+        db: { prepare: (sql: string) => { get: () => { version: number } | null } };
+      };
+      const versionRow = rawCheck.db.prepare("SELECT version FROM memory_schema_version LIMIT 1").get();
+      expect(versionRow).not.toBeNull();
+      expect(versionRow!.version).toBe(2);
+    } finally {
+      migratedStore.close();
+    }
   });
 });

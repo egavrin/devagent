@@ -308,6 +308,8 @@ export interface MemoryConfig {
   readonly promptMaxChars: number;
   /** Run maintenance (decay + prune + dedup) on startup. Default: true. */
   readonly maintenanceOnStartup: boolean;
+  /** Run deduplicate() every N startups (decay+prune always run). Default: 10. */
+  readonly dedupEveryStartups: number;
 }
 
 export interface ArkTSConfig {
