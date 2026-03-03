@@ -40,6 +40,8 @@ import { formatToolSummary } from "./tool-summary-formatter.js";
 // preserving backward compatibility for external consumers.
 export { summarizeDiff, summarizeTestOutput, extractStructuralDigest } from "./tool-summary-formatter.js";
 import { StagnationDetector } from "./stagnation-detector.js";
+import { parseToolScriptStepsArg } from "./tool-script.js";
+import type { ToolScriptStep } from "./tool-script.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -99,13 +101,7 @@ interface PendingToolCall {
 interface NormalizedToolCall {
   readonly toolCall: PendingToolCall;
   readonly bypassResult: ToolResult | null;
-  readonly scriptSteps: ToolScriptStepLike[] | null;
-}
-
-interface ToolScriptStepLike {
-  readonly id: string;
-  readonly tool: string;
-  readonly args: Record<string, unknown>;
+  readonly scriptSteps: ToolScriptStep[] | null;
 }
 
 interface ToolCallBatch {
@@ -1178,8 +1174,8 @@ export class TaskLoop {
     if (!parsedSteps) return { toolCall, bypassResult: null, scriptSteps: null };
     const referencedStepIds = collectReferencedStepIds(parsedSteps);
 
-    const dedupedSteps: ToolScriptStepLike[] = [];
-    const skippedSteps: ToolScriptStepLike[] = [];
+    const dedupedSteps: ToolScriptStep[] = [];
+    const skippedSteps: ToolScriptStep[] = [];
     const seenInBatch = new Set<string>();
 
     for (const step of parsedSteps) {
@@ -1221,7 +1217,7 @@ export class TaskLoop {
       ...toolCall,
       arguments: {
         ...toolCall.arguments,
-        steps: JSON.stringify(dedupedSteps),
+        steps: dedupedSteps,
       },
     };
 
@@ -1233,11 +1229,11 @@ export class TaskLoop {
   }
 
   private collectSuccessfulScriptStepResults(
-    steps: ReadonlyArray<ToolScriptStepLike>,
+    steps: ReadonlyArray<ToolScriptStep>,
     scriptOutput: string,
-  ): Array<{ step: ToolScriptStepLike; output: string }> {
+  ): Array<{ step: ToolScriptStep; output: string }> {
     const sections = parseToolScriptOutputSections(scriptOutput);
-    const successful: Array<{ step: ToolScriptStepLike; output: string }> = [];
+    const successful: Array<{ step: ToolScriptStep; output: string }> = [];
     for (const step of steps) {
       const section = sections.get(step.id);
       if (!section || section.failed) continue;
@@ -1850,35 +1846,9 @@ function normalizeArgsForReadonlyKey(value: unknown): unknown {
   return value;
 }
 
-function parseToolScriptStepsArg(raw: unknown): ToolScriptStepLike[] | null {
-  if (typeof raw !== "string") return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return null;
-    const steps: ToolScriptStepLike[] = [];
-    for (const entry of parsed) {
-      if (!entry || typeof entry !== "object") return null;
-      const step = entry as Record<string, unknown>;
-      const id = step["id"];
-      const tool = step["tool"];
-      const args = step["args"];
-      if (typeof id !== "string" || typeof tool !== "string" || !args || typeof args !== "object") {
-        return null;
-      }
-      steps.push({
-        id,
-        tool,
-        args: { ...(args as Record<string, unknown>) },
-      });
-    }
-    return steps;
-  } catch {
-    return null;
-  }
-}
 
 function collectReferencedStepIds(
-  steps: ReadonlyArray<ToolScriptStepLike>,
+  steps: ReadonlyArray<ToolScriptStep>,
 ): Set<string> {
   const referenced = new Set<string>();
   for (const step of steps) {

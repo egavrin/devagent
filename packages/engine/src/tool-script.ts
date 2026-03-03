@@ -27,6 +27,53 @@ export interface ToolScript {
   readonly steps: ReadonlyArray<ToolScriptStep>;
 }
 
+/**
+ * Parse a raw `steps` argument from provider output into validated steps.
+ * Accepts both arrays (primary path) and JSON strings (legacy fallback).
+ * Returns null if the input is malformed.
+ */
+export function parseToolScriptStepsArg(raw: unknown): ToolScriptStep[] | null {
+  let entries: unknown[];
+  if (Array.isArray(raw)) {
+    entries = raw;
+  } else if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return null;
+      entries = parsed;
+    } catch {
+      return null;
+    }
+  } else {
+    return null;
+  }
+
+  const steps: ToolScriptStep[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") return null;
+    const step = entry as Record<string, unknown>;
+    const id = step["id"];
+    const tool = step["tool"];
+    let args = step["args"];
+    if (typeof args === "string") {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        return null;
+      }
+    }
+    if (typeof id !== "string" || typeof tool !== "string" || !args || typeof args !== "object") {
+      return null;
+    }
+    steps.push({
+      id,
+      tool,
+      args: { ...(args as Record<string, unknown>) },
+    });
+  }
+  return steps;
+}
+
 export interface StepResult {
   readonly id: string;
   readonly tool: string;

@@ -821,7 +821,7 @@ describe("createToolScriptTool", () => {
     expect(tool.paramSchema.required).toContain("steps");
   });
 
-  it("parses JSON and returns formatted output", async () => {
+  it("accepts array steps and returns formatted output", async () => {
     registry.register(
       makeReadonlyTool("find_files", async () =>
         successResult("a.ts\nb.ts"),
@@ -836,14 +836,10 @@ describe("createToolScriptTool", () => {
     const tool = createToolScriptTool({ registry, bus });
     const result = await tool.handler(
       {
-        steps: JSON.stringify([
+        steps: [
           { id: "find", tool: "find_files", args: { pattern: "*.ts" } },
-          {
-            id: "read",
-            tool: "read_file",
-            args: { path: "$find.lines[0]" },
-          },
-        ]),
+          { id: "read", tool: "read_file", args: { path: "$find.lines[0]" } },
+        ],
       },
       defaultContext,
     );
@@ -856,7 +852,28 @@ describe("createToolScriptTool", () => {
     expect(result.output).toContain("2/2 steps succeeded");
   });
 
-  it("returns error on invalid JSON", async () => {
+  it("accepts JSON string steps as legacy fallback", async () => {
+    registry.register(
+      makeReadonlyTool("find_files", async () =>
+        successResult("a.ts"),
+      ),
+    );
+
+    const tool = createToolScriptTool({ registry, bus });
+    const result = await tool.handler(
+      {
+        steps: JSON.stringify([
+          { id: "find", tool: "find_files", args: { pattern: "*.ts" } },
+        ]),
+      },
+      defaultContext,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Step find (find_files)");
+  });
+
+  it("returns error on invalid JSON string", async () => {
     const tool = createToolScriptTool({ registry, bus });
     const result = await tool.handler(
       { steps: "not valid json {{{" },
@@ -864,10 +881,10 @@ describe("createToolScriptTool", () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("Invalid JSON");
+    expect(result.error).toContain("Invalid steps parameter");
   });
 
-  it("returns error on non-array JSON", async () => {
+  it("returns error on non-array JSON string", async () => {
     const tool = createToolScriptTool({ registry, bus });
     const result = await tool.handler(
       { steps: '{"not": "array"}' },
@@ -875,6 +892,54 @@ describe("createToolScriptTool", () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("JSON array");
+    expect(result.error).toContain("Invalid steps parameter");
+  });
+
+  it("returns error on non-array/non-string input", async () => {
+    const tool = createToolScriptTool({ registry, bus });
+    const result = await tool.handler(
+      { steps: 42 },
+      defaultContext,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Invalid steps parameter");
+  });
+
+  it("parses JSON-encoded string args from strict-mode providers", async () => {
+    registry.register(
+      makeReadonlyTool("find_files", async (params) =>
+        successResult(`found: ${params["pattern"]}`),
+      ),
+    );
+
+    const tool = createToolScriptTool({ registry, bus });
+    // Strict-mode providers (OpenAI) send args as a JSON string per the schema
+    const result = await tool.handler(
+      {
+        steps: [
+          { id: "find", tool: "find_files", args: '{"pattern":"**/*.ts"}' },
+        ],
+      },
+      defaultContext,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("found: **/*.ts");
+  });
+
+  it("returns error on invalid JSON in string args", async () => {
+    const tool = createToolScriptTool({ registry, bus });
+    const result = await tool.handler(
+      {
+        steps: [
+          { id: "find", tool: "find_files", args: "{broken json" },
+        ],
+      },
+      defaultContext,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Invalid steps parameter");
   });
 });

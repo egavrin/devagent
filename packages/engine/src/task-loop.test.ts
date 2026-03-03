@@ -3897,7 +3897,8 @@ describe("TaskLoop", () => {
         resultSchema: { type: "object" },
         handler: async (params) => {
           scriptHandlerCalls++;
-          const steps = JSON.parse(params["steps"] as string) as Array<{
+          const raw = params["steps"];
+          const steps = (Array.isArray(raw) ? raw : JSON.parse(raw as string)) as Array<{
             id: string;
             tool: string;
             args: { path?: string };
@@ -3983,7 +3984,8 @@ describe("TaskLoop", () => {
         },
         resultSchema: { type: "object" },
         handler: async (params) => {
-          const steps = JSON.parse(params["steps"] as string) as Array<{ id: string; tool: string }>;
+          const raw = params["steps"];
+          const steps = (Array.isArray(raw) ? raw : JSON.parse(raw as string)) as Array<{ id: string; tool: string }>;
           seenStepIds.push(steps.map((s) => s.id));
           return {
             success: true,

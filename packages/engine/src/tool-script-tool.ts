@@ -8,10 +8,8 @@
 
 import type { ToolSpec, ToolContext } from "@devagent/core";
 import type { EventBus } from "@devagent/core";
-import { extractErrorMessage } from "@devagent/core";
 import type { ToolRegistry } from "@devagent/tools";
-import { ToolScriptEngine } from "./tool-script.js";
-import type { ToolScriptStep } from "./tool-script.js";
+import { ToolScriptEngine, parseToolScriptStepsArg } from "./tool-script.js";
 
 export interface ToolScriptToolContext {
   readonly registry: ToolRegistry;
@@ -32,11 +30,31 @@ export function createToolScriptTool(ctx: ToolScriptToolContext): ToolSpec {
       type: "object",
       properties: {
         steps: {
-          type: "string",
+          type: "array",
           description:
-            'JSON array of steps: [{"id":"find","tool":"find_files","args":{"pattern":"**/*.ts"}}, ' +
-            '{"id":"read1","tool":"read_file","args":{"path":"$find.lines[0]"}}]. ' +
+            "Array of tool steps to execute sequentially. " +
+            "Reference previous step outputs with $stepId (full output) or $stepId.lines[N] (specific line, 0-indexed). " +
             "Use canonical tool names only (no functions./function./tools. prefixes).",
+          items: {
+            type: "object",
+            properties: {
+              id: {
+                type: "string",
+                description: "Unique identifier for this step, used for inter-step references.",
+              },
+              tool: {
+                type: "string",
+                description: "Canonical tool name (e.g. read_file, find_files, search_files).",
+              },
+              args: {
+                type: "string",
+                description:
+                  'JSON-encoded tool parameters, e.g. {"path":"src/foo.ts"} or {} for no arguments.',
+              },
+            },
+            required: ["id", "tool", "args"],
+            additionalProperties: false,
+          },
         },
       },
       required: ["steps"],
@@ -46,28 +64,12 @@ export function createToolScriptTool(ctx: ToolScriptToolContext): ToolSpec {
       params: Record<string, unknown>,
       toolContext: ToolContext,
     ) => {
-      const stepsJson = params["steps"] as string;
-
-      // Parse JSON
-      let steps: ToolScriptStep[];
-      try {
-        steps = JSON.parse(stepsJson) as ToolScriptStep[];
-      } catch (err) {
-        const msg = extractErrorMessage(err);
+      const steps = parseToolScriptStepsArg(params["steps"]);
+      if (!steps) {
         return {
           success: false,
           output: "",
-          error: `Invalid JSON in steps parameter: ${msg}`,
-          artifacts: [],
-        };
-      }
-
-      // Validate it's an array
-      if (!Array.isArray(steps)) {
-        return {
-          success: false,
-          output: "",
-          error: "Steps must be a JSON array",
+          error: "Invalid steps parameter: must be an array of {id, tool, args} objects (or a JSON string encoding one)",
           artifacts: [],
         };
       }
