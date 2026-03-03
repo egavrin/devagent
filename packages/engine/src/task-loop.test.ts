@@ -5448,7 +5448,7 @@ describe("TaskLoop", () => {
       // in the estimatedTokens of the compacted event.
       const sessionState = new SessionState();
       sessionState.recordModifiedFile("/tmp/foo.ts");
-      sessionState.addToolSummary({ toolName: "echo", callId: "c_0", summary: "test data for session state padding content" });
+      sessionState.addToolSummary({ tool: "echo", target: "/tmp/foo.ts", summary: "test data for session state padding content", iteration: 1 });
 
       const compactedEvents: Array<{ estimatedTokens: number; tokensBefore: number }> = [];
       bus.on("context:compacted", (evt: any) => {

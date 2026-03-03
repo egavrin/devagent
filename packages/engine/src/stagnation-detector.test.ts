@@ -68,6 +68,26 @@ describe("StagnationDetector — phase-aware stagnation", () => {
     }
     expect(nudge).not.toBeNull();
   });
+
+  it("suppresses NO_PROGRESS_LOOP when all steps are done even if tool fatigue is also active", () => {
+    const state = new SessionState();
+    state.setPlan([
+      { description: "Step 1", status: "completed" },
+    ]);
+    const { detector } = makeDetector(state);
+
+    // Activate fatigue for a tool
+    for (let i = 0; i < 6; i++) {
+      detector.recordToolResult("run_command", { cmd: `attempt-${i}` }, false);
+    }
+    detector.checkToolFatigue([{ name: "run_command", arguments: {}, callId: "c" }]);
+
+    // Phase guard must still suppress despite fatigue guard also being active
+    const calls = [makeReadonlyCall()];
+    for (let i = 0; i < 6; i++) {
+      expect(detector.maybeInjectNoProgressNudge(calls)).toBeNull();
+    }
+  });
 });
 
 describe("StagnationDetector — tool fatigue suppression", () => {

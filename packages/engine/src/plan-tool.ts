@@ -101,6 +101,8 @@ export function createPlanTool(
       // Single-pass status counting
       let inProgressCount = 0;
       let newCompleted = 0;
+      let mergeOccurred = false;
+      let preservedCount = 0;
       for (const s of steps) {
         if (s.status === "in_progress") inProgressCount++;
         else if (s.status === "completed") newCompleted++;
@@ -142,10 +144,10 @@ export function createPlanTool(
       // caller explicitly opts into regression.
       if (oldPlan && oldPlan.length > 0) {
         const oldCompleted = oldPlan.filter((s) => s.status === "completed");
-        const newCompleted = steps.filter((s) => s.status === "completed");
+        const newCompletedSteps = steps.filter((s) => s.status === "completed");
         const revertedSteps = oldCompleted
           .filter((oldStep) =>
-            !newCompleted.some((newStep) =>
+            !newCompletedSteps.some((newStep) =>
               isSamePlanStep(oldStep.description, newStep.description)
             )
           )
@@ -173,7 +175,7 @@ export function createPlanTool(
         if (revertedSteps.length > 0) {
           bus.emit("plan:regression", {
             oldCompleted: oldCompleted.length,
-            newCompleted: newCompleted.length,
+            newCompleted: newCompletedSteps.length,
             reverted: revertedSteps.length,
           });
           if (!allowRegression) {
@@ -183,6 +185,21 @@ export function createPlanTool(
               error: `Plan regression detected: this update reverts ${revertedSteps.length} previously completed step(s): ${revertedSteps.map((d) => `"${d}"`).join(", ")}. Preserve completed steps, or retry with allow_regression=true if reset is intentional.`,
               artifacts: [],
             };
+          }
+
+          // allow_regression=true: check if this is a catastrophic reset.
+          // Threshold: reverts >= max(3, 50% of completed) → auto-merge to prevent
+          // accidental loss of large amounts of completed work.
+          const catastropheThreshold = Math.max(3, Math.ceil(oldCompleted.length * 0.5));
+          if (revertedSteps.length >= catastropheThreshold) {
+            // Preserve all completed steps; append only genuinely new pending steps.
+            const newNonOverlapping = steps.filter(
+              (ns) => !oldCompleted.some((oc) => isSamePlanStep(oc.description, ns.description)),
+            );
+            steps = [...oldCompleted, ...newNonOverlapping];
+            newCompleted = steps.filter((s) => s.status === "completed").length;
+            preservedCount = oldCompleted.length;
+            mergeOccurred = true;
           }
         }
       }
@@ -214,10 +231,13 @@ export function createPlanTool(
         .join("\n");
 
       const total = steps.length;
+      const mergeNote = mergeOccurred
+        ? ` (${preservedCount} previously completed step(s) auto-preserved)`
+        : "";
 
       return {
         success: true,
-        output: `Plan updated (${newCompleted}/${total} completed):\n${planDisplay}`,
+        output: `Plan updated (${newCompleted}/${total} completed)${mergeNote}:\n${planDisplay}`,
         error: null,
         artifacts: [],
       };
