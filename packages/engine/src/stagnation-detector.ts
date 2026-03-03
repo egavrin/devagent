@@ -194,6 +194,15 @@ export class StagnationDetector {
   ): string | null {
     if (!this.sessionState || toolCalls.length === 0) return null;
 
+    // Phase guard: when all plan steps are completed the LLM is in verification
+    // mode. Readonly tool calls (git_diff, git_status) are expected and do not
+    // indicate stagnation. Disable NO_PROGRESS_LOOP for the verification phase.
+    const totalPlan = this.sessionState.getTotalPlanCount();
+    const completedPlan = this.sessionState.getPlanCompletedCount();
+    if (totalPlan > 0 && completedPlan >= totalPlan) {
+      return null;
+    }
+
     const snapshot = this.makeProgressSnapshot();
     if (!snapshot) return null;
 
