@@ -40,7 +40,7 @@ export const DEFAULT_BUDGET: BudgetConfig = {
   enableCostTracking: true,
 };
 
-const DEFAULT_CONTEXT: ContextConfig = {
+export const DEFAULT_CONTEXT: ContextConfig = {
   pruningStrategy: "hybrid",
   triggerRatio: 0.9,
   keepRecentMessages: 40,

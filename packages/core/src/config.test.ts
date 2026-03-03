@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { loadConfig, findProjectRoot } from "./config.js";
+import { loadConfig, findProjectRoot, DEFAULT_CONTEXT } from "./config.js";
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -300,6 +300,15 @@ api_key = "env:NONEXISTENT_VAR_12345"
     } finally {
       rmSync(dir, { recursive: true });
     }
+  });
+});
+
+describe("DEFAULT_CONTEXT export", () => {
+  it("is accessible and has expected default keepRecentMessages", () => {
+    expect(DEFAULT_CONTEXT).toBeDefined();
+    expect(DEFAULT_CONTEXT.keepRecentMessages).toBe(40);
+    expect(DEFAULT_CONTEXT.pruningStrategy).toBe("hybrid");
+    expect(DEFAULT_CONTEXT.triggerRatio).toBe(0.9);
   });
 });
 

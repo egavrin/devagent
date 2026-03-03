@@ -71,7 +71,7 @@ export type {
 } from "./events.js";
 
 // Config
-export { loadConfig, findProjectRoot, resolveProviderCredentials, DEFAULT_BUDGET } from "./config.js";
+export { loadConfig, findProjectRoot, resolveProviderCredentials, DEFAULT_BUDGET, DEFAULT_CONTEXT } from "./config.js";
 
 // Model registry
 export {

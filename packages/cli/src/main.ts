@@ -22,6 +22,7 @@ import {
   lookupModelCapabilities,
   lookupModelEntry,
   DEFAULT_BUDGET,
+  DEFAULT_CONTEXT,
   EventLogger,
 } from "@devagent/core";
 import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, Memory, VerbosityConfig } from "@devagent/core";
@@ -354,6 +355,23 @@ async function setupConfig(cliArgs: CliArgs): Promise<ConfigSetupResult> {
         responseHeadroom: registryEntry.responseHeadroom,
       },
     };
+  }
+
+  // Scale keepRecentMessages with context budget when the user hasn't
+  // explicitly configured it. A fixed value (40) is too aggressive on
+  // large-context models (192K+) and causes unnecessary Phase 2 compaction.
+  if (config.context.keepRecentMessages === DEFAULT_CONTEXT.keepRecentMessages) {
+    const effectiveBudget = config.budget.maxContextTokens - config.budget.responseHeadroom;
+    const scaledKeep = Math.floor(effectiveBudget / 1500);
+    if (scaledKeep > DEFAULT_CONTEXT.keepRecentMessages) {
+      config = {
+        ...config,
+        context: {
+          ...config.context,
+          keepRecentMessages: scaledKeep,
+        },
+      };
+    }
   }
 
   return { config, projectRoot };
