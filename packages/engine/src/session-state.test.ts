@@ -301,6 +301,20 @@ describe("SessionState", () => {
       expect(msg).toContain("- [pending] Implement feature");
     });
 
+    it("includes preservation instruction even when no steps are completed yet", () => {
+      state.setPlan([
+        { description: "Locate spec rules", status: "in_progress" },
+        { description: "Reproduce behavior", status: "pending" },
+        { description: "Compare vs spec", status: "pending" },
+        { description: "Write report", status: "pending" },
+      ]);
+      const msg = state.toSystemMessage()!;
+      expect(msg).toContain("## Plan");
+      // Must carry an explicit instruction even before any step completes,
+      // so the LLM does not rewrite step names after context compaction.
+      expect(msg).toMatch(/IMPORTANT.*Do NOT.*steps/i);
+    });
+
     it("includes modified files section", () => {
       state.recordModifiedFile("/src/foo.ts");
       state.recordModifiedFile("/src/bar.ts");
@@ -447,14 +461,17 @@ describe("SessionState", () => {
       expect(msg).toContain("Continue from where the plan left off");
     });
 
-    it("omits IMPORTANT instruction when no steps are completed", () => {
+    it("includes preservation instruction even when no steps are completed (all-pending plan)", () => {
       state.setPlan([
         { description: "Read codebase", status: "in_progress" },
         { description: "Write tests", status: "pending" },
       ]);
       const msg = state.toSystemMessage()!;
       expect(msg).toContain("## Plan");
-      expect(msg).not.toContain("IMPORTANT");
+      // Instruction must always be present so the LLM does not rewrite step
+      // names after context compaction, even before any step completes.
+      expect(msg).toContain("IMPORTANT");
+      expect(msg).toContain("Do NOT replace or rename these steps");
     });
 
     it("includes findings section in all tiers", () => {

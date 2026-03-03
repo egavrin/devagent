@@ -526,7 +526,7 @@ export class SessionState {
       const hasCompleted = this.plan.some((s) => s.status === "completed");
       const instruction = hasCompleted
         ? "IMPORTANT: The following plan steps reflect verified progress. Do NOT reset completed steps when calling update_plan. Continue from where the plan left off.\n"
-        : "";
+        : "IMPORTANT: This is the active plan. Do NOT replace or rename these steps — only update their statuses (pending → in_progress → completed).\n";
       const lines = this.plan.map(
         (s) => `- [${s.status}] ${s.description}`,
       );
