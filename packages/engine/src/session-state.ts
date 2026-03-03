@@ -510,6 +510,39 @@ export class SessionState {
   // ─── System Message Serialization ──────────────────────────
 
   /**
+   * Build the "Completed work (verified)" evidence section.
+   * Returns null if no files have been modified.
+   *
+   * For each modified file (most recent first), finds the most recent
+   * toolSummary whose target matches the file path (exact or suffix match)
+   * and formats it as a one-line entry with iteration and tool context.
+   */
+  private buildEvidenceSection(): string | null {
+    if (this.modifiedFiles.length === 0) return null;
+
+    const lines: string[] = [];
+    for (const file of [...this.modifiedFiles].reverse()) {
+      const match = [...this.toolSummaries].reverse().find((s) => {
+        const t = s.target.replaceAll("\\", "/");
+        const f = file.replaceAll("\\", "/");
+        return t === f || f.endsWith("/" + t) || t.endsWith("/" + f);
+      });
+      if (match) {
+        const flat = match.summary.replace(/\n/g, " | ").slice(0, 120);
+        lines.push(`- ${file}: ${flat} (iter ${match.iteration}, ${match.tool})`);
+      } else {
+        lines.push(`- ${file}`);
+      }
+    }
+
+    return [
+      "## Completed work (verified)",
+      "IMPORTANT: The files below were physically modified in this session. Do NOT redo this work or reset the plan steps that cover them.",
+      lines.join("\n"),
+    ].join("\n");
+  }
+
+  /**
    * Serialize state into a system message for injection after compaction.
    * Returns null if the state is completely empty.
    *
@@ -520,6 +553,13 @@ export class SessionState {
    */
   toSystemMessage(tier: "full" | "compact" | "minimal" = "full"): string | null {
     const sections: string[] = [];
+
+    // Evidence section — leads the message so LLM reads it before status labels.
+    // Omitted from minimal tier to keep it token-light.
+    if (tier !== "minimal") {
+      const evidenceSection = this.buildEvidenceSection();
+      if (evidenceSection) sections.push(evidenceSection);
+    }
 
     // Plan section (always included if present)
     if (this.plan !== null && this.plan.length > 0) {

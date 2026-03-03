@@ -527,6 +527,55 @@ describe("SessionState", () => {
       expect(msg).toContain("/src/file-19.ts");
       expect(msg).toContain("/src/file-0.ts");
     });
+
+    it("leads with evidence section listing modified files with tool summary context", () => {
+      state.recordModifiedFile("src/foo.ts");
+      state.recordModifiedFile("src/bar.ts");
+      state.addToolSummary({
+        tool: "edit_file",
+        target: "src/foo.ts",
+        summary: "replaced 3 patterns",
+        iteration: 5,
+      });
+      state.setPlan([
+        { description: "Edit foo.ts", status: "completed" },
+        { description: "Edit bar.ts", status: "in_progress" },
+      ]);
+
+      const msg = state.toSystemMessage()!;
+      // Evidence section must appear before Plan section
+      const evidenceIdx = msg.indexOf("## Completed work");
+      const planIdx = msg.indexOf("## Plan");
+      expect(evidenceIdx).toBeGreaterThanOrEqual(0);
+      expect(planIdx).toBeGreaterThan(evidenceIdx);
+      // Should include file + tool summary reference
+      expect(msg).toContain("src/foo.ts");
+      expect(msg).toContain("replaced 3 patterns");
+      expect(msg).toContain("iter 5");
+    });
+
+    it("evidence section omitted when no files have been modified", () => {
+      state.setPlan([{ description: "Step 1", status: "pending" }]);
+      const msg = state.toSystemMessage()!;
+      expect(msg).not.toContain("## Completed work");
+    });
+
+    it("evidence section lists file without detail when no matching tool summary", () => {
+      state.recordModifiedFile("src/baz.ts");
+      state.setPlan([{ description: "Step 1", status: "completed" }]);
+      const msg = state.toSystemMessage()!;
+      expect(msg).toContain("## Completed work");
+      expect(msg).toContain("src/baz.ts");
+      // Bare file line — no summary detail appended
+      expect(msg).not.toContain(": (iter");
+    });
+
+    it("evidence section omitted in minimal tier", () => {
+      state.recordModifiedFile("src/foo.ts");
+      state.setPlan([{ description: "Step 1", status: "in_progress" }]);
+      const msg = state.toSystemMessage("minimal")!;
+      expect(msg).not.toContain("## Completed work");
+    });
   });
 
   // ─── JSON Serialization ──────────────────────────────────────
