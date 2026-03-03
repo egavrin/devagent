@@ -6324,6 +6324,78 @@ type RunResult = string
       expect(summaries.some(s => s.target.startsWith("search:"))).toBe(true);
       expect(summaries.some(s => s.target.startsWith("find:"))).toBe(true);
     });
+
+    it("search_files with different patterns on the same path produces distinct summary targets", async () => {
+      // Regression test: different patterns on the same path must yield separate SessionState
+      // entries so the stagnation detector sees progress on each call.
+      //
+      // Previously getSummaryTarget returned the path arg directly for any tool
+      // with a non-empty path, so search_files(pattern=A, path=P) and
+      // search_files(pattern=B, path=P) both produced target=P. The second
+      // overwrote the first → toolSummaries.length stayed constant across iterations
+      // → the stagnation detector fired prematurely, cutting off directory discovery
+      // before all ANI source directories had been scanned.
+      const searchTool: ToolSpec = {
+        name: "search_files",
+        description: "Search files",
+        category: "readonly",
+        paramSchema: {
+          type: "object",
+          properties: { pattern: { type: "string" }, path: { type: "string" } },
+          required: ["pattern"],
+        },
+        resultSchema: { type: "object" },
+        handler: async () => ({
+          success: true,
+          output: "1 match(es):\nframeworks/js/ani/foo.cpp:10: match",
+          error: null,
+          artifacts: [],
+        }),
+      };
+
+      const provider = createMockProvider([
+        [
+          // First call: pattern A on path P
+          {
+            type: "tool_call",
+            content: '{"pattern": "Find(Class|Namespace)", "path": "frameworks/js/ani"}',
+            toolCallId: "call_0",
+            toolName: "search_files",
+          },
+          { type: "done", content: "" },
+        ],
+        [
+          // Second call: DIFFERENT pattern, SAME path — must NOT overwrite first
+          {
+            type: "tool_call",
+            content: '{"pattern": "@ohos\\\\.[A-Za-z]+", "path": "frameworks/js/ani"}',
+            toolCallId: "call_1",
+            toolName: "search_files",
+          },
+          { type: "done", content: "" },
+        ],
+        [{ type: "text", content: "Done." }, { type: "done", content: "" }],
+      ]);
+
+      const registry = new ToolRegistry();
+      registry.register(searchTool);
+      const gate = new ApprovalGate(config.approval, bus);
+      const sessionState = new SessionState();
+
+      const loop = new TaskLoop({
+        provider, tools: registry, bus, approvalGate: gate, config,
+        systemPrompt: "Test", repoRoot: "/tmp", sessionState,
+      });
+
+      await loop.run("Search with two different patterns in the same directory");
+      const summaries = sessionState.getToolSummaries();
+      // Both calls must produce distinct entries — second must NOT overwrite first
+      expect(summaries.length).toBe(2);
+      expect(summaries[0]!.target).not.toBe(summaries[1]!.target);
+      // Coverage targets must also be distinct (stagnation detector tracks these)
+      const coverage = sessionState.getReadonlyCoverage().get("search_files") ?? [];
+      expect(coverage.length).toBe(2);
+    });
   });
 
   describe("summarizeTestOutput", () => {

@@ -1259,6 +1259,28 @@ export class TaskLoop {
           return `${normalized}:${startLine ?? ""}:${endLine ?? ""}`;
         }
       }
+      // For search/find tools, include the pattern so that different patterns
+      // on the same path each get a unique SessionState slot. Without this,
+      // successive searches scoped to the same directory overwrite each other,
+      // suppressing the stagnation detector's progress signal and causing
+      // premature stall-lock before all source directories are discovered.
+      if (toolName === "search_files") {
+        const pattern = args["pattern"];
+        if (typeof pattern === "string") {
+          const truncated = pattern.length > 60 ? pattern.slice(0, 57) + "..." : pattern;
+          // Omit path suffix for root/cwd — identical to the no-path form.
+          const pathSuffix = normalized !== "." ? `@${normalized}` : "";
+          return `search:${truncated}${pathSuffix}`;
+        }
+      }
+      if (toolName === "find_files") {
+        const pattern = args["pattern"];
+        if (typeof pattern === "string") {
+          const truncated = pattern.length > 60 ? pattern.slice(0, 57) + "..." : pattern;
+          const pathSuffix = normalized !== "." ? `@${normalized}` : "";
+          return `find:${truncated}${pathSuffix}`;
+        }
+      }
       return normalized;
     }
     if (toolName === "git_status") return "git_status";
