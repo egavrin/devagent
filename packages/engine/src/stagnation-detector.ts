@@ -203,6 +203,13 @@ export class StagnationDetector {
       return null;
     }
 
+    // Fatigue guard: when TOOL_FATIGUE is active for any tool, the LLM is in
+    // failure-recovery mode (readonly inspection is expected). Suppress
+    // NO_PROGRESS_LOOP to avoid compounding failure signals.
+    if (this.toolFatigueWarned.size > 0) {
+      return null;
+    }
+
     const snapshot = this.makeProgressSnapshot();
     if (!snapshot) return null;
 
