@@ -907,7 +907,12 @@ export class TaskLoop {
     this.toolResultIndices.clear();
     this.approachingLimitWarned = false;
     if (full) {
-      this.successfulReadonlyCallKeys.clear();
+      // Preserve successfulReadonlyCallKeys through compaction — the in-memory
+      // dedup set is still accurate because compaction does not change the workspace.
+      // Only mutating tool execution clears it (see executeTool).
+      // Clearing here caused post-compaction re-read storms for all tool types
+      // (especially search_files/find_files whose coverage targets can't be
+      // round-tripped back to the original dedup key format).
       this.stagnationDetector.notifyCompaction(this.iterations);
     }
   }

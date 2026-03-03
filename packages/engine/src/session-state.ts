@@ -591,7 +591,8 @@ export class SessionState {
         lines.push(`- ... (+${hiddenToolCount} more tools)`);
       }
 
-      const instruction = "IMPORTANT: Use this coverage index to avoid repeating identical readonly inspections. Only re-run a covered target when you need fresh output after a mutation.\n";
+      const totalTargets = this.getReadonlyCoverageTargetCount();
+      const instruction = `IMPORTANT: ${totalTargets} readonly inspection(s) below are tracked and will be SKIPPED if re-requested. Do NOT attempt to re-read these files — the results are cached. Only a mutating tool (edit/write) resets the cache for affected paths.\n`;
       sections.push(`## Readonly coverage\n${instruction}${lines.join("\n")}`);
     }
 
