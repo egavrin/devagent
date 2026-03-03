@@ -329,6 +329,76 @@ describe("plan-tool validation", () => {
     expect(result.error).toContain("Invalid plan step description");
   });
 
+  it("auto-merges catastrophic regression (allow_regression=true, 5+ reverted steps)", async () => {
+    const { tool } = makePlanTool();
+
+    // Establish an 8-step plan, 6 completed
+    await tool.handler(
+      {
+        steps: JSON.stringify([
+          { description: "Discover files", status: "completed" },
+          { description: "Read spec", status: "completed" },
+          { description: "Plan transforms", status: "completed" },
+          { description: "Edit foo.rs", status: "completed" },
+          { description: "Edit bar.rs", status: "completed" },
+          { description: "Edit baz.rs", status: "completed" },
+          { description: "Run tests", status: "in_progress" },
+          { description: "Verify diff", status: "pending" },
+        ]),
+      },
+      { repoRoot: "/tmp" },
+    );
+
+    // LLM tries to replace everything with a fresh 2-step plan
+    const result = await tool.handler(
+      {
+        steps: JSON.stringify([
+          { description: "Restart analysis", status: "in_progress" },
+          { description: "Apply fixes", status: "pending" },
+        ]),
+        allow_regression: true,
+      },
+      { repoRoot: "/tmp" },
+    );
+
+    expect(result.success).toBe(true);
+    // Output should contain the note about preserved steps
+    expect(result.output).toContain("preserved");
+    // The plan should have kept all 6 completed steps
+    expect(result.output).toContain("6/");
+  });
+
+  it("does NOT auto-merge small regression (1 reverted step, allow_regression=true)", async () => {
+    const { tool } = makePlanTool();
+
+    await tool.handler(
+      {
+        steps: JSON.stringify([
+          { description: "Step 1", status: "completed" },
+          { description: "Step 2", status: "in_progress" },
+        ]),
+      },
+      { repoRoot: "/tmp" },
+    );
+
+    // Revert only Step 1 — below threshold, accepted as before
+    const result = await tool.handler(
+      {
+        steps: JSON.stringify([
+          { description: "Step 1", status: "pending" },
+          { description: "Step 2", status: "pending" },
+        ]),
+        allow_regression: true,
+      },
+      { repoRoot: "/tmp" },
+    );
+
+    expect(result.success).toBe(true);
+    // Small regression: accepted without merge note
+    expect(result.output).toContain("Plan updated (0/2 completed)");
+    expect(result.output).not.toContain("preserved");
+  });
+
   it("syncs plan to session state", async () => {
     const { tool, state } = makePlanTool();
 
