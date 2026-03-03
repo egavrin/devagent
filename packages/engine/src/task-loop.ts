@@ -170,10 +170,12 @@ const STALL_LOCK_TOOLS = new Set([
 
 /** Token budget for pinned messages — oldest unpinned when exceeded. */
 const PINNED_TOKEN_BUDGET = 80_000;
-/** Minimum token size for a tool message to be eligible for pruning. */
-const MIN_PRUNE_MSG_TOKENS = 500;
-/** After pruning, target 85% of threshold to leave headroom. */
-const PRUNE_THRESHOLD_RATIO = 0.85;
+/** Minimum token size for a tool message to be eligible for pruning.
+ * At 5000 tokens, net savings after ~150-token summary replacement is ~4850 tokens.
+ * Below this threshold, the context loss outweighs the negligible savings. */
+const MIN_PRUNE_MSG_TOKENS = 5_000;
+/** After pruning, target 75% of threshold to leave larger headroom and reduce Phase 2 triggers. */
+const PRUNE_THRESHOLD_RATIO = 0.75;
 /** Warning fires at 60% of compaction threshold so the LLM can persist findings. */
 const APPROACHING_LIMIT_RATIO = 0.6;
 /** Max chars for an inline pruned-tool summary placeholder. */

@@ -5126,6 +5126,106 @@ describe("TaskLoop", () => {
     });
   });
 
+  // ─── Pruning Threshold Tuning ──────────────────────────────
+
+  describe("pruning threshold tuning", () => {
+    it("Phase 1 skips tool results under 5000 tokens", async () => {
+      const provider = createMockProvider([]);
+      const registry = new ToolRegistry();
+      registry.register(makeEchoTool());
+      const testConfig = makeConfig({
+        context: { ...config.context, pruneProtectTokens: 0 },
+      });
+      const gate = new ApprovalGate(testConfig.approval, bus);
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config: testConfig,
+        systemPrompt: "Test",
+        repoRoot: "/tmp",
+      });
+
+      const sessionState = new SessionState();
+      (loop as any).sessionState = sessionState;
+
+      // Build messages: assistant with tool calls + tool results
+      // Use outputs of ~2000 tokens (~8000 chars) — above old 500 threshold but below new 5000
+      const mediumOutput = "x".repeat(8_000); // ~2000 tokens
+      const messages: Message[] = [
+        { role: MessageRole.USER, content: "start" },
+        {
+          role: MessageRole.ASSISTANT,
+          content: "",
+          toolCalls: [
+            { callId: "call_0", name: "echo", arguments: { text: "a" } },
+            { callId: "call_1", name: "echo", arguments: { text: "b" } },
+          ],
+        },
+        { role: MessageRole.TOOL, content: mediumOutput, toolCallId: "call_0" },
+        { role: MessageRole.TOOL, content: mediumOutput, toolCallId: "call_1" },
+        { role: MessageRole.USER, content: "continue" },
+      ];
+
+      (loop as any).messages = messages;
+      // currentTokens=~4000, threshold=3000 → would trigger pruning
+      const pruneResult = (loop as any).pruneToolOutputs(4_000, 3_000);
+      // Messages at ~2000 tokens each are below MIN_PRUNE_MSG_TOKENS (5000),
+      // so nothing should be pruned
+      expect(pruneResult.prunedCount).toBe(0);
+      expect(pruneResult.savedTokens).toBe(0);
+    });
+
+    it("Phase 1 targets 75% of threshold (not 85%)", async () => {
+      const provider = createMockProvider([]);
+      const registry = new ToolRegistry();
+      registry.register(makeEchoTool());
+      const testConfig = makeConfig({
+        context: { ...config.context, pruneProtectTokens: 0 },
+      });
+      const gate = new ApprovalGate(testConfig.approval, bus);
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config: testConfig,
+        systemPrompt: "Test",
+        repoRoot: "/tmp",
+      });
+
+      const sessionState = new SessionState();
+      (loop as any).sessionState = sessionState;
+
+      // Create 4 large tool outputs (~7500 tokens each = ~30000 chars)
+      const bigOutput = "x".repeat(30_000);
+      const messages: Message[] = [
+        { role: MessageRole.USER, content: "start" },
+      ];
+      for (let i = 0; i < 4; i++) {
+        messages.push({
+          role: MessageRole.ASSISTANT,
+          content: "",
+          toolCalls: [{ callId: `call_${i}`, name: "echo", arguments: { text: `${i}` } }],
+        });
+        messages.push({ role: MessageRole.TOOL, content: bigOutput, toolCallId: `call_${i}` });
+      }
+      messages.push({ role: MessageRole.USER, content: "continue" });
+
+      (loop as any).messages = messages;
+      // currentTokens=30000, threshold=28000
+      // At 75%: targetTokens=21000, targetSavings=9000 → needs 2 prunes (~7500 each)
+      // At 85%: targetTokens=23800, targetSavings=6200 → needs 1 prune
+      const pruneResult = (loop as any).pruneToolOutputs(30_000, 28_000);
+      // With 0.75 ratio: targetTokens = 28000 * 0.75 = 21000
+      // targetSavings = 30000 - 21000 = 9000 → needs 2 prunes (~7500 tokens each)
+      expect(pruneResult.prunedCount).toBe(2);
+    });
+  });
+
   // ─── Fix: Provider Token Overhead Causes Context Collapse ─────────────
 
   describe("overhead-aware pruning", () => {
