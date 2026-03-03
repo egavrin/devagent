@@ -199,6 +199,14 @@ export class SessionState {
     return this.plan.filter((s) => s.status === "completed").length;
   }
 
+  /**
+   * Total count of plan steps (completed + in_progress + pending).
+   * Returns 0 if no plan is set.
+   */
+  getTotalPlanCount(): number {
+    return this.plan?.length ?? 0;
+  }
+
   // ─── Modified Files ────────────────────────────────────────
 
   /**

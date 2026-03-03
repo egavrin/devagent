@@ -23,6 +23,19 @@ describe("SessionState", () => {
       expect(state.getPlan()).toBeNull();
     });
 
+    it("getTotalPlanCount returns 0 when no plan", () => {
+      expect(state.getTotalPlanCount()).toBe(0);
+    });
+
+    it("getTotalPlanCount returns total step count regardless of status", () => {
+      state.setPlan([
+        { description: "Step 1", status: "completed" },
+        { description: "Step 2", status: "completed" },
+        { description: "Step 3", status: "in_progress" },
+      ]);
+      expect(state.getTotalPlanCount()).toBe(3);
+    });
+
     it("stores and retrieves a plan", () => {
       const steps: PlanStep[] = [
         { description: "Read codebase", status: "completed" },
