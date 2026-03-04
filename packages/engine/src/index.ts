@@ -14,7 +14,6 @@ export type {
 export { StagnationDetector } from "./stagnation-detector.js";
 export type {
   StagnationToolCall,
-  ToolCategoryResolver,
   StagnationDetectorOptions,
 } from "./stagnation-detector.js";
 

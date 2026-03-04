@@ -326,13 +326,6 @@ export class SessionState {
   }
 
   /**
-   * Count of tool result summaries (avoids cloning).
-   */
-  getToolSummariesCount(): number {
-    return this.toolSummaries.length;
-  }
-
-  /**
    * Track successful readonly coverage independently from tool summary eviction.
    * Deduplicates by target per tool and preserves recency order.
    */

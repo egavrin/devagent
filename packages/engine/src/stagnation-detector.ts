@@ -5,12 +5,13 @@
  * Detects:
  * - Doom loops (identical failing tool calls repeated N times)
  * - Tool fatigue (same tool failing with different args)
- * - No-progress readonly inspection loops
+ * - LLM-as-judge stagnation (periodic LLM review of conversation history)
  * - Per-file re-read stagnation (with soft nudge + hard block)
  * - Post-compaction re-read storms
  */
 
-import type { EventBus, ToolCategory } from "@devagent/core";
+import type { EventBus, LLMProvider, Message } from "@devagent/core";
+import { MessageRole } from "@devagent/core";
 import type { SessionState } from "./session-state.js";
 
 // ─── Constants ────────────────────────────────────────────────
@@ -20,9 +21,6 @@ const DOOM_LOOP_THRESHOLD = 3;
 
 /** Number of consecutive failures of the same tool (regardless of args) that triggers a "tool fatigue" warning. */
 const TOOL_FATIGUE_THRESHOLD = 5;
-
-/** Consecutive readonly-only cycles with no progress before stall lock engages. */
-const NO_PROGRESS_THRESHOLD = 5;
 
 /** Iterations after compaction in which re-reads count toward a storm. */
 const REREAD_STORM_WINDOW = 5;
@@ -36,14 +34,56 @@ const PER_FILE_READ_LIMIT = 8;
 /** Hard block on reads after this many reads of the same file. */
 const PER_FILE_READ_HARD_LIMIT = 12;
 
-// ─── Types ────────────────────────────────────────────────────
+// ─── LLM-as-judge constants ─────────────────────────────────
 
-interface ProgressSnapshot {
-  readonly toolSummaries: number;
-  readonly findings: number;
-  readonly coverageTargets: number;
-  readonly completedPlan: number;
-}
+/** Don't run the judge before this iteration. */
+const MIN_JUDGE_ITERATION = 15;
+/** Default interval (iterations) between judge checks. */
+const DEFAULT_JUDGE_INTERVAL = 8;
+/** High confidence → check more often. */
+const MIN_JUDGE_INTERVAL = 5;
+/** Low confidence → check less often. */
+const MAX_JUDGE_INTERVAL = 12;
+/** Confidence threshold at which the judge fires a stagnation nudge. */
+const JUDGE_CONFIDENCE_THRESHOLD = 0.85;
+/** Number of recent messages sent to the judge for assessment. */
+const JUDGE_HISTORY_COUNT = 20;
+
+const STAGNATION_JUDGE_SYSTEM_PROMPT = `You are a diagnostic agent that determines whether a conversational AI coding assistant is stuck in an unproductive state. Analyze the conversation history and session state to make this determination.
+
+## What constitutes stagnation
+
+Stagnation requires BOTH of these to be true:
+1. The assistant has exhibited a repetitive pattern over at least 5 consecutive tool calls or text responses.
+2. The repetition produces NO net change or forward progress toward the user's goal.
+
+Specific patterns to look for:
+- **Alternating cycles with no net effect:** The assistant cycles between the same actions (e.g., read_file → search_files → read_file → search_files) where each iteration targets the same files/patterns and produces the same results, making zero progress.
+- **Search diversification without edits:** Running many search variants targeting the same information without making any file edits IS stagnation, even if each search query is slightly different. The key signal is: many readonly operations, zero file modifications.
+- **Semantic repetition with identical outcomes:** The assistant calls the same tool with semantically equivalent arguments multiple times consecutively, and each call produces the same outcome.
+- **Stuck reasoning:** Multiple consecutive text responses that restate the same plan or analysis without taking any new action.
+
+## What is NOT stagnation
+
+You MUST distinguish repetitive-looking but productive work from true stagnation:
+- **Cross-file batch operations:** A series of tool calls targeting different files (different file paths in arguments) — this is distinct work, not repetition.
+- **Incremental same-file edits:** Multiple edits to the same file that target different line ranges, functions, or content.
+- **Initial codebase exploration:** Early-phase exploration before the first edit (roughly iterations 1-15) is expected and productive.
+- **Running tests after edits:** Re-running build/test commands after making code changes is normal verification workflow.
+- **Retry with meaningful variation:** Re-attempting a failed operation with modified arguments or a different approach.
+- **Verification phase:** After completing all plan steps, readonly operations (git_diff, git_status, tests) are expected verification.
+
+## Argument analysis (critical)
+
+When evaluating tool calls, you MUST compare the ARGUMENTS of each call, not just the tool name:
+- **File paths:** Different file paths mean different targets — this is distinct work.
+- **Search queries and patterns:** Different search terms with genuinely different intent indicate information gathering. However, minor rephrasing of the same search (e.g., "find class Foo" → "search for Foo class" → "locate Foo") targeting the same information IS stagnation.
+- **Line numbers and text content:** Different line ranges or different edit content indicate distinct edits.
+
+Respond ONLY with valid JSON (no markdown fences, no commentary):
+{"analysis": "<1-2 sentence explanation>", "stagnation_confidence": <0.0-1.0>}`;
+
+// ─── Types ────────────────────────────────────────────────────
 
 /** Minimal tool-call shape consumed by the detector. */
 export interface StagnationToolCall {
@@ -52,14 +92,10 @@ export interface StagnationToolCall {
   readonly callId: string;
 }
 
-/** Dependency: resolve tool category by name. */
-export type ToolCategoryResolver = (toolName: string) => ToolCategory;
-
 /** Configuration passed from TaskLoop at construction time. */
 export interface StagnationDetectorOptions {
   readonly bus: EventBus;
   readonly sessionState: SessionState | null;
-  readonly resolveCategory: ToolCategoryResolver;
 }
 
 // ─── StagnationDetector ──────────────────────────────────────
@@ -67,7 +103,6 @@ export interface StagnationDetectorOptions {
 export class StagnationDetector {
   private readonly bus: EventBus;
   private readonly sessionState: SessionState | null;
-  private readonly resolveCategory: ToolCategoryResolver;
 
   // Doom loop state
   private recentToolCalls: Array<{ name: string; argsKey: string }> = [];
@@ -77,10 +112,9 @@ export class StagnationDetector {
   private toolFailureCounts = new Map<string, number>();
   private toolFatigueWarned = new Set<string>();
 
-  // No-progress readonly loop state
-  private stagnantReadonlyCycles = 0;
-  private lastProgressSnapshot: ProgressSnapshot | null = null;
-  private readonlyStallLock = false;
+  // LLM-as-judge stagnation state
+  private lastJudgeIteration = 0;
+  private judgeInterval = DEFAULT_JUDGE_INTERVAL;
 
   // Per-file read stagnation
   private perFileReadCount = new Map<string, number>();
@@ -92,7 +126,6 @@ export class StagnationDetector {
   constructor(options: StagnationDetectorOptions) {
     this.bus = options.bus;
     this.sessionState = options.sessionState;
-    this.resolveCategory = options.resolveCategory;
   }
 
   // ─── Public API ──────────────────────────────────────────────
@@ -184,81 +217,82 @@ export class StagnationDetector {
   }
 
   /**
-   * Generic no-progress detection for readonly inspection loops.
-   * Injects a nudge into messages when the LLM repeatedly runs readonly
-   * tools without making progress (no new coverage, findings, etc.).
-   * Returns a system message to inject, or null.
+   * LLM-as-judge stagnation detection. Periodically reviews recent conversation
+   * history + session state and returns a confidence score for stagnation.
+   * Returns a nudge string to inject, or null if no stagnation detected.
    */
-  maybeInjectNoProgressNudge(
-    toolCalls: ReadonlyArray<StagnationToolCall>,
-  ): string | null {
-    if (!this.sessionState || toolCalls.length === 0) return null;
+  async checkStagnationWithLLM(
+    provider: LLMProvider,
+    messages: ReadonlyArray<Message>,
+    iteration: number,
+  ): Promise<string | null> {
+    if (iteration < MIN_JUDGE_ITERATION) return null;
+    if (iteration - this.lastJudgeIteration < this.judgeInterval) return null;
 
-    // Phase guard: when all plan steps are completed the LLM is in verification
-    // mode. Readonly tool calls (git_diff, git_status) are expected and do not
-    // indicate stagnation. Disable NO_PROGRESS_LOOP for the verification phase.
-    const totalPlan = this.sessionState.getTotalPlanCount();
-    const completedPlan = this.sessionState.getPlanCompletedCount();
-    if (totalPlan > 0 && completedPlan >= totalPlan) {
+    this.lastJudgeIteration = iteration;
+
+    try {
+      // Extract original user request (first USER-role message)
+      const userRequest = messages.find((m) => m.role === MessageRole.USER);
+      const originalRequest = userRequest?.content ?? "(unknown request)";
+
+      // Slice last JUDGE_HISTORY_COUNT messages
+      const recentMessages = messages.slice(-JUDGE_HISTORY_COUNT);
+
+      // Build session state context
+      const stateContext = this.buildSessionStateContext();
+
+      // Build judge messages with rich tool call context
+      const formattedHistory = recentMessages.map((m) => formatMessageForJudge(m)).join("\n\n");
+
+      const judgeMessages: Message[] = [
+        { role: MessageRole.SYSTEM, content: STAGNATION_JUDGE_SYSTEM_PROMPT },
+        {
+          role: MessageRole.USER,
+          content: [
+            `## Original user request\n${originalRequest}`,
+            `## Session state\n${stateContext}`,
+            `## Current iteration: ${iteration}`,
+            `## Recent conversation (last ${recentMessages.length} messages)\n${formattedHistory}`,
+            `\nAssess whether the assistant is stuck in a stagnation loop. Respond with JSON only.`,
+          ].join("\n\n"),
+        },
+      ];
+
+      const responseText = await collectStreamText(provider, judgeMessages);
+
+      // Parse JSON response — strip markdown fences if present
+      const cleaned = responseText.replace(/```json\s*|```\s*/g, "").trim();
+      const parsed = JSON.parse(cleaned) as {
+        analysis: string;
+        stagnation_confidence: number;
+      };
+      const confidence = parsed.stagnation_confidence;
+
+      // Adapt interval based on confidence
+      if (confidence >= 0.7) {
+        this.judgeInterval = MIN_JUDGE_INTERVAL;
+      } else if (confidence <= 0.3) {
+        this.judgeInterval = MAX_JUDGE_INTERVAL;
+      } else {
+        this.judgeInterval = DEFAULT_JUDGE_INTERVAL;
+      }
+
+      if (confidence >= JUDGE_CONFIDENCE_THRESHOLD) {
+        this.bus.emit("error", {
+          message: `LLM stagnation judge detected stagnation (confidence: ${confidence.toFixed(2)}): ${parsed.analysis}`,
+          code: "LLM_STAGNATION_DETECTED",
+          fatal: false,
+        });
+
+        return `STAGNATION DETECTED (confidence: ${confidence.toFixed(2)}): ${parsed.analysis}\n\nYou are stuck in an unproductive loop. Stop repeating readonly operations. Either:\n1. Make file edits to advance the task\n2. Persist your findings with save_finding\n3. Finalize your response with what you know\n4. Ask the user for guidance if you are blocked`;
+      }
+
+      return null;
+    } catch {
+      // On any error (parse failure, provider error): return null gracefully
       return null;
     }
-
-    // Fatigue guard: when TOOL_FATIGUE is active for any tool, the LLM is in
-    // failure-recovery mode (readonly inspection is expected). Suppress
-    // NO_PROGRESS_LOOP to avoid compounding failure signals.
-    if (this.toolFatigueWarned.size > 0) {
-      return null;
-    }
-
-    const snapshot = this.makeProgressSnapshot();
-    if (!snapshot) return null;
-
-    const previous = this.lastProgressSnapshot;
-    this.lastProgressSnapshot = snapshot;
-    if (!previous) return null;
-
-    const hasReadonly = toolCalls.some((tc) => this.resolveCategory(tc.name) === "readonly");
-    const hasMutating = toolCalls.some((tc) => this.resolveCategory(tc.name) === "mutating");
-    if (hasMutating) {
-      this.stagnantReadonlyCycles = 0;
-      this.readonlyStallLock = false;
-      return null;
-    }
-    if (!hasReadonly) {
-      // State/agent-only batches should not reset readonly stagnation history.
-      return null;
-    }
-
-    const progressed = snapshot.toolSummaries > previous.toolSummaries
-      || snapshot.findings > previous.findings
-      || snapshot.coverageTargets > previous.coverageTargets
-      || snapshot.completedPlan > previous.completedPlan;
-
-    if (progressed) {
-      this.stagnantReadonlyCycles = 0;
-      this.readonlyStallLock = false;
-      return null;
-    }
-
-    this.stagnantReadonlyCycles++;
-    if (this.stagnantReadonlyCycles < NO_PROGRESS_THRESHOLD) return null;
-
-    this.stagnantReadonlyCycles = 0;
-    this.readonlyStallLock = true;
-    this.bus.emit("error", {
-      message: "Readonly no-progress loop detected: repeated inspections are not increasing coverage/findings.",
-      code: "NO_PROGRESS_LOOP",
-      fatal: false,
-    });
-    return "Readonly inspections are no longer increasing coverage or findings. Stop repetitive reads/diffs. If you already have enough evidence, persist remaining issues with save_finding and finalize your response. Otherwise switch to a different tool/action that produces new evidence.";
-  }
-
-  /**
-   * Check whether the readonly stall lock is currently engaged.
-   * When engaged, readonly inspection tools should be bypassed.
-   */
-  isReadonlyStallLocked(): boolean {
-    return this.readonlyStallLock;
   }
 
   /**
@@ -325,9 +359,8 @@ export class StagnationDetector {
    * and from resetIterations().
    */
   resetRunState(): void {
-    this.stagnantReadonlyCycles = 0;
-    this.lastProgressSnapshot = null;
-    this.readonlyStallLock = false;
+    this.lastJudgeIteration = 0;
+    this.judgeInterval = DEFAULT_JUDGE_INTERVAL;
     this.perFileReadCount.clear();
   }
 
@@ -345,18 +378,103 @@ export class StagnationDetector {
 
   // ─── Private ─────────────────────────────────────────────────
 
-  private makeProgressSnapshot(): ProgressSnapshot | null {
-    if (!this.sessionState) return null;
-    return {
-      toolSummaries: this.sessionState.getToolSummariesCount(),
-      findings: this.sessionState.getFindingsCount(),
-      coverageTargets: this.sessionState.getReadonlyCoverageTargetCount(),
-      completedPlan: this.sessionState.getPlanCompletedCount(),
-    };
+  private buildSessionStateContext(): string {
+    if (!this.sessionState) return "No session state available.";
+
+    const lines: string[] = [];
+
+    const plan = this.sessionState.getPlan();
+    if (plan && plan.length > 0) {
+      const completed = this.sessionState.getPlanCompletedCount();
+      const total = this.sessionState.getTotalPlanCount();
+      lines.push(`Plan progress: ${completed}/${total} steps completed`);
+      for (const step of plan) {
+        lines.push(`  [${step.status}] ${step.description}`);
+      }
+    } else {
+      lines.push("No plan set.");
+    }
+
+    const modifiedFiles = this.sessionState.getModifiedFiles();
+    lines.push(`Modified files: ${modifiedFiles.length}`);
+
+    const findings = this.sessionState.getFindings();
+    lines.push(`Findings: ${findings.length}`);
+
+    return lines.join("\n");
   }
 }
 
 // ─── Helpers ────────────────────────────────────────────────
+
+async function collectStreamText(
+  provider: LLMProvider,
+  messages: ReadonlyArray<Message>,
+): Promise<string> {
+  const chunks: string[] = [];
+  for await (const chunk of provider.chat(messages)) {
+    if (chunk.type === "text") {
+      chunks.push(chunk.content);
+    }
+  }
+  return chunks.join("");
+}
+
+/** Max characters for a single tool argument value in the judge context. */
+const JUDGE_ARG_MAX_CHARS = 200;
+/** Max characters for tool result content in the judge context. */
+const JUDGE_RESULT_MAX_CHARS = 300;
+
+/**
+ * Format a conversation message for the stagnation judge, preserving
+ * tool call names, arguments, and result context that the judge needs
+ * to distinguish productive batch work from stagnation loops.
+ */
+function formatMessageForJudge(m: Message): string {
+  const parts: string[] = [`[${m.role}]`];
+
+  // For ASSISTANT messages: include tool call details (names + arguments)
+  if (m.toolCalls && m.toolCalls.length > 0) {
+    for (const tc of m.toolCalls) {
+      const argsStr = formatToolArgs(tc.arguments);
+      parts.push(`  tool_call: ${tc.name}(${argsStr})`);
+    }
+  }
+
+  // For TOOL messages: include the tool call ID reference and result content
+  if (m.role === MessageRole.TOOL && m.toolCallId) {
+    parts.push(`  tool_result [${m.toolCallId}]`);
+  }
+
+  // Include text content if present (truncated)
+  if (m.content) {
+    const truncated = m.content.length > JUDGE_RESULT_MAX_CHARS
+      ? m.content.slice(0, JUDGE_RESULT_MAX_CHARS) + "..."
+      : m.content;
+    parts.push(`  ${truncated}`);
+  }
+
+  return parts.join("\n");
+}
+
+/**
+ * Format tool call arguments for judge context. Shows key=value pairs
+ * with values truncated, focusing on the arguments that matter for
+ * distinguishing stagnation (file paths, search patterns, etc.).
+ */
+function formatToolArgs(args: Record<string, unknown>): string {
+  const entries = Object.entries(args);
+  if (entries.length === 0) return "";
+  return entries
+    .map(([key, val]) => {
+      const str = typeof val === "string" ? val : JSON.stringify(val);
+      const truncated = str.length > JUDGE_ARG_MAX_CHARS
+        ? str.slice(0, JUDGE_ARG_MAX_CHARS) + "..."
+        : str;
+      return `${key}=${truncated}`;
+    })
+    .join(", ");
+}
 
 function normalizeRepoPath(filePath: string): string {
   const normalized = filePath.trim().replaceAll("\\", "/");

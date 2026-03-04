@@ -148,20 +148,6 @@ export function truncateToolOutput(output: string, maxChars: number = MAX_TOOL_O
 
 /** Tools whose output can be safely deduplicated (readonly, replaceable). */
 const DEDUP_TOOLS = new Set(["read_file", "git_diff", "git_status"]);
-/** Readonly inspection tools to pause when no-progress loops are detected.
- *  Only category:"readonly" tools belong here — the stall lock gate
- *  (normalizeToolCall) skips non-readonly categories before checking this set. */
-const STALL_LOCK_TOOLS = new Set([
-  "read_file",
-  "git_diff",
-  "git_status",
-  "search_files",
-  "find_files",
-  "symbols",
-  "diagnostics",
-  "execute_tool_script",
-]);
-
 // ─── Context & Pruning Thresholds ───────────────────────────
 
 /** Token budget for pinned messages — oldest unpinned when exceeded. */
@@ -258,7 +244,6 @@ export class TaskLoop {
     this.stagnationDetector = new StagnationDetector({
       bus: this.bus,
       sessionState: this.sessionState,
-      resolveCategory: (toolName: string) => this.tools.get(toolName).category,
     });
 
     // Initialize messages: from previous session or fresh system prompt
@@ -448,13 +433,12 @@ export class TaskLoop {
           }
         }
 
-        // Generic no-progress detection for readonly inspection loops.
-        const noProgressNudge = this.stagnationDetector.maybeInjectNoProgressNudge(toolCalls);
-        if (noProgressNudge) {
-          this.pushMessage({
-            role: MessageRole.SYSTEM,
-            content: noProgressNudge,
-          });
+        // LLM-as-judge stagnation check: periodic review of conversation history.
+        const stagnationNudge = await this.stagnationDetector.checkStagnationWithLLM(
+          this.provider, this.messages, this.iterations,
+        );
+        if (stagnationNudge) {
+          this.pushMessage({ role: MessageRole.SYSTEM, content: stagnationNudge });
         }
 
         // Doom loop detection: warn the LLM if it's repeating identical failing calls
@@ -1126,19 +1110,6 @@ export class TaskLoop {
     category: ToolSpec["category"],
   ): NormalizedToolCall {
     if (category !== "readonly") return { toolCall, bypassResult: null, scriptSteps: null };
-    if (this.stagnationDetector.isReadonlyStallLocked() && STALL_LOCK_TOOLS.has(toolCall.name)) {
-      return {
-        toolCall,
-        bypassResult: {
-          success: true,
-          output:
-            `Readonly inspection paused due to repeated no-progress cycles. Stop re-running ${toolCall.name}; either persist findings and finalize, or switch to a different action that produces new evidence.`,
-          error: null,
-          artifacts: [],
-        },
-        scriptSteps: null,
-      };
-    }
     if (toolCall.name === "execute_tool_script") {
       return this.normalizeToolScriptCall(toolCall);
     }
