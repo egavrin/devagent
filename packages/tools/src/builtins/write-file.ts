@@ -22,6 +22,12 @@ export const writeFileTool: ToolSpec = {
     },
     required: ["path", "content"],
   },
+  errorGuidance: {
+    common: "write_file only creates new files. Use replace_in_file to modify existing files.",
+    patterns: [
+      { match: "overwrite", hint: "This file already exists. Use replace_in_file to edit it, or choose a different filename." },
+    ],
+  },
   resultSchema: {
     type: "object",
     properties: {

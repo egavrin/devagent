@@ -7190,4 +7190,230 @@ type RunResult = string
     });
   });
 
+  describe("applyErrorGuidance", () => {
+    it("appends common hint on tool failure when errorGuidance is set", async () => {
+      const failingTool: ToolSpec = {
+        name: "failing_tool",
+        description: "A tool that fails",
+        category: "readonly",
+        paramSchema: { type: "object", properties: {} },
+        resultSchema: { type: "object" },
+        errorGuidance: {
+          common: "Try a different approach.",
+        },
+        handler: async () => ({
+          success: false,
+          output: "",
+          error: "Something went wrong",
+          artifacts: [],
+        }),
+      };
+
+      const registry = new ToolRegistry();
+      registry.register(failingTool);
+
+      const provider = createMockProvider([
+        [
+          { type: "tool_call", content: "{}", toolName: "failing_tool", toolCallId: "tc1" },
+          { type: "done", content: "" },
+        ],
+        [
+          { type: "text", content: "Done" },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const bus = new EventBus();
+      const gate = new ApprovalGate({ mode: ApprovalMode.FULL_AUTO, auditLog: false, toolOverrides: {}, pathRules: [] });
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config: makeConfig(),
+        repoRoot: "/tmp/test-repo",
+      });
+
+      loop.pushMessage({ role: MessageRole.SYSTEM, content: "You are a test assistant." });
+      loop.pushMessage({ role: MessageRole.USER, content: "Run failing_tool" });
+
+      await loop.run();
+
+      const toolMsg = loop.getMessages().find(
+        (m) => m.role === MessageRole.TOOL && m.content?.includes("[Recovery hint]"),
+      );
+      expect(toolMsg).toBeDefined();
+      expect(toolMsg!.content).toContain("Try a different approach.");
+    });
+
+    it("uses pattern-matched hint when error matches a pattern", async () => {
+      const failingTool: ToolSpec = {
+        name: "pattern_tool",
+        description: "A tool with pattern guidance",
+        category: "readonly",
+        paramSchema: { type: "object", properties: {} },
+        resultSchema: { type: "object" },
+        errorGuidance: {
+          common: "Generic hint.",
+          patterns: [
+            { match: "not found", hint: "File not found — use find_files to locate it." },
+            { match: "timeout", hint: "Command timed out — try a smaller scope." },
+          ],
+        },
+        handler: async () => ({
+          success: false,
+          output: "",
+          error: "File not found: src/missing.ts",
+          artifacts: [],
+        }),
+      };
+
+      const registry = new ToolRegistry();
+      registry.register(failingTool);
+
+      const provider = createMockProvider([
+        [
+          { type: "tool_call", content: "{}", toolName: "pattern_tool", toolCallId: "tc1" },
+          { type: "done", content: "" },
+        ],
+        [
+          { type: "text", content: "Done" },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const bus = new EventBus();
+      const gate = new ApprovalGate({ mode: ApprovalMode.FULL_AUTO, auditLog: false, toolOverrides: {}, pathRules: [] });
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config: makeConfig(),
+        repoRoot: "/tmp/test-repo",
+      });
+
+      loop.pushMessage({ role: MessageRole.SYSTEM, content: "Test" });
+      loop.pushMessage({ role: MessageRole.USER, content: "Run pattern_tool" });
+
+      await loop.run();
+
+      const toolMsg = loop.getMessages().find(
+        (m) => m.role === MessageRole.TOOL && m.content?.includes("[Recovery hint]"),
+      );
+      expect(toolMsg).toBeDefined();
+      expect(toolMsg!.content).toContain("File not found — use find_files to locate it.");
+      expect(toolMsg!.content).not.toContain("Generic hint.");
+    });
+
+    it("does not append hint on success", async () => {
+      const succeedingTool: ToolSpec = {
+        name: "ok_tool",
+        description: "A tool that succeeds",
+        category: "readonly",
+        paramSchema: { type: "object", properties: {} },
+        resultSchema: { type: "object" },
+        errorGuidance: {
+          common: "This should never appear.",
+        },
+        handler: async () => ({
+          success: true,
+          output: "All good",
+          error: null,
+          artifacts: [],
+        }),
+      };
+
+      const registry = new ToolRegistry();
+      registry.register(succeedingTool);
+
+      const provider = createMockProvider([
+        [
+          { type: "tool_call", content: "{}", toolName: "ok_tool", toolCallId: "tc1" },
+          { type: "done", content: "" },
+        ],
+        [
+          { type: "text", content: "Done" },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const bus = new EventBus();
+      const gate = new ApprovalGate({ mode: ApprovalMode.FULL_AUTO, auditLog: false, toolOverrides: {}, pathRules: [] });
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config: makeConfig(),
+        repoRoot: "/tmp/test-repo",
+      });
+
+      loop.pushMessage({ role: MessageRole.SYSTEM, content: "Test" });
+      loop.pushMessage({ role: MessageRole.USER, content: "Run ok_tool" });
+
+      await loop.run();
+
+      const toolMsg = loop.getMessages().find(
+        (m) => m.role === MessageRole.TOOL && m.content?.includes("[Recovery hint]"),
+      );
+      expect(toolMsg).toBeUndefined();
+    });
+
+    it("does not append hint when errorGuidance is absent", async () => {
+      const noGuidanceTool: ToolSpec = {
+        name: "bare_tool",
+        description: "A tool without guidance",
+        category: "readonly",
+        paramSchema: { type: "object", properties: {} },
+        resultSchema: { type: "object" },
+        handler: async () => ({
+          success: false,
+          output: "",
+          error: "Something broke",
+          artifacts: [],
+        }),
+      };
+
+      const registry = new ToolRegistry();
+      registry.register(noGuidanceTool);
+
+      const provider = createMockProvider([
+        [
+          { type: "tool_call", content: "{}", toolName: "bare_tool", toolCallId: "tc1" },
+          { type: "done", content: "" },
+        ],
+        [
+          { type: "text", content: "Done" },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const bus = new EventBus();
+      const gate = new ApprovalGate({ mode: ApprovalMode.FULL_AUTO, auditLog: false, toolOverrides: {}, pathRules: [] });
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config: makeConfig(),
+        repoRoot: "/tmp/test-repo",
+      });
+
+      loop.pushMessage({ role: MessageRole.SYSTEM, content: "Test" });
+      loop.pushMessage({ role: MessageRole.USER, content: "Run bare_tool" });
+
+      await loop.run();
+
+      const toolMsg = loop.getMessages().find(
+        (m) => m.role === MessageRole.TOOL && m.content?.includes("[Recovery hint]"),
+      );
+      expect(toolMsg).toBeUndefined();
+    });
+  });
+
 });

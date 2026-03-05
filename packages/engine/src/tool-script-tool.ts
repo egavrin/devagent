@@ -26,6 +26,15 @@ export function createToolScriptTool(ctx: ToolScriptToolContext): ToolSpec {
       "Only readonly tools are allowed (find_files, read_file, search_files, git_status, etc.). " +
       "Tool names must be canonical (for example read_file, not functions.read_file).",
     category: "readonly",
+    errorGuidance: {
+      common: "Break the script into individual tool calls. Check that tool names are bare canonical names (e.g. read_file, not functions.read_file) and args are valid JSON strings.",
+      patterns: [
+        { match: "forward reference", hint: "Step references must refer to earlier steps. Reorder your steps so referenced steps come first." },
+        { match: "Unknown tool", hint: "Check the tool name — only readonly tools are allowed (read_file, search_files, find_files, git_status, git_diff)." },
+        { match: "steps failed", hint: "Some steps failed. Check the [FAILED] steps in the output. Consider using individual tool calls for the failed operations." },
+        { match: "Invalid steps", hint: "The steps parameter must be a JSON array of {id, tool, args} objects. Each args value must be a JSON string, not an object." },
+      ],
+    },
     paramSchema: {
       type: "object",
       properties: {

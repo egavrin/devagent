@@ -8,6 +8,7 @@ export type {
   AgentMessage,
   AgentResult,
   ToolSpec,
+  ToolErrorGuidance,
   ToolContext,
   ToolResult,
   ToolHandler,

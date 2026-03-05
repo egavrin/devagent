@@ -23,6 +23,12 @@ export const readFileTool: ToolSpec = {
     },
     required: ["path"],
   },
+  errorGuidance: {
+    common: "Use find_files to verify the file path exists before reading.",
+    patterns: [
+      { match: "not found", hint: "File does not exist at this path. Use find_files to discover the correct location." },
+    ],
+  },
   resultSchema: {
     type: "object",
     properties: {

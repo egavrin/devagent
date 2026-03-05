@@ -42,6 +42,9 @@ export const searchFilesTool: ToolSpec = {
     },
     required: ["pattern"],
   },
+  errorGuidance: {
+    common: "Try a different search pattern or broader file_pattern. Use find_files to verify the project structure first.",
+  },
   resultSchema: {
     type: "object",
     properties: {

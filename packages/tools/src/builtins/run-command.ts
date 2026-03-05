@@ -52,6 +52,13 @@ export const runCommandTool: ToolSpec = {
     },
     required: ["command"],
   },
+  errorGuidance: {
+    common: "Read the earliest stderr line — it is usually the root cause. Fix the underlying code or config, then re-run.",
+    patterns: [
+      { match: "timed out", hint: "Command timed out. Try a more targeted command (e.g., single test file instead of full suite)." },
+      { match: "not found", hint: "Command not found. Check the project's package.json scripts or use the project's package manager." },
+    ],
+  },
   resultSchema: {
     type: "object",
     properties: {

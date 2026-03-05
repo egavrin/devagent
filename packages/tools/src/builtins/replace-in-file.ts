@@ -517,6 +517,15 @@ export const replaceInFileTool: ToolSpec = {
     },
     required: ["path"],
   },
+  errorGuidance: {
+    common: "Re-read the file with read_file and copy the exact current text as your search parameter.",
+    patterns: [
+      { match: "not found", hint: "The search text doesn't match. Re-read the file — it may have changed since your last read. Copy the exact text from read_file output." },
+      { match: "multiple matches", hint: "The search text matches multiple locations. Add 1-3 surrounding context lines to make it unique." },
+      { match: "No-op", hint: "The replacement produced identical content. Check that your replace text is actually different from the search text." },
+      { match: "Missing required", hint: "Check that tool arguments are valid JSON with both 'search' and 'replace' fields." },
+    ],
+  },
   resultSchema: {
     type: "object",
     properties: {

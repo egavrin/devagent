@@ -45,6 +45,17 @@ export interface AgentResult {
 
 // ─── Tool Types ───────────────────────────────────────────────
 
+/** Recovery guidance appended to tool error messages on failure. */
+export interface ToolErrorGuidance {
+  /** Always appended on first failure of this tool. */
+  readonly common: string;
+  /** Pattern-matched hints — first substring match wins, overrides common. */
+  readonly patterns?: ReadonlyArray<{
+    readonly match: string;
+    readonly hint: string;
+  }>;
+}
+
 export interface ToolSpec {
   readonly name: string;
   readonly description: string;
@@ -52,6 +63,8 @@ export interface ToolSpec {
   readonly paramSchema: JsonSchema;
   readonly resultSchema: JsonSchema;
   readonly handler: ToolHandler;
+  /** Optional error recovery guidance appended to error messages on failure. */
+  readonly errorGuidance?: ToolErrorGuidance;
 }
 
 export type ToolCategory = "readonly" | "mutating" | "workflow" | "external" | "state";

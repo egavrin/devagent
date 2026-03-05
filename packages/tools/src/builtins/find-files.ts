@@ -31,6 +31,9 @@ export const findFilesTool: ToolSpec = {
     },
     required: ["pattern"],
   },
+  errorGuidance: {
+    common: "Try a broader glob pattern. Check that you are searching in the correct directory.",
+  },
   resultSchema: {
     type: "object",
     properties: {

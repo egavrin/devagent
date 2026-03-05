@@ -36,6 +36,9 @@ export function createPlanTool(
     description:
       "Track progress on multi-step tasks. Create or update a plan with steps (pending/in_progress/completed). Use for tasks with 3+ steps. Keep step descriptions under 7 words. One step should be in_progress at a time.",
     category: "state",
+    errorGuidance: {
+      common: "Ensure steps is a valid JSON array of {description, status} objects. Valid statuses: pending, in_progress, completed.",
+    },
     paramSchema: {
       type: "object",
       properties: {

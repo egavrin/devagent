@@ -504,14 +504,40 @@ export class TaskLoop {
             content: textContent,
             partial: false,
           });
-          const nudge = hasIncompleteSteps
-            ? "Your plan has incomplete steps. Continue working — use tools to make progress on the next pending step."
-            : "You outlined next steps but did not use any tools. Use update_plan to create a plan, then use tools to start working.";
           this.pushMessage({
             role: MessageRole.SYSTEM,
-            content: nudge,
+            content: "Your plan has incomplete steps. Continue working — use tools to make progress on the next pending step.",
           });
           continue;
+        }
+
+        // Safety cap: don't call judge if we've already hit max continuations
+        if (textOnlyContinuations >= MAX_TEXT_CONTINUATIONS) {
+          // Fall through to exit
+        } else {
+          // LLM completion judge: classify this text as final answer vs progress update
+          const originalRequest = this.messages.find((m) => m.role === MessageRole.USER)?.content ?? "";
+          const judgeResult = await judgeCompletion(
+            this.provider, textContent, originalRequest,
+            this.sessionState, this.iterations, hadToolCalls,
+          );
+
+          if (judgeResult && !judgeResult.is_final && judgeResult.confidence >= 0.7) {
+            textOnlyContinuations++;
+            this.pushMessage({
+              role: MessageRole.ASSISTANT,
+              content: textContent,
+            });
+            this.bus.emit("message:assistant", {
+              content: textContent,
+              partial: false,
+            });
+            this.pushMessage({
+              role: MessageRole.SYSTEM,
+              content: "You described next steps but haven't executed them. Continue working — use tools to make progress.",
+            });
+            continue;
+          }
         }
 
         this.pushMessage({
@@ -972,7 +998,21 @@ export class TaskLoop {
   }
 
   /**
-   * Format a tool result, push to messages, and emit the bus event.
+   * Append co-located error guidance from the tool definition.
+   * Deterministic, free (no LLM call), runs on every failure.
+   */
+  private applyErrorGuidance(result: ToolResult, tool: ToolSpec): void {
+    if (result.success || !result.error || !tool.errorGuidance) return;
+    const guidance = tool.errorGuidance;
+    let hint = guidance.common;
+    if (guidance.patterns) {
+      const matched = guidance.patterns.find((p) => result.error!.includes(p.match));
+      if (matched) hint = matched.hint;
+    }
+    (result as { error: string | null }).error += `\n[Recovery hint] ${hint}`;
+  }
+
+  /**
    * Classify tool errors using the LLM judge and append classification
    * to the error message. Mutates result.error in place when applicable.
    */
@@ -1564,6 +1604,9 @@ export class TaskLoop {
     }
 
     const durationMs = Date.now() - startTime;
+
+    // Append co-located error guidance from the tool definition (free, deterministic)
+    this.applyErrorGuidance(result, tool);
 
     // Track recent tool calls for doom loop + tool fatigue detection
     this.stagnationDetector.recordToolResult(effectiveCall.name, effectiveCall.arguments, result.success);

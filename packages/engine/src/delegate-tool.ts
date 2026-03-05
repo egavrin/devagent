@@ -45,6 +45,9 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
     description:
       "Spawn a subagent to handle a subtask. Choose the agent type based on the task: 'general' for implementation, 'reviewer' for code review, 'architect' for design/planning.",
     category: "workflow",
+    errorGuidance: {
+      common: "Verify the agent type is valid (general, reviewer, architect). Ensure the task description is specific and actionable.",
+    },
     paramSchema: {
       type: "object",
       properties: {

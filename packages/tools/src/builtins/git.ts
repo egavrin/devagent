@@ -110,6 +110,9 @@ export const gitStatusTool: ToolSpec = {
   name: "git_status",
   description: "Show the working tree status (modified, staged, untracked files). Use before committing to verify changed files.",
   category: "readonly",
+  errorGuidance: {
+    common: "Ensure you are in a git repository.",
+  },
   paramSchema: {
     type: "object",
     properties: {},
@@ -136,6 +139,9 @@ export const gitDiffTool: ToolSpec = {
   description:
     "Show changes between commits, working tree, etc. Optionally specify a file path or ref. Use after edits to verify modifications, or before committing to review changes.",
   category: "readonly",
+  errorGuidance: {
+    common: "Check that the ref or file path exists. Use git_status to see current state.",
+  },
   paramSchema: {
     type: "object",
     properties: {
@@ -201,6 +207,9 @@ export const gitCommitTool: ToolSpec = {
   description:
     "Stage files and create a git commit. Requires a commit message. Only use when explicitly requested by the user. Specify individual files rather than '.'. Never commit .env or secrets.",
   category: "mutating",
+  errorGuidance: {
+    common: "Verify file paths with git_status before committing. Ensure files are not in .gitignore.",
+  },
   paramSchema: {
     type: "object",
     properties: {
