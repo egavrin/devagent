@@ -37,6 +37,18 @@ export class OutputState {
   /** Whether we're currently buffering text. */
   isBufferingText = false;
 
+  /** Pending tool group for collapsing consecutive same-tool calls. */
+  pendingToolGroup: {
+    name: string;
+    count: number;
+    params: string[];
+    totalDurationMs: number;
+    lastSuccess: boolean;
+    lastError: string | undefined;
+    iteration: number;
+    maxIter: number;
+  } | null = null;
+
   // ─── Session-level state ────────────────────────────────────
 
   sessionTotalIterations = 0;
@@ -60,6 +72,7 @@ export class OutputState {
     this.turnCostDelta = 0;
     this.textBuffer = "";
     this.isBufferingText = false;
+    this.pendingToolGroup = null;
   }
 
   /** Reset session-level counters (e.g. on a fresh CLI invocation). */

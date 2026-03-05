@@ -13,6 +13,15 @@ import {
   formatTurnSummary,
   formatSessionSummary,
   formatCompactionResult,
+  formatReasoning,
+  Spinner,
+  SPINNER_VERBS,
+  toolVerb,
+  formatToolStart,
+  formatToolEnd,
+  formatToolGroupStart,
+  formatToolGroupEnd,
+  StatusBar,
 } from "./format.js";
 import type { VerbosityConfig } from "@devagent/core";
 
@@ -448,5 +457,249 @@ describe("formatSessionSummary", () => {
     expect(result).toContain("file_14.ts");
     expect(result).not.toContain("file_15.ts");
     expect(result).toContain("+5 more");
+  });
+});
+
+// ─── Reasoning Display ───────────────────────────────────────
+
+describe("formatReasoning", () => {
+  it("returns dimmed text with info icon", () => {
+    const result = formatReasoning("I'll read the file to understand the structure");
+    expect(result).toContain("ℹ");
+    expect(result).toContain("read the file");
+  });
+
+  it("returns null for empty string", () => {
+    expect(formatReasoning("")).toBeNull();
+  });
+
+  it("returns null for whitespace-only string", () => {
+    expect(formatReasoning("   \n  \t  ")).toBeNull();
+  });
+
+  it("truncates to 120 chars with ellipsis", () => {
+    const long = "A".repeat(200);
+    const result = formatReasoning(long);
+    expect(result).not.toBeNull();
+    // Strip ANSI codes to check length
+    const stripped = result!.replace(/\x1b\[[0-9;]*m/g, "");
+    // "  ℹ " prefix (4 chars) + 119 chars + "…" = 124 chars
+    expect(stripped.length).toBeLessThanOrEqual(125);
+  });
+
+  it("collapses newlines to spaces", () => {
+    const result = formatReasoning("First line\nSecond line\nThird line");
+    expect(result).not.toBeNull();
+    const stripped = result!.replace(/\x1b\[[0-9;]*m/g, "");
+    expect(stripped).not.toContain("\n");
+    expect(stripped).toContain("First line Second line");
+  });
+
+  it("takes first sentence if shorter than 120 chars", () => {
+    const result = formatReasoning("I need to check the file. Then I will edit it and run the tests to make sure everything works correctly.");
+    expect(result).not.toBeNull();
+    const stripped = result!.replace(/\x1b\[[0-9;]*m/g, "");
+    expect(stripped).toContain("I need to check the file.");
+    expect(stripped).not.toContain("Then I will");
+  });
+});
+
+// ─── Rotating Spinner Verbs ──────────────────────────────────
+
+describe("SPINNER_VERBS", () => {
+  it("contains at least 10 verbs", () => {
+    expect(SPINNER_VERBS.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("does not contain duplicates", () => {
+    const unique = new Set(SPINNER_VERBS);
+    expect(unique.size).toBe(SPINNER_VERBS.length);
+  });
+
+  it("contains 'Thinking' as the first verb", () => {
+    expect(SPINNER_VERBS[0]).toBe("Thinking");
+  });
+});
+
+// ─── Human-Readable Tool Verbs ───────────────────────────────
+
+describe("toolVerb", () => {
+  it("returns present and past tense for read_file", () => {
+    const verb = toolVerb("read_file");
+    expect(verb.present).toBe("Reading");
+    expect(verb.past).toBe("Read");
+  });
+
+  it("returns present and past tense for write_file", () => {
+    const verb = toolVerb("write_file");
+    expect(verb.present).toBe("Writing");
+    expect(verb.past).toBe("Wrote");
+  });
+
+  it("returns present and past tense for replace_in_file", () => {
+    const verb = toolVerb("replace_in_file");
+    expect(verb.present).toBe("Editing");
+    expect(verb.past).toBe("Edited");
+  });
+
+  it("returns present and past tense for search_files", () => {
+    const verb = toolVerb("search_files");
+    expect(verb.present).toBe("Searching");
+    expect(verb.past).toBe("Searched");
+  });
+
+  it("returns present and past tense for run_command", () => {
+    const verb = toolVerb("run_command");
+    expect(verb.present).toBe("Running");
+    expect(verb.past).toBe("Ran");
+  });
+
+  it("returns fallback for unknown tools", () => {
+    const verb = toolVerb("some_custom_tool");
+    expect(verb.present).toBe("Calling some_custom_tool");
+    expect(verb.past).toBe("Called some_custom_tool");
+  });
+});
+
+describe("formatToolStart with verbs", () => {
+  it("uses present-tense verb instead of raw tool name", () => {
+    const result = formatToolStart("read_file", { path: "src/main.ts" }, 1, 30);
+    expect(result).toContain("Reading");
+    expect(result).toContain("src/main.ts");
+    expect(result).not.toContain("read_file");
+  });
+
+  it("uses present-tense verb for search_files", () => {
+    const result = formatToolStart("search_files", { pattern: "handleAuth" }, 2, 30);
+    expect(result).toContain("Searching");
+    expect(result).toContain("handleAuth");
+  });
+});
+
+describe("formatToolEnd with verbs", () => {
+  it("uses past-tense verb and includes param summary on success", () => {
+    const result = formatToolEnd("read_file", true, 120, undefined, { path: "src/main.ts" });
+    expect(result).toContain("Read");
+    expect(result).toContain("src/main.ts");
+    expect(result).toContain("120ms");
+  });
+
+  it("uses past-tense verb on failure", () => {
+    const result = formatToolEnd("run_command", false, 3000, "exit code 1", { command: "bun test" });
+    expect(result).toContain("Ran");
+    expect(result).toContain("exit code 1");
+  });
+});
+
+// ─── Tool Grouping ──────────────────────────────────────────
+
+describe("formatToolGroupStart", () => {
+  it("formats grouped read_file calls", () => {
+    const result = formatToolGroupStart(
+      "read_file", 3, ["src/main.ts", "src/format.ts", "src/output-state.ts"],
+      1, 30,
+    );
+    expect(result).toContain("Reading");
+    expect(result).toContain("3 files");
+    expect(result).toContain("src/main.ts");
+    expect(result).toContain("src/format.ts");
+    expect(result).toContain("src/output-state.ts");
+  });
+
+  it("truncates params list beyond 3 items", () => {
+    const result = formatToolGroupStart(
+      "read_file", 5,
+      ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"],
+      2, 30,
+    );
+    expect(result).toContain("5 files");
+    expect(result).toContain("a.ts");
+    expect(result).toContain("b.ts");
+    expect(result).toContain("c.ts");
+    expect(result).toContain("+2 more");
+    expect(result).not.toContain("d.ts");
+  });
+
+  it("uses generic 'calls' for non-file tools", () => {
+    const result = formatToolGroupStart(
+      "run_command", 3, ["ls", "pwd", "whoami"],
+      1, 30,
+    );
+    expect(result).toContain("Running");
+    expect(result).toContain("3 calls");
+  });
+});
+
+describe("formatToolGroupEnd", () => {
+  it("formats grouped completion with total duration", () => {
+    const result = formatToolGroupEnd("read_file", 3, true, 303);
+    expect(result).toContain("Read");
+    expect(result).toContain("3 files");
+    expect(result).toContain("303ms");
+  });
+
+  it("formats failure", () => {
+    const result = formatToolGroupEnd("run_command", 2, false, 5000, "exit code 1");
+    expect(result).toContain("Ran");
+    expect(result).toContain("2 calls");
+    expect(result).toContain("exit code 1");
+  });
+});
+
+// ─── Status Bar ─────────────────────────────────────────────
+
+describe("StatusBar", () => {
+  it("constructs with enabled=false without errors", () => {
+    const bar = new StatusBar(false);
+    expect(bar.active).toBe(false);
+  });
+
+  it("formatLine returns formatted status content", () => {
+    const bar = new StatusBar(false);
+    const line = bar.formatLine({
+      iteration: 3,
+      maxIter: 30,
+      tokens: 45000,
+      maxTokens: 128000,
+      cost: 0.0234,
+      branch: "main",
+    });
+    expect(line).toContain("iter 3/30");
+    expect(line).toContain("45k/128k");
+    expect(line).toContain("$0.0234");
+    expect(line).toContain("main");
+  });
+
+  it("formatLine omits zero-value fields", () => {
+    const bar = new StatusBar(false);
+    const line = bar.formatLine({
+      iteration: 1,
+      maxIter: 0,
+      tokens: 0,
+      maxTokens: 0,
+      cost: 0,
+    });
+    expect(line).toContain("iter 1");
+    expect(line).not.toContain("k/");
+    expect(line).not.toContain("$");
+  });
+
+  it("formatLine color-codes tokens by usage ratio", () => {
+    const bar = new StatusBar(false);
+
+    // > 80% = red
+    const highUsage = bar.formatLine({
+      iteration: 1, maxIter: 30,
+      tokens: 110000, maxTokens: 128000, cost: 0,
+    });
+    // Should contain red ANSI (31m)
+    expect(highUsage).toContain("\x1b[31m");
+
+    // 60-80% = yellow
+    const midUsage = bar.formatLine({
+      iteration: 1, maxIter: 30,
+      tokens: 90000, maxTokens: 128000, cost: 0,
+    });
+    expect(midUsage).toContain("\x1b[33m");
   });
 });

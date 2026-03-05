@@ -57,6 +57,9 @@ import {
   dim, red, cyan, green, yellow, bold,
   formatToolStart,
   formatToolEnd,
+  formatToolGroupStart,
+  formatToolGroupEnd,
+  summarizeToolParams,
   formatPlan,
   formatSummary,
   formatError,
@@ -70,6 +73,8 @@ import {
   formatTurnSummary,
   formatSessionSummary,
   formatCompactionResult,
+  formatReasoning,
+  StatusBar,
 } from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { OutputState } from "./output-state.js";
@@ -98,6 +103,7 @@ interface RunOptions {
   readonly verbosityConfig: VerbosityConfig;
   readonly sessionState: SessionState;
   readonly briefing?: TurnBriefing;
+  readonly statusBar?: StatusBar;
 }
 
 interface RunSingleQueryOptions extends RunOptions {
@@ -131,6 +137,7 @@ interface CliArgs {
   resume: string | null;
   continue_: boolean;
   review: ReviewArgs | null;
+  noStatusBar: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -150,6 +157,7 @@ function parseArgs(argv: string[]): CliArgs {
     resume: null,
     continue_: false,
     review: null,
+    noStatusBar: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -218,6 +226,8 @@ function parseArgs(argv: string[]): CliArgs {
       result.resume = args[++i]!;
     } else if (arg === "--continue") {
       result.continue_ = true;
+    } else if (arg === "--no-status-bar") {
+      result.noStatusBar = true;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -452,12 +462,13 @@ async function setupTools(
   cliArgs: CliArgs,
   projectRoot: string,
   provider: LLMProvider,
+  statusBar?: StatusBar,
 ): Promise<ToolsSetupResult> {
   const toolRegistry = createDefaultToolRegistry();
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
   const verbosityConfig = buildVerbosityConfig(cliArgs.verbosity, cliArgs.verboseCategories);
-  const { lspToolCounts } = setupEventHandlers(bus, config, cliArgs.verbosity, verbosityConfig);
+  const { lspToolCounts } = setupEventHandlers(bus, config, cliArgs.verbosity, verbosityConfig, undefined, statusBar);
   const trackInternalLSPDiagnostics = () => {
     const key = "diagnostics(double-check)";
     lspToolCounts.set(key, (lspToolCounts.get(key) ?? 0) + 1);
@@ -1042,6 +1053,20 @@ export async function main(): Promise<void> {
   // ─── 1. Config ─────────────────────────────────────────────
   const { config, projectRoot } = await setupConfig(cliArgs);
 
+  // Detect git branch for status bar
+  let gitBranch: string | undefined;
+  try {
+    gitBranch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: projectRoot, encoding: "utf-8" }).trim();
+  } catch {
+    // Not in a git repo or git not available
+  }
+
+  // Create status bar
+  const statusBarEnabled = cliArgs.verbosity !== "quiet" && !cliArgs.noStatusBar;
+  const statusBar = new StatusBar(statusBarEnabled);
+  if (gitBranch) statusBar.update({ branch: gitBranch });
+  process.on("exit", () => statusBar.cleanup());
+
   // ─── 2. Provider ───────────────────────────────────────────
   const { provider } = setupProvider(config, cliArgs);
 
@@ -1110,7 +1135,7 @@ export async function main(): Promise<void> {
   }
 
   // ─── 3. Tools, bus, gate, plugins, MCP, memory, checkpoints ──
-  const tools = await setupTools(config, cliArgs, projectRoot, provider);
+  const tools = await setupTools(config, cliArgs, projectRoot, provider, statusBar);
 
   // ─── 4. LSP ────────────────────────────────────────────────
   const lsp = await setupLSP(
@@ -1145,6 +1170,7 @@ export async function main(): Promise<void> {
       verbosityConfig: tools.verbosityConfig,
       sessionState: tools.sessionState,
       briefing: persistence.resumeBriefing,
+      statusBar,
     };
 
     if (cliArgs.interactive) {
@@ -1224,9 +1250,28 @@ function setupEventHandlers(
   verbosity: Verbosity,
   verbosityConfig?: VerbosityConfig,
   os: OutputState = outputState,
+  statusBar?: StatusBar,
 ): { lspToolCounts: Map<string, number> } {
   const maxIter = config.budget.maxIterations;
   const vc = verbosityConfig ?? buildVerbosityConfig(verbosity, undefined);
+  const toolParamsCache = new Map<string, Record<string, unknown>>();
+
+  function flushToolGroup(): void {
+    const group = os.pendingToolGroup;
+    if (!group || group.count <= 1) {
+      os.pendingToolGroup = null;
+      return;
+    }
+    os.pendingToolGroup = null;
+
+    // Write group start + end lines
+    spinner.log(
+      formatToolGroupStart(group.name, group.count, group.params, group.iteration, group.maxIter),
+    );
+    spinner.log(
+      formatToolGroupEnd(group.name, group.count, group.lastSuccess, group.totalDurationMs, group.lastError),
+    );
+  }
 
   // ─── Iteration tracking ─────────────────────────────────────
 
@@ -1244,12 +1289,19 @@ function setupEventHandlers(
     // Stop spinner — a tool call arrived
     spinner.stop();
 
-    // Discard any buffered thinking text that preceded these tool calls
+    // Show buffered thinking text as dimmed reasoning, then clear
+    if (os.textBuffer.trim() && verbosity !== "quiet") {
+      const reasoningLine = formatReasoning(os.textBuffer);
+      if (reasoningLine) {
+        spinner.log(reasoningLine);
+      }
+    }
     os.textBuffer = "";
     os.isBufferingText = false;
 
     os.hadToolCalls = true;
     os.turnToolCallCount++;
+    toolParamsCache.set(event.callId, event.params);
 
     if (verbosity === "quiet" && !isCategoryEnabled("tools", vc)) return;
 
@@ -1257,46 +1309,97 @@ function setupEventHandlers(
       ? formatContextGauge(os.currentTokens, os.maxContextTokens)
       : undefined;
 
+    const summary = summarizeToolParams(event.name, event.params);
+
+    // Verbose mode: no grouping, show every call individually
     if (isCategoryEnabled("tools", vc)) {
-      // Verbose tools: show full params as JSON
+      flushToolGroup();
       const line = formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge);
       process.stderr.write(line + "\n");
       process.stderr.write(dim(`  params: ${JSON.stringify(event.params, null, 2)}`) + "\n");
-    } else if (verbosity !== "quiet") {
-      // Normal: concise summary
-      process.stderr.write(
-        formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge) + "\n",
-      );
+      return;
     }
+
+    if (verbosity === "quiet") return;
+
+    // Grouping: check if same tool as pending group
+    if (os.pendingToolGroup && os.pendingToolGroup.name === event.name) {
+      os.pendingToolGroup.count++;
+      if (summary) os.pendingToolGroup.params.push(summary);
+      return;  // Don't print individual start line
+    }
+
+    // Different tool or no group — flush previous group and start new one
+    flushToolGroup();
+    os.pendingToolGroup = {
+      name: event.name,
+      count: 1,
+      params: summary ? [summary] : [],
+      totalDurationMs: 0,
+      lastSuccess: true,
+      lastError: undefined,
+      iteration: os.currentIteration,
+      maxIter,
+    };
+    // Show the first call immediately (it might end up being a single call)
+    process.stderr.write(
+      formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge) + "\n",
+    );
   });
 
   bus.on("tool:after", (event) => {
     if (event.name.startsWith("audit:")) return;
 
-    // Stop spinner before writing — prevents tool-end text mixing with spinner line
+    // Stop spinner before writing
     spinner.stop();
+
+    const cachedParams = toolParamsCache.get(event.callId);
+    toolParamsCache.delete(event.callId);
 
     if (verbosity === "quiet" && !isCategoryEnabled("tools", vc) && event.result.success) return;
 
-    const line = formatToolEnd(
-      event.name,
-      event.result.success,
-      event.durationMs,
-      event.result.error ?? undefined,
-    );
-    process.stderr.write(line + "\n");
+    // Accumulate into group if applicable
+    if (os.pendingToolGroup && os.pendingToolGroup.name === event.name && !isCategoryEnabled("tools", vc)) {
+      os.pendingToolGroup.totalDurationMs += event.durationMs;
+      if (!event.result.success) {
+        os.pendingToolGroup.lastSuccess = false;
+        os.pendingToolGroup.lastError = event.result.error ?? undefined;
+      }
+
+      if (os.pendingToolGroup.count === 1) {
+        // Single call so far — show individual end line
+        const line = formatToolEnd(
+          event.name,
+          event.result.success,
+          event.durationMs,
+          event.result.error ?? undefined,
+          cachedParams,
+        );
+        process.stderr.write(line + "\n");
+      }
+      // If count > 1, end line will be shown when group flushes
+    } else {
+      // Not in a group (or verbose mode) — show individual end line
+      const line = formatToolEnd(
+        event.name,
+        event.result.success,
+        event.durationMs,
+        event.result.error ?? undefined,
+        cachedParams,
+      );
+      process.stderr.write(line + "\n");
+    }
 
     if (isCategoryEnabled("tools", vc) && event.result.output) {
-      // Show truncated output in verbose mode
       const output = event.result.output.length > 500
         ? event.result.output.substring(0, 500) + "…"
         : event.result.output;
       process.stderr.write(dim(`  output: ${output}`) + "\n");
     }
 
-    // Restart spinner after tool completes (waiting for next LLM response)
+    // Restart spinner after tool completes
     if (verbosity !== "quiet") {
-      spinner.start("Thinking…");
+      spinner.start();
     }
   });
 
@@ -1325,19 +1428,17 @@ function setupEventHandlers(
   bus.on("message:user", () => {
     // Start spinner when user query is sent (waiting for LLM)
     if (verbosity !== "quiet") {
-      spinner.start("Thinking…");
+      spinner.start();
     }
   });
 
   bus.on("message:assistant", (event) => {
     if (event.partial) {
-      // Stop spinner on first text chunk
       spinner.stop();
-      // Buffer the text — it might be thinking text before tool calls,
-      // or it might be the final response. We'll know when tool:before
-      // fires (discard buffer) or the loop ends (flush buffer to stdout).
       os.textBuffer += event.content;
       os.isBufferingText = true;
+    } else {
+      flushToolGroup();
     }
   });
 
@@ -1433,6 +1534,23 @@ function setupEventHandlers(
       },
     );
   });
+
+  // ─── Status bar ──────────────────────────────────────────────
+
+  if (statusBar) {
+    bus.on("iteration:start", (event) => {
+      statusBar.update({
+        iteration: event.iteration,
+        maxIter: event.maxIterations,
+        tokens: event.estimatedTokens,
+        maxTokens: event.maxContextTokens,
+      });
+    });
+
+    bus.on("cost:update", () => {
+      statusBar.update({ cost: os.sessionTotalCost });
+    });
+  }
 
   return { lspToolCounts };
 }
@@ -1625,7 +1743,7 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
   const {
     query, provider, toolRegistry, bus, gate, config, repoRoot, mode,
     skills, contextManager, memoryStore, memories, checkpointManager,
-    doubleCheck, initialMessages, verbosity, sessionState, briefing,
+    doubleCheck, initialMessages, verbosity, sessionState, briefing, statusBar,
   } = options;
 
   const systemPrompt = assembleSystemPrompt({
@@ -1686,6 +1804,7 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     midpointCallback,
   });
 
+  statusBar?.init();
   const result = await loop.run(query);
 
   // Stop spinner in case LLM finished without emitting text
@@ -1714,7 +1833,7 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
     provider, toolRegistry, bus, gate, config, repoRoot,
     pluginManager, skills, contextManager, memoryStore, loadMemories,
     checkpointManager, doubleCheck, initialMessages, verbosity, verbosityConfig: vc,
-    sessionState, briefing: resumeBriefing,
+    sessionState, briefing: resumeBriefing, statusBar,
   } = options;
   let { mode } = options;
   process.stderr.write(bold("DevAgent") + " interactive mode\n");
@@ -1798,6 +1917,7 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
     });
   }
 
+  statusBar?.init();
   rl.prompt();
 
   for await (const line of rl) {

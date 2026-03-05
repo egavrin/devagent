@@ -64,14 +64,20 @@ export function buildVerbosityConfig(
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+export const SPINNER_VERBS = [
+  "Thinking", "Analyzing", "Considering", "Reasoning", "Processing",
+  "Evaluating", "Examining", "Working", "Reflecting", "Assessing",
+  "Deliberating", "Exploring", "Weighing", "Pondering", "Reviewing",
+];
+
 export class Spinner {
   private frameIndex = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private message = "";
 
-  start(message: string): void {
+  start(message?: string): void {
     this.stop();
-    this.message = message;
+    this.message = message ?? SPINNER_VERBS[Math.floor(Math.random() * SPINNER_VERBS.length)]! + "…";
     this.frameIndex = 0;
     this.render();
     this.timer = setInterval(() => this.render(), 80);
@@ -120,7 +126,7 @@ export class Spinner {
  * Extract a human-readable summary of tool parameters.
  * Shows the most relevant info per tool type.
  */
-function summarizeToolParams(name: string, params: Record<string, unknown>): string {
+export function summarizeToolParams(name: string, params: Record<string, unknown>): string {
   switch (name) {
     case "read_file": {
       const path = params["path"] as string ?? "";
@@ -195,6 +201,28 @@ function summarizeToolParams(name: string, params: Record<string, unknown>): str
   }
 }
 
+export interface ToolVerbPair {
+  readonly present: string;
+  readonly past: string;
+}
+
+const TOOL_VERBS: Record<string, ToolVerbPair> = {
+  read_file:       { present: "Reading",          past: "Read" },
+  write_file:      { present: "Writing",          past: "Wrote" },
+  replace_in_file: { present: "Editing",          past: "Edited" },
+  search_files:    { present: "Searching",        past: "Searched" },
+  find_files:      { present: "Finding",          past: "Found" },
+  run_command:     { present: "Running",          past: "Ran" },
+  git_status:      { present: "Checking status",  past: "Checked status" },
+  git_diff:        { present: "Diffing",          past: "Diffed" },
+  git_commit:      { present: "Committing",       past: "Committed" },
+  update_plan:     { present: "Updating plan",    past: "Updated plan" },
+};
+
+export function toolVerb(name: string): ToolVerbPair {
+  return TOOL_VERBS[name] ?? { present: `Calling ${name}`, past: `Called ${name}` };
+}
+
 export function formatToolStart(
   name: string,
   params: Record<string, unknown>,
@@ -204,9 +232,10 @@ export function formatToolStart(
 ): string {
   const counter = maxIter > 0 ? dim(`[${iteration}/${maxIter}]`) : dim(`[${iteration}]`);
   const summary = summarizeToolParams(name, params);
+  const verb = toolVerb(name);
   const detail = summary ? ` ${dim(summary)}` : "";
   const gaugeSuffix = gauge ? ` ${gauge}` : "";
-  return `${counter} ${dimBold("↳")} ${bold(name)}${detail}${gaugeSuffix}`;
+  return `${counter} ${dimBold("↳")} ${bold(verb.present)}${detail}${gaugeSuffix}`;
 }
 
 export function formatToolEnd(
@@ -214,13 +243,63 @@ export function formatToolEnd(
   success: boolean,
   durationMs: number,
   error?: string,
+  params?: Record<string, unknown>,
 ): string {
   const duration = dim(`(${formatDuration(durationMs)})`);
+  const verb = toolVerb(name);
+  const summary = params ? summarizeToolParams(name, params) : "";
+  const detail = summary ? ` ${dim(summary)}` : "";
   if (success) {
-    return `  ${green("✓")} ${dim(name)} ${duration}`;
+    return `  ${green("✓")} ${dim(verb.past)}${detail} ${duration}`;
   }
   const errMsg = error ? `: ${truncate(error, 80)}` : "";
-  return `  ${red("✗")} ${dim(name)} ${duration}${red(errMsg)}`;
+  return `  ${red("✗")} ${dim(verb.past)}${detail} ${duration}${red(errMsg)}`;
+}
+
+// ─── Tool Grouping ──────────────────────────────────────────
+
+const FILE_TOOLS = new Set(["read_file", "write_file", "replace_in_file", "find_files"]);
+
+function groupNoun(name: string, count: number): string {
+  if (FILE_TOOLS.has(name)) return `${count} file${count > 1 ? "s" : ""}`;
+  return `${count} call${count > 1 ? "s" : ""}`;
+}
+
+export function formatToolGroupStart(
+  name: string,
+  count: number,
+  paramSummaries: ReadonlyArray<string>,
+  iteration: number,
+  maxIter: number,
+  gauge?: string,
+): string {
+  const counter = maxIter > 0 ? dim(`[${iteration}/${maxIter}]`) : dim(`[${iteration}]`);
+  const verb = toolVerb(name);
+  const noun = groupNoun(name, count);
+  const displayed = paramSummaries.slice(0, 3);
+  const extra = paramSummaries.length > 3 ? `, +${paramSummaries.length - 3} more` : "";
+  const detail = displayed.length > 0
+    ? ` ${dim(`(${displayed.join(", ")}${extra})`)}`
+    : "";
+  const gaugeSuffix = gauge ? ` ${gauge}` : "";
+  return `${counter} ${dimBold("↳")} ${bold(`${verb.present} ${noun}`)}${detail}${gaugeSuffix}`;
+}
+
+export function formatToolGroupEnd(
+  name: string,
+  count: number,
+  success: boolean,
+  totalDurationMs: number,
+  error?: string,
+): string {
+  const duration = dim(`(${formatDuration(totalDurationMs)} total)`);
+  const verb = toolVerb(name);
+  const noun = groupNoun(name, count);
+  if (success) {
+    return `  ${green("✓")} ${dim(`${verb.past} ${noun}`)} ${duration}`;
+  }
+  const errMsg = error ? `: ${truncate(error, 80)}` : "";
+  return `  ${red("✗")} ${dim(`${verb.past} ${noun}`)} ${duration}${red(errMsg)}`;
 }
 
 // ─── Plan Rendering ─────────────────────────────────────────
@@ -491,6 +570,147 @@ export function formatContextGauge(estimatedTokens: number, maxTokens: number): 
   if (ratio > 0.8) return red(label);
   if (ratio > 0.6) return yellow(label);
   return dim(label);
+}
+
+// ─── Reasoning Display ──────────────────────────────────────
+
+export function formatReasoning(text: string): string | null {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return null;
+
+  // Take first sentence if it ends within 120 chars
+  const sentenceEnd = collapsed.search(/[.!?]\s/);
+  let display: string;
+  if (sentenceEnd > 0 && sentenceEnd < 120) {
+    display = collapsed.substring(0, sentenceEnd + 1);
+  } else {
+    display = truncate(collapsed, 120);
+  }
+
+  return `  ${dim("ℹ")} ${dim(display)}`;
+}
+
+// ─── Status Bar ─────────────────────────────────────────────
+
+export interface StatusBarData {
+  readonly iteration?: number;
+  readonly maxIter?: number;
+  readonly tokens?: number;
+  readonly maxTokens?: number;
+  readonly cost?: number;
+  readonly branch?: string;
+}
+
+export class StatusBar {
+  private enabled: boolean;
+  private data: StatusBarData = {};
+  private rows = 0;
+  private cols = 0;
+  private initialized = false;
+
+  constructor(enabled: boolean) {
+    this.enabled = enabled && !!process.stderr.isTTY;
+    if (this.enabled) {
+      this.updateDimensions();
+    }
+  }
+
+  get active(): boolean {
+    return this.enabled;
+  }
+
+  private updateDimensions(): void {
+    this.rows = process.stderr.rows ?? 24;
+    this.cols = process.stderr.columns ?? 80;
+  }
+
+  /** Initialize scroll region, reserving bottom line. */
+  init(): void {
+    if (!this.enabled) return;
+    this.updateDimensions();
+    // Set scroll region to rows 1..(rows-1), leaving last row for status bar
+    process.stderr.write(`\x1b[1;${this.rows - 1}r`);
+    // Move cursor to top of scroll region
+    process.stderr.write(`\x1b[${this.rows - 1};1H`);
+    this.initialized = true;
+    this.render();
+
+    // Listen for terminal resize
+    process.stderr.on("resize", () => {
+      this.updateDimensions();
+      // Reset scroll region to new size
+      process.stderr.write(`\x1b[1;${this.rows - 1}r`);
+      this.render();
+    });
+  }
+
+  update(data: Partial<StatusBarData>): void {
+    this.data = { ...this.data, ...data };
+    if (this.initialized) this.render();
+  }
+
+  formatLine(data: StatusBarData): string {
+    const parts: string[] = [];
+
+    // Iteration
+    if (data.iteration !== undefined) {
+      if (data.maxIter && data.maxIter > 0) {
+        parts.push(`iter ${data.iteration}/${data.maxIter}`);
+      } else {
+        parts.push(`iter ${data.iteration}`);
+      }
+    }
+
+    // Tokens (color-coded)
+    if (data.tokens && data.maxTokens && data.tokens > 0 && data.maxTokens > 0) {
+      const kTokens = Math.round(data.tokens / 1000);
+      const kMax = Math.round(data.maxTokens / 1000);
+      const ratio = data.tokens / data.maxTokens;
+      const tokenStr = `${kTokens}k/${kMax}k`;
+      if (ratio > 0.8) {
+        parts.push(red(tokenStr));
+      } else if (ratio > 0.6) {
+        parts.push(yellow(tokenStr));
+      } else {
+        parts.push(tokenStr);
+      }
+    }
+
+    // Cost
+    if (data.cost && data.cost > 0) {
+      parts.push(`$${data.cost.toFixed(4)}`);
+    }
+
+    // Branch
+    if (data.branch) {
+      parts.push(data.branch);
+    }
+
+    return dim("[") + parts.join(dim(" | ")) + dim("]");
+  }
+
+  render(): void {
+    if (!this.enabled || !this.initialized) return;
+    this.updateDimensions();
+    const line = this.formatLine(this.data);
+
+    // Save cursor, move to last row, clear line, write status, restore cursor
+    process.stderr.write(
+      `\x1b7\x1b[${this.rows};1H\x1b[2K${line}\x1b8`,
+    );
+  }
+
+  /** Restore full scroll region and clear status bar line. */
+  cleanup(): void {
+    if (!this.enabled || !this.initialized) return;
+    // Reset scroll region to full terminal
+    process.stderr.write(`\x1b[1;${this.rows}r`);
+    // Clear the last line
+    process.stderr.write(`\x1b[${this.rows};1H\x1b[2K`);
+    // Move cursor back
+    process.stderr.write(`\x1b[${this.rows - 1};1H`);
+    this.initialized = false;
+  }
 }
 
 // ─── Helpers ────────────────────────────────────────────────
