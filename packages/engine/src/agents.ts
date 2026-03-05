@@ -58,9 +58,15 @@ function loadAgentPrompt(filename: string): string {
 }
 
 // Cache loaded prompts (never change during process lifetime)
+let cachedCommonPrompt: string | null = null;
 let cachedGeneralPrompt: string | null = null;
 let cachedReviewerPrompt: string | null = null;
 let cachedArchitectPrompt: string | null = null;
+
+function getCommonPrompt(): string {
+  cachedCommonPrompt ??= loadAgentPrompt("agent-common.md");
+  return cachedCommonPrompt;
+}
 
 function getGeneralPrompt(): string {
   cachedGeneralPrompt ??= loadAgentPrompt("agent-general.md");
@@ -152,11 +158,9 @@ export async function runAgent(
 ): Promise<AgentRunResult> {
   const definition = registry.get(agentType);
 
-  // Build system prompt from template
-  const systemPrompt = definition.systemPromptTemplate.replace(
-    /\{\{repoRoot\}\}/g,
-    options.repoRoot,
-  );
+  // Build system prompt: common guidance + agent-specific template
+  const systemPrompt = (getCommonPrompt() + "\n\n" + definition.systemPromptTemplate)
+    .replace(/\{\{repoRoot\}\}/g, options.repoRoot);
 
   // Filter tools based on agent's allowed categories
   const filteredTools = filterToolsByCategories(

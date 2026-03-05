@@ -357,6 +357,53 @@ describe("runAgent", () => {
     expect(result.result.iterations).toBe(1);
   });
 
+  it("prepends agent-common.md to every agent's system prompt", async () => {
+    const capturedSystemPrompts = new Map<string, string>();
+
+    for (const agentType of [AgentType.GENERAL, AgentType.REVIEWER, AgentType.ARCHITECT]) {
+      let captured = false;
+      const provider: LLMProvider = {
+        id: "mock",
+        async *chat(msgs): AsyncIterable<StreamChunk> {
+          if (!captured) {
+            const sys = msgs.find((m) => m.role === "system");
+            if (sys?.content) {
+              capturedSystemPrompts.set(String(agentType), sys.content);
+              captured = true;
+            }
+          }
+          yield { type: "text", content: "OK" };
+          yield { type: "done", content: "" };
+        },
+        abort() {},
+      };
+
+      const tools = new ToolRegistry();
+      const gate = new ApprovalGate(config.approval, bus);
+      await runAgent(
+        agentType,
+        "Test prompt",
+        { provider, tools, bus, approvalGate: gate, config, repoRoot: "/tmp/r", parentId: null, agentId: `agent-common-${agentType}` },
+        agentRegistry,
+      );
+    }
+
+    // All three agents should have common prompt sections
+    for (const [type, prompt] of capturedSystemPrompts) {
+      expect(prompt).toContain("## Tool Usage");
+      expect(prompt).toContain("### Search Strategy");
+      expect(prompt).toContain("## Error Recovery");
+      expect(prompt).toContain("## Post-Compaction Awareness");
+      expect(prompt).toContain("## Output Style");
+      expect(prompt).toContain("## Standards");
+    }
+
+    // Each should also have its unique content
+    expect(capturedSystemPrompts.get(String(AgentType.GENERAL))).toContain("General development agent");
+    expect(capturedSystemPrompts.get(String(AgentType.REVIEWER))).toContain("Code Review agent");
+    expect(capturedSystemPrompts.get(String(AgentType.ARCHITECT))).toContain("Architecture agent");
+  });
+
   it("seeds subagent SessionState from parent's coverage", async () => {
     // Create a parent SessionState with some existing coverage
     const parentState = new SessionState({ persist: false });
