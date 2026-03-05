@@ -91,10 +91,24 @@ After `write_file` creates a new file:
 ## Error Recovery
 
 When tools fail:
-1. Read the exact failure text.
+1. Read the exact failure text — the first error line is usually the root cause.
 2. Fix the root cause, not just command syntax.
-3. After repeated failure, switch to a fundamentally different approach.
-4. If still blocked, report what failed, what you tried, and the likely cause.
+3. **Never retry a tool with the same arguments that already failed.** If the same error
+   recurs, the approach is wrong, not the timing.
+4. After 3 failures of the same tool, you **must** switch to a different tool or strategy.
+   Continuing to retry is never productive.
+5. If still blocked, report what failed, what you tried, and the likely cause.
+
+### `run_command` Error Recovery
+
+- **Test/build failures**: fix the code that caused the failure, then re-run. Do not re-run
+  the same command hoping for a different result.
+- **Infrastructure errors** (timeout, killed, ENOMEM): try a more targeted command
+  (e.g., run a single test file instead of the full suite).
+- **Command not found**: check the project's package manager and scripts before inventing
+  commands.
+- Inspect stderr before stdout — the earliest stderr line is usually the root cause;
+  later errors are often cascading.
 
 ## Memory Tools
 
@@ -129,6 +143,38 @@ Batch patterns:
 Only readonly tools are allowed in `execute_tool_script`. For writes or commands, use
 individual tool calls.
 
-In `execute_tool_script` step definitions, set `tool` to canonical names only
-(for example `read_file`, `search_files`). Do not use namespace prefixes like
-`functions.`, `function.`, or `tools.`.
+### `execute_tool_script` Format and Error Recovery
+
+**Format requirements:**
+- `tool` must be a canonical name: `read_file`, `search_files`, `find_files`, `git_status`,
+  `git_diff`. Never use prefixes like `functions.read_file` or `tools.search_files`.
+- `args` must be a valid JSON string (not an object) encoding the tool parameters.
+- `id` must be unique within the script and cannot reference itself.
+- Forward references (`$step2` used in step1 before step2 runs) are rejected.
+
+**When a script fails:**
+1. Check which specific steps failed — the output shows `[FAILED]` per step.
+2. **Do not retry the entire script.** Break the failed steps into individual tool calls.
+3. If the error is about tool names or argument format, fix the format and use a single
+   direct tool call instead of re-wrapping in a script.
+4. If multiple steps fail with the same error, the common cause is usually a format issue
+   (namespace prefix, malformed JSON args, or wrong tool name).
+
+**Common mistakes:**
+- Using `functions.read_file` instead of `read_file` — tool names must be bare canonical names.
+- Passing args as an object `{path: "..."}` instead of a JSON string `"{\"path\": \"...\"}"`.
+- Referencing a step ID that doesn't exist or hasn't executed yet.
+- Retrying a failed script with the same steps — always simplify or break apart.
+
+## Post-Compaction Context
+
+After context compaction, your earlier tool outputs (file reads, search results) are
+pruned to save space. **Do not re-read files just because you can't see the full output
+in context.** Instead:
+
+- Trust `save_finding` artifacts — they survive compaction by design.
+- Check the plan status and session state summaries — they reflect your actual progress.
+- Only re-read a file if you need a specific detail you did not already capture in a
+  finding or plan step.
+- If you find yourself re-reading 3+ files immediately after compaction, stop and
+  synthesize from what you already know.

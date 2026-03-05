@@ -195,7 +195,8 @@ export class StagnationDetector {
       fatal: false,
     });
 
-    return `WARNING: You have called "${toolName}" ${DOOM_LOOP_THRESHOLD} times with the exact same arguments, and it keeps failing. This approach is not working. Try a completely different strategy — change the command arguments, use a different tool, or modify your approach. Do NOT repeat the same failing call.`;
+    const recovery = getDoomLoopRecovery(toolName);
+    return `WARNING: You have called "${toolName}" ${DOOM_LOOP_THRESHOLD} times with the exact same arguments, and it keeps failing. This approach is not working.\n\n${recovery}\n\nDo NOT repeat the same failing call.`;
   }
 
   /**
@@ -220,7 +221,8 @@ export class StagnationDetector {
           fatal: false,
         });
 
-        return `ESCALATED WARNING: The tool "${tc.name}" has failed ${count} consecutive times, even with different arguments. This tool is not working for the current task. You MUST try a fundamentally different approach: use a different tool, break the problem into smaller steps, or ask the user for guidance. Do NOT call "${tc.name}" again unless you have resolved the underlying issue.`;
+        const recovery = getToolFatigueRecovery(tc.name);
+        return `ESCALATED WARNING: The tool "${tc.name}" has failed ${count} consecutive times, even with different arguments. This tool is not working for the current task.\n\n${recovery}\n\nDo NOT call "${tc.name}" again unless you have resolved the underlying issue.`;
       }
     }
     return null;
@@ -413,6 +415,44 @@ export class StagnationDetector {
 
     return `[Error classification: ${result.category}/${result.severity}] ${result.recovery_hint}`;
   }
+}
+
+// ─── Recovery hints ─────────────────────────────────────────
+
+const TOOL_RECOVERY: Record<string, { doom: string; fatigue: string }> = {
+  replace_in_file: {
+    doom: "Re-read the file with read_file to get the exact current content, then use that exact text as the search parameter. If the file has changed since your last read, your search text is stale.",
+    fatigue: "The file content does not match your expectations. Re-read the file, verify the exact text you want to replace, and use a broader anchored replacement. If the file has been heavily modified, consider a single large block replacement.",
+  },
+  execute_tool_script: {
+    doom: "Break the script into individual tool calls instead of batching. Check that tool names are bare canonical names (e.g. read_file, not functions.read_file) and args are valid JSON strings.",
+    fatigue: "Stop using execute_tool_script for this task. Use individual tool calls (read_file, search_files, find_files) directly — they give clearer error messages and are easier to debug.",
+  },
+  run_command: {
+    doom: "The command keeps failing with the same error. Fix the underlying code or configuration that the command is testing, or try a more targeted command (e.g. run a single test file instead of the full suite).",
+    fatigue: "Shell commands are consistently failing. Check if the project builds first (run the build command), then try a targeted test or lint command. If infrastructure is the issue (missing deps, wrong env), ask the user.",
+  },
+  search_files: {
+    doom: "The search pattern is not matching anything. Try a different pattern, broader file_pattern, or use find_files to verify the file structure first.",
+    fatigue: "Search is not finding what you need. Try find_files to map the project structure, then read_file on likely candidates. Consider that the code you're looking for may not exist or may use different naming.",
+  },
+  read_file: {
+    doom: "The file path does not exist. Use find_files to discover the correct path, or check if the file is in a different directory.",
+    fatigue: "Multiple file reads are failing. Use find_files to verify the project structure and file locations before attempting to read.",
+  },
+};
+
+const DEFAULT_RECOVERY = {
+  doom: "Try a completely different strategy: use a different tool, change your approach, or ask the user for guidance.",
+  fatigue: "You MUST try a fundamentally different approach: use a different tool, break the problem into smaller steps, or ask the user for guidance.",
+};
+
+function getDoomLoopRecovery(toolName: string): string {
+  return TOOL_RECOVERY[toolName]?.doom ?? DEFAULT_RECOVERY.doom;
+}
+
+function getToolFatigueRecovery(toolName: string): string {
+  return TOOL_RECOVERY[toolName]?.fatigue ?? DEFAULT_RECOVERY.fatigue;
 }
 
 // ─── Helpers ────────────────────────────────────────────────

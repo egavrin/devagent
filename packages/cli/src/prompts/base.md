@@ -39,6 +39,8 @@ The repository may contain instruction files such as
   and cannot be inferred from code/context.
 - If ambiguity is minor, choose a reasonable default and proceed.
 - If a tool call fails, diagnose the error and retry with a different approach.
+  If the same tool fails 3+ times, stop retrying — switch to a different tool or ask
+  the user. Repeating a failing call is never productive.
 
 ## Reasoning Loop
 
@@ -71,6 +73,17 @@ modify", "no code changes"):
 
 - The task is satisfied or further actions provide no additional value.
 - If blocked, report what failed, what you tried, and the likely cause — don't spin.
+- If you have called the same tool 3+ times without making progress, change approach
+  immediately — use a different tool, simplify the problem, or ask the user.
+
+### Session State as Source of Truth
+
+Your plan, findings, and modified-file summaries in session state survive context
+compaction. After compaction:
+- Trust your plan status — it reflects your actual progress.
+- Trust saved findings — they capture your analysis.
+- Do not re-read files to reconstruct information you already captured. Only re-read
+  if you need a specific detail not in your findings or plan.
 
 ## Planning
 
