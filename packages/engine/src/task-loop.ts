@@ -41,6 +41,7 @@ import { formatToolSummary } from "./tool-summary-formatter.js";
 export { summarizeDiff, summarizeTestOutput, extractStructuralDigest } from "./tool-summary-formatter.js";
 import { StagnationDetector } from "./stagnation-detector.js";
 import { judgeCompactionQuality, buildPreCompactionSummary } from "./compaction-judge.js";
+import { judgeCompletion } from "./completion-judge.js";
 import { parseToolScriptStepsArg } from "./tool-script.js";
 import type { ToolScriptStep } from "./tool-script.js";
 
@@ -490,18 +491,10 @@ export class TaskLoop {
         // Plan-aware continuation: if the plan has incomplete steps,
         // the LLM likely produced a "progress update" rather than a
         // final answer. Auto-continue up to MAX_TEXT_CONTINUATIONS times.
-        // Also continue early in the session when no plan exists yet —
-        // the LLM may outline future steps without actually doing them.
         const hasIncompleteSteps = this.sessionState?.hasPendingPlanSteps() ?? false;
-        // Also continue early when no plan exists but the LLM has already
-        // used tools (it was working, then produced a text-only "progress update").
-        // Only when sessionState is configured (indicates a full session, not a test).
-        const isEarlyNoPlan = this.sessionState != null && this.sessionState.getPlan() == null
-          && this.iterations <= 5 && textOnlyContinuations === 0
-          && this.iterations > 1;
-        const shouldContinue = hasIncompleteSteps || isEarlyNoPlan;
 
-        if (shouldContinue && textOnlyContinuations < MAX_TEXT_CONTINUATIONS) {
+        // Fast-path: plan has pending steps → continue without LLM call
+        if (hasIncompleteSteps && textOnlyContinuations < MAX_TEXT_CONTINUATIONS) {
           textOnlyContinuations++;
           this.pushMessage({
             role: MessageRole.ASSISTANT,

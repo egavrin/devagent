@@ -63,6 +63,10 @@ export type { SubagentJudgeResult } from "./subagent-judge.js";
 export { classifyError } from "./error-judge.js";
 export type { ErrorClassification } from "./error-judge.js";
 
+// Completion judge (prevents premature loop exit)
+export { judgeCompletion } from "./completion-judge.js";
+export type { CompletionJudgeResult } from "./completion-judge.js";
+
 export { SessionState, extractEnvFact, DEFAULT_SESSION_STATE_CONFIG, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX } from "./session-state.js";
 export type {
   EnvFact,
