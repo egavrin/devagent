@@ -28,7 +28,7 @@ import {
 import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, Memory, VerbosityConfig } from "@devagent/core";
 import { ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/core";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
-import { createDefaultToolRegistry, McpHub, createLSPTools, createRoutingLSPTools, ToolRegistry } from "@devagent/tools";
+import { createDefaultToolRegistry, McpHub, createRoutingLSPTools, ToolRegistry } from "@devagent/tools";
 import {
   TaskLoop,
   truncateToolOutput,
@@ -61,7 +61,6 @@ import {
   formatToolGroupEnd,
   summarizeToolParams,
   formatPlan,
-  formatSummary,
   formatError,
   isCategoryEnabled,
   debugLog,

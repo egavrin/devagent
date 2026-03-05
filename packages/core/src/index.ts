@@ -4,9 +4,6 @@
 
 // Types
 export type {
-  AgentContext,
-  AgentMessage,
-  AgentResult,
   ToolSpec,
   ToolErrorGuidance,
   ToolContext,
@@ -33,18 +30,15 @@ export type {
   Session,
   CostRecord,
   JsonSchema,
-  TaskStep,
   SessionStateConfigCore,
   LoggingConfig,
   VerbosityConfig,
 } from "./types.js";
 
 export {
-  AgentStatus,
   AgentType,
   MessageRole,
   ApprovalMode,
-  TaskStatus,
 } from "./types.js";
 
 export type { ToolCategory } from "./types.js";
@@ -182,7 +176,7 @@ export { EventLogger } from "./event-logger.js";
 export type { LogEntry } from "./event-logger.js";
 
 // Language extensions
-export { LANGUAGE_EXTENSIONS, detectLanguageFromExtension } from "./languages.js";
+export { LANGUAGE_EXTENSIONS } from "./languages.js";
 
 // Errors
 export {

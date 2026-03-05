@@ -5,42 +5,10 @@
 
 // ─── Agent Types ──────────────────────────────────────────────
 
-export enum AgentStatus {
-  IDLE = "idle",
-  RUNNING = "running",
-  COMPLETED = "completed",
-  FAILED = "failed",
-  BLOCKED = "blocked",
-}
-
 export enum AgentType {
   GENERAL = "general",
   REVIEWER = "reviewer",
   ARCHITECT = "architect",
-}
-
-export interface AgentContext {
-  readonly sessionId: string;
-  readonly parentId: string | null;
-  readonly workingDirectory: string;
-  readonly environment: Record<string, string>;
-  readonly metadata: Record<string, unknown>;
-}
-
-export interface AgentMessage {
-  readonly agentName: string;
-  readonly content: string;
-  readonly messageType: "info" | "warning" | "error" | "success";
-  readonly timestamp: number;
-}
-
-export interface AgentResult {
-  readonly success: boolean;
-  readonly output: string;
-  readonly error: string | null;
-  readonly toolCalls: ReadonlyArray<ToolCallRecord>;
-  readonly messages: ReadonlyArray<AgentMessage>;
-  readonly cost: CostRecord;
 }
 
 // ─── Tool Types ───────────────────────────────────────────────
@@ -379,20 +347,3 @@ export interface JsonSchema {
   readonly items?: Record<string, unknown>;
 }
 
-// ─── Task Types ──────────────────────────────────────────────
-
-export enum TaskStatus {
-  PENDING = "pending",
-  RUNNING = "running",
-  DONE = "done",
-  FAILED = "failed",
-}
-
-export interface TaskStep {
-  readonly id: string;
-  readonly description: string;
-  readonly agentType: AgentType;
-  readonly status: TaskStatus;
-  readonly result: AgentResult | null;
-  readonly cost: CostRecord;
-}

@@ -2,7 +2,7 @@
  * @devagent/engine — Task loop, agents, orchestration.
  */
 
-export { TaskLoop, summarizeDiff, truncateToolOutput, extractStructuralDigest } from "./task-loop.js";
+export { TaskLoop, truncateToolOutput } from "./task-loop.js";
 export type {
   TaskMode,
   TaskCompletionStatus,
@@ -17,16 +17,6 @@ export type {
   StagnationDetectorOptions,
 } from "./stagnation-detector.js";
 
-// Shared LLM judge infrastructure
-export {
-  collectStreamText,
-  parseJudgeResponse,
-  formatMessageForJudge,
-  formatToolArgs,
-  buildSessionStateContext,
-  JUDGE_ARG_MAX_CHARS,
-  JUDGE_RESULT_MAX_CHARS,
-} from "./llm-judge.js";
 
 export { AgentRegistry, runAgent } from "./agents.js";
 export type {
@@ -44,7 +34,7 @@ export type {
 export { createDelegateTool } from "./delegate-tool.js";
 export type { DelegateToolContext } from "./delegate-tool.js";
 
-export { createPlanTool, isStructuralChange } from "./plan-tool.js";
+export { createPlanTool } from "./plan-tool.js";
 export type { PlanStep, Plan } from "./plan-tool.js";
 
 // Plan quality judge
@@ -52,7 +42,7 @@ export { judgePlanQuality } from "./plan-judge.js";
 export type { PlanJudgeResult } from "./plan-judge.js";
 
 // Compaction quality judge
-export { judgeCompactionQuality, buildPreCompactionSummary } from "./compaction-judge.js";
+export { judgeCompactionQuality } from "./compaction-judge.js";
 export type { CompactionJudgeResult } from "./compaction-judge.js";
 
 // Sub-agent validation judge
@@ -67,7 +57,7 @@ export type { ErrorClassification } from "./error-judge.js";
 export { judgeCompletion } from "./completion-judge.js";
 export type { CompletionJudgeResult } from "./completion-judge.js";
 
-export { SessionState, extractEnvFact, DEFAULT_SESSION_STATE_CONFIG, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX } from "./session-state.js";
+export { SessionState, extractEnvFact } from "./session-state.js";
 export type {
   EnvFact,
   ToolResultSummary,
@@ -88,7 +78,7 @@ export type {
 } from "./double-check.js";
 
 // Turn briefing (context synthesis for turn isolation)
-export { synthesizeBriefing, extractHeuristicBriefing, formatBriefing, findLastUserContent } from "./briefing.js";
+export { synthesizeBriefing, formatBriefing, findLastUserContent } from "./briefing.js";
 export type { TurnBriefing, BriefingStrategy, SynthesizeBriefingOptions } from "./briefing.js";
 
 // Memory tools (LLM-callable cross-session memory)
@@ -132,6 +122,4 @@ export {
   createReviewPlugin,
   createFeatureDevPlugin,
   createBuiltinPlugins,
-  getFeaturePhases,
 } from "./plugins/index.js";
-export type { FeaturePhase } from "./plugins/index.js";

@@ -19,7 +19,6 @@ export class ToolRegistry {
   get(name: string): ToolSpec {
     const tool = this.tools.get(name);
     if (!tool) {
-      const available = this.list().join(", ");
       throw new ToolNotFoundError(name);
     }
     return tool;
