@@ -139,6 +139,62 @@ interface CliArgs {
   noStatusBar: boolean;
 }
 
+interface CrashSessionReporter {
+  printSessionId: () => void;
+  dispose: () => void;
+}
+
+interface CrashSessionReporterProcess {
+  stderr: { write: (chunk: string) => boolean };
+  once: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => void;
+  off: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => void;
+  exit: (code?: number) => never;
+}
+
+export function createCrashSessionReporter(
+  sessionId: string,
+  verbosity: Verbosity,
+  proc: CrashSessionReporterProcess = process,
+): CrashSessionReporter {
+  let printed = false;
+
+  const printSessionId = (): void => {
+    if (printed || verbosity === "quiet") return;
+    proc.stderr.write(dim(`[session] ${sessionId}`) + "\n");
+    printed = true;
+  };
+
+  const onSigint = (): void => {
+    printSessionId();
+    proc.exit(130);
+  };
+
+  const onUncaughtException = (err: unknown): void => {
+    proc.stderr.write(formatError(`Uncaught exception: ${extractErrorMessage(err)}`) + "\n");
+    printSessionId();
+    proc.exit(1);
+  };
+
+  const onUnhandledRejection = (reason: unknown): void => {
+    proc.stderr.write(formatError(`Unhandled rejection: ${extractErrorMessage(reason)}`) + "\n");
+    printSessionId();
+    proc.exit(1);
+  };
+
+  proc.once("SIGINT", onSigint);
+  proc.once("uncaughtException", onUncaughtException);
+  proc.once("unhandledRejection", onUnhandledRejection);
+
+  return {
+    printSessionId,
+    dispose: (): void => {
+      proc.off("SIGINT", onSigint);
+      proc.off("uncaughtException", onUncaughtException);
+      proc.off("unhandledRejection", onUnhandledRejection);
+    },
+  };
+}
+
 function parseArgs(argv: string[]): CliArgs {
   const args = argv.slice(2); // Skip bun and script path
   const result: CliArgs = {
@@ -1149,6 +1205,11 @@ export async function main(): Promise<void> {
   // If session state was swapped on resume, propagate back so closures see it
   tools.sessionState = persistence.sessionState;
 
+  const crashSessionReporter = createCrashSessionReporter(
+    persistence.session.id,
+    cliArgs.verbosity,
+  );
+
   const sessionStartTime = Date.now();
   try {
     const commonOptions = {
@@ -1186,6 +1247,8 @@ export async function main(): Promise<void> {
       });
     }
   } finally {
+    crashSessionReporter.dispose();
+
     // Print LSP tool usage summary (for measuring value)
     if (tools.lspToolCounts.size > 0 && cliArgs.verbosity !== "quiet") {
       const parts = [...tools.lspToolCounts.entries()]
