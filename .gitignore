@@ -47,6 +47,9 @@ Thumbs.db
 # Claude Code
 .claude/worktrees/
 
+# Git worktrees
+.worktrees/
+
 # Internal
 docs/
 review_rules/
