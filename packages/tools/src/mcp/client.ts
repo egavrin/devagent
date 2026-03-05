@@ -12,7 +12,7 @@
 import { existsSync, readFileSync, watchFile, unwatchFile } from "node:fs";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import type { ToolSpec, ToolResult } from "@devagent/core";
+import type { ToolSpec, ToolResult, ToolErrorGuidance } from "@devagent/core";
 import { extractErrorMessage } from "@devagent/core";
 
 // ─── MCP Types ───────────────────────────────────────────────
@@ -47,6 +47,26 @@ export interface McpHubOptions {
   readonly configPath?: string;
   readonly watchConfig?: boolean;
 }
+
+/** Shared error guidance for all MCP-proxied tools. */
+const MCP_ERROR_GUIDANCE: ToolErrorGuidance = {
+  common:
+    "MCP tool call failed. Check that the MCP server is running and the tool arguments match the expected schema.",
+  patterns: [
+    {
+      match: "not running",
+      hint: "The MCP server is not running. Check .devagent/mcp.json configuration and restart the server.",
+    },
+    {
+      match: "timed out",
+      hint: "MCP request timed out (30s). The server may be overloaded or unresponsive — check its logs.",
+    },
+    {
+      match: "MCP error",
+      hint: "The MCP server returned an error. Check tool arguments against the expected schema and review server logs.",
+    },
+  ],
+};
 
 // ─── MCP Hub ─────────────────────────────────────────────────
 
@@ -123,6 +143,7 @@ export class McpHub {
             required: tool.inputSchema["required"] as ReadonlyArray<string> | undefined,
           },
           resultSchema: { type: "object" },
+          errorGuidance: MCP_ERROR_GUIDANCE,
           handler: async (params) => this.callTool(serverName, tool.name, params),
         });
       }

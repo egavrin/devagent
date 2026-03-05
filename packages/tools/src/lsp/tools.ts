@@ -4,7 +4,7 @@
  * All are read-only (category: "readonly").
  */
 
-import type { ToolSpec } from "@devagent/core";
+import type { ToolSpec, ToolErrorGuidance } from "@devagent/core";
 import { extractErrorMessage } from "@devagent/core";
 import type { LSPClient } from "./client.js";
 
@@ -15,6 +15,18 @@ export type LSPClientResolver = (filePath: string) => {
   client: LSPClient;
   languageId: string;
 } | null;
+
+/** Common LSP error patterns shared by all single-client tools. */
+const LSP_COMMON_PATTERNS: ReadonlyArray<{ readonly match: string; readonly hint: string }> = [
+  {
+    match: "not running",
+    hint: "LSP client is not running. The language server may not be installed or may have crashed — check its process.",
+  },
+  {
+    match: "timed out",
+    hint: "LSP request timed out. The language server may be overloaded — try a smaller file or restart the server.",
+  },
+];
 
 // ─── Tool Factory ───────────────────────────────────────────
 
@@ -87,6 +99,10 @@ function createDiagnosticsTool(client: LSPClient): ToolSpec {
         diagnostics: { type: "string" },
         count: { type: "number" },
       },
+    },
+    errorGuidance: {
+      common: "Diagnostics failed. Ensure the LSP server is running and the file path is correct.",
+      patterns: LSP_COMMON_PATTERNS,
     },
     handler: async (params) => {
       if (!client.isRunning()) {
@@ -170,6 +186,10 @@ function createDefinitionTool(client: LSPClient): ToolSpec {
         locations: { type: "string" },
       },
     },
+    errorGuidance: {
+      common: "Definition lookup failed. Verify the file path and position — use read_file to confirm the symbol location.",
+      patterns: LSP_COMMON_PATTERNS,
+    },
     handler: async (params) => {
       if (!client.isRunning()) {
         return {
@@ -252,6 +272,10 @@ function createReferencesTool(client: LSPClient): ToolSpec {
         count: { type: "number" },
       },
     },
+    errorGuidance: {
+      common: "References lookup failed. Verify the file path and position — use read_file to confirm the symbol location.",
+      patterns: LSP_COMMON_PATTERNS,
+    },
     handler: async (params) => {
       if (!client.isRunning()) {
         return {
@@ -325,6 +349,10 @@ function createSymbolsTool(client: LSPClient): ToolSpec {
         symbols: { type: "string" },
         count: { type: "number" },
       },
+    },
+    errorGuidance: {
+      common: "Symbol listing failed. Verify the file path is correct — use find_files to discover available files.",
+      patterns: LSP_COMMON_PATTERNS,
     },
     handler: async (params) => {
       if (!client.isRunning()) {
@@ -400,6 +428,50 @@ function routingHandler(
   }
 }
 
+/** Error guidance for position-based routing LSP tools. */
+const LSP_ROUTING_GUIDANCE: ToolErrorGuidance = {
+  common:
+    "LSP operation failed. Verify the file path is correct and a language server is configured for this file type.",
+  patterns: [
+    {
+      match: "No LSP server",
+      hint: "No LSP server available for this file type. Check that a language server is configured for this extension.",
+    },
+    {
+      match: "not running",
+      hint: "LSP client is not running. The language server may need to be restarted.",
+    },
+    {
+      match: "timed out",
+      hint: "LSP request timed out. The language server may be overloaded — try a smaller file or restart the server.",
+    },
+  ],
+};
+
+/** Error guidance for name-based LSP tools (extends routing guidance with symbol lookup). */
+const LSP_NAME_LOOKUP_GUIDANCE: ToolErrorGuidance = {
+  common:
+    "LSP name-based lookup failed. Verify the file path and symbol name are correct.",
+  patterns: [
+    {
+      match: "No LSP server",
+      hint: "No LSP server available for this file type. Check that a language server is configured for this extension.",
+    },
+    {
+      match: "not running",
+      hint: "LSP client is not running. The language server may need to be restarted.",
+    },
+    {
+      match: "not found in",
+      hint: "Symbol not found in this file. Use the symbols tool to list available symbols, then retry with the correct name.",
+    },
+    {
+      match: "timed out",
+      hint: "LSP request timed out. The language server may be overloaded — try a smaller file or restart the server.",
+    },
+  ],
+};
+
 function createRoutingDiagnosticsTool(resolver: LSPClientResolver): ToolSpec {
   return {
     name: "diagnostics",
@@ -417,6 +489,7 @@ function createRoutingDiagnosticsTool(resolver: LSPClientResolver): ToolSpec {
       type: "object",
       properties: { diagnostics: { type: "string" }, count: { type: "number" } },
     },
+    errorGuidance: LSP_ROUTING_GUIDANCE,
     handler: async (params) => {
       const filePath = params["path"] as string;
       return routingHandler(resolver, filePath, async (client, fp, langId) => {
@@ -450,6 +523,7 @@ function createRoutingDefinitionTool(resolver: LSPClientResolver): ToolSpec {
       type: "object",
       properties: { locations: { type: "string" } },
     },
+    errorGuidance: LSP_ROUTING_GUIDANCE,
     handler: async (params) => {
       const filePath = params["path"] as string;
       return routingHandler(resolver, filePath, async (client, fp, langId) => {
@@ -480,6 +554,7 @@ function createRoutingReferencesTool(resolver: LSPClientResolver): ToolSpec {
       type: "object",
       properties: { references: { type: "string" }, count: { type: "number" } },
     },
+    errorGuidance: LSP_ROUTING_GUIDANCE,
     handler: async (params) => {
       const filePath = params["path"] as string;
       return routingHandler(resolver, filePath, async (client, fp, langId) => {
@@ -508,6 +583,7 @@ function createRoutingSymbolsTool(resolver: LSPClientResolver): ToolSpec {
       type: "object",
       properties: { symbols: { type: "string" }, count: { type: "number" } },
     },
+    errorGuidance: LSP_ROUTING_GUIDANCE,
     handler: async (params) => {
       const filePath = params["path"] as string;
       return routingHandler(resolver, filePath, async (client, fp, langId) => {
@@ -545,6 +621,7 @@ function createRoutingDefinitionByNameTool(resolver: LSPClientResolver): ToolSpe
       type: "object",
       properties: { locations: { type: "string" } },
     },
+    errorGuidance: LSP_NAME_LOOKUP_GUIDANCE,
     handler: async (params) => {
       const filePath = params["path"] as string;
       const symbolName = params["symbol_name"] as string;
@@ -580,6 +657,7 @@ function createRoutingReferencesByNameTool(resolver: LSPClientResolver): ToolSpe
       type: "object",
       properties: { references: { type: "string" }, count: { type: "number" } },
     },
+    errorGuidance: LSP_NAME_LOOKUP_GUIDANCE,
     handler: async (params) => {
       const filePath = params["path"] as string;
       const symbolName = params["symbol_name"] as string;

@@ -195,6 +195,42 @@ describe("McpHub", () => {
     }
   });
 
+  it("includes errorGuidance in generated tool specs", () => {
+    const hub = new McpHub({ repoRoot: TEST_DIR });
+
+    // Inject a fake running server with one tool via internal state
+    const servers = (hub as unknown as { servers: Map<string, unknown> }).servers;
+    servers.set("test-server", {
+      config: { command: "echo", args: [] },
+      status: "running",
+      tools: [
+        {
+          name: "do_thing",
+          description: "Does a thing",
+          inputSchema: { type: "object", properties: {}, required: [] },
+        },
+      ],
+      process: null,
+    });
+
+    const specs = hub.getToolSpecs();
+    expect(specs).toHaveLength(1);
+
+    const g = specs[0].errorGuidance;
+    expect(g).toBeDefined();
+    expect(g!.common).toContain("MCP");
+
+    // Must cover the three MCP-specific failure modes
+    const patterns = g!.patterns!;
+    expect(patterns.length).toBeGreaterThanOrEqual(3);
+    const matches = patterns.map((p) => p.match);
+    expect(matches).toContain("not running");
+    expect(matches).toContain("timed out");
+    expect(matches).toContain("MCP error");
+
+    hub.dispose();
+  });
+
   it("preserves unmatched lines across multiple data events", async () => {
     vi.useFakeTimers();
     const hub = new McpHub({ repoRoot: TEST_DIR });

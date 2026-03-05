@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { LSPClient } from "./client.js";
-import { createLSPTools, createRoutingLSPTools } from "./tools.js";
+import { createLSPTools, createRoutingLSPTools, type LSPClientResolver } from "./tools.js";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -565,5 +565,107 @@ describe("name-based LSP tools", () => {
     const result = await tool.handler({ path: "src/bar.ts", symbol_name: "bar" }, ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain("not found");
+  });
+});
+
+describe("LSP tool errorGuidance", () => {
+  it("all single-client LSP tools have errorGuidance with common and patterns", () => {
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: "/tmp",
+      languageId: "typescript",
+    });
+
+    const tools = createLSPTools(client);
+    expect(tools).toHaveLength(4);
+
+    for (const tool of tools) {
+      expect(tool.errorGuidance, `${tool.name} missing errorGuidance`).toBeDefined();
+      expect(tool.errorGuidance!.common.length, `${tool.name} empty common`).toBeGreaterThan(0);
+      expect(tool.errorGuidance!.patterns, `${tool.name} missing patterns`).toBeDefined();
+      expect(tool.errorGuidance!.patterns!.length, `${tool.name} no patterns`).toBeGreaterThan(0);
+    }
+  });
+
+  it("all single-client LSP tools cover 'not running' pattern", () => {
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: "/tmp",
+      languageId: "typescript",
+    });
+
+    const tools = createLSPTools(client);
+    for (const tool of tools) {
+      const matches = tool.errorGuidance!.patterns!.map((p) => p.match);
+      expect(matches, `${tool.name} missing 'not running' pattern`).toContain("not running");
+    }
+  });
+
+  it("diagnostics common hint mentions file path", () => {
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: "/tmp",
+      languageId: "typescript",
+    });
+
+    const tools = createLSPTools(client);
+    const diag = tools.find((t) => t.name === "diagnostics")!;
+    expect(diag.errorGuidance!.common).toContain("file path");
+  });
+});
+
+describe("Routing LSP tool errorGuidance", () => {
+  it("all routing LSP tools have errorGuidance", () => {
+    const resolver: LSPClientResolver = () => null;
+    const tools = createRoutingLSPTools(resolver);
+    expect(tools).toHaveLength(6);
+
+    for (const tool of tools) {
+      expect(tool.errorGuidance, `${tool.name} missing errorGuidance`).toBeDefined();
+      expect(tool.errorGuidance!.common.length, `${tool.name} empty common`).toBeGreaterThan(0);
+      expect(tool.errorGuidance!.patterns, `${tool.name} missing patterns`).toBeDefined();
+    }
+  });
+
+  it("all routing tools cover 'No LSP server' and 'not running' patterns", () => {
+    const resolver: LSPClientResolver = () => null;
+    const tools = createRoutingLSPTools(resolver);
+
+    for (const tool of tools) {
+      const matches = tool.errorGuidance!.patterns!.map((p) => p.match);
+      expect(matches, `${tool.name} missing 'No LSP server'`).toContain("No LSP server");
+      expect(matches, `${tool.name} missing 'not running'`).toContain("not running");
+    }
+  });
+
+  it("name-based tools have 'not found in' pattern for missing symbols", () => {
+    const resolver: LSPClientResolver = () => null;
+    const tools = createRoutingLSPTools(resolver);
+    const nameTools = tools.filter(
+      (t) => t.name === "definition_by_name" || t.name === "references_by_name",
+    );
+    expect(nameTools).toHaveLength(2);
+
+    for (const tool of nameTools) {
+      const matches = tool.errorGuidance!.patterns!.map((p) => p.match);
+      expect(matches, `${tool.name} missing 'not found in'`).toContain("not found in");
+    }
+  });
+
+  it("position-based tools do NOT have 'not found in' pattern", () => {
+    const resolver: LSPClientResolver = () => null;
+    const tools = createRoutingLSPTools(resolver);
+    const posTools = tools.filter(
+      (t) => t.name !== "definition_by_name" && t.name !== "references_by_name",
+    );
+    expect(posTools).toHaveLength(4);
+
+    for (const tool of posTools) {
+      const matches = tool.errorGuidance!.patterns!.map((p) => p.match);
+      expect(matches, `${tool.name} has 'not found in' but shouldn't`).not.toContain("not found in");
+    }
   });
 });
