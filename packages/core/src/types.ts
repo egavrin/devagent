@@ -209,10 +209,12 @@ export interface SessionStateConfigCore {
   readonly trackEnv?: boolean;
   readonly trackToolResults?: boolean;
   readonly trackFindings?: boolean;
+  readonly trackKnowledge?: boolean;
   readonly maxModifiedFiles?: number;
   readonly maxEnvFacts?: number;
   readonly maxToolSummaries?: number;
   readonly maxFindings?: number;
+  readonly maxKnowledge?: number;
 }
 
 export interface CheckpointConfig {

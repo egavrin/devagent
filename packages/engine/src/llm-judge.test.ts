@@ -164,4 +164,14 @@ describe("llm-judge — buildSessionStateContext", () => {
     const result = buildSessionStateContext(state);
     expect(result).toContain("No plan set.");
   });
+
+  it("includes knowledge entries when present", () => {
+    const state = new SessionState();
+    state.addKnowledge("inventory", "Found 5 ANI descriptors in src/ani/", 3);
+    state.addKnowledge("decisions", "Using visitor pattern for transformation", 5);
+    const result = buildSessionStateContext(state);
+    expect(result).toContain("Knowledge entries: 2");
+    expect(result).toContain("[inventory] Found 5 ANI descriptors");
+    expect(result).toContain("[decisions] Using visitor pattern");
+  });
 });

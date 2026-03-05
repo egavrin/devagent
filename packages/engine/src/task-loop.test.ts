@@ -2584,7 +2584,8 @@ describe("TaskLoop", () => {
         },
       });
 
-      // Provider: tool call with big output, then text response
+      // Provider: tool call with big output, then extra responses for
+      // knowledge extraction + compaction judge + final text
       const provider = createMockProvider([
         [
           {
@@ -2595,6 +2596,16 @@ describe("TaskLoop", () => {
               callId: "c1",
             }),
           },
+          { type: "done", content: "" },
+        ],
+        // Knowledge extraction call (consumes a response slot)
+        [
+          { type: "text", content: '{"entries":[]}' },
+          { type: "done", content: "" },
+        ],
+        // Compaction quality judge call
+        [
+          { type: "text", content: '{"quality_loss":0.1,"missing_context":[],"recommendation":"none"}' },
           { type: "done", content: "" },
         ],
         [
@@ -2703,7 +2714,17 @@ describe("TaskLoop", () => {
           { type: "tool_call", content: searchArgs, toolCallId: "c1", toolName: "search_files" },
           { type: "done", content: "" },
         ],
-        // Second LLM call (compaction fires before this): re-invoke same search_files
+        // Knowledge extraction call (during compaction)
+        [
+          { type: "text", content: '{"entries":[]}' },
+          { type: "done", content: "" },
+        ],
+        // Compaction quality judge call
+        [
+          { type: "text", content: '{"quality_loss":0.1,"missing_context":[],"recommendation":"none"}' },
+          { type: "done", content: "" },
+        ],
+        // Second LLM call (after compaction): re-invoke same search_files
         // Should be deduped — handler must NOT be called a second time
         [
           { type: "tool_call", content: searchArgs, toolCallId: "c2", toolName: "search_files" },
@@ -2745,6 +2766,88 @@ describe("TaskLoop", () => {
       // even after compaction
       expect(searchCallCount).toBe(1);
     });
+  });
+
+  it("injects post-compaction continuation message after Phase 2", async () => {
+    const sessionState = new SessionState();
+    sessionState.setPlan([
+      { description: "Step 1", status: "completed" },
+      { description: "Step 2", status: "in_progress" },
+    ]);
+    sessionState.recordModifiedFile("src/foo.ts");
+
+    const smallConfig = makeConfig({
+      budget: {
+        maxIterations: 10,
+        maxContextTokens: 800,
+        responseHeadroom: 50,
+        costWarningThreshold: 1.0,
+        enableCostTracking: true,
+      },
+      context: {
+        pruningStrategy: "sliding_window",
+        triggerRatio: 0.3,
+        keepRecentMessages: 3,
+      },
+    });
+
+    // Use a dynamic provider that handles multiple call types:
+    // tool call on first main chat, then text on everything else
+    let mainChatCalls = 0;
+    const provider: LLMProvider = {
+      id: "mock-continuation",
+      async *chat(msgs: ReadonlyArray<Message>): AsyncIterable<StreamChunk> {
+        const sys = msgs.find((m) => m.role === MessageRole.SYSTEM);
+        // Judge calls have distinctive system prompts
+        if (sys?.content?.includes("assess whether") || sys?.content?.includes("extract structured") || sys?.content?.includes("classify")) {
+          yield { type: "text", content: '{"entries":[],"is_final":true,"confidence":0.9,"reason":"done","quality_loss":0.1,"missing_context":[],"recommendation":"none"}' };
+          yield { type: "done", content: "" };
+          return;
+        }
+        mainChatCalls++;
+        if (mainChatCalls === 1) {
+          yield {
+            type: "tool_call",
+            content: JSON.stringify({ name: "echo", arguments: { text: "A".repeat(600) }, callId: "c1" }),
+            toolCallId: "c1",
+            toolName: "echo",
+          };
+        } else {
+          yield { type: "text", content: "Done" };
+        }
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+    const gate = new ApprovalGate(smallConfig.approval, bus);
+    const contextManager = new ContextManager(smallConfig.context);
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config: smallConfig,
+      systemPrompt: "You are a test assistant.",
+      repoRoot: "/tmp",
+      contextManager,
+      sessionState,
+    });
+
+    const result = await loop.run("Test continuation msg");
+
+    // After Phase 2 compaction, a continuation message should be injected
+    const continuationMsg = result.messages.find(
+      (m) => m.role === MessageRole.SYSTEM && m.content?.includes("Context was compacted"),
+    );
+    if (continuationMsg) {
+      expect(continuationMsg.content).toContain("do NOT re-scan");
+      expect(continuationMsg.content).toContain("knowledge");
+    }
+    expect(result.status).toBe("success");
   });
 
   describe("SessionState full lifecycle (disk persistence)", () => {

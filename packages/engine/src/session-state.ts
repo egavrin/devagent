@@ -17,11 +17,13 @@ import type { PlanStep } from "./plan-tool.js";
 
 const DEFAULT_MAX_MODIFIED_FILES = 50;
 const DEFAULT_MAX_ENV_FACTS = 20;
-const DEFAULT_MAX_TOOL_SUMMARIES = 30;
+const DEFAULT_MAX_TOOL_SUMMARIES = 60;
 const DEFAULT_MAX_READONLY_COVERAGE_PER_TOOL = 200;
 const DEFAULT_MAX_FINDINGS = 20;
+const DEFAULT_MAX_KNOWLEDGE = 10;
 export const SUMMARY_MAX_CHARS = 2000;
 export const FINDING_DETAIL_MAX_CHARS = 500;
+export const KNOWLEDGE_CONTENT_MAX_CHARS = 1000;
 
 /** Marker prefix used to identify session-state system messages. */
 export const SESSION_STATE_MARKER = "[SESSION STATE";
@@ -48,11 +50,18 @@ export interface Finding {
   readonly iteration: number;
 }
 
+export interface KnowledgeEntry {
+  readonly key: string;
+  readonly content: string;
+  readonly iteration: number;
+}
+
 /** Configuration for SessionState — controls which sections are active.
  *  Extends SessionStateConfigCore from @devagent/core with engine-specific
  *  fields, making all inherited optional fields required. */
 export interface SessionStateConfig extends Required<SessionStateConfigCore> {
   readonly maxReadonlyCoveragePerTool: number;
+  readonly maxKnowledge: number;
 }
 
 export const DEFAULT_SESSION_STATE_CONFIG: SessionStateConfig = {
@@ -62,11 +71,13 @@ export const DEFAULT_SESSION_STATE_CONFIG: SessionStateConfig = {
   trackEnv: true,
   trackToolResults: true,
   trackFindings: true,
+  trackKnowledge: true,
   maxModifiedFiles: DEFAULT_MAX_MODIFIED_FILES,
   maxEnvFacts: DEFAULT_MAX_ENV_FACTS,
   maxToolSummaries: DEFAULT_MAX_TOOL_SUMMARIES,
   maxReadonlyCoveragePerTool: DEFAULT_MAX_READONLY_COVERAGE_PER_TOOL,
   maxFindings: DEFAULT_MAX_FINDINGS,
+  maxKnowledge: DEFAULT_MAX_KNOWLEDGE,
 };
 
 /** Serialized form for disk persistence (JSON round-trip safe). */
@@ -78,6 +89,7 @@ export interface SessionStateJSON {
   readonly toolSummaries: ToolResultSummary[];
   readonly readonlyCoverage?: Array<{ tool: string; targets: string[] }>;
   readonly findings?: Finding[];
+  readonly knowledge?: KnowledgeEntry[];
 }
 
 /** Persistence interface — decouples SessionState from any specific storage. */
@@ -95,6 +107,7 @@ export class SessionState {
   private toolSummaries: ToolResultSummary[] = [];
   private readonlyCoverage: Map<string, string[]> = new Map();
   private findings: Finding[] = [];
+  private knowledge: KnowledgeEntry[] = [];
 
   private persistence: SessionStatePersistence | null = null;
   private sessionId: string | null = null;
@@ -418,6 +431,43 @@ export class SessionState {
     return this.findings.length;
   }
 
+  // ─── Knowledge ─────────────────────────────────────────────
+
+  /**
+   * Store a knowledge entry extracted before compaction.
+   * Deduplicates by key — re-adding replaces the old entry at the end.
+   */
+  addKnowledge(key: string, content: string, iteration: number): void {
+    if (!this.config.trackKnowledge) return;
+
+    const truncatedContent = content.length > KNOWLEDGE_CONTENT_MAX_CHARS
+      ? content.slice(0, KNOWLEDGE_CONTENT_MAX_CHARS)
+      : content;
+
+    // Deduplicate by key
+    const existingIdx = this.knowledge.findIndex((k) => k.key === key);
+    if (existingIdx !== -1) {
+      this.knowledge.splice(existingIdx, 1);
+    }
+
+    this.knowledge.push({ key, content: truncatedContent, iteration });
+
+    // Enforce cap — drop oldest
+    const cap = this.config.maxKnowledge;
+    if (this.knowledge.length > cap) {
+      this.knowledge = this.knowledge.slice(this.knowledge.length - cap);
+    }
+
+    this.autosave();
+  }
+
+  /**
+   * Return array of knowledge entries.
+   */
+  getKnowledge(): ReadonlyArray<KnowledgeEntry> {
+    return this.knowledge;
+  }
+
   // ─── JSON Serialization ────────────────────────────────────
 
   /**
@@ -431,6 +481,7 @@ export class SessionState {
       envFacts: [...this.envFacts.entries()].map(([key, value]) => ({ key, value })),
       toolSummaries: this.toolSummaries.map((s) => ({ ...s })),
       findings: this.findings.length > 0 ? this.findings.map((f) => ({ ...f })) : undefined,
+      knowledge: this.knowledge.length > 0 ? this.knowledge.map((k) => ({ ...k })) : undefined,
     };
     if (this.readonlyCoverage.size > 0) {
       return {
@@ -477,6 +528,9 @@ export class SessionState {
     for (const finding of data.findings ?? []) {
       ss.findings.push({ ...finding });
     }
+    for (const entry of data.knowledge ?? []) {
+      ss.knowledge.push({ ...entry });
+    }
 
     // Re-apply caps: persisted data may exceed configured limits
     // (e.g., config was tightened after a prior session).
@@ -503,6 +557,9 @@ export class SessionState {
     }
     if (ss.findings.length > cfg.maxFindings) {
       ss.findings = ss.findings.slice(ss.findings.length - cfg.maxFindings);
+    }
+    if (ss.knowledge.length > cfg.maxKnowledge) {
+      ss.knowledge = ss.knowledge.slice(ss.knowledge.length - cfg.maxKnowledge);
     }
 
     return ss;
@@ -644,6 +701,15 @@ export class SessionState {
         (f) => `- **${f.title}**: ${f.detail}`,
       );
       sections.push(`## Findings\n${lines.join("\n")}`);
+    }
+
+    // Knowledge section — always included at all tiers (extracted domain
+    // knowledge that MUST survive compaction to prevent re-reading).
+    if (this.knowledge.length > 0) {
+      const lines = this.knowledge.map(
+        (k) => `- **${k.key}**: ${k.content}`,
+      );
+      sections.push(`## Accumulated knowledge\n${lines.join("\n")}`);
     }
 
     if (sections.length === 0) return null;

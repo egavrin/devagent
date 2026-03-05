@@ -147,12 +147,15 @@ export function formatSearchFilesSummary(
     }
   }
 
+  // Match content lines first (higher semantic value), then file list.
+  // When truncation at SUMMARY_MAX_CHARS occurs, match content is preserved
+  // over file paths — preventing loss of semantic context after compaction.
   const parts = [header];
-  if (fileLines.length > 0) {
-    parts.push(`Files: ${fileLines.join(", ")}`);
-  }
   for (const ml of matchLines) {
     parts.push(ml);
+  }
+  if (fileLines.length > 0) {
+    parts.push(`Files: ${fileLines.join(", ")}`);
   }
 
   return truncateToSummary(parts.join("\n"));

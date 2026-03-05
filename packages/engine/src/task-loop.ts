@@ -41,6 +41,7 @@ import { formatToolSummary } from "./tool-summary-formatter.js";
 export { summarizeDiff, summarizeTestOutput, extractStructuralDigest } from "./tool-summary-formatter.js";
 import { StagnationDetector } from "./stagnation-detector.js";
 import { judgeCompactionQuality, buildPreCompactionSummary } from "./compaction-judge.js";
+import { extractPreCompactionKnowledge } from "./knowledge-extractor.js";
 import { judgeCompletion } from "./completion-judge.js";
 import { parseToolScriptStepsArg } from "./tool-script.js";
 import type { ToolScriptStep } from "./tool-script.js";
@@ -737,6 +738,29 @@ export class TaskLoop {
     const preCompactionSummary = buildPreCompactionSummary(
       this.sessionState, this.messages, this.iterations,
     );
+
+    // Pre-compaction knowledge extraction: capture domain knowledge
+    // before context is truncated to prevent post-compaction re-reading.
+    // Only fires when sessionState exists (otherwise there's nowhere to store it).
+    if (this.sessionState) {
+      try {
+        const firstUserMsg = this.messages.find(
+          (m) => m.role === MessageRole.USER && m.content,
+        );
+        const knowledgeResult = await extractPreCompactionKnowledge(
+          this.provider, preCompactionSummary, this.sessionState,
+          this.messages, firstUserMsg?.content ?? null,
+        );
+        if (knowledgeResult) {
+          for (const entry of knowledgeResult.entries) {
+            this.sessionState.addKnowledge(entry.key, entry.content, this.iterations);
+          }
+        }
+      } catch {
+        // Knowledge extraction failure is non-fatal
+      }
+    }
+
     this.bus.emit("context:compacting", { estimatedTokens, maxTokens });
 
     try {
@@ -779,6 +803,15 @@ export class TaskLoop {
           }
         } catch {
           // Judge failure is non-fatal — continue without quality assessment
+        }
+
+        // Post-compaction continuation guidance: steer the LLM away from
+        // re-reading files and re-scanning the codebase after compaction.
+        if (this.sessionState) {
+          this.pushMessage({
+            role: MessageRole.SYSTEM,
+            content: "Context was compacted. Your accumulated knowledge, plan, and file edit history are preserved above. Continue from your current plan step. Your next action should be based on the knowledge and progress sections \u2014 do NOT re-scan or re-read files listed in recent activity.",
+          });
         }
 
         if (postCompactTokens > maxTokens) {

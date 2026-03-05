@@ -130,5 +130,13 @@ export function buildSessionStateContext(
   const findings = sessionState.getFindings();
   lines.push(`Findings: ${findings.length}`);
 
+  const knowledge = sessionState.getKnowledge();
+  if (knowledge.length > 0) {
+    lines.push(`Knowledge entries: ${knowledge.length}`);
+    for (const k of knowledge) {
+      lines.push(`  [${k.key}] ${k.content.slice(0, 200)}`);
+    }
+  }
+
   return lines.join("\n");
 }

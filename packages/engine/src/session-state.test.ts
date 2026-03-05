@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionState, extractEnvFact } from "./session-state.js";
+import { SessionState, extractEnvFact, KNOWLEDGE_CONTENT_MAX_CHARS } from "./session-state.js";
 import { createPlanTool } from "./plan-tool.js";
 import { EventBus } from "@devagent/core";
 import type { PlanStep } from "./plan-tool.js";
@@ -7,6 +7,7 @@ import type {
   SessionStateJSON,
   SessionStatePersistence,
   ToolResultSummary,
+  KnowledgeEntry,
 } from "./session-state.js";
 
 describe("SessionState", () => {
@@ -202,8 +203,8 @@ describe("SessionState", () => {
       expect(summaries[0]!.summary.length).toBe(2000);
     });
 
-    it("respects max cap of 30 (default)", () => {
-      for (let i = 0; i < 40; i++) {
+    it("respects max cap of 60 (default)", () => {
+      for (let i = 0; i < 70; i++) {
         state.addToolSummary({
           tool: "edit_file",
           target: `/src/file-${i}.ts`,
@@ -212,7 +213,7 @@ describe("SessionState", () => {
         });
       }
       const summaries = state.getToolSummaries();
-      expect(summaries.length).toBe(30);
+      expect(summaries.length).toBe(60);
       expect(summaries[0]!.target).toBe("/src/file-10.ts");
     });
 
@@ -1016,6 +1017,147 @@ describe("SessionState", () => {
       expect(restored.getToolSummaries()[0]!.summary).toBe("s");
       expect(restored.getFindings()[0]!.detail).toBe("Detail");
     });
+  });
+});
+
+// ─── Knowledge Tracking ──────────────────────────────────────
+
+describe("SessionState knowledge tracking", () => {
+  let state: SessionState;
+
+  beforeEach(() => {
+    state = new SessionState();
+  });
+
+  it("returns empty array when no knowledge stored", () => {
+    expect(state.getKnowledge()).toEqual([]);
+  });
+
+  it("stores and retrieves a knowledge entry", () => {
+    state.addKnowledge("inventory", "Found 5 ANI descriptors in src/ani/", 3);
+    const knowledge = state.getKnowledge();
+    expect(knowledge.length).toBe(1);
+    expect(knowledge[0]!.key).toBe("inventory");
+    expect(knowledge[0]!.content).toContain("Found 5 ANI descriptors");
+    expect(knowledge[0]!.iteration).toBe(3);
+  });
+
+  it("deduplicates by key, keeping latest", () => {
+    state.addKnowledge("inventory", "Found 3 ANI descriptors", 2);
+    state.addKnowledge("decisions", "Using visitor pattern", 3);
+    state.addKnowledge("inventory", "Found 5 ANI descriptors (2 more in tests/)", 5);
+    const knowledge = state.getKnowledge();
+    expect(knowledge.length).toBe(2);
+    // Deduplicated entry moves to end
+    expect(knowledge[0]!.key).toBe("decisions");
+    expect(knowledge[1]!.key).toBe("inventory");
+    expect(knowledge[1]!.content).toContain("5 ANI descriptors");
+    expect(knowledge[1]!.iteration).toBe(5);
+  });
+
+  it("truncates content exceeding KNOWLEDGE_CONTENT_MAX_CHARS", () => {
+    const longContent = "x".repeat(KNOWLEDGE_CONTENT_MAX_CHARS + 500);
+    state.addKnowledge("test", longContent, 1);
+    expect(state.getKnowledge()[0]!.content.length).toBe(KNOWLEDGE_CONTENT_MAX_CHARS);
+  });
+
+  it("respects max cap of 10 (default)", () => {
+    for (let i = 0; i < 15; i++) {
+      state.addKnowledge(`key-${i}`, `content ${i}`, i);
+    }
+    const knowledge = state.getKnowledge();
+    expect(knowledge.length).toBe(10);
+    // Should keep the most recent 10 (drop earliest)
+    expect(knowledge[0]!.key).toBe("key-5");
+    expect(knowledge[9]!.key).toBe("key-14");
+  });
+
+  it("respects custom maxKnowledge cap", () => {
+    const ss = new SessionState({ maxKnowledge: 3 });
+    for (let i = 0; i < 5; i++) {
+      ss.addKnowledge(`key-${i}`, `content ${i}`, i);
+    }
+    expect(ss.getKnowledge().length).toBe(3);
+    expect(ss.getKnowledge()[0]!.key).toBe("key-2");
+  });
+
+  it("does not track when trackKnowledge is disabled", () => {
+    const ss = new SessionState({ trackKnowledge: false });
+    ss.addKnowledge("test", "content", 1);
+    expect(ss.getKnowledge()).toEqual([]);
+  });
+
+  it("auto-saves when bound", () => {
+    const saved: SessionStateJSON[] = [];
+    const persistence: SessionStatePersistence = {
+      save: (_id, data) => { saved.push(structuredClone(data)); },
+      load: () => null,
+    };
+
+    state.bind("test-session", persistence);
+    state.addKnowledge("test", "content", 1);
+    expect(saved.length).toBe(1);
+    expect(saved[0]!.knowledge!.length).toBe(1);
+  });
+
+  it("includes knowledge in toSystemMessage at all tiers", () => {
+    state.addKnowledge("inventory", "Found 5 ANI descriptors in src/ani/", 3);
+    state.addKnowledge("decisions", "Using visitor pattern for transformation", 5);
+
+    // Need something else to make minimal tier produce output
+    state.setPlan([{ description: "Step 1", status: "in_progress" }]);
+
+    const full = state.toSystemMessage("full")!;
+    expect(full).toContain("## Accumulated knowledge");
+    expect(full).toContain("inventory");
+    expect(full).toContain("Found 5 ANI descriptors");
+
+    const compact = state.toSystemMessage("compact")!;
+    expect(compact).toContain("## Accumulated knowledge");
+
+    const minimal = state.toSystemMessage("minimal")!;
+    expect(minimal).toContain("## Accumulated knowledge");
+  });
+
+  it("round-trips knowledge through JSON serialization", () => {
+    state.addKnowledge("inventory", "Found 5 ANI descriptors", 3);
+    state.addKnowledge("decisions", "Using visitor pattern", 5);
+    const json = state.toJSON();
+    expect(json.knowledge).toBeDefined();
+    expect(json.knowledge!.length).toBe(2);
+
+    const restored = SessionState.fromJSON(json);
+    expect(restored.getKnowledge()).toEqual(state.getKnowledge());
+  });
+
+  it("fromJSON handles missing knowledge field (backward compat)", () => {
+    const data: SessionStateJSON = {
+      version: 1,
+      plan: null,
+      modifiedFiles: [],
+      envFacts: [],
+      toolSummaries: [],
+    };
+    const restored = SessionState.fromJSON(data);
+    expect(restored.getKnowledge()).toEqual([]);
+  });
+
+  it("fromJSON re-applies knowledge cap", () => {
+    const data: SessionStateJSON = {
+      version: 1,
+      plan: null,
+      modifiedFiles: [],
+      envFacts: [],
+      toolSummaries: [],
+      knowledge: Array.from({ length: 15 }, (_, i) => ({
+        key: `key-${i}`,
+        content: `content ${i}`,
+        iteration: i,
+      })),
+    };
+    const ss = SessionState.fromJSON(data, { maxKnowledge: 5 });
+    expect(ss.getKnowledge().length).toBe(5);
+    expect(ss.getKnowledge()[0]!.key).toBe("key-10");
   });
 });
 

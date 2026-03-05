@@ -57,11 +57,16 @@ export type { ErrorClassification } from "./error-judge.js";
 export { judgeCompletion } from "./completion-judge.js";
 export type { CompletionJudgeResult } from "./completion-judge.js";
 
-export { SessionState, extractEnvFact } from "./session-state.js";
+// Knowledge extraction (pre-compaction domain knowledge capture)
+export { extractPreCompactionKnowledge } from "./knowledge-extractor.js";
+export type { KnowledgeExtractionResult, KnowledgeExtractionEntry } from "./knowledge-extractor.js";
+
+export { SessionState, extractEnvFact, DEFAULT_SESSION_STATE_CONFIG, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX, KNOWLEDGE_CONTENT_MAX_CHARS } from "./session-state.js";
 export type {
   EnvFact,
   ToolResultSummary,
   Finding,
+  KnowledgeEntry,
   SessionStateJSON,
   SessionStatePersistence,
   SessionStateConfig,
