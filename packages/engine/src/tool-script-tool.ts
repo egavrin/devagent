@@ -119,10 +119,15 @@ export function createToolScriptTool(ctx: ToolScriptToolContext): ToolSpec {
       }
       sections.push(summary);
 
+      const allSucceeded = succeededCount === result.steps.length;
       return {
-        success: succeededCount > 0,
+        success: allSucceeded,
         output: sections.join("\n\n"),
-        error: succeededCount === 0 ? "All steps failed" : null,
+        error: allSucceeded
+          ? null
+          : succeededCount === 0
+            ? "All steps failed"
+            : `${result.steps.length - succeededCount}/${result.steps.length} steps failed`,
         artifacts: [],
       };
     },
