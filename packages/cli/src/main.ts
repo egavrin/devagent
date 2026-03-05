@@ -34,6 +34,7 @@ import {
   truncateToolOutput,
   createBuiltinPlugins,
   createPlanTool,
+  judgePlanQuality,
   createMemoryTools,
   createFindingTool,
   createToolScriptTool,
@@ -468,7 +469,34 @@ async function setupTools(
   let sessionState = new SessionState(config.sessionState);
 
   // Register state tools (getter indirection so resume can swap the instance)
-  toolRegistry.register(createPlanTool(bus, () => sessionState, () => outputState.currentIteration));
+  // Plan judge rate-limiting: track updates to skip judge on frequent calls
+  let planUpdateCount = 0;
+  let lastJudgedPlanUpdate = 0;
+  toolRegistry.register(createPlanTool(
+    bus,
+    () => sessionState,
+    () => outputState.currentIteration,
+    async (steps, oldPlan) => {
+      planUpdateCount++;
+      const iteration = outputState.currentIteration;
+      // Gating: skip for tiny plans, early iterations, or rate-limited
+      if (steps.length <= 2) return null;
+      if (iteration < 3) return null;
+      if (planUpdateCount - lastJudgedPlanUpdate < 3) return null;
+
+      lastJudgedPlanUpdate = planUpdateCount;
+      const originalRequest = cliArgs.query ?? "(interactive session)";
+      const result = await judgePlanQuality(
+        provider, originalRequest, steps, oldPlan,
+        sessionState, iteration,
+      );
+      if (!result) return null;
+      if (result.quality_score < 0.5) {
+        return `PLAN QUALITY WARNING (score: ${result.quality_score.toFixed(2)}): ${result.issues.join("; ")}. ${result.suggestion ?? ""}`;
+      }
+      return null;
+    },
+  ));
   // Finding tool: tracks iteration via tool:after event count
   let findingToolCallCount = 0;
   bus.on("tool:after", () => { findingToolCallCount++; });

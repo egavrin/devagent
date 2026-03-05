@@ -13,6 +13,13 @@
 import type { EventBus, LLMProvider, Message } from "@devagent/core";
 import { MessageRole } from "@devagent/core";
 import type { SessionState } from "./session-state.js";
+import {
+  collectStreamText,
+  parseJudgeResponse,
+  formatMessageForJudge,
+  buildSessionStateContext,
+} from "./llm-judge.js";
+import { classifyError } from "./error-judge.js";
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -122,6 +129,9 @@ export class StagnationDetector {
   // Post-compaction re-read storm
   private lastCompactionIteration = 0;
   private postCompactionRereadCount = 0;
+
+  // Error classification rate limiting
+  private lastErrorClassificationIteration = 0;
 
   constructor(options: StagnationDetectorOptions) {
     this.bus = options.bus;
@@ -240,7 +250,7 @@ export class StagnationDetector {
       const recentMessages = messages.slice(-JUDGE_HISTORY_COUNT);
 
       // Build session state context
-      const stateContext = this.buildSessionStateContext();
+      const stateContext = buildSessionStateContext(this.sessionState);
 
       // Build judge messages with rich tool call context
       const formattedHistory = recentMessages.map((m) => formatMessageForJudge(m)).join("\n\n");
@@ -262,11 +272,10 @@ export class StagnationDetector {
       const responseText = await collectStreamText(provider, judgeMessages);
 
       // Parse JSON response — strip markdown fences if present
-      const cleaned = responseText.replace(/```json\s*|```\s*/g, "").trim();
-      const parsed = JSON.parse(cleaned) as {
+      const parsed = parseJudgeResponse<{
         analysis: string;
         stagnation_confidence: number;
-      };
+      }>(responseText);
       const confidence = parsed.stagnation_confidence;
 
       // Adapt interval based on confidence
@@ -376,105 +385,37 @@ export class StagnationDetector {
     this.resetRunState();
   }
 
-  // ─── Private ─────────────────────────────────────────────────
+  /**
+   * Classify a tool error using the LLM judge to guide recovery strategy.
+   * Rate-limited to 1 classification per 3 iterations. Skips short errors.
+   */
+  async classifyToolError(
+    provider: LLMProvider,
+    toolName: string,
+    args: Record<string, unknown>,
+    errorMessage: string,
+    recentMessages: ReadonlyArray<Message>,
+    iteration: number,
+  ): Promise<string | null> {
+    if (errorMessage.length < 50) return null;
+    if (iteration - this.lastErrorClassificationIteration < 3) return null;
 
-  private buildSessionStateContext(): string {
-    if (!this.sessionState) return "No session state available.";
+    this.lastErrorClassificationIteration = iteration;
+    const recentContext = recentMessages
+      .slice(-3)
+      .map(formatMessageForJudge)
+      .join("\n\n");
 
-    const lines: string[] = [];
+    const result = await classifyError(
+      provider, toolName, args, errorMessage, recentContext,
+    );
+    if (!result) return null;
 
-    const plan = this.sessionState.getPlan();
-    if (plan && plan.length > 0) {
-      const completed = this.sessionState.getPlanCompletedCount();
-      const total = this.sessionState.getTotalPlanCount();
-      lines.push(`Plan progress: ${completed}/${total} steps completed`);
-      for (const step of plan) {
-        lines.push(`  [${step.status}] ${step.description}`);
-      }
-    } else {
-      lines.push("No plan set.");
-    }
-
-    const modifiedFiles = this.sessionState.getModifiedFiles();
-    lines.push(`Modified files: ${modifiedFiles.length}`);
-
-    const findings = this.sessionState.getFindings();
-    lines.push(`Findings: ${findings.length}`);
-
-    return lines.join("\n");
+    return `[Error classification: ${result.category}/${result.severity}] ${result.recovery_hint}`;
   }
 }
 
 // ─── Helpers ────────────────────────────────────────────────
-
-async function collectStreamText(
-  provider: LLMProvider,
-  messages: ReadonlyArray<Message>,
-): Promise<string> {
-  const chunks: string[] = [];
-  for await (const chunk of provider.chat(messages)) {
-    if (chunk.type === "text") {
-      chunks.push(chunk.content);
-    }
-  }
-  return chunks.join("");
-}
-
-/** Max characters for a single tool argument value in the judge context. */
-const JUDGE_ARG_MAX_CHARS = 200;
-/** Max characters for tool result content in the judge context. */
-const JUDGE_RESULT_MAX_CHARS = 300;
-
-/**
- * Format a conversation message for the stagnation judge, preserving
- * tool call names, arguments, and result context that the judge needs
- * to distinguish productive batch work from stagnation loops.
- */
-function formatMessageForJudge(m: Message): string {
-  const parts: string[] = [`[${m.role}]`];
-
-  // For ASSISTANT messages: include tool call details (names + arguments)
-  if (m.toolCalls && m.toolCalls.length > 0) {
-    for (const tc of m.toolCalls) {
-      const argsStr = formatToolArgs(tc.arguments);
-      parts.push(`  tool_call: ${tc.name}(${argsStr})`);
-    }
-  }
-
-  // For TOOL messages: include the tool call ID reference and result content
-  if (m.role === MessageRole.TOOL && m.toolCallId) {
-    parts.push(`  tool_result [${m.toolCallId}]`);
-  }
-
-  // Include text content if present (truncated)
-  if (m.content) {
-    const truncated = m.content.length > JUDGE_RESULT_MAX_CHARS
-      ? m.content.slice(0, JUDGE_RESULT_MAX_CHARS) + "..."
-      : m.content;
-    parts.push(`  ${truncated}`);
-  }
-
-  return parts.join("\n");
-}
-
-/**
- * Format tool call arguments for judge context. Shows key=value pairs
- * with values truncated, focusing on the arguments that matter for
- * distinguishing stagnation (file paths, search patterns, etc.).
- */
-function formatToolArgs(args: Record<string, unknown>): string {
-  const entries = Object.entries(args);
-  if (entries.length === 0) return "";
-  return entries
-    .map(([key, val]) => {
-      const str = typeof val === "string" ? val : JSON.stringify(val);
-      const truncated = str.length > JUDGE_ARG_MAX_CHARS
-        ? str.slice(0, JUDGE_ARG_MAX_CHARS) + "..."
-        : str;
-      return `${key}=${truncated}`;
-    })
-    .join(", ");
-}
 
 function normalizeRepoPath(filePath: string): string {
   const normalized = filePath.trim().replaceAll("\\", "/");

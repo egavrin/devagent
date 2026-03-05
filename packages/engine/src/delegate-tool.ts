@@ -11,6 +11,7 @@ import { AgentType, EventBus, ApprovalGate , extractErrorMessage } from "@devage
 import type { ToolRegistry } from "@devagent/tools";
 import { AgentRegistry, runAgent } from "./agents.js";
 import type { SessionState } from "./session-state.js";
+import { judgeSubagentOutput } from "./subagent-judge.js";
 
 /** Hard cap on subagent iterations to prevent runaway loops. */
 export const SUBAGENT_MAX_ITERATIONS = 30;
@@ -124,9 +125,25 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
 
         const costSummary = `[${result.result.iterations} iterations, ${result.cost.inputTokens}+${result.cost.outputTokens} tokens]`;
 
+        // Validate subagent output quality for non-trivial tasks
+        let qualityNote = "";
+        if (result.result.iterations >= 5) {
+          try {
+            const judgeResult = await judgeSubagentOutput(
+              ctx.provider, task, agentTypeStr, finalMessage,
+              result.result.iterations, cappedMax,
+            );
+            if (judgeResult && judgeResult.quality_score < 0.4) {
+              qualityNote = `[Subagent quality: ${judgeResult.completeness}] ${judgeResult.note}\n\n`;
+            }
+          } catch {
+            // Judge failure is non-fatal
+          }
+        }
+
         return {
           success: true,
-          output: `Subagent (${agentTypeStr}) completed ${costSummary}:\n\n${finalMessage}`,
+          output: `${qualityNote}Subagent (${agentTypeStr}) completed ${costSummary}:\n\n${finalMessage}`,
           error: null,
           artifacts: [],
         };

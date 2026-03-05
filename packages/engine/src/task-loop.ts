@@ -40,6 +40,7 @@ import { formatToolSummary } from "./tool-summary-formatter.js";
 // preserving backward compatibility for external consumers.
 export { summarizeDiff, summarizeTestOutput, extractStructuralDigest } from "./tool-summary-formatter.js";
 import { StagnationDetector } from "./stagnation-detector.js";
+import { judgeCompactionQuality, buildPreCompactionSummary } from "./compaction-judge.js";
 import { parseToolScriptStepsArg } from "./tool-script.js";
 import type { ToolScriptStep } from "./tool-script.js";
 
@@ -421,6 +422,7 @@ export class TaskLoop {
             // Append results in original order (API requires matching order)
             for (const { callId, result } of settled) {
               const tc = batch.calls.find((c) => c.callId === callId)!;
+              await this.maybeClassifyError(result, tc.name, tc.arguments);
               this.appendToolResult(callId, result, tc.name, tc.arguments);
             }
           } else {
@@ -428,6 +430,7 @@ export class TaskLoop {
             for (const tc of batch.calls) {
               if (this.aborted) break;
               const result = await this.executeToolCall(tc, availableToolNames, availableTools);
+              await this.maybeClassifyError(result, tc.name, tc.arguments);
               this.appendToolResult(tc.callId, result, tc.name, tc.arguments);
             }
           }
@@ -711,6 +714,10 @@ export class TaskLoop {
     }
 
     // Phase 2: Full compaction (hybrid summarization)
+    // Capture pre-compaction summary for quality assessment
+    const preCompactionSummary = buildPreCompactionSummary(
+      this.sessionState, this.messages, this.iterations,
+    );
     this.bus.emit("context:compacting", { estimatedTokens, maxTokens });
 
     try {
@@ -734,6 +741,27 @@ export class TaskLoop {
           estimatedTokens: postCompactTokens,
           tokensBefore: estimatedTokens,
         });
+
+        // Post-compaction quality assessment
+        try {
+          const judgeResult = await judgeCompactionQuality(
+            this.provider, preCompactionSummary, this.messages, this.sessionState,
+          );
+          if (judgeResult && judgeResult.quality_loss >= 0.6) {
+            this.pushMessage({
+              role: MessageRole.SYSTEM,
+              content: `COMPACTION GAP WARNING: ${judgeResult.recommendation}\nMissing context: ${judgeResult.missing_context.join("; ")}`,
+            });
+            this.bus.emit("error", {
+              message: `Compaction quality loss: ${judgeResult.quality_loss.toFixed(2)}`,
+              code: "COMPACTION_QUALITY_LOSS",
+              fatal: false,
+            });
+          }
+        } catch {
+          // Judge failure is non-fatal — continue without quality assessment
+        }
+
         if (postCompactTokens > maxTokens) {
           throw new Error(
             `Compaction did not fit budget: ${postCompactTokens} > ${maxTokens}`,
@@ -952,6 +980,29 @@ export class TaskLoop {
 
   /**
    * Format a tool result, push to messages, and emit the bus event.
+   * Classify tool errors using the LLM judge and append classification
+   * to the error message. Mutates result.error in place when applicable.
+   */
+  private async maybeClassifyError(
+    result: ToolResult,
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+  ): Promise<void> {
+    if (result.success || !result.error) return;
+    try {
+      const classification = await this.stagnationDetector.classifyToolError(
+        this.provider, toolName, toolArgs, result.error,
+        this.messages, this.iterations,
+      );
+      if (classification) {
+        (result as { error: string | null }).error += `\n${classification}`;
+      }
+    } catch {
+      // Classification failure is non-fatal
+    }
+  }
+
+  /**
    * Applies tool output truncation (head+tail) to prevent single tool calls
    * from dominating the context window. Also deduplicates: if the same
    * readonly tool was called on the same target before, the older result

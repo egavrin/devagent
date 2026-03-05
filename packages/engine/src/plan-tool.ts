@@ -29,6 +29,7 @@ export function createPlanTool(
   bus: EventBus,
   getSessionState: () => SessionState | undefined,
   getIteration?: () => number,
+  onPlanUpdated?: (steps: ReadonlyArray<PlanStep>, oldPlan: ReadonlyArray<PlanStep> | null) => Promise<string | null>,
 ): ToolSpec {
   return {
     name: "update_plan",
@@ -207,6 +208,12 @@ export function createPlanTool(
       // Sync to session state sidecar (survives compaction)
       getSessionState()?.setPlan(steps);
 
+      // Invoke plan quality judge callback if structural change occurred
+      let judgeFeedback: string | null = null;
+      if (onPlanUpdated && isStructuralChange(oldPlan ?? null, steps)) {
+        judgeFeedback = await onPlanUpdated(steps, oldPlan ?? null);
+      }
+
       // Emit plan event
       bus.emit("plan:updated", {
         steps: steps.map((s) => ({
@@ -235,9 +242,11 @@ export function createPlanTool(
         ? ` (${preservedCount} previously completed step(s) auto-preserved)`
         : "";
 
+      const judgeNote = judgeFeedback ? `\n\n${judgeFeedback}` : "";
+
       return {
         success: true,
-        output: `Plan updated (${newCompleted}/${total} completed)${mergeNote}:\n${planDisplay}`,
+        output: `Plan updated (${newCompleted}/${total} completed)${mergeNote}:\n${planDisplay}${judgeNote}`,
         error: null,
         artifacts: [],
       };
@@ -281,4 +290,21 @@ function normalizeStepDescription(description: string): string {
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .replace(/\s+/g, " ");
+}
+
+/**
+ * Detect whether a plan update is structural (description changes)
+ * vs. status-only (same steps, just status transitions).
+ */
+export function isStructuralChange(
+  oldPlan: ReadonlyArray<PlanStep> | null,
+  newPlan: ReadonlyArray<PlanStep>,
+): boolean {
+  if (!oldPlan) return true;
+  if (oldPlan.length !== newPlan.length) return true;
+
+  for (let i = 0; i < oldPlan.length; i++) {
+    if (oldPlan[i]!.description !== newPlan[i]!.description) return true;
+  }
+  return false;
 }

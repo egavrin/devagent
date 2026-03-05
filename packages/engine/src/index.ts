@@ -17,6 +17,17 @@ export type {
   StagnationDetectorOptions,
 } from "./stagnation-detector.js";
 
+// Shared LLM judge infrastructure
+export {
+  collectStreamText,
+  parseJudgeResponse,
+  formatMessageForJudge,
+  formatToolArgs,
+  buildSessionStateContext,
+  JUDGE_ARG_MAX_CHARS,
+  JUDGE_RESULT_MAX_CHARS,
+} from "./llm-judge.js";
+
 export { AgentRegistry, runAgent } from "./agents.js";
 export type {
   AgentDefinition,
@@ -33,8 +44,24 @@ export type {
 export { createDelegateTool } from "./delegate-tool.js";
 export type { DelegateToolContext } from "./delegate-tool.js";
 
-export { createPlanTool } from "./plan-tool.js";
+export { createPlanTool, isStructuralChange } from "./plan-tool.js";
 export type { PlanStep, Plan } from "./plan-tool.js";
+
+// Plan quality judge
+export { judgePlanQuality } from "./plan-judge.js";
+export type { PlanJudgeResult } from "./plan-judge.js";
+
+// Compaction quality judge
+export { judgeCompactionQuality, buildPreCompactionSummary } from "./compaction-judge.js";
+export type { CompactionJudgeResult } from "./compaction-judge.js";
+
+// Sub-agent validation judge
+export { judgeSubagentOutput } from "./subagent-judge.js";
+export type { SubagentJudgeResult } from "./subagent-judge.js";
+
+// Error recovery classification judge
+export { classifyError } from "./error-judge.js";
+export type { ErrorClassification } from "./error-judge.js";
 
 export { SessionState, extractEnvFact, DEFAULT_SESSION_STATE_CONFIG, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX } from "./session-state.js";
 export type {
