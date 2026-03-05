@@ -11,6 +11,9 @@ import { spawn } from "node:child_process";
 const DEFAULT_TIMEOUT_MS = 120_000; // 2 minutes
 const DEFAULT_MAX_BYTES = 100_000;
 
+/** Node.js setTimeout uses a 32-bit signed integer; values above this overflow to 1ms. */
+const MAX_SAFE_TIMEOUT_MS = 2_147_483_647; // 2^31 - 1
+
 export interface SpawnCaptureOptions {
   /** Working directory for the subprocess. */
   readonly cwd: string;
@@ -41,7 +44,8 @@ export function spawnAndCapture(
   args: string[],
   options: SpawnCaptureOptions,
 ): Promise<SpawnCaptureResult> {
-  const { cwd, timeout = DEFAULT_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, env } = options;
+  const { cwd, timeout: rawTimeout = DEFAULT_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, env } = options;
+  const timeout = Math.min(rawTimeout, MAX_SAFE_TIMEOUT_MS);
 
   return new Promise((resolve) => {
     const child = spawn(command, args, {

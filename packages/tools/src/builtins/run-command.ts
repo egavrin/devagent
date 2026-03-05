@@ -8,6 +8,7 @@ import type { ToolSpec } from "@devagent/core";
 import { spawnAndCapture } from "./spawn-capture.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000; // 2 minutes
+const MAX_COMMAND_TIMEOUT_MS = 600_000; // 10 minutes — hard cap for LLM-provided values
 const MAX_OUTPUT_BYTES = 100_000;
 
 function withTruncationMarker(
@@ -42,7 +43,8 @@ export const runCommandTool: ToolSpec = {
       },
       timeout_ms: {
         type: "number",
-        description: "Timeout in milliseconds (default: 120000)",
+        description: "Timeout in milliseconds (default: 120000, max: 600000)",
+        maximum: 600_000,
       },
       env: {
         type: "string",
@@ -73,8 +75,10 @@ export const runCommandTool: ToolSpec = {
       context.repoRoot,
       (params["cwd"] as string | undefined) ?? ".",
     );
-    const timeoutMs =
-      (params["timeout_ms"] as number | undefined) ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMs = Math.min(
+      (params["timeout_ms"] as number | undefined) ?? DEFAULT_TIMEOUT_MS,
+      MAX_COMMAND_TIMEOUT_MS,
+    );
     let envOverrides: Record<string, string> = {};
     const envParam = params["env"];
     if (typeof envParam === "string" && envParam.length > 0) {

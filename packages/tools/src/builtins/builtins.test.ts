@@ -27,6 +27,7 @@ import {
 import { findFilesTool } from "./find-files.js";
 import { searchFilesTool } from "./search-files.js";
 import { runCommandTool } from "./run-command.js";
+import { spawnAndCapture } from "./spawn-capture.js";
 import { gitDiffTool, gitCommitTool } from "./git.js";
 import { builtinTools } from "./index.js";
 import { FileTime } from "./file-time.js";
@@ -602,6 +603,46 @@ describe("run_command", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output).toContain("[output truncated");
+  });
+
+  it("clamps timeout_ms to MAX_COMMAND_TIMEOUT_MS (600_000)", async () => {
+    // A huge timeout_ms should be clamped, not cause a setTimeout overflow
+    const result = await runCommandTool.handler(
+      { command: "echo clamped", timeout_ms: 1_200_000_000_000 },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe("clamped");
+  });
+
+  it("schema declares maximum for timeout_ms", () => {
+    const schema = runCommandTool.paramSchema as Record<string, unknown>;
+    const props = schema.properties as Record<string, Record<string, unknown>>;
+    expect(props.timeout_ms.maximum).toBe(600_000);
+  });
+});
+
+describe("spawnAndCapture", () => {
+  it("clamps timeout > 2^31-1 to prevent setTimeout overflow", async () => {
+    // 1.2 trillion ms would overflow setTimeout's 32-bit signed int,
+    // causing it to fire at 1ms. The clamp should prevent this.
+    const result = await spawnAndCapture("echo", ["overflow-safe"], {
+      cwd: tmpDir,
+      timeout: 1_200_000_000_000,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe("overflow-safe");
+    expect(result.timedOut).toBe(false);
+  });
+
+  it("still times out with a valid large timeout under 2^31-1", async () => {
+    // Use a tiny timeout (50ms) with a long-running command to verify timeout still works
+    const result = await spawnAndCapture("sleep", ["10"], {
+      cwd: tmpDir,
+      timeout: 50,
+    });
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).toBe(1);
   });
 });
 
