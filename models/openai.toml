@@ -6,6 +6,33 @@ provider = "openai"
 base_url = "https://api.openai.com/v1"
 
 # =============================================================================
+# GPT-5.4 Family (1.05M context, 128K output)
+# =============================================================================
+
+["gpt-5.4"]
+context_window = 1050000
+response_headroom = 128000
+tokenizer = "o200k_base"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = false
+input_price_per_million = 2.50
+output_price_per_million = 15
+# reasoning_effort: none, low, medium, high, xhigh
+
+["gpt-5.4-pro"]
+context_window = 1050000
+response_headroom = 128000
+tokenizer = "o200k_base"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = false
+use_responses_api = true
+input_price_per_million = 30
+output_price_per_million = 180
+# reasoning_effort: medium, high, xhigh
+
+# =============================================================================
 # GPT-5.3 Codex (400K context, 128K output)
 # =============================================================================
 
