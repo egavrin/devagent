@@ -55,6 +55,7 @@ prompts/      # Shared prompt templates
 - `devagent auth logout` – Remove stored credentials
 
 ### Options
+- `-f, --file <path>` – Read the query from a file
 - `--provider <name>` – LLM provider (anthropic, openai, ollama, chatgpt, github-copilot)
 - `--model <id>` – Model ID
 - `--max-iterations <n>` – Max tool-call iterations

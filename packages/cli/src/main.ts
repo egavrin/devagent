@@ -5,6 +5,7 @@
 
 import { createInterface } from "node:readline";
 import { execSync } from "node:child_process";
+import { readFileSync as nodeReadFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -127,6 +128,7 @@ interface ReviewArgs {
 
 interface CliArgs {
   query: string | null;
+  file: string | null;
   interactive: boolean;
   mode: TaskMode;
   provider: string | null;
@@ -141,6 +143,34 @@ interface CliArgs {
   continue_: boolean;
   review: ReviewArgs | null;
   noStatusBar: boolean;
+}
+
+export function loadQueryFromFile(
+  path: string,
+  readFileSync: (path: string, encoding: "utf-8") => string = nodeReadFileSync,
+  inlineQuery: string | null = null,
+): string {
+  if (inlineQuery) {
+    throw new Error("Cannot specify both --file and an inline query");
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch (error) {
+    const message = extractErrorMessage(error);
+    if (message.includes("ENOENT")) {
+      throw new Error(`Input file not found: ${path}`);
+    }
+    throw error;
+  }
+
+  const query = raw.trim();
+  if (query.length === 0) {
+    throw new Error(`Input file is empty: ${path}`);
+  }
+
+  return query;
 }
 
 interface CrashSessionReporter {
@@ -199,10 +229,11 @@ export function createCrashSessionReporter(
   };
 }
 
-function parseArgs(argv: string[]): CliArgs {
+export function parseArgs(argv: string[]): CliArgs {
   const args = argv.slice(2); // Skip bun and script path
   const result: CliArgs = {
     query: null,
+    file: null,
     interactive: false,
     mode: "act",
     provider: null,
@@ -269,6 +300,8 @@ function parseArgs(argv: string[]): CliArgs {
     } else if (arg.startsWith("--verbose=")) {
       const cats = arg.slice("--verbose=".length);
       result.verboseCategories = cats;
+    } else if ((arg === "--file" || arg === "-f") && i + 1 < args.length) {
+      result.file = args[++i]!;
     } else if (arg === "--provider" && i + 1 < args.length) {
       result.provider = args[++i]!;
     } else if (arg === "--model" && i + 1 < args.length) {
@@ -295,8 +328,8 @@ function parseArgs(argv: string[]): CliArgs {
     }
   }
 
-  // Default to interactive if no query
-  if (!result.query) {
+  // Default to interactive if no query or file
+  if (!result.query && !result.file) {
     result.interactive = true;
   }
 
@@ -310,12 +343,13 @@ function getApprovalMode(argv: string[]): ApprovalMode | null {
   return null;
 }
 
-function printHelp(): void {
-  console.log(`
+export function renderHelpText(): string {
+  return `
 devagent — AI-powered development agent
 
 Usage:
   devagent "<query>"              Natural language query
+  devagent -f <path>               Read query from file
   devagent chat                   Interactive chat mode
   devagent --plan "<query>"       Plan mode (read-only analysis)
   devagent review <file> --rule <rule_file> [--json]
@@ -327,6 +361,7 @@ Auth:
   devagent auth logout            Remove stored credentials
 
 Options:
+  -f, --file <path>    Read query from file
   --provider <name>     LLM provider (anthropic, openai, deepseek, openrouter, ollama, chatgpt, github-copilot)
   --model <id>          Model ID
   --max-iterations <n>  Max tool-call iterations (default: 30)
@@ -362,8 +397,14 @@ Environment:
 
 Installation:
   bun run build && bun run install-cli    Install as 'devagent' command
-`.trim());
+`;
 }
+
+function printHelp(): void {
+  console.log(renderHelpText());
+}
+
+
 
 // ─── Setup Helpers ─────────────────────────────────────────
 
@@ -1253,12 +1294,17 @@ export async function main(): Promise<void> {
         skillResolver: tools.skillResolver,
         loadMemories: tools.loadFreshMemories,
       });
-    } else if (cliArgs.query) {
-      await runSingleQuery({
-        ...commonOptions,
-        query: cliArgs.query,
-        memories: tools.loadFreshMemories(),
-      });
+    } else {
+      const query = cliArgs.file
+        ? loadQueryFromFile(cliArgs.file, nodeReadFileSync, cliArgs.query)
+        : cliArgs.query;
+      if (query) {
+        await runSingleQuery({
+          ...commonOptions,
+          query,
+          memories: tools.loadFreshMemories(),
+        });
+      }
     }
   } finally {
     crashSessionReporter.dispose();
