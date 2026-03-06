@@ -36,7 +36,6 @@ packages/
   tools/      # Tool registry, builtins (patch-parser, file ops), LSP, MCP
   providers/  # LLM provider abstraction (Anthropic, OpenAI, Ollama, ChatGPT)
   arkts/      # ArkTS linter support
-  desktop/    # Tauri desktop app (SolidJS frontend)
 models/       # LLM provider config files (TOML)
 prompts/      # Shared prompt templates
 ```
