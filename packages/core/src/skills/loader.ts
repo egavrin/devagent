@@ -58,7 +58,7 @@ export class SkillLoader {
    * Discover skills from standard paths. Returns metadata only (no body loading).
    * Paths scanned in priority order (later overrides earlier):
    *   1. Global: ~/.config/devagent/skills/, ~/.agents/skills/, ~/.claude/skills/
-   *   2. Project: .agents/skills/, .claude/skills/, .devagent/skills/
+   *   2. Project: .agents/skills/, .github/skills/, .claude/skills/, .devagent/skills/
    */
   discover(options: DiscoverOptions): SkillMetadata[] {
     const { repoRoot } = options;
@@ -81,6 +81,7 @@ export class SkillLoader {
     // Project paths (higher priority — overrides global)
     const projectPaths: Array<{ path: string; source: SkillSource }> = [
       { path: join(repoRoot, ".agents", "skills"), source: "project" },
+      { path: join(repoRoot, ".github", "skills"), source: "project" },
       { path: join(repoRoot, ".claude", "skills"), source: "claude-compat" },
       { path: join(repoRoot, ".devagent", "skills"), source: "project" },
     ];
