@@ -93,6 +93,9 @@ export interface TaskLoopResult {
   readonly aborted: boolean;
   readonly status: TaskCompletionStatus;
   readonly lastText: string | null;
+  /** The longest assistant text produced during the session — survives
+   *  overwrite by brief "Done" wrapper messages. */
+  readonly substantiveText: string | null;
 }
 
 interface PendingToolCall {
@@ -281,7 +284,9 @@ export class TaskLoop {
     let hadToolCalls = false;
     let summaryRequested = false;
     let budgetGraceUsed = false;
+    let textCapGraceUsed = false;
     let lastNonEmptyText: string | null = null;
+    let longestAssistantText: string | null = null;
     let textOnlyContinuations = 0;
     let status: TaskCompletionStatus = "success";
 
@@ -362,6 +367,9 @@ export class TaskLoop {
       // Track last non-empty text from the LLM (even if tool calls follow)
       if (textContent.trim()) {
         lastNonEmptyText = textContent;
+        if (textContent.length > (longestAssistantText?.length ?? 0)) {
+          longestAssistantText = textContent;
+        }
       }
 
       if (toolCalls.length > 0) {
@@ -482,11 +490,17 @@ export class TaskLoop {
             role: MessageRole.ASSISTANT,
             content: textContent,
           });
-          this.pushMessage({
-            role: MessageRole.SYSTEM,
-            content: "Double-check still failing from prior edits. You must fix validation errors before finalizing.",
-          });
-          continue;
+          textOnlyContinuations++;
+          if (textOnlyContinuations < MAX_TEXT_CONTINUATIONS) {
+            this.pushMessage({
+              role: MessageRole.SYSTEM,
+              content: "Double-check still failing from prior edits. You must fix validation errors before finalizing.",
+            });
+            continue;
+          }
+          // Cap reached — LLM isn't fixing errors via tool calls; exit to avoid infinite loop.
+          status = "success";
+          break;
         }
 
         // Plan-aware continuation: if the plan has incomplete steps,
@@ -512,9 +526,29 @@ export class TaskLoop {
           continue;
         }
 
-        // Safety cap: don't call judge if we've already hit max continuations
+        // Safety cap: when text-only continuations are exhausted, request a
+        // summary (grace iteration) before exiting — same pattern as budget_exceeded.
         if (textOnlyContinuations >= MAX_TEXT_CONTINUATIONS) {
-          // Fall through to exit
+          if (!textCapGraceUsed) {
+            textCapGraceUsed = true;
+            this.pushMessage({
+              role: MessageRole.ASSISTANT,
+              content: textContent,
+            });
+            this.bus.emit("message:assistant", {
+              content: textContent,
+              partial: false,
+            });
+            this.pushMessage({
+              role: MessageRole.SYSTEM,
+              content:
+                "You have produced multiple text-only responses without using tools. " +
+                "Provide a concise summary of your findings and any deliverables from the original request. " +
+                "Do not describe next steps — summarize what you have accomplished and found so far.",
+            });
+            continue;
+          }
+          // Grace used — fall through to exit
         } else {
           // LLM completion judge: classify this text as final answer vs progress update
           const originalRequest = this.messages.find((m) => m.role === MessageRole.USER)?.content ?? "";
@@ -582,6 +616,7 @@ export class TaskLoop {
       aborted: this.aborted,
       status,
       lastText: lastNonEmptyText,
+      substantiveText: longestAssistantText,
     };
   }
 

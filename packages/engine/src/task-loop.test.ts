@@ -1089,6 +1089,49 @@ describe("TaskLoop", () => {
     expect(result.lastText).toBe("Final answer");
   });
 
+  it("substantiveText preserves longest text even when overwritten by brief wrapper", async () => {
+    const longReport = "## Conclusion\n\nThe compiler crashes on instanceof with erased generic type.\n\n## Spec Verdict\n\nSpec says instanceof with void is a CTE.\n\n## Fix Plan\n\n1. Add check in arithmetic.cpp\n2. Emit CTE for void RHS";
+    const briefWrapper = "Done — triage is complete.";
+
+    const provider = createMockProvider([
+      // First: long report text + tool call (update_plan)
+      [
+        { type: "text", content: longReport },
+        {
+          type: "tool_call",
+          content: '{"text": "marking done"}',
+          toolCallId: "call_0",
+          toolName: "echo",
+        },
+        { type: "done", content: "" },
+      ],
+      // Second: brief "Done" wrapper (text-only → triggers exit)
+      [
+        { type: "text", content: briefWrapper },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Write a triage report");
+    expect(result.lastText).toBe(briefWrapper);
+    expect(result.substantiveText).toBe(longReport);
+    expect(result.substantiveText!.length).toBeGreaterThan(result.lastText!.length);
+  });
+
   it("emits PROVIDER_RETRY error events during retries", async () => {
     let callCount = 0;
     const provider: LLMProvider = {
@@ -1732,6 +1775,76 @@ describe("TaskLoop", () => {
         m.content?.includes("Double-check still failing"),
     );
     expect(unresolvedValidationMessage).toBeDefined();
+  });
+
+  it("exits loop when double-check keeps failing and LLM only produces text (no infinite loop)", async () => {
+    // Regression: unresolvedDoubleCheckFailure path had no textOnlyContinuations cap,
+    // causing an infinite loop when the LLM responded with text instead of tool calls.
+    const mockDoubleCheck = {
+      isEnabled: () => true,
+      async captureBaseline() { return {}; },
+      async check() {
+        // Always fail — simulates persistent LSP errors (e.g., pre-existing AOSP errors)
+        return {
+          passed: false,
+          diagnosticErrors: ["/tmp/file.cpp: error: unknown type"],
+          testOutput: null,
+          testPassed: null,
+        };
+      },
+      formatResults() {
+        return "Diagnostic errors (1):\n  - /tmp/file.cpp: error: unknown type";
+      },
+    } as any;
+
+    const writeTool: ToolSpec = {
+      name: "write_file",
+      description: "Write a file",
+      category: "mutating",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: true,
+        output: "Written",
+        error: null,
+        artifacts: ["/tmp/file.cpp"],
+      }),
+    };
+
+    // LLM: one tool call, then only text responses forever
+    const provider = createMockProvider([
+      [
+        { type: "tool_call", content: '{"path": "/tmp/file.cpp"}', toolCallId: "c0", toolName: "write_file" },
+        { type: "done", content: "" },
+      ],
+      // All subsequent responses are text-only — the LLM never fixes the errors
+      [{ type: "text", content: "I see errors, let me analyze..." }, { type: "done", content: "" }],
+      [{ type: "text", content: "Still looking at the errors..." }, { type: "done", content: "" }],
+      [{ type: "text", content: "I will fix them now..." }, { type: "done", content: "" }],
+      [{ type: "text", content: "Should not reach here" }, { type: "done", content: "" }],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+      doubleCheck: mockDoubleCheck,
+    });
+
+    const result = await loop.run("Fix the file");
+
+    // Must terminate — not run forever
+    expect(result.status).toBe("success");
+    // Should not have consumed all 4 text-only responses (capped at MAX_TEXT_CONTINUATIONS=3)
+    expect(result.iterations).toBeLessThanOrEqual(5);
   });
 
   it("skips checkpoint for readonly tools", async () => {
@@ -4013,9 +4126,15 @@ describe("TaskLoop", () => {
         ]);
       }
 
-      // Final text-only (will hit safety cap — no judge call)
+      // Final text-only (will hit safety cap → grace summary request)
       responses.push([
         { type: "text", content: "Still working on it... attempt 3" },
+        { type: "done", content: "" },
+      ]);
+
+      // Grace iteration: LLM produces a summary after the grace nudge
+      responses.push([
+        { type: "text", content: "Summary of findings so far" },
         { type: "done", content: "" },
       ]);
 
@@ -4034,10 +4153,12 @@ describe("TaskLoop", () => {
       });
 
       const result = await loop.run("Do some work");
-      // 1 (tool) + 3 (text continued) + 1 (text capped) = 5
-      expect(result.iterations).toBeLessThanOrEqual(6);
+      // 1 (tool) + 3 (text continued) + 1 (text capped grace) + 1 (grace response) = 6
+      expect(result.iterations).toBeLessThanOrEqual(7);
       expect(result.iterations).toBeGreaterThan(2);
       expect(result.status).toBe("success");
+      // Grace summary should be the final text
+      expect(result.lastText).toBe("Summary of findings so far");
     });
   });
 
