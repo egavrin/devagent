@@ -186,13 +186,36 @@ function extractJsonFromResponse(text: string): unknown | null {
     try {
       return JSON.parse(candidate);
     } catch {
-      // Try to find matching close brace
+      // Try to find matching close brace by tracking depth.
+      // NOTE: This heuristic tracks unescaped double-quote characters to skip
+      // braces inside JSON string literals. It does NOT handle all edge cases,
+      // e.g. single-quoted strings (invalid JSON but sometimes seen), nested
+      // escaped sequences like \\", or non-string values that happen to
+      // contain quote-like characters. For those cases the JSON.parse above
+      // or the fenced-block path should be preferred.
       let depth = 0;
+      let inString = false;
       const opener = candidate[0];
       const closer = opener === "{" ? "}" : "]";
       for (let i = 0; i < candidate.length; i++) {
-        if (candidate[i] === opener) depth++;
-        if (candidate[i] === closer) depth--;
+        const ch = candidate[i];
+        if (inString) {
+          if (ch === "\\" ) {
+            i++; // skip escaped character
+            continue;
+          }
+          if (ch === '"') {
+            inString = false;
+          }
+          continue;
+        }
+        // Not inside a string
+        if (ch === '"') {
+          inString = true;
+          continue;
+        }
+        if (ch === opener) depth++;
+        if (ch === closer) depth--;
         if (depth === 0) {
           try {
             return JSON.parse(candidate.slice(0, i + 1));
@@ -234,8 +257,15 @@ export async function runWorkflowPhase(wfArgs: WorkflowRunArgs): Promise<void> {
   const startTime = Date.now();
 
   // 1. Read input
-  const inputRaw = readFileSync(wfArgs.inputFile, "utf-8");
-  const input = JSON.parse(inputRaw);
+  let input: unknown;
+  try {
+    const inputRaw = readFileSync(wfArgs.inputFile, "utf-8");
+    input = JSON.parse(inputRaw);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`Failed to read or parse input file "${wfArgs.inputFile}": ${message}\n`);
+    process.exit(1);
+  }
 
   // 2. Load config
   const approvalMode = phaseToApprovalMode(wfArgs.phase, wfArgs.approval);
@@ -377,7 +407,12 @@ export async function runWorkflowPhase(wfArgs: WorkflowRunArgs): Promise<void> {
   };
 
   // 9. Write output
-  writeFileSync(wfArgs.outputFile, JSON.stringify(phaseResult, null, 2) + "\n");
+  try {
+    writeFileSync(wfArgs.outputFile, JSON.stringify(phaseResult, null, 2) + "\n");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`Failed to write output file "${wfArgs.outputFile}": ${message}\n`);
+  }
 
   // Emit completion event
   if (wfArgs.eventsFile) {
