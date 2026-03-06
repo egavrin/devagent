@@ -189,6 +189,10 @@ export type { LogEntry } from "./event-logger.js";
 // Language extensions
 export { LANGUAGE_EXTENSIONS } from "./languages.js";
 
+// Artifact store
+export { ArtifactStore } from "./artifact-store.js";
+export type { ArtifactMetadata } from "./artifact-store.js";
+
 // Workflow phase result schemas
 export { WORKFLOW_SCHEMA_VERSION } from "./workflow-types.js";
 export type {
@@ -204,6 +208,10 @@ export type {
   ReviewFinding,
   RepairReport,
 } from "./workflow-types.js";
+
+// Repository instruction loader
+export { RepositoryInstructionLoader } from "./instruction-loader.js";
+export type { RepoInstruction } from "./instruction-loader.js";
 
 // Errors
 export {
