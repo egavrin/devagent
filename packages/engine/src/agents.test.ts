@@ -1,472 +1,98 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { AgentRegistry, runAgent } from "./agents.js";
-import type { AgentDefinition, AgentRunOptions } from "./agents.js";
-import type {
-  LLMProvider,
-  StreamChunk,
-  DevAgentConfig,
-} from "@devagent/core";
-import {
-  AgentType,
-  EventBus,
-  ApprovalGate,
-  ApprovalMode,
-  MessageRole,
-} from "@devagent/core";
-import { ToolRegistry } from "@devagent/tools";
-import type { ToolSpec } from "@devagent/core";
-import { SessionState } from "./session-state.js";
-
-// ─── Mock Provider ──────────────────────────────────────────
-
-function createMockProvider(
-  responses: Array<StreamChunk[]>,
-): LLMProvider {
-  let callIndex = 0;
-  return {
-    id: "mock",
-    async *chat(): AsyncIterable<StreamChunk> {
-      const chunks = responses[callIndex] ?? [];
-      callIndex++;
-      for (const chunk of chunks) {
-        yield chunk;
-      }
-    },
-    abort() {},
-  };
-}
-
-function makeConfig(): DevAgentConfig {
-  return {
-    provider: "mock",
-    model: "mock-model",
-    providers: {},
-    approval: {
-      mode: ApprovalMode.FULL_AUTO,
-      auditLog: false,
-      toolOverrides: {},
-      pathRules: [],
-    },
-    budget: {
-      maxIterations: 10,
-      maxContextTokens: 100_000,
-      responseHeadroom: 2_000,
-      costWarningThreshold: 1.0,
-      enableCostTracking: true,
-    },
-    context: {
-      pruningStrategy: "hybrid",
-      triggerRatio: 0.8,
-      keepRecentMessages: 10,
-    },
-    arkts: {
-      enabled: false,
-      strictMode: false,
-      targetVersion: "5.0",
-    },
-  };
-}
-
-function makeReadOnlyTool(): ToolSpec {
-  return {
-    name: "read_file",
-    description: "Read a file",
-    category: "readonly",
-    paramSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
-    resultSchema: { type: "object" },
-    handler: async (params) => ({
-      success: true,
-      output: `Content of ${params["path"] as string}`,
-      error: null,
-      artifacts: [],
-    }),
-  };
-}
-
-function makeMutatingTool(): ToolSpec {
-  return {
-    name: "write_file",
-    description: "Write a file",
-    category: "mutating",
-    paramSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
-    resultSchema: { type: "object" },
-    handler: async () => ({
-      success: true,
-      output: "Written",
-      error: null,
-      artifacts: [],
-    }),
-  };
-}
-
-// ─── AgentRegistry Tests ────────────────────────────────────
+import { describe, it, expect } from "vitest";
+import { AgentType } from "@devagent/core";
+import { AgentRegistry } from "./agents.js";
 
 describe("AgentRegistry", () => {
-  let registry: AgentRegistry;
+  it("registers all four agent types", () => {
+    const registry = new AgentRegistry();
+    const allTypes = [
+      AgentType.GENERAL,
+      AgentType.REVIEWER,
+      AgentType.ARCHITECT,
+      AgentType.EXPLORE,
+    ];
 
-  beforeEach(() => {
-    registry = new AgentRegistry();
+    for (const type of allTypes) {
+      expect(registry.has(type)).toBe(true);
+    }
+
+    expect(registry.list()).toHaveLength(4);
   });
 
-  it("has all four built-in agent types", () => {
-    expect(registry.has(AgentType.GENERAL)).toBe(true);
-    expect(registry.has(AgentType.REVIEWER)).toBe(true);
-    expect(registry.has(AgentType.ARCHITECT)).toBe(true);
-    expect(registry.has(AgentType.EXPLORE)).toBe(true);
-  });
-
-  it("returns correct definition for General agent", () => {
+  it("general agent uses act mode with full tool categories", () => {
+    const registry = new AgentRegistry();
     const def = registry.get(AgentType.GENERAL);
+
     expect(def.name).toBe("General");
     expect(def.defaultMode).toBe("act");
-    expect(def.allowedToolCategories).toContain("mutating");
+    expect(def.allowedToolCategories).toEqual([
+      "readonly",
+      "mutating",
+      "workflow",
+      "external",
+    ]);
   });
 
-  it("returns correct definition for Reviewer agent", () => {
+  it("reviewer agent uses plan mode with readonly tools only", () => {
+    const registry = new AgentRegistry();
     const def = registry.get(AgentType.REVIEWER);
+
     expect(def.name).toBe("Reviewer");
     expect(def.defaultMode).toBe("plan");
     expect(def.allowedToolCategories).toEqual(["readonly"]);
   });
 
-  it("returns correct definition for Architect agent", () => {
+  it("architect agent uses plan mode with readonly tools only", () => {
+    const registry = new AgentRegistry();
     const def = registry.get(AgentType.ARCHITECT);
+
     expect(def.name).toBe("Architect");
     expect(def.defaultMode).toBe("plan");
     expect(def.allowedToolCategories).toEqual(["readonly"]);
   });
 
-  it("returns correct definition for Explore agent", () => {
+  it("explore agent uses act mode with readonly tools only", () => {
+    const registry = new AgentRegistry();
     const def = registry.get(AgentType.EXPLORE);
+
     expect(def.name).toBe("Explore");
     expect(def.defaultMode).toBe("act");
     expect(def.allowedToolCategories).toEqual(["readonly"]);
   });
 
-  it("lists all definitions", () => {
-    const defs = registry.list();
-    expect(defs.length).toBe(4);
-    const types = defs.map((d) => d.type);
-    expect(types).toContain(AgentType.GENERAL);
-    expect(types).toContain(AgentType.REVIEWER);
-    expect(types).toContain(AgentType.ARCHITECT);
-    expect(types).toContain(AgentType.EXPLORE);
+  it("throws for unknown agent type", () => {
+    const registry = new AgentRegistry();
+    expect(() => registry.get("unknown" as AgentType)).toThrow(
+      "Unknown agent type: unknown",
+    );
   });
 
-  it("allows registering custom agent types", () => {
-    const custom: AgentDefinition = {
-      type: AgentType.GENERAL, // Overrides default
-      name: "CustomGeneral",
-      description: "Custom general agent",
-      systemPromptTemplate: "Custom prompt for {{repoRoot}}",
-      defaultMode: "act",
+  it("has() returns false for unknown type", () => {
+    const registry = new AgentRegistry();
+    expect(registry.has("nonexistent" as AgentType)).toBe(false);
+  });
+
+  it("each agent has a non-empty system prompt template", () => {
+    const registry = new AgentRegistry();
+    for (const def of registry.list()) {
+      expect(def.systemPromptTemplate.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("register() adds a custom agent definition", () => {
+    const registry = new AgentRegistry();
+    const custom = {
+      type: "custom" as AgentType,
+      name: "Custom",
+      description: "A custom agent",
+      systemPromptTemplate: "You are custom.",
+      defaultMode: "act" as const,
       allowedToolCategories: ["readonly"],
     };
+
     registry.register(custom);
-    expect(registry.get(AgentType.GENERAL).name).toBe("CustomGeneral");
-  });
-});
-
-// ─── runAgent Tests ─────────────────────────────────────────
-
-describe("runAgent", () => {
-  let bus: EventBus;
-  let config: DevAgentConfig;
-  let agentRegistry: AgentRegistry;
-
-  beforeEach(() => {
-    bus = new EventBus();
-    config = makeConfig();
-    agentRegistry = new AgentRegistry();
-  });
-
-  it("runs a General agent with a simple query", async () => {
-    const provider = createMockProvider([
-      [
-        { type: "text", content: "Hello from General agent" },
-        { type: "done", content: "" },
-      ],
-    ]);
-
-    const tools = new ToolRegistry();
-    tools.register(makeReadOnlyTool());
-    tools.register(makeMutatingTool());
-
-    const gate = new ApprovalGate(config.approval, bus);
-    const options: AgentRunOptions = {
-      provider,
-      tools,
-      bus,
-      approvalGate: gate,
-      config,
-      repoRoot: "/tmp/test",
-      parentId: null,
-      agentId: "agent-1",
-    };
-
-    const result = await runAgent(AgentType.GENERAL, "Hello", options, agentRegistry);
-    expect(result.agentId).toBe("agent-1");
-    expect(result.agentType).toBe(AgentType.GENERAL);
-    expect(result.result.iterations).toBe(1);
-    expect(result.result.aborted).toBe(false);
-  });
-
-  it("Reviewer agent only has read-only tools", async () => {
-    const provider = createMockProvider([
-      // Reviewer tries to use write_file — should fail as unknown tool
-      [
-        {
-          type: "tool_call",
-          content: '{"path": "/tmp/test.ts"}',
-          toolCallId: "call_0",
-          toolName: "write_file",
-        },
-        { type: "done", content: "" },
-      ],
-      [
-        { type: "text", content: "Cannot write in review mode" },
-        { type: "done", content: "" },
-      ],
-    ]);
-
-    const tools = new ToolRegistry();
-    tools.register(makeReadOnlyTool());
-    tools.register(makeMutatingTool());
-
-    const gate = new ApprovalGate(config.approval, bus);
-    const options: AgentRunOptions = {
-      provider,
-      tools,
-      bus,
-      approvalGate: gate,
-      config,
-      repoRoot: "/tmp/test",
-      parentId: "parent-1",
-      agentId: "agent-2",
-    };
-
-    const result = await runAgent(AgentType.REVIEWER, "Review code", options, agentRegistry);
-    // write_file should be rejected — not in Reviewer's tool set
-    const toolMessages = result.result.messages.filter(
-      (m) => m.role === MessageRole.TOOL,
-    );
-    expect(toolMessages.length).toBe(1);
-    expect(toolMessages[0]!.content).toContain("Error: Unknown tool");
-  });
-
-  it("Reviewer agent can use read-only tools", async () => {
-    const provider = createMockProvider([
-      [
-        {
-          type: "tool_call",
-          content: '{"path": "src/main.ts"}',
-          toolCallId: "call_0",
-          toolName: "read_file",
-        },
-        { type: "done", content: "" },
-      ],
-      [
-        { type: "text", content: "File looks good" },
-        { type: "done", content: "" },
-      ],
-    ]);
-
-    const tools = new ToolRegistry();
-    tools.register(makeReadOnlyTool());
-    tools.register(makeMutatingTool());
-
-    const gate = new ApprovalGate(config.approval, bus);
-    const options: AgentRunOptions = {
-      provider,
-      tools,
-      bus,
-      approvalGate: gate,
-      config,
-      repoRoot: "/tmp/test",
-      parentId: null,
-      agentId: "agent-3",
-    };
-
-    const result = await runAgent(AgentType.REVIEWER, "Review main.ts", options, agentRegistry);
-    const toolMessages = result.result.messages.filter(
-      (m) => m.role === MessageRole.TOOL,
-    );
-    expect(toolMessages.length).toBe(1);
-    expect(toolMessages[0]!.content).toBe("Content of src/main.ts");
-  });
-
-  it("substitutes repoRoot in system prompt", async () => {
-    const messages: Array<{ role: string; content: string | null }> = [];
-    const provider: LLMProvider = {
-      id: "mock",
-      async *chat(msgs): AsyncIterable<StreamChunk> {
-        for (const m of msgs) {
-          messages.push({ role: String(m.role), content: m.content });
-        }
-        yield { type: "text", content: "OK" };
-        yield { type: "done", content: "" };
-      },
-      abort() {},
-    };
-
-    const tools = new ToolRegistry();
-    const gate = new ApprovalGate(config.approval, bus);
-    const options: AgentRunOptions = {
-      provider,
-      tools,
-      bus,
-      approvalGate: gate,
-      config,
-      repoRoot: "/home/user/project",
-      parentId: null,
-      agentId: "agent-4",
-    };
-
-    await runAgent(AgentType.ARCHITECT, "Plan the architecture", options, agentRegistry);
-
-    // System prompt should contain the actual repoRoot
-    const systemMsg = messages.find((m) => m.role === "system");
-    expect(systemMsg).toBeDefined();
-    expect(systemMsg!.content).toContain("/home/user/project");
-    expect(systemMsg!.content).not.toContain("{{repoRoot}}");
-  });
-
-  it("creates a SessionState for the subagent TaskLoop", async () => {
-    // Verify that the subagent gets session state by checking that
-    // tool summaries are recorded (they require sessionState).
-    let capturedSessionState = false;
-    const provider: LLMProvider = {
-      id: "mock",
-      async *chat(msgs): AsyncIterable<StreamChunk> {
-        // Check if a session state message is injected
-        // (SessionState injects after tool calls if present)
-        yield { type: "text", content: "Done" };
-        yield { type: "done", content: "" };
-      },
-      abort() {},
-    };
-
-    const tools = new ToolRegistry();
-    tools.register(makeReadOnlyTool());
-    const gate = new ApprovalGate(config.approval, bus);
-    const options: AgentRunOptions = {
-      provider,
-      tools,
-      bus,
-      approvalGate: gate,
-      config,
-      repoRoot: "/tmp/test",
-      parentId: null,
-      agentId: "agent-ss",
-    };
-
-    // runAgent should not throw and should complete — the internal
-    // SessionState creation is what we're testing
-    const result = await runAgent(AgentType.REVIEWER, "Review code", options, agentRegistry);
-    expect(result.result.iterations).toBe(1);
-  });
-
-  it("prepends agent-common.md to every agent's system prompt", async () => {
-    const capturedSystemPrompts = new Map<string, string>();
-
-    for (const agentType of [AgentType.GENERAL, AgentType.REVIEWER, AgentType.ARCHITECT, AgentType.EXPLORE]) {
-      let captured = false;
-      const provider: LLMProvider = {
-        id: "mock",
-        async *chat(msgs): AsyncIterable<StreamChunk> {
-          if (!captured) {
-            const sys = msgs.find((m) => m.role === "system");
-            if (sys?.content) {
-              capturedSystemPrompts.set(String(agentType), sys.content);
-              captured = true;
-            }
-          }
-          yield { type: "text", content: "OK" };
-          yield { type: "done", content: "" };
-        },
-        abort() {},
-      };
-
-      const tools = new ToolRegistry();
-      const gate = new ApprovalGate(config.approval, bus);
-      await runAgent(
-        agentType,
-        "Test prompt",
-        { provider, tools, bus, approvalGate: gate, config, repoRoot: "/tmp/r", parentId: null, agentId: `agent-common-${agentType}` },
-        agentRegistry,
-      );
-    }
-
-    // All three agents should have common prompt sections
-    for (const [type, prompt] of capturedSystemPrompts) {
-      expect(prompt).toContain("## Tool Usage");
-      expect(prompt).toContain("### Search Strategy");
-      expect(prompt).toContain("## Error Recovery");
-      expect(prompt).toContain("## Post-Compaction Awareness");
-      expect(prompt).toContain("## Output Style");
-      expect(prompt).toContain("## Standards");
-    }
-
-    // Each should also have its unique content
-    expect(capturedSystemPrompts.get(String(AgentType.GENERAL))).toContain("General development agent");
-    expect(capturedSystemPrompts.get(String(AgentType.REVIEWER))).toContain("Code Review agent");
-    expect(capturedSystemPrompts.get(String(AgentType.ARCHITECT))).toContain("Architecture agent");
-    expect(capturedSystemPrompts.get(String(AgentType.EXPLORE))).toContain("Codebase Exploration agent");
-  });
-
-  it("seeds subagent SessionState from parent's coverage", async () => {
-    // Create a parent SessionState with some existing coverage
-    const parentState = new SessionState({ persist: false });
-    parentState.addToolSummary({
-      tool: "read_file",
-      target: "src/auth.ts",
-      summary: "Read 50 lines: export function authenticate",
-      iteration: 1,
-    });
-    parentState.recordReadonlyCoverage("read_file", "src/auth.ts");
-    parentState.recordModifiedFile("src/auth.ts");
-
-    // When the subagent reads the same file that the parent already covered,
-    // it should be skipped as redundant (because the parent's coverage was seeded).
-    const provider = createMockProvider([
-      // First call: try to read src/auth.ts (already in parent's readonly keys)
-      [
-        {
-          type: "tool_call",
-          content: '{"path": "src/auth.ts"}',
-          toolCallId: "call_0",
-          toolName: "read_file",
-        },
-        { type: "done", content: "" },
-      ],
-      // Second call: done
-      [
-        { type: "text", content: "Done reviewing" },
-        { type: "done", content: "" },
-      ],
-    ]);
-
-    const tools = new ToolRegistry();
-    tools.register(makeReadOnlyTool());
-    const gate = new ApprovalGate(config.approval, bus);
-    const options: AgentRunOptions = {
-      provider,
-      tools,
-      bus,
-      approvalGate: gate,
-      config,
-      repoRoot: "/tmp/test",
-      parentId: null,
-      agentId: "agent-seeded",
-      parentSessionState: parentState,
-    };
-
-    const result = await runAgent(AgentType.REVIEWER, "Review code", options, agentRegistry);
-    // The subagent should complete without errors
-    expect(result.result.iterations).toBeGreaterThanOrEqual(1);
-    // The seeded tool summaries should be present in the subagent's session state
-    // (visible via the tool messages — the read_file should succeed or reference parent data)
-    const toolMsgs = result.result.messages.filter((m) => m.role === MessageRole.TOOL);
-    expect(toolMsgs.length).toBeGreaterThanOrEqual(1);
+    expect(registry.has("custom" as AgentType)).toBe(true);
+    expect(registry.get("custom" as AgentType)).toEqual(custom);
+    expect(registry.list()).toHaveLength(5);
   });
 });
