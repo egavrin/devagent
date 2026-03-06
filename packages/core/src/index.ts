@@ -98,12 +98,23 @@ export type {
   CommandHandler,
 } from "./plugins.js";
 
-// Skills
-export { SkillRegistry } from "./skills.js";
+// Skills (Agent Skills standard)
+export {
+  SkillRegistry,
+  SkillLoader,
+  SkillResolver,
+  isValidSkillName,
+} from "./skills/index.js";
 export type {
-  Skill,
+  SkillFrontmatter,
+  SkillSource,
   SkillMetadata,
-} from "./skills.js";
+  Skill,
+  ResolvedSkill,
+  DiscoverOptions,
+  ResolveContext,
+  SkillResolverOptions,
+} from "./skills/index.js";
 
 // Context management
 export {

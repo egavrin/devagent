@@ -11,7 +11,9 @@ import {
   EventBus,
   ApprovalGate,
   PluginManager,
+  SkillLoader,
   SkillRegistry,
+  SkillResolver,
   ContextManager,
   MemoryStore,
   SessionStore,
@@ -39,6 +41,7 @@ import {
   createFindingTool,
   createToolScriptTool,
   createDelegateTool,
+  createSkillTool,
   AgentRegistry,
   CheckpointManager,
   DoubleCheck,
@@ -112,6 +115,7 @@ interface RunSingleQueryOptions extends RunOptions {
 
 interface RunInteractiveOptions extends RunOptions {
   readonly pluginManager: PluginManager;
+  readonly skillResolver: SkillResolver;
   readonly loadMemories: () => ReadonlyArray<Memory>;
 }
 
@@ -346,6 +350,7 @@ Interactive Commands:
   /checkpoint restore <id>     Restore workspace to checkpoint
   /checkpoint diff <id> [<id2>] Show changes between checkpoints
   /skills                      List available skills
+  /<skill-name> [args]         Invoke a skill by name
   /commands                    List available plugin commands
   /<command> [args]             Run a plugin command
   exit                         Quit
@@ -497,6 +502,7 @@ interface ToolsSetupResult {
   /** Mutable — may be swapped on resume. Access via getter closure. */
   sessionState: SessionState;
   readonly skills: SkillRegistry;
+  readonly skillResolver: SkillResolver;
   readonly pluginManager: PluginManager;
   readonly mcpHub: McpHub;
   readonly memoryStore: MemoryStore;
@@ -568,12 +574,18 @@ async function setupTools(
   bus.on("tool:after", () => { findingToolCallCount++; });
   toolRegistry.register(createFindingTool(() => sessionState, () => findingToolCallCount));
 
-  // ─── Skills ────────────────────────────────────────────────
+  // ─── Skills (Agent Skills standard) ────────────────────────
+  const skillLoader = new SkillLoader();
+  const skillMetadata = skillLoader.discover({ repoRoot: projectRoot });
   const skills = new SkillRegistry();
-  skills.discover(projectRoot);
+  skills.register(skillMetadata);
+  const skillResolver = new SkillResolver();
   if (skills.size > 0 && cliArgs.verbosity !== "quiet") {
     process.stderr.write(dim(`[skills] Discovered ${skills.size} skill(s)`) + "\n");
   }
+
+  // Register skill tool (LLM can invoke skills during conversation)
+  toolRegistry.register(createSkillTool(skills, skillResolver));
 
   // ─── Plugins ───────────────────────────────────────────────
   const pluginManager = new PluginManager();
@@ -717,6 +729,7 @@ async function setupTools(
     trackInternalLSPDiagnostics,
     sessionState,
     skills,
+    skillResolver,
     pluginManager,
     mcpHub,
     memoryStore,
@@ -1237,6 +1250,7 @@ export async function main(): Promise<void> {
       await runInteractive({
         ...commonOptions,
         pluginManager: tools.pluginManager,
+        skillResolver: tools.skillResolver,
         loadMemories: tools.loadFreshMemories,
       });
     } else if (cliArgs.query) {
@@ -1895,7 +1909,7 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
 async function runInteractive(options: RunInteractiveOptions): Promise<void> {
   const {
     provider, toolRegistry, bus, gate, config, repoRoot,
-    pluginManager, skills, contextManager, memoryStore, loadMemories,
+    pluginManager, skills, skillResolver, contextManager, memoryStore, loadMemories,
     checkpointManager, doubleCheck, initialMessages, verbosity, verbosityConfig: vc,
     sessionState, briefing: resumeBriefing, statusBar,
   } = options;
@@ -1985,7 +1999,7 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
   rl.prompt();
 
   for await (const line of rl) {
-    const input = line.trim();
+    let input = line.trim();
     if (!input) {
       rl.prompt();
       continue;
@@ -2032,6 +2046,7 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
       process.stderr.write(`  ${cyan("/checkpoint restore <id>")}     Restore workspace to checkpoint\n`);
       process.stderr.write(`  ${cyan("/checkpoint diff <id> [<id2>]")} Show changes between checkpoints\n`);
       process.stderr.write(`  ${cyan("/skills")}                      List available skills\n`);
+      process.stderr.write(`  ${cyan("/<skill-name> [args]")}         Invoke a skill by name\n`);
       process.stderr.write(`  ${cyan("/commands")}                    List plugin commands\n`);
       process.stderr.write(`  ${cyan("exit")}                         Quit\n`);
       rl.prompt();
@@ -2132,7 +2147,7 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
     if (input === "/skills") {
       const skillList = skills.list();
       if (skillList.length === 0) {
-        process.stderr.write(dim("No skills discovered. Add .md files to .devagent/skills/") + "\n");
+        process.stderr.write(dim("No skills discovered. Add skills as <name>/SKILL.md directories in .devagent/skills/") + "\n");
       } else {
         process.stderr.write(bold("Available skills:") + "\n");
         for (const skill of skillList) {
@@ -2161,12 +2176,31 @@ async function runInteractive(options: RunInteractiveOptions): Promise<void> {
         continue;
       }
 
-      // Unknown slash command
-      process.stderr.write(
-        yellow(`Unknown command: /${cmdName}. Use /help to see available commands.`) + "\n",
-      );
-      rl.prompt();
-      continue;
+      // ─── Skill Commands ──────────────────────────────────
+      if (skills.has(cmdName)) {
+        try {
+          const skill = await skills.load(cmdName);
+          const resolved = await skillResolver.resolve(skill, cmdArgs, {
+            sessionId: "interactive",
+            allowShellPreprocess: skill.source === "project",
+          });
+          // Inject resolved skill instructions as the next user message to the LLM
+          input = `[Skill: ${cmdName}]\n\n${resolved.resolvedInstructions}${cmdArgs ? `\n\nArguments: ${cmdArgs}` : ""}`;
+          // Fall through to LLM query processing below
+        } catch (err) {
+          const msg = extractErrorMessage(err);
+          process.stderr.write(formatError(`Skill error: ${msg}`) + "\n");
+          rl.prompt();
+          continue;
+        }
+      } else {
+        // Unknown slash command
+        process.stderr.write(
+          yellow(`Unknown command: /${cmdName}. Use /help to see available commands.`) + "\n",
+        );
+        rl.prompt();
+        continue;
+      }
     }
 
     // ─── LLM Query ────────────────────────────────────────

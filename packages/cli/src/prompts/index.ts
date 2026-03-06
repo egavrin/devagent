@@ -112,14 +112,16 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
     sections.push(projectContext);
   }
 
-  // Skills
+  // Skills (Agent Skills standard)
   const skillList = opts.skills.list();
   if (skillList.length > 0) {
     const skillLines = skillList
-      .map((s) => `- ${s.name}: ${s.description}`)
+      .map((s) => `- ${s.name}: ${s.description} (${s.source})`)
       .join("\n");
     sections.push(
-      `## Available Skills\n\n${skillLines}\nYou can reference these skills when the user asks about related topics.`,
+      `## Available Skills\n\n${skillLines}\n\n` +
+      `Use the \`invoke_skill\` tool to load a skill's full instructions when the ` +
+      `user's task matches a skill description. Always invoke a relevant skill before starting work.`,
     );
   }
 

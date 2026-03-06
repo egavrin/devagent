@@ -73,6 +73,34 @@ prompts/      # Shared prompt templates
 - `/checkpoint list|restore|diff` – Checkpoint management
 - `/skills` – List available skills
 - `/commands` – List available plugin commands
+- `/<skill-name> [args]` – Invoke a skill by name
+
+## Skills System
+
+DevAgent implements the [Agent Skills standard](https://agentskills.io) for cross-tool compatible skills.
+
+### Skill Format
+Skills are directories containing a `SKILL.md` file with YAML frontmatter:
+```
+my-skill/
+  SKILL.md           # Required: frontmatter (name, description) + instructions
+  scripts/           # Optional: executable scripts
+  references/        # Optional: documentation
+  assets/            # Optional: templates, resources
+```
+
+### Discovery Paths (priority order)
+1. `.devagent/skills/` (project, highest priority)
+2. `.claude/skills/` (project, Claude-compatible)
+3. `.agents/skills/` (project, standard)
+4. `~/.claude/skills/` (global)
+5. `~/.agents/skills/` (global)
+6. `~/.config/devagent/skills/` (global, lowest priority)
+
+### Invocation
+- **LLM auto-invocation**: Agent calls `invoke_skill` tool when task matches a skill
+- **Slash command**: `/<skill-name> [arguments]` in interactive mode
+- **Arguments**: `$ARGUMENTS`, `$0`/`$1`/`$N`, `${SKILL_DIR}`, `${SESSION_ID}`, `` !`command` ``
 
 ## Build & Test
 

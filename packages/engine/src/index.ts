@@ -89,6 +89,9 @@ export type { MemoryToolOptions } from "./memory-tools.js";
 // Finding tool (LLM-callable analysis persistence)
 export { createFindingTool } from "./finding-tool.js";
 
+// Skill tool (LLM-callable skill invocation)
+export { createSkillTool } from "./skill-tool.js";
+
 // Tool script — batched readonly tool execution
 export { ToolScriptEngine } from "./tool-script.js";
 export type {

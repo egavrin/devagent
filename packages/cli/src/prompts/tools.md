@@ -178,3 +178,18 @@ in context.** Instead:
   finding or plan step.
 - If you find yourself re-reading 3+ files immediately after compaction, stop and
   synthesize from what you already know.
+
+## Skills
+
+Skills are reusable instruction sets that guide how to approach specific tasks.
+Available skills are listed in the "Available Skills" section of the system prompt.
+
+When you see a matching skill:
+1. Call `invoke_skill` with the skill name before starting work.
+2. Follow the skill's instructions as guidance for the task.
+3. Skills may reference supporting files in `scripts/`, `references/`, and `assets/`
+   subdirectories accessible via the skill's directory path returned in the tool result.
+
+Arguments: pass arguments to `invoke_skill` using the `arguments` parameter. The
+skill can reference them as `$ARGUMENTS` (full string), `$0`/`$1`/`$N` (positional),
+or `${SKILL_DIR}` (skill directory path).
