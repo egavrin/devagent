@@ -748,24 +748,14 @@ describe("TaskLoop", () => {
 
   it("supports multi-turn conversation (reuse loop)", async () => {
     const provider = createMockProvider([
-      // Turn 1: text response
+      // Turn 1: text response (text-only = done, no judge)
       [
         { type: "text", content: "Answer to turn 1" },
-        { type: "done", content: "" },
-      ],
-      // Turn 1: completion judge → final
-      [
-        { type: "text", content: '{"is_final": true, "confidence": 0.95, "reason": "Direct answer"}' },
         { type: "done", content: "" },
       ],
       // Turn 2: text response
       [
         { type: "text", content: "Answer to turn 2" },
-        { type: "done", content: "" },
-      ],
-      // Turn 2: completion judge → final
-      [
-        { type: "text", content: '{"is_final": true, "confidence": 0.95, "reason": "Direct answer"}' },
         { type: "done", content: "" },
       ],
     ]);
@@ -883,8 +873,8 @@ describe("TaskLoop", () => {
     });
 
     const result = await loop.run("hello");
-    // callCount = 1 (fail) + 1 (retry success) + 1 (completion judge) = 3
-    expect(callCount).toBe(3);
+    // callCount = 1 (fail) + 1 (retry success) = 2
+    expect(callCount).toBe(2);
     expect(result.iterations).toBe(1);
 
     const assistantMsgs = result.messages.filter(
@@ -1089,49 +1079,6 @@ describe("TaskLoop", () => {
     expect(result.lastText).toBe("Final answer");
   });
 
-  it("substantiveText preserves longest text even when overwritten by brief wrapper", async () => {
-    const longReport = "## Conclusion\n\nThe compiler crashes on instanceof with erased generic type.\n\n## Spec Verdict\n\nSpec says instanceof with void is a CTE.\n\n## Fix Plan\n\n1. Add check in arithmetic.cpp\n2. Emit CTE for void RHS";
-    const briefWrapper = "Done — triage is complete.";
-
-    const provider = createMockProvider([
-      // First: long report text + tool call (update_plan)
-      [
-        { type: "text", content: longReport },
-        {
-          type: "tool_call",
-          content: '{"text": "marking done"}',
-          toolCallId: "call_0",
-          toolName: "echo",
-        },
-        { type: "done", content: "" },
-      ],
-      // Second: brief "Done" wrapper (text-only → triggers exit)
-      [
-        { type: "text", content: briefWrapper },
-        { type: "done", content: "" },
-      ],
-    ]);
-
-    const registry = new ToolRegistry();
-    registry.register(makeEchoTool());
-
-    const gate = new ApprovalGate(config.approval, bus);
-    const loop = new TaskLoop({
-      provider,
-      tools: registry,
-      bus,
-      approvalGate: gate,
-      config,
-      systemPrompt: "Test",
-      repoRoot: "/tmp",
-    });
-
-    const result = await loop.run("Write a triage report");
-    expect(result.lastText).toBe(briefWrapper);
-    expect(result.substantiveText).toBe(longReport);
-    expect(result.substantiveText!.length).toBeGreaterThan(result.lastText!.length);
-  });
-
   it("emits PROVIDER_RETRY error events during retries", async () => {
     let callCount = 0;
     const provider: LLMProvider = {
@@ -1168,8 +1115,8 @@ describe("TaskLoop", () => {
     });
 
     const result = await loop.run("hello");
-    // callCount = 2 (transient errors) + 1 (success) + 1 (completion judge) = 4
-    expect(callCount).toBe(4);
+    // callCount = 2 (transient errors) + 1 (success) = 3
+    expect(callCount).toBe(3);
     expect(retryEvents.length).toBe(2);
     expect(retryEvents[0]!.code).toBe("PROVIDER_RETRY");
     expect(retryEvents[0]!.fatal).toBe(false);
@@ -1778,8 +1725,8 @@ describe("TaskLoop", () => {
   });
 
   it("exits loop when double-check keeps failing and LLM only produces text (no infinite loop)", async () => {
-    // Regression: unresolvedDoubleCheckFailure path had no textOnlyContinuations cap,
-    // causing an infinite loop when the LLM responded with text instead of tool calls.
+    // Regression: unresolvedDoubleCheckFailure nudge fires once then clears,
+    // so the second text-only response exits immediately.
     const mockDoubleCheck = {
       isEnabled: () => true,
       async captureBaseline() { return {}; },
@@ -1811,17 +1758,16 @@ describe("TaskLoop", () => {
       }),
     };
 
-    // LLM: one tool call, then only text responses forever
+    // LLM: one tool call, then only text responses
     const provider = createMockProvider([
       [
         { type: "tool_call", content: '{"path": "/tmp/file.cpp"}', toolCallId: "c0", toolName: "write_file" },
         { type: "done", content: "" },
       ],
-      // All subsequent responses are text-only — the LLM never fixes the errors
+      // Text-only: triggers double-check nudge (one-shot, clears flag)
       [{ type: "text", content: "I see errors, let me analyze..." }, { type: "done", content: "" }],
-      [{ type: "text", content: "Still looking at the errors..." }, { type: "done", content: "" }],
-      [{ type: "text", content: "I will fix them now..." }, { type: "done", content: "" }],
-      [{ type: "text", content: "Should not reach here" }, { type: "done", content: "" }],
+      // Text-only: double-check flag cleared, exits as final answer
+      [{ type: "text", content: "Here are my conclusions." }, { type: "done", content: "" }],
     ]);
 
     const registry = new ToolRegistry();
@@ -1841,10 +1787,10 @@ describe("TaskLoop", () => {
 
     const result = await loop.run("Fix the file");
 
-    // Must terminate — not run forever
+    // Must terminate — nudge once then exit
     expect(result.status).toBe("success");
-    // Should not have consumed all 4 text-only responses (capped at MAX_TEXT_CONTINUATIONS=3)
-    expect(result.iterations).toBeLessThanOrEqual(5);
+    // 1 (tool call) + 2 (nudge) + 3 (exit) = 3 iterations
+    expect(result.iterations).toBe(3);
   });
 
   it("skips checkpoint for readonly tools", async () => {
@@ -3847,8 +3793,9 @@ describe("TaskLoop", () => {
       expect(result.iterations).toBe(2);
     });
 
-    it("limits text-only continuations to prevent infinite loops", async () => {
-      // LLM keeps producing text-only responses with an incomplete plan
+    it("limits plan nudge to a single attempt to prevent infinite loops", async () => {
+      // LLM keeps producing text-only responses with an incomplete plan.
+      // Plan nudge fires once, then the next text-only exits immediately.
       const responses: StreamChunk[][] = [
         // Iteration 1: set up plan
         [
@@ -3865,14 +3812,17 @@ describe("TaskLoop", () => {
           },
           { type: "done", content: "" },
         ],
-      ];
-      // Add many text-only responses (more than the max continuation limit)
-      for (let i = 0; i < 6; i++) {
-        responses.push([
-          { type: "text", content: `Still working on step 1... attempt ${i}` },
+        // Iteration 2: text-only → plan nudge fires (single shot)
+        [
+          { type: "text", content: "Still working on step 1..." },
           { type: "done", content: "" },
-        ]);
-      }
+        ],
+        // Iteration 3: text-only → planNudgeUsed=true, exits as final
+        [
+          { type: "text", content: "Here are my partial results." },
+          { type: "done", content: "" },
+        ],
+      ];
 
       const provider = createMockProvider(responses);
       const registry = new ToolRegistry();
@@ -3892,18 +3842,14 @@ describe("TaskLoop", () => {
       });
 
       const result = await loop.run("Review the code");
-      // Should stop after max continuations (not loop forever)
-      // 1 (plan) + 3 (max continuations) + 1 (final) = 5
-      expect(result.iterations).toBeLessThanOrEqual(6);
-      expect(result.iterations).toBeGreaterThan(2);
+      // 1 (plan setup) + 2 (text → nudge) + 3 (text → exit)
+      expect(result.iterations).toBe(3);
     });
 
-    it("continues when no plan exists but completion judge says not final (low iterations)", async () => {
-      // Simulates: LLM does a tool call, then produces text-only "here's what I'll do"
-      // without creating a plan — the completion judge detects this as a progress update
-      // and the loop continues instead of exiting.
+    it("text-only response without plan exits immediately (no judge)", async () => {
+      // Without a plan and without completion judge, text-only = done.
       const provider = createMockProvider([
-        // 0: Iteration 1 — tool call (productive work)
+        // Iteration 1: tool call
         [
           {
             type: "tool_call",
@@ -3913,34 +3859,9 @@ describe("TaskLoop", () => {
           },
           { type: "done", content: "" },
         ],
-        // 1: Iteration 2 — text-only "progress update" without plan
+        // Iteration 2: text-only → exits immediately
         [
-          { type: "text", content: "I found an issue. I'll continue reviewing the rest of the files." },
-          { type: "done", content: "" },
-        ],
-        // 2: Judge response → not final (triggers continuation)
-        [
-          { type: "text", content: '{"is_final": false, "confidence": 0.9, "reason": "States intent to continue reviewing"}' },
-          { type: "done", content: "" },
-        ],
-        // 3: Iteration 3 — tool call (continues after nudge)
-        [
-          {
-            type: "tool_call",
-            content: '{"text": "more work"}',
-            toolCallId: "call_1",
-            toolName: "echo",
-          },
-          { type: "done", content: "" },
-        ],
-        // 4: Iteration 4 — final text
-        [
-          { type: "text", content: "All done." },
-          { type: "done", content: "" },
-        ],
-        // 5: Judge response → final (triggers exit)
-        [
-          { type: "text", content: '{"is_final": true, "confidence": 0.95, "reason": "Completed work summary"}' },
+          { type: "text", content: "Here are my findings: everything looks correct." },
           { type: "done", content: "" },
         ],
       ]);
@@ -3948,7 +3869,6 @@ describe("TaskLoop", () => {
       const registry = new ToolRegistry();
       registry.register(makeEchoTool());
       const gate = new ApprovalGate(config.approval, bus);
-      const ss = new SessionState();
       const loop = new TaskLoop({
         provider,
         tools: registry,
@@ -3956,209 +3876,12 @@ describe("TaskLoop", () => {
         approvalGate: gate,
         config,
         systemPrompt: "Test",
-        sessionState: ss,
-        repoRoot: "/tmp",
-      });
-
-      const result = await loop.run("Review the code");
-      // Should have continued past the text-only at iteration 2
-      // At least 3 iterations (tool + text-nudge + tool)
-      expect(result.iterations).toBeGreaterThanOrEqual(3);
-    });
-  });
-
-  describe("completion judge continuation", () => {
-    it("continues when completion judge says response is not final", async () => {
-      // No sessionState with a plan → plan fast-path does NOT trigger.
-      // The completion judge is called instead.
-      //
-      // Response sequence (mock provider returns in order):
-      //   0: Main LLM → tool call (echo)
-      //   1: Main LLM → text-only "Let me apply the transformations"
-      //   2: Judge    → '{"is_final": false, ...}' (continue)
-      //   3: Main LLM → tool call (echo) after nudge
-      //   4: Main LLM → text-only "All done"
-      //   5: Judge    → '{"is_final": true, ...}' (exit)
-      const provider = createMockProvider([
-        // 0: Iteration 1 — tool call
-        [
-          {
-            type: "tool_call",
-            content: '{"text": "step one"}',
-            toolCallId: "call_1",
-            toolName: "echo",
-          },
-          { type: "done", content: "" },
-        ],
-        // 1: Iteration 2 — text-only progress update
-        [
-          { type: "text", content: "Let me apply the transformations to the remaining files." },
-          { type: "done", content: "" },
-        ],
-        // 2: Judge response → not final
-        [
-          { type: "text", content: '{"is_final": false, "confidence": 0.9, "reason": "States intent to continue"}' },
-          { type: "done", content: "" },
-        ],
-        // 3: Iteration 3 — tool call after nudge
-        [
-          {
-            type: "tool_call",
-            content: '{"text": "step two"}',
-            toolCallId: "call_2",
-            toolName: "echo",
-          },
-          { type: "done", content: "" },
-        ],
-        // 4: Iteration 4 — text-only final answer
-        [
-          { type: "text", content: "All done, the transformations have been applied." },
-          { type: "done", content: "" },
-        ],
-        // 5: Judge response → final
-        [
-          { type: "text", content: '{"is_final": true, "confidence": 0.95, "reason": "Summarizes completed work"}' },
-          { type: "done", content: "" },
-        ],
-      ]);
-
-      const registry = new ToolRegistry();
-      registry.register(makeEchoTool());
-      const gate = new ApprovalGate(config.approval, bus);
-      const loop = new TaskLoop({
-        provider,
-        tools: registry,
-        bus,
-        approvalGate: gate,
-        config,
-        systemPrompt: "You are a test assistant.",
-        repoRoot: "/tmp",
-      });
-
-      const result = await loop.run("Apply transformations to all files");
-      expect(result.iterations).toBe(4);
-      expect(result.status).toBe("success");
-    });
-
-    it("exits when completion judge says response is final", async () => {
-      // Response sequence:
-      //   0: Main LLM → tool call (echo)
-      //   1: Main LLM → text-only "Here are my findings"
-      //   2: Judge    → '{"is_final": true, ...}' (exit)
-      const provider = createMockProvider([
-        // 0: Iteration 1 — tool call
-        [
-          {
-            type: "tool_call",
-            content: '{"text": "checking"}',
-            toolCallId: "call_1",
-            toolName: "echo",
-          },
-          { type: "done", content: "" },
-        ],
-        // 1: Iteration 2 — text-only final answer
-        [
-          { type: "text", content: "Here are my findings: everything looks correct." },
-          { type: "done", content: "" },
-        ],
-        // 2: Judge response → final
-        [
-          { type: "text", content: '{"is_final": true, "confidence": 0.95, "reason": "Direct answer to request"}' },
-          { type: "done", content: "" },
-        ],
-      ]);
-
-      const registry = new ToolRegistry();
-      registry.register(makeEchoTool());
-      const gate = new ApprovalGate(config.approval, bus);
-      const loop = new TaskLoop({
-        provider,
-        tools: registry,
-        bus,
-        approvalGate: gate,
-        config,
-        systemPrompt: "You are a test assistant.",
         repoRoot: "/tmp",
       });
 
       const result = await loop.run("Check the code");
       expect(result.iterations).toBe(2);
       expect(result.status).toBe("success");
-    });
-
-    it("respects MAX_TEXT_CONTINUATIONS even when judge says not final", async () => {
-      // After the initial tool call, send many text-only responses with
-      // judge always saying is_final=false. The loop should cap at
-      // MAX_TEXT_CONTINUATIONS (3) judge-driven continuations and then exit.
-      //
-      // Response sequence:
-      //   0: Main LLM → tool call (echo)
-      //   1: Main LLM → text-only "Still working 0"
-      //   2: Judge    → not final  → continue (textOnlyContinuations=1)
-      //   3: Main LLM → text-only "Still working 1"
-      //   4: Judge    → not final  → continue (textOnlyContinuations=2)
-      //   5: Main LLM → text-only "Still working 2"
-      //   6: Judge    → not final  → continue (textOnlyContinuations=3)
-      //   7: Main LLM → text-only "Still working 3"
-      //   (textOnlyContinuations=3 >= MAX=3 → safety cap, no judge call → exit)
-      const responses: Array<StreamChunk[]> = [
-        // 0: Iteration 1 — tool call
-        [
-          {
-            type: "tool_call",
-            content: '{"text": "start"}',
-            toolCallId: "call_0",
-            toolName: "echo",
-          },
-          { type: "done", content: "" },
-        ],
-      ];
-
-      // Add text-only + judge pairs (3 pairs for 3 continuations)
-      for (let i = 0; i < 3; i++) {
-        responses.push([
-          { type: "text", content: `Still working on it... attempt ${i}` },
-          { type: "done", content: "" },
-        ]);
-        responses.push([
-          { type: "text", content: `{"is_final": false, "confidence": 0.85, "reason": "Still working"}` },
-          { type: "done", content: "" },
-        ]);
-      }
-
-      // Final text-only (will hit safety cap → grace summary request)
-      responses.push([
-        { type: "text", content: "Still working on it... attempt 3" },
-        { type: "done", content: "" },
-      ]);
-
-      // Grace iteration: LLM produces a summary after the grace nudge
-      responses.push([
-        { type: "text", content: "Summary of findings so far" },
-        { type: "done", content: "" },
-      ]);
-
-      const provider = createMockProvider(responses);
-      const registry = new ToolRegistry();
-      registry.register(makeEchoTool());
-      const gate = new ApprovalGate(config.approval, bus);
-      const loop = new TaskLoop({
-        provider,
-        tools: registry,
-        bus,
-        approvalGate: gate,
-        config,
-        systemPrompt: "You are a test assistant.",
-        repoRoot: "/tmp",
-      });
-
-      const result = await loop.run("Do some work");
-      // 1 (tool) + 3 (text continued) + 1 (text capped grace) + 1 (grace response) = 6
-      expect(result.iterations).toBeLessThanOrEqual(7);
-      expect(result.iterations).toBeGreaterThan(2);
-      expect(result.status).toBe("success");
-      // Grace summary should be the final text
-      expect(result.lastText).toBe("Summary of findings so far");
     });
   });
 

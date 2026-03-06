@@ -53,10 +53,6 @@ export type { SubagentJudgeResult } from "./subagent-judge.js";
 export { classifyError } from "./error-judge.js";
 export type { ErrorClassification } from "./error-judge.js";
 
-// Completion judge (prevents premature loop exit)
-export { judgeCompletion } from "./completion-judge.js";
-export type { CompletionJudgeResult } from "./completion-judge.js";
-
 // Knowledge extraction (pre-compaction domain knowledge capture)
 export { extractPreCompactionKnowledge } from "./knowledge-extractor.js";
 export type { KnowledgeExtractionResult, KnowledgeExtractionEntry } from "./knowledge-extractor.js";

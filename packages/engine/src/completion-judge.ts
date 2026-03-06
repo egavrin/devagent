@@ -2,10 +2,11 @@
  * Completion Judge — determines whether an LLM text-only response
  * is a final answer or a progress update.
  *
- * Prevents the task loop from exiting prematurely when the LLM
- * produces text-only "progress update" responses instead of final answers.
- * A progress update means the LLM intends to continue working, so the
- * loop should keep iterating rather than returning the partial result.
+ * @deprecated No longer used by TaskLoop. The industry-standard pattern
+ * (no tool calls = done) with strong system prompt instructions replaced
+ * this LLM-based judge. Kept for backward compatibility with external
+ * consumers. See agent-general.md and agent-common.md for finalization
+ * instructions that replaced this approach.
  */
 
 import type { LLMProvider } from "@devagent/core";

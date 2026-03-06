@@ -74,3 +74,13 @@ After context compaction, earlier tool outputs are pruned to save space.
 - Keep changes minimal and consistent with existing code style.
 - Do not fix unrelated issues — mention them but leave them alone.
 - Use ASCII by default. Sparse comments — explain why, not what.
+
+## Finalization
+
+When completing a task:
+- Your last message must address the original user request with results, not next steps.
+- Include key deliverables: file paths changed, test results, answers to questions asked.
+- If you cannot fully resolve the task, state what was done and what remains — do not
+  silently yield with a partial progress update.
+- Never produce a text-only response that describes what you plan to do next without
+  actually doing it. Either use tools to continue working, or summarize what's done.

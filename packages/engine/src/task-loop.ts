@@ -42,7 +42,6 @@ export { summarizeDiff, summarizeTestOutput, extractStructuralDigest } from "./t
 import { StagnationDetector } from "./stagnation-detector.js";
 import { judgeCompactionQuality, buildPreCompactionSummary } from "./compaction-judge.js";
 import { extractPreCompactionKnowledge } from "./knowledge-extractor.js";
-import { judgeCompletion } from "./completion-judge.js";
 import { parseToolScriptStepsArg } from "./tool-script.js";
 import type { ToolScriptStep } from "./tool-script.js";
 
@@ -93,9 +92,6 @@ export interface TaskLoopResult {
   readonly aborted: boolean;
   readonly status: TaskCompletionStatus;
   readonly lastText: string | null;
-  /** The longest assistant text produced during the session — survives
-   *  overwrite by brief "Done" wrapper messages. */
-  readonly substantiveText: string | null;
 }
 
 interface PendingToolCall {
@@ -170,8 +166,6 @@ const APPROACHING_LIMIT_RATIO = 0.6;
 const MAX_INLINE_SUMMARY_CHARS = 600;
 /** Max auto-pinned git_diff results per session. */
 const MAX_PINNED_DIFFS = 20;
-/** Max text-only continuations before the loop accepts a text-only response. */
-const MAX_TEXT_CONTINUATIONS = 3;
 
 // ─── Prune Priority ─────────────────────────────────────────
 /** Tool pruning priority: lower = pruned first. Tools not listed default to 1. */
@@ -284,10 +278,8 @@ export class TaskLoop {
     let hadToolCalls = false;
     let summaryRequested = false;
     let budgetGraceUsed = false;
-    let textCapGraceUsed = false;
+    let planNudgeUsed = false;
     let lastNonEmptyText: string | null = null;
-    let longestAssistantText: string | null = null;
-    let textOnlyContinuations = 0;
     let status: TaskCompletionStatus = "success";
 
     while (!this.aborted) {
@@ -367,14 +359,10 @@ export class TaskLoop {
       // Track last non-empty text from the LLM (even if tool calls follow)
       if (textContent.trim()) {
         lastNonEmptyText = textContent;
-        if (textContent.length > (longestAssistantText?.length ?? 0)) {
-          longestAssistantText = textContent;
-        }
       }
 
       if (toolCalls.length > 0) {
         hadToolCalls = true;
-        textOnlyContinuations = 0; // Reset: LLM is making progress
 
         // Add single assistant message with both text and tool calls
         const mappedToolCalls = toolCalls.map((tc) => ({
@@ -485,40 +473,30 @@ export class TaskLoop {
 
       // No tool calls — LLM produced a text response
       if (textContent) {
-        if (this.unresolvedDoubleCheckFailure) {
+        // Double-check forcing: if validation errors remain, nudge once
+        if (this.unresolvedDoubleCheckFailure && hadToolCalls) {
           this.pushMessage({
             role: MessageRole.ASSISTANT,
             content: textContent,
           });
-          textOnlyContinuations++;
-          if (textOnlyContinuations < MAX_TEXT_CONTINUATIONS) {
-            this.pushMessage({
-              role: MessageRole.SYSTEM,
-              content: "Double-check still failing from prior edits. You must fix validation errors before finalizing.",
-            });
-            continue;
-          }
-          // Cap reached — LLM isn't fixing errors via tool calls; exit to avoid infinite loop.
-          status = "success";
-          break;
+          this.bus.emit("message:assistant", { content: textContent, partial: false });
+          this.pushMessage({
+            role: MessageRole.SYSTEM,
+            content: "Double-check still failing from prior edits. You must fix validation errors before finalizing.",
+          });
+          this.unresolvedDoubleCheckFailure = false; // Only nudge once
+          continue;
         }
 
-        // Plan-aware continuation: if the plan has incomplete steps,
-        // the LLM likely produced a "progress update" rather than a
-        // final answer. Auto-continue up to MAX_TEXT_CONTINUATIONS times.
+        // Plan-aware nudge: if plan has incomplete steps, nudge ONCE
         const hasIncompleteSteps = this.sessionState?.hasPendingPlanSteps() ?? false;
-
-        // Fast-path: plan has pending steps → continue without LLM call
-        if (hasIncompleteSteps && textOnlyContinuations < MAX_TEXT_CONTINUATIONS) {
-          textOnlyContinuations++;
+        if (hasIncompleteSteps && hadToolCalls && !planNudgeUsed) {
+          planNudgeUsed = true;
           this.pushMessage({
             role: MessageRole.ASSISTANT,
             content: textContent,
           });
-          this.bus.emit("message:assistant", {
-            content: textContent,
-            partial: false,
-          });
+          this.bus.emit("message:assistant", { content: textContent, partial: false });
           this.pushMessage({
             role: MessageRole.SYSTEM,
             content: "Your plan has incomplete steps. Continue working — use tools to make progress on the next pending step.",
@@ -526,63 +504,12 @@ export class TaskLoop {
           continue;
         }
 
-        // Safety cap: when text-only continuations are exhausted, request a
-        // summary (grace iteration) before exiting — same pattern as budget_exceeded.
-        if (textOnlyContinuations >= MAX_TEXT_CONTINUATIONS) {
-          if (!textCapGraceUsed) {
-            textCapGraceUsed = true;
-            this.pushMessage({
-              role: MessageRole.ASSISTANT,
-              content: textContent,
-            });
-            this.bus.emit("message:assistant", {
-              content: textContent,
-              partial: false,
-            });
-            this.pushMessage({
-              role: MessageRole.SYSTEM,
-              content:
-                "You have produced multiple text-only responses without using tools. " +
-                "Provide a concise summary of your findings and any deliverables from the original request. " +
-                "Do not describe next steps — summarize what you have accomplished and found so far.",
-            });
-            continue;
-          }
-          // Grace used — fall through to exit
-        } else {
-          // LLM completion judge: classify this text as final answer vs progress update
-          const originalRequest = this.messages.find((m) => m.role === MessageRole.USER)?.content ?? "";
-          const judgeResult = await judgeCompletion(
-            this.provider, textContent, originalRequest,
-            this.sessionState, this.iterations, hadToolCalls,
-          );
-
-          if (judgeResult && !judgeResult.is_final && judgeResult.confidence >= 0.7) {
-            textOnlyContinuations++;
-            this.pushMessage({
-              role: MessageRole.ASSISTANT,
-              content: textContent,
-            });
-            this.bus.emit("message:assistant", {
-              content: textContent,
-              partial: false,
-            });
-            this.pushMessage({
-              role: MessageRole.SYSTEM,
-              content: "You described next steps but haven't executed them. Continue working — use tools to make progress.",
-            });
-            continue;
-          }
-        }
-
+        // Accept as final answer
         this.pushMessage({
           role: MessageRole.ASSISTANT,
           content: textContent,
         });
-        this.bus.emit("message:assistant", {
-          content: textContent,
-          partial: false,
-        });
+        this.bus.emit("message:assistant", { content: textContent, partial: false });
         status = "success";
         break;
       }
@@ -616,7 +543,6 @@ export class TaskLoop {
       aborted: this.aborted,
       status,
       lastText: lastNonEmptyText,
-      substantiveText: longestAssistantText,
     };
   }
 
