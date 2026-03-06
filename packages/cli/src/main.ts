@@ -1679,10 +1679,27 @@ Be concise and structured.${stateContext}`,
 
 /**
  * Flush buffered output and handle TaskCompletionStatus.
- * Falls back to result.lastText when the final response is empty.
+ * Falls back to result.substantiveText / result.lastText when the
+ * final streamed response is empty or is a brief wrapper around
+ * the actual deliverable.
  */
 function flushOutput(result: TaskLoopResult, verbosity: Verbosity, os: OutputState = outputState): void {
-  if (os.textBuffer.trim()) {
+  const streamed = os.textBuffer.trim();
+  const substantive = result.substantiveText?.trim() ?? null;
+
+  // Prefer substantive text when the streamed final message is a brief
+  // wrapper (e.g. "Done — triage is complete") but the LLM produced a
+  // longer response earlier that was swallowed by reasoning truncation.
+  const useSubstantive = substantive
+    && streamed
+    && substantive !== streamed
+    && streamed.length < 300
+    && substantive.length > streamed.length * 2;
+
+  if (useSubstantive) {
+    if (os.hadToolCalls) process.stderr.write("\n");
+    process.stdout.write(substantive + "\n");
+  } else if (streamed) {
     if (os.hadToolCalls) process.stderr.write("\n");
     process.stdout.write(os.textBuffer + "\n");
   } else if (result.lastText?.trim()) {
