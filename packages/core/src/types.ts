@@ -9,6 +9,7 @@ export enum AgentType {
   GENERAL = "general",
   REVIEWER = "reviewer",
   ARCHITECT = "architect",
+  EXPLORE = "explore",
 }
 
 // ─── Tool Types ───────────────────────────────────────────────

@@ -1,5 +1,5 @@
 /**
- * Agent types — General, Reviewer, Architect.
+ * Agent types — General, Reviewer, Architect, Explore.
  * Each agent type wraps a TaskLoop with a specialized system prompt
  * and restricted tool set. Agents are spawned by the delegate tool.
  */
@@ -62,6 +62,7 @@ let cachedCommonPrompt: string | null = null;
 let cachedGeneralPrompt: string | null = null;
 let cachedReviewerPrompt: string | null = null;
 let cachedArchitectPrompt: string | null = null;
+let cachedExplorePrompt: string | null = null;
 
 function getCommonPrompt(): string {
   cachedCommonPrompt ??= loadAgentPrompt("agent-common.md");
@@ -81,6 +82,11 @@ function getReviewerPrompt(): string {
 function getArchitectPrompt(): string {
   cachedArchitectPrompt ??= loadAgentPrompt("agent-architect.md");
   return cachedArchitectPrompt;
+}
+
+function getExplorePrompt(): string {
+  cachedExplorePrompt ??= loadAgentPrompt("agent-explore.md");
+  return cachedExplorePrompt;
 }
 
 // ─── Agent Registry ──────────────────────────────────────────
@@ -109,6 +115,14 @@ function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
       description: "Design documents and task breakdown. Read-only tools only.",
       systemPromptTemplate: getArchitectPrompt(),
       defaultMode: "plan",
+      allowedToolCategories: ["readonly"],
+    },
+    {
+      type: AgentType.EXPLORE,
+      name: "Explore",
+      description: "Codebase search and discovery. Read-only tools only. Fast iteration cap.",
+      systemPromptTemplate: getExplorePrompt(),
+      defaultMode: "act",
       allowedToolCategories: ["readonly"],
     },
   ];

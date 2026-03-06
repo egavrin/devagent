@@ -108,10 +108,11 @@ describe("AgentRegistry", () => {
     registry = new AgentRegistry();
   });
 
-  it("has all three built-in agent types", () => {
+  it("has all four built-in agent types", () => {
     expect(registry.has(AgentType.GENERAL)).toBe(true);
     expect(registry.has(AgentType.REVIEWER)).toBe(true);
     expect(registry.has(AgentType.ARCHITECT)).toBe(true);
+    expect(registry.has(AgentType.EXPLORE)).toBe(true);
   });
 
   it("returns correct definition for General agent", () => {
@@ -135,13 +136,21 @@ describe("AgentRegistry", () => {
     expect(def.allowedToolCategories).toEqual(["readonly"]);
   });
 
+  it("returns correct definition for Explore agent", () => {
+    const def = registry.get(AgentType.EXPLORE);
+    expect(def.name).toBe("Explore");
+    expect(def.defaultMode).toBe("act");
+    expect(def.allowedToolCategories).toEqual(["readonly"]);
+  });
+
   it("lists all definitions", () => {
     const defs = registry.list();
-    expect(defs.length).toBe(3);
+    expect(defs.length).toBe(4);
     const types = defs.map((d) => d.type);
     expect(types).toContain(AgentType.GENERAL);
     expect(types).toContain(AgentType.REVIEWER);
     expect(types).toContain(AgentType.ARCHITECT);
+    expect(types).toContain(AgentType.EXPLORE);
   });
 
   it("allows registering custom agent types", () => {
@@ -360,7 +369,7 @@ describe("runAgent", () => {
   it("prepends agent-common.md to every agent's system prompt", async () => {
     const capturedSystemPrompts = new Map<string, string>();
 
-    for (const agentType of [AgentType.GENERAL, AgentType.REVIEWER, AgentType.ARCHITECT]) {
+    for (const agentType of [AgentType.GENERAL, AgentType.REVIEWER, AgentType.ARCHITECT, AgentType.EXPLORE]) {
       let captured = false;
       const provider: LLMProvider = {
         id: "mock",
@@ -402,6 +411,7 @@ describe("runAgent", () => {
     expect(capturedSystemPrompts.get(String(AgentType.GENERAL))).toContain("General development agent");
     expect(capturedSystemPrompts.get(String(AgentType.REVIEWER))).toContain("Code Review agent");
     expect(capturedSystemPrompts.get(String(AgentType.ARCHITECT))).toContain("Architecture agent");
+    expect(capturedSystemPrompts.get(String(AgentType.EXPLORE))).toContain("Codebase Exploration agent");
   });
 
   it("seeds subagent SessionState from parent's coverage", async () => {

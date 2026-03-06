@@ -28,18 +28,42 @@ Use `delegate` to spawn a subagent for independent subtasks that benefit
 from a focused context window. Each subagent runs in isolation with its own
 message history. Available agent types:
 
-- `general` — implementation, bug fixes, code changes (full tool access).
+- `explore` — codebase search and discovery (read-only tools, fast).
 - `reviewer` — code review and analysis (read-only tools).
 - `architect` — design, planning, task breakdown (read-only tools).
+- `general` — implementation, bug fixes, code changes (full tool access).
 
-When to delegate:
-- A subtask is self-contained and doesn't need your accumulated context.
-- You want a clean review of code you just wrote.
-- The task has clearly separable parts that can benefit from focused attention.
+### Concrete triggers
 
-Do NOT delegate when:
+**Codebase exploration** → delegate to `explore`:
+- You need to search 3+ files or patterns to find something.
+- You need to understand how a symbol is used across the codebase.
+- You need to discover project structure or locate specific modules.
+- You need to answer "where is X?" or "what calls Y?" questions.
+
+**Code review** → delegate to `reviewer`:
+- After writing or modifying code, delegate for a clean review.
+- When you want a second opinion on correctness or edge cases.
+
+**Architecture and design** → delegate to `architect`:
+- Before implementing a complex feature that touches 3+ files.
+- When you need a design document or implementation plan.
+
+**Parallel implementation** → delegate to `general`:
+- When the task has 2+ independent parts that don't share context.
+- When a subtask is self-contained and doesn't need your accumulated context.
+
+### Patterns that ALWAYS trigger delegation
+
+1. Multiple codebase searches to find something → `explore`.
+2. Post-implementation correctness check → `reviewer`.
+3. Pre-implementation design for multi-file changes → `architect`.
+
+### Do NOT delegate when
+
 - The subtask depends heavily on context from your current conversation.
-- The task is small enough to handle directly.
+- The task is small enough to handle directly (single file, simple question).
+- You already have the answer in your context window.
 
 ## Test-Driven Implementation
 

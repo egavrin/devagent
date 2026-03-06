@@ -130,6 +130,38 @@ describe("delegate tool", () => {
     expect(result.output).toContain("Subagent (reviewer) completed");
   });
 
+  it("delegates to an Explore agent", async () => {
+    const provider = createMockProvider([
+      [
+        { type: "text", content: "Found auth module at src/auth.ts:15" },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const tools = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const agentRegistry = new AgentRegistry();
+
+    const delegateTool = createDelegateTool({
+      provider,
+      tools,
+      bus,
+      approvalGate: gate,
+      config,
+      repoRoot: "/tmp",
+      agentRegistry,
+      parentAgentId: "parent-1",
+    });
+
+    const result = await delegateTool.handler(
+      { agent_type: "explore", task: "Find where authentication is implemented" },
+      { repoRoot: "/tmp", config, sessionId: "" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Subagent (explore) completed");
+  });
+
   it("rejects invalid agent type", async () => {
     const provider = createMockProvider([]);
     const tools = new ToolRegistry();
@@ -154,6 +186,7 @@ describe("delegate tool", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Invalid agent type");
+    expect(result.error).toContain("explore");
   });
 
   it("handles subagent errors gracefully", async () => {
@@ -265,6 +298,170 @@ describe("delegate tool", () => {
     // The subagent should complete successfully with capped iterations
   });
 
+  it("caps explore agent to lower iteration budget than general", async () => {
+    // Unlimited parent — the per-agent-type cap is the only constraint.
+    const unlimitedConfig = {
+      ...config,
+      budget: { ...config.budget, maxIterations: 0 },
+    };
+
+    // Provider that always calls a tool — forces iteration until maxIterations.
+    function createLoopingProvider(): LLMProvider {
+      let callIndex = 0;
+      return {
+        id: "looping",
+        async *chat(): AsyncIterable<StreamChunk> {
+          callIndex++;
+          yield {
+            type: "tool_call",
+            content: `{"pattern": "*.ts"}`,
+            toolCallId: `call_${callIndex}`,
+            toolName: "find_files",
+          };
+          yield { type: "done", content: "" };
+        },
+        abort() {},
+      };
+    }
+
+    const findFilesTool: ToolSpec = {
+      name: "find_files",
+      description: "Find files",
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: true,
+        output: "src/main.ts",
+        error: null,
+        artifacts: [],
+      }),
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(findFilesTool);
+    const gate = new ApprovalGate(unlimitedConfig.approval, bus);
+    const agentRegistry = new AgentRegistry();
+
+    // Run explore — should cap at 15 iterations
+    const exploreTool = createDelegateTool({
+      provider: createLoopingProvider(),
+      tools,
+      bus,
+      approvalGate: gate,
+      config: unlimitedConfig,
+      repoRoot: "/tmp",
+      agentRegistry,
+      parentAgentId: "parent-1",
+    });
+
+    const exploreResult = await exploreTool.handler(
+      { agent_type: "explore", task: "Search codebase" },
+      { repoRoot: "/tmp", config: unlimitedConfig, sessionId: "" },
+    );
+    expect(exploreResult.success).toBe(true);
+
+    // Run general with same setup — should cap at 30 iterations
+    const generalTool = createDelegateTool({
+      provider: createLoopingProvider(),
+      tools,
+      bus,
+      approvalGate: gate,
+      config: unlimitedConfig,
+      repoRoot: "/tmp",
+      agentRegistry,
+      parentAgentId: "parent-2",
+    });
+
+    const generalResult = await generalTool.handler(
+      { agent_type: "general", task: "Search codebase" },
+      { repoRoot: "/tmp", config: unlimitedConfig, sessionId: "" },
+    );
+    expect(generalResult.success).toBe(true);
+
+    // Extract iteration counts from the output
+    const exploreMatch = exploreResult.output.match(/\[(\d+) iterations/);
+    const generalMatch = generalResult.output.match(/\[(\d+) iterations/);
+    const exploreIter = Number(exploreMatch![1]);
+    const generalIter = Number(generalMatch![1]);
+
+    // Explore should have fewer iterations than general.
+    // TaskLoop adds one grace iteration for summarization, so actual count
+    // is cap + 1.  Assert the behavioral invariant: explore < general,
+    // and each is within its cap (+ 1 grace).
+    expect(exploreIter).toBeLessThanOrEqual(15 + 1);
+    expect(generalIter).toBeGreaterThan(exploreIter);
+    expect(generalIter).toBeLessThanOrEqual(30 + 1);
+  });
+
+  it("caps explore to min(parentMax, 15) when parent budget is bounded", async () => {
+    // Parent has 10 iterations — both explore (15) and general (30)
+    // should be capped to 10.
+    const boundedConfig = {
+      ...config,
+      budget: { ...config.budget, maxIterations: 10 },
+    };
+
+    function createLoopingProvider(): LLMProvider {
+      let callIndex = 0;
+      return {
+        id: "looping",
+        async *chat(): AsyncIterable<StreamChunk> {
+          callIndex++;
+          yield {
+            type: "tool_call",
+            content: `{"pattern": "*.ts"}`,
+            toolCallId: `call_${callIndex}`,
+            toolName: "find_files",
+          };
+          yield { type: "done", content: "" };
+        },
+        abort() {},
+      };
+    }
+
+    const findFilesTool: ToolSpec = {
+      name: "find_files",
+      description: "Find files",
+      category: "readonly",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async () => ({
+        success: true,
+        output: "src/main.ts",
+        error: null,
+        artifacts: [],
+      }),
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(findFilesTool);
+    const gate = new ApprovalGate(boundedConfig.approval, bus);
+    const agentRegistry = new AgentRegistry();
+
+    const delegateTool = createDelegateTool({
+      provider: createLoopingProvider(),
+      tools,
+      bus,
+      approvalGate: gate,
+      config: boundedConfig,
+      repoRoot: "/tmp",
+      agentRegistry,
+      parentAgentId: "parent-1",
+    });
+
+    const result = await delegateTool.handler(
+      { agent_type: "explore", task: "Search codebase" },
+      { repoRoot: "/tmp", config: boundedConfig, sessionId: "" },
+    );
+    expect(result.success).toBe(true);
+
+    const match = result.output.match(/\[(\d+) iterations/);
+    const iterations = Number(match![1]);
+    // min(parentMax=10, exploreCap=15) = 10, plus 1 grace iteration
+    expect(iterations).toBeLessThanOrEqual(10 + 1);
+  });
+
   it("resolves getParentSessionState getter at call time, not registration time", async () => {
     // Simulate session resume: sessionState reference changes after registration
     const { SessionState } = await import("./session-state.js");
@@ -329,6 +526,7 @@ describe("delegate tool", () => {
 
     expect(delegateTool.name).toBe("delegate");
     expect(delegateTool.category).toBe("workflow");
+    expect(delegateTool.description).toContain("explore");
     expect(delegateTool.paramSchema.required).toContain("agent_type");
     expect(delegateTool.paramSchema.required).toContain("task");
   });

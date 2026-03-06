@@ -16,6 +16,11 @@ import { judgeSubagentOutput } from "./subagent-judge.js";
 /** Hard cap on subagent iterations to prevent runaway loops. */
 export const SUBAGENT_MAX_ITERATIONS = 30;
 
+/** Per-agent-type iteration caps. Explore is faster — lower budget. */
+const AGENT_ITERATION_CAPS: Readonly<Record<string, number>> = {
+  explore: 15,
+};
+
 // ─── Types ──────────────────────────────────────────────────
 
 export interface DelegateToolContext {
@@ -43,10 +48,10 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
   return {
     name: "delegate",
     description:
-      "Spawn a subagent to handle a subtask. Choose the agent type based on the task: 'general' for implementation, 'reviewer' for code review, 'architect' for design/planning.",
+      "Spawn a subagent to handle a subtask. Choose the agent type based on the task: 'explore' for codebase search, 'general' for implementation, 'reviewer' for code review, 'architect' for design/planning.",
     category: "workflow",
     errorGuidance: {
-      common: "Verify the agent type is valid (general, reviewer, architect). Ensure the task description is specific and actionable.",
+      common: "Verify the agent type is valid (explore, general, reviewer, architect). Ensure the task description is specific and actionable.",
     },
     paramSchema: {
       type: "object",
@@ -54,7 +59,7 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
         agent_type: {
           type: "string",
           description:
-            "Agent type: 'general', 'reviewer', or 'architect'",
+            "Agent type: 'explore', 'general', 'reviewer', or 'architect'",
         },
         task: {
           type: "string",
@@ -81,7 +86,7 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
         return {
           success: false,
           output: "",
-          error: `Invalid agent type: "${agentTypeStr}". Use 'general', 'reviewer', or 'architect'.`,
+          error: `Invalid agent type: "${agentTypeStr}". Use 'explore', 'general', 'reviewer', or 'architect'.`,
           artifacts: [],
         };
       }
@@ -91,10 +96,11 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
 
       // Cap subagent iterations: use the smaller of parent's budget and the hard cap.
       // When parent has maxIterations: 0 (unlimited), use the hard cap.
+      const agentCap = AGENT_ITERATION_CAPS[agentTypeStr.toLowerCase()] ?? SUBAGENT_MAX_ITERATIONS;
       const parentMax = ctx.config.budget.maxIterations;
       const cappedMax = parentMax > 0
-        ? Math.min(parentMax, SUBAGENT_MAX_ITERATIONS)
-        : SUBAGENT_MAX_ITERATIONS;
+        ? Math.min(parentMax, agentCap)
+        : agentCap;
       const subagentConfig: DevAgentConfig = {
         ...ctx.config,
         budget: { ...ctx.config.budget, maxIterations: cappedMax },
@@ -173,6 +179,8 @@ function parseAgentType(str: string): AgentType | null {
       return AgentType.REVIEWER;
     case "architect":
       return AgentType.ARCHITECT;
+    case "explore":
+      return AgentType.EXPLORE;
     default:
       return null;
   }
