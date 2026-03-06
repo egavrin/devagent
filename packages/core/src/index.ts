@@ -189,6 +189,22 @@ export type { LogEntry } from "./event-logger.js";
 // Language extensions
 export { LANGUAGE_EXTENSIONS } from "./languages.js";
 
+// Workflow phase result schemas
+export { WORKFLOW_SCHEMA_VERSION } from "./workflow-types.js";
+export type {
+  WorkflowPhase,
+  PhaseResult,
+  TriageReport,
+  PlanDraft,
+  PlanStep,
+  ExecutionReport,
+  VerificationReport,
+  VerificationCommand,
+  ReviewReport,
+  ReviewFinding,
+  RepairReport,
+} from "./workflow-types.js";
+
 // Errors
 export {
   DevAgentError,
