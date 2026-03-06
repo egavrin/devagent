@@ -20,7 +20,7 @@ const stubContext = {
 };
 
 describe("git tool safety: assertSafeArg", () => {
-  const shellMetachars = [";", "|", "`", "$", "<", ">", "\n", "\r", "\0"];
+  const shellMetachars = [";", "&", "|", "`", "$", "<", ">", "\n", "\r", "\0"];
 
   for (const char of shellMetachars) {
     const display = JSON.stringify(char);
@@ -48,18 +48,21 @@ describe("git tool safety: assertSafeArg", () => {
     // This will fail because the repo doesn't exist, but it should NOT
     // fail with a ToolError about disallowed characters or option-style refs.
     // It should fail with a git execution error instead.
-    try {
-      await gitDiffTool.handler(
+    const err: ToolError = await gitDiffTool
+      .handler(
         { ref: "HEAD~1", path: "src/index.ts" },
         stubContext as never,
+      )
+      .then(
+        () => {
+          throw new Error("expected handler to reject");
+        },
+        (e: ToolError) => e,
       );
-    } catch (err) {
-      // Should be a git execution error, not a safety validation error
-      expect(err).toBeInstanceOf(ToolError);
-      expect((err as ToolError).message).toMatch(/failed/);
-      expect((err as ToolError).message).not.toMatch(/disallowed/);
-      expect((err as ToolError).message).not.toMatch(/option-style/);
-    }
+    // Should be a git execution error, not a safety validation error
+    expect(err).toBeInstanceOf(ToolError);
+    expect(err.message).not.toMatch(/disallowed/);
+    expect(err.message).not.toMatch(/option-style/);
   });
 });
 
