@@ -27,6 +27,8 @@ import {
   DEFAULT_BUDGET,
   DEFAULT_CONTEXT,
   SkillRegistry,
+  RepositoryInstructionLoader,
+  ArtifactStore,
 } from "@devagent/core";
 import type { DevAgentConfig, ApprovalPolicy } from "@devagent/core";
 import { ApprovalMode } from "@devagent/core";
@@ -369,7 +371,17 @@ export async function runWorkflowPhase(wfArgs: WorkflowRunArgs): Promise<void> {
     provider: config.provider,
     model: config.model,
   });
-  const systemPrompt = baseSystemPrompt + phasePromptSuffix(wfArgs.phase);
+  // Load repo instructions and prepend to system prompt
+  const instructionLoader = new RepositoryInstructionLoader(wfArgs.repo);
+  const repoInstructions = instructionLoader.load();
+  const instructionContext = repoInstructions
+    .map((i) => `## ${i.source}\n${i.content}`)
+    .join("\n\n");
+
+  const phaseSuffix = phasePromptSuffix(wfArgs.phase);
+  const systemPrompt = instructionContext
+    ? `${instructionContext}\n\n---\n\n${baseSystemPrompt}${phaseSuffix}`
+    : baseSystemPrompt + phaseSuffix;
 
   // 6. Build user query from input
   const query = buildPhaseQuery(wfArgs.phase, input);
@@ -413,6 +425,12 @@ export async function runWorkflowPhase(wfArgs: WorkflowRunArgs): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(`Failed to write output file "${wfArgs.outputFile}": ${message}\n`);
   }
+
+  // 10. Save artifacts by run ID
+  const runId = `${wfArgs.phase}-${Date.now()}`;
+  const artifactStore = new ArtifactStore();
+  artifactStore.save(runId, "input.json", input);
+  artifactStore.save(runId, "output.json", phaseResult);
 
   // Emit completion event
   if (wfArgs.eventsFile) {
