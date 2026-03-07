@@ -6,6 +6,7 @@
 import { createInterface } from "node:readline";
 import { execSync } from "node:child_process";
 import { readFileSync as nodeReadFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -342,7 +343,7 @@ function resolveCliPackageJsonPath(importMetaUrl: string = import.meta.url): str
 }
 
 interface VersionFlagOptions {
-  readFileSync?: (path: string, encoding: "utf-8") => string;
+  requireFn?: (path: string) => { version?: string };
   stdout?: { write: (chunk: string) => boolean };
   exit?: (code?: number) => never;
   packageJsonPath?: string;
@@ -354,14 +355,13 @@ export function handleVersionFlag(argv: string[], options: VersionFlagOptions = 
     return false;
   }
 
-  const readFileSync = options.readFileSync ?? nodeReadFileSync;
+  const requireFn = options.requireFn ?? createRequire(import.meta.url);
   const stdout = options.stdout ?? process.stdout;
   const exit = options.exit ?? process.exit;
   const packageJsonPath = options.packageJsonPath ?? resolveCliPackageJsonPath();
 
-  const raw = readFileSync(packageJsonPath, "utf-8");
-  const parsed = JSON.parse(raw) as { version?: string };
-  if (!parsed.version) {
+  const parsed = requireFn(packageJsonPath);
+  if (!parsed?.version) {
     throw new Error(`Version not found in ${packageJsonPath}`);
   }
 

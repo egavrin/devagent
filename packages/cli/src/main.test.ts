@@ -4,50 +4,56 @@ import { handleVersionFlag, loadQueryFromFile, parseArgs, renderHelpText } from 
 
 describe("handleVersionFlag", () => {
   it("prints version for --version", () => {
-    const readFileSync = vi.fn(() => JSON.stringify({ version: "0.1.0" }));
+    const requireFn = vi.fn(() => ({ version: "0.1.0" }));
     const stdout = { write: vi.fn(() => true) };
     const exit = vi.fn();
+    const packageJsonPath = "/tmp/package.json";
 
     const handled = handleVersionFlag(["node", "devagent", "--version"], {
-      readFileSync,
+      requireFn,
+      packageJsonPath,
       stdout,
       exit: exit as unknown as (code?: number) => never,
     });
 
     expect(handled).toBe(true);
+    expect(requireFn).toHaveBeenCalledWith(packageJsonPath);
     expect(stdout.write).toHaveBeenCalledWith("devagent 0.1.0\n");
     expect(exit).toHaveBeenCalledWith(0);
   });
 
   it("prints version for -V", () => {
-    const readFileSync = vi.fn(() => JSON.stringify({ version: "9.9.9" }));
+    const requireFn = vi.fn(() => ({ version: "9.9.9" }));
     const stdout = { write: vi.fn(() => true) };
     const exit = vi.fn();
+    const packageJsonPath = "/tmp/package.json";
 
     const handled = handleVersionFlag(["node", "devagent", "-V"], {
-      readFileSync,
+      requireFn,
+      packageJsonPath,
       stdout,
       exit: exit as unknown as (code?: number) => never,
     });
 
     expect(handled).toBe(true);
+    expect(requireFn).toHaveBeenCalledWith(packageJsonPath);
     expect(stdout.write).toHaveBeenCalledWith("devagent 9.9.9\n");
     expect(exit).toHaveBeenCalledWith(0);
   });
 
   it("returns false when no version flag is present", () => {
-    const readFileSync = vi.fn();
+    const requireFn = vi.fn();
     const stdout = { write: vi.fn(() => true) };
     const exit = vi.fn();
 
     const handled = handleVersionFlag(["node", "devagent", "chat"], {
-      readFileSync,
+      requireFn,
       stdout,
       exit: exit as unknown as (code?: number) => never,
     });
 
     expect(handled).toBe(false);
-    expect(readFileSync).not.toHaveBeenCalled();
+    expect(requireFn).not.toHaveBeenCalled();
     expect(stdout.write).not.toHaveBeenCalled();
     expect(exit).not.toHaveBeenCalled();
   });
