@@ -174,15 +174,15 @@ export class RepositoryInstructionLoader {
     if (!source.startsWith(prefix)) return false;
 
     const instructionRelPath = source.slice(prefix.length);
-    // The directory part is the scope
-    const scopeDir = dirname(instructionRelPath);
+    const normalizedFilePath = relFilePath.replace(/\\/g, "/");
+    const scopePath = instructionRelPath.replace(/\.instructions\.md$/, "");
 
-    if (scopeDir === ".") {
+    if (scopePath === "" || scopePath === ".") {
       // Top-level instruction file — applies to everything
       return true;
     }
 
-    const normalizedFilePath = relFilePath.replace(/\\/g, "/");
-    return normalizedFilePath.startsWith(scopeDir + "/");
+    if (normalizedFilePath === scopePath) return true;
+    return normalizedFilePath.startsWith(scopePath + "/");
   }
 }
