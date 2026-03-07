@@ -1162,14 +1162,14 @@ async function setupSessionPersistence(
 // ─── Main ──────────────────────────────────────────────────
 
 export async function main(): Promise<void> {
-<<<<<<< HEAD
+  if (handleVersionFlag(process.argv)) {
+    return;
+  }
+
   // Workflow commands — intercept before normal arg parsing (headless mode)
   if (process.argv[2] === "workflow") {
     const { handleWorkflowCommand } = await import("./workflow-runner.js");
     await handleWorkflowCommand(process.argv);
-=======
-  if (handleVersionFlag(process.argv)) {
->>>>>>> 93c17c7 (feat(cli): add --version flag handling)
     return;
   }
 
