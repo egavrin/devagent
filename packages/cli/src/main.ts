@@ -336,6 +336,40 @@ export function parseArgs(argv: string[]): CliArgs {
   return result;
 }
 
+function resolveCliPackageJsonPath(importMetaUrl: string = import.meta.url): string {
+  const cliDir = dirname(fileURLToPath(importMetaUrl));
+  return join(cliDir, "..", "package.json");
+}
+
+interface VersionFlagOptions {
+  readFileSync?: (path: string, encoding: "utf-8") => string;
+  stdout?: { write: (chunk: string) => boolean };
+  exit?: (code?: number) => never;
+  packageJsonPath?: string;
+}
+
+export function handleVersionFlag(argv: string[], options: VersionFlagOptions = {}): boolean {
+  const args = argv.slice(2);
+  if (!args.includes("--version") && !args.includes("-V")) {
+    return false;
+  }
+
+  const readFileSync = options.readFileSync ?? nodeReadFileSync;
+  const stdout = options.stdout ?? process.stdout;
+  const exit = options.exit ?? process.exit;
+  const packageJsonPath = options.packageJsonPath ?? resolveCliPackageJsonPath();
+
+  const raw = readFileSync(packageJsonPath, "utf-8");
+  const parsed = JSON.parse(raw) as { version?: string };
+  if (!parsed.version) {
+    throw new Error(`Version not found in ${packageJsonPath}`);
+  }
+
+  stdout.write(`devagent ${parsed.version}\n`);
+  exit(0);
+  return true;
+}
+
 function getApprovalMode(argv: string[]): ApprovalMode | null {
   if (argv.includes("--suggest")) return ApprovalMode.SUGGEST;
   if (argv.includes("--auto-edit")) return ApprovalMode.AUTO_EDIT;
@@ -373,6 +407,7 @@ Options:
   --full-auto           Full-auto mode (auto-approve everything)
   -v, --verbose         Verbose output (show full tool params and results)
   -q, --quiet           Quiet output (errors only)
+  -V, --version         Show CLI version
   -h, --help            Show this help
 
 Interactive Commands:
@@ -1127,10 +1162,14 @@ async function setupSessionPersistence(
 // ─── Main ──────────────────────────────────────────────────
 
 export async function main(): Promise<void> {
+<<<<<<< HEAD
   // Workflow commands — intercept before normal arg parsing (headless mode)
   if (process.argv[2] === "workflow") {
     const { handleWorkflowCommand } = await import("./workflow-runner.js");
     await handleWorkflowCommand(process.argv);
+=======
+  if (handleVersionFlag(process.argv)) {
+>>>>>>> 93c17c7 (feat(cli): add --version flag handling)
     return;
   }
 
