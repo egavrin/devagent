@@ -285,7 +285,7 @@ export async function runWorkflowPhase(wfArgs: WorkflowRunArgs): Promise<void> {
   let config = loadConfig(wfArgs.repo, configOverrides);
   config = await resolveProviderCredentials(config);
 
-  if (wfArgs.maxIterations) {
+  if (wfArgs.maxIterations !== undefined) {
     config = {
       ...config,
       budget: { ...config.budget, maxIterations: wfArgs.maxIterations },
@@ -424,6 +424,7 @@ export async function runWorkflowPhase(wfArgs: WorkflowRunArgs): Promise<void> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(`Failed to write output file "${wfArgs.outputFile}": ${message}\n`);
+    process.exit(1);
   }
 
   // 10. Save artifacts by run ID

@@ -112,7 +112,8 @@ describe("RepositoryInstructionLoader", () => {
   });
 
   it("loadForPath filters path-specific instructions correctly", () => {
-    // Create a path-specific instruction for src/
+    // Create a path-specific instruction for src/rules/
+    // Filename "rules.instructions.md" in dir "src/" scopes to "src/rules/**"
     const instrDir = join(root, ".github", "instructions", "src");
     mkdirSync(instrDir, { recursive: true });
     writeFileSync(
@@ -131,15 +132,40 @@ describe("RepositoryInstructionLoader", () => {
 
     const loader = new RepositoryInstructionLoader(root);
 
-    // File under src/ should match both path-specific instructions
-    const srcInstructions = loader.loadForPath(join(root, "src", "index.ts"));
-    expect(srcInstructions).toHaveLength(3); // workflow + global + src-specific
+    // File under src/rules/ should match workflow + src/rules-specific
+    const rulesFile = loader.loadForPath(join(root, "src", "rules", "index.ts"));
+    expect(rulesFile).toHaveLength(2);
 
-    // File outside src/ should not match src-specific instruction
+    // File under src/ but NOT under src/rules/ should only match workflow
+    const srcInstructions = loader.loadForPath(join(root, "src", "index.ts"));
+    expect(srcInstructions).toHaveLength(1);
+
+    // File outside src/ should only match workflow
     const otherInstructions = loader.loadForPath(
       join(root, "tests", "foo.test.ts"),
     );
-    expect(otherInstructions).toHaveLength(2); // workflow + global only
+    expect(otherInstructions).toHaveLength(1);
+  });
+
+  it("scopes instruction using filename segment", () => {
+    const instrDir = join(root, ".github", "instructions", "src");
+    mkdirSync(instrDir, { recursive: true });
+    writeFileSync(
+      join(instrDir, "components.instructions.md"),
+      "Components rules.",
+    );
+
+    const loader = new RepositoryInstructionLoader(root);
+
+    const componentInstructions = loader.loadForPath(
+      join(root, "src", "components", "Button.tsx"),
+    );
+    expect(componentInstructions).toHaveLength(1);
+
+    const otherInstructions = loader.loadForPath(
+      join(root, "src", "utils", "format.ts"),
+    );
+    expect(otherInstructions).toHaveLength(0);
   });
 
   it("discovers nested instruction files", () => {
