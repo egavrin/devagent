@@ -692,14 +692,21 @@ describe("StatusBar", () => {
       iteration: 1, maxIter: 30,
       tokens: 110000, maxTokens: 128000, cost: 0,
     });
-    // Should contain red ANSI (31m)
-    expect(highUsage).toContain("\x1b[31m");
+    if (process.env["NO_COLOR"]) {
+      expect(highUsage).not.toContain("\x1b[31m");
+    } else {
+      expect(highUsage).toContain("\x1b[31m");
+    }
 
     // 60-80% = yellow
     const midUsage = bar.formatLine({
       iteration: 1, maxIter: 30,
       tokens: 90000, maxTokens: 128000, cost: 0,
     });
-    expect(midUsage).toContain("\x1b[33m");
+    if (process.env["NO_COLOR"]) {
+      expect(midUsage).not.toContain("\x1b[33m");
+    } else {
+      expect(midUsage).toContain("\x1b[33m");
+    }
   });
 });

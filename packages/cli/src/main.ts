@@ -1127,6 +1127,19 @@ async function setupSessionPersistence(
 // ─── Main ──────────────────────────────────────────────────
 
 export async function main(): Promise<void> {
+  // Workflow commands — intercept before normal arg parsing (headless mode)
+  if (process.argv[2] === "workflow") {
+    const { handleWorkflowCommand } = await import("./workflow-runner.js");
+    await handleWorkflowCommand(process.argv);
+    return;
+  }
+
+  if (process.argv[2] === "execute") {
+    const { handleExecuteCommand } = await import("./execute-runner.js");
+    await handleExecuteCommand(process.argv);
+    return;
+  }
+
   const cliArgs = parseArgs(process.argv);
 
   if (process.argv[2] === "execute") {

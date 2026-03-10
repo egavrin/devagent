@@ -2,31 +2,41 @@
 version: 1
 tracker:
   kind: github
-  issue_labels_include: [devagent]
+  issue_labels_include: ["da:ready", "devagent"]
 dispatch:
-  max_concurrency: 4
+  max_concurrency: 1
 workspace:
   mode: worktree
-  root: "."
+  root: ".devagent/workspaces"
 runner:
   bin: "devagent"
   provider: chatgpt
   model: gpt-5.4
-  approval_mode: full-auto
-  max_iterations: 50
+  approval_mode: auto-edit
+  max_iterations: 60
+roles:
+  triage: architect
+  plan: architect
+  implement: general
+  review: reviewer
 verify:
   commands:
-    - "bun run test"
+    - "bun run lint"
     - "bun run typecheck"
+    - "bun run test"
 pr:
   draft: true
-  open_requires: [verify]
+  open_requires: [verify_passed, no_blocking_self_review_findings]
 repair:
-  max_rounds: 3
+  max_rounds: 2
 handoff:
-  when: [repair_failed, review_rejected]
+  when: [draft_pr_opened, ci_green, no_blocking_auto_review_findings]
 ---
 
 # DevAgent Workflow
 
 This file configures how devagent-hub orchestrates work on this repository.
+
+The intended path is: triage, plan, implement in an isolated worktree, verify,
+open a draft PR, run review and repair loops, then hand off once CI is green or
+a human decision is required.

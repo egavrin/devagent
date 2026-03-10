@@ -12,14 +12,14 @@ This guide condenses the working rules and development process for DevAgent — 
 - **Never create new `.md` files unless the user explicitly asks**: capture notes in the conversation or update existing Markdown files instead.
 - **Front-load situational awareness**: run `bun run test` and `bun run typecheck` before touching code.
 - **Design before implementation**: draft the approach in the conversation or update existing docs.
-- **Work in tight loops**: write tests before code, keep functionality changes tiny, leave git commits to the user.
+- **Work in tight loops**: write tests before code, keep functionality changes tiny, do not create git commits unless explicitly instructed by the user or invoked via the `/commit` command.
 
 ## Implementation Loop
 - **Tests-first TDD**: add or extend tests in `packages/*/src/*.test.ts` before touching production modules; ensure the new tests fail for the expected reason before editing functionality.
 - **Run to failure**: execute the new tests and let them fail—capture stack traces and error messages so the root cause is obvious.
 - **Implement after failing tests**: once the tests define the behavior and fail, update production code in minimal increments to make them pass without breaking prior capabilities.
 - **Delete defensive shims**: remove temporary guards or fallback logic once the fix lands to keep the failure path visible if it ever regresses.
-- **Commit handoff**: never run `git commit` or otherwise write to git history; prepare commit-ready diffs and message suggestions so the user can apply them when satisfied.
+- **Commit handoff**: during autonomous coding sessions, do not create git commits unless explicitly instructed by the user or invoked via the `/commit` command. The `git_commit` tool and `/commit` plugin exist for user-initiated workflows and are not for autonomous use during implementation phases.
 
 ## Anti-Patterns To Avoid
 - **Silent guards**: never swallow exceptions or return default values to keep the workflow limping along. If a dependency misbehaves, raise and investigate.
@@ -36,7 +36,6 @@ packages/
   tools/      # Tool registry, builtins (patch-parser, file ops), LSP, MCP
   providers/  # LLM provider abstraction (Anthropic, OpenAI, Ollama, ChatGPT)
   arkts/      # ArkTS linter support
-  desktop/    # Tauri desktop app (SolidJS frontend)
 models/       # LLM provider config files (TOML)
 prompts/      # Shared prompt templates
 ```

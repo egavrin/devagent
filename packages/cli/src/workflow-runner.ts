@@ -566,3 +566,14 @@ export async function runWorkflowPhase(args: WorkflowRunArgs): Promise<void> {
     process.exitCode = EXIT_CODE.PHASE_FAILED;
   }
 }
+
+export async function handleWorkflowCommand(argv: string[]): Promise<void> {
+  const raw = parseWorkflowArgs(argv);
+  if (raw.subcommand === "describe") {
+    printRunnerDescription();
+    return;
+  }
+
+  const args = validateWorkflowArgs(raw);
+  await runWorkflowPhase(args);
+}
