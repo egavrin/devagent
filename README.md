@@ -112,6 +112,16 @@ bun run typecheck
 bun run dev
 ```
 
+## Workflow validation skills
+
+DevAgent ships with validation-focused skills you can invoke during workflow reviews:
+
+- `verification-checklist`: pre-commit/PR gate for `bun run typecheck`, `bun run test`, `bun run build`, commit format, and scope review.
+- `security-checklist`: checks command safety, secret handling, and fail-fast behavior.
+- `testing`: guidance for minimal test coverage when behavior changes.
+
+These live in `.agents/skills/` and can be invoked via `/verification-checklist`, `/security-checklist`, or `/testing` in interactive mode (or referenced in agent instructions).
+
 ## Validated Flow
 
 The current validated machine path is:
