@@ -1,514 +1,579 @@
 /**
  * Headless workflow runner — executes a single workflow phase
- * with structured JSON input/output, no TTY required.
+ * with typed JSON input/output for Hub integration.
  *
  * Usage:
- *   devagent workflow run \
- *     --phase triage \
- *     --repo /path/to/repo \
- *     --input issue.json \
- *     --output triage.json \
- *     --events events.jsonl
+ *   devagent workflow run --phase <phase> --input <json> --output <json>
+ *     --events <jsonl> --repo <path> [--provider <p>] [--model <m>]
+ *     [--max-iterations <n>] [--suggest|--auto-edit|--full-auto]
+ *     [--reasoning low|medium|high]
+ *
+ * Exit codes:
+ *   0 = success (output JSON written)
+ *   1 = phase failed (partial output may be written)
+ *   2 = invalid arguments
  */
 
 import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import {
-  EventBus,
-  ApprovalGate,
-  ContextManager,
-  MemoryStore,
-  loadConfig,
-  resolveProviderCredentials,
-  loadModelRegistry,
-  lookupModelCapabilities,
-  lookupModelEntry,
-  DEFAULT_BUDGET,
-  DEFAULT_CONTEXT,
-  SkillRegistry,
-  RepositoryInstructionLoader,
-  ArtifactStore,
-} from "@devagent/core";
-import type { DevAgentConfig, ApprovalPolicy } from "@devagent/core";
-import { ApprovalMode } from "@devagent/core";
-import { createDefaultRegistry } from "@devagent/providers";
-import { createDefaultToolRegistry } from "@devagent/tools";
-import {
-  TaskLoop,
-  CheckpointManager,
-  DoubleCheck,
-  DEFAULT_DOUBLE_CHECK_OPTIONS,
-  SessionState,
-} from "@devagent/engine";
-import type { TaskMode, TaskLoopResult } from "@devagent/engine";
-import { assembleSystemPrompt } from "./prompts/index.js";
-import { resolveBundledModelsDir } from "./model-registry-path.js";
-import type {
-  WorkflowPhase,
-  PhaseResult,
-} from "@devagent/core";
-import { WORKFLOW_SCHEMA_VERSION } from "@devagent/core";
+  type WorkflowPhase,
+  type WorkflowRunArgs,
+  type WorkflowApprovalMode,
+  type ReasoningLevel,
+  type RunnerDescription,
+  isValidPhase,
+  isValidApprovalMode,
+  isValidReasoningLevel,
+  EXIT_CODE,
+  WORKFLOW_PHASES,
+  WORKFLOW_APPROVAL_MODES,
+  REASONING_LEVELS,
+} from "@devagent/core/workflow-contract";
 
-// ─── Types ──────────────────────────────────────────────────
+// ─── Runner Description ──────────────────────────────────────
 
-export interface WorkflowRunArgs {
-  readonly phase: WorkflowPhase;
-  readonly repo: string;
-  readonly inputFile: string;
-  readonly outputFile: string;
-  readonly eventsFile?: string;
-  readonly provider?: string;
-  readonly model?: string;
-  readonly maxIterations?: number;
-  readonly approval?: string;
+export function printRunnerDescription(): void {
+  const pkg = { version: "0.1.0" }; // TODO: read from package.json
+  const description: RunnerDescription = {
+    version: pkg.version,
+    supportedPhases: [...WORKFLOW_PHASES],
+    availableProviders: ["anthropic", "openai", "ollama", "chatgpt", "github-copilot"],
+    supportedApprovalModes: [...WORKFLOW_APPROVAL_MODES],
+    supportedReasoningLevels: [...REASONING_LEVELS],
+  };
+  process.stdout.write(JSON.stringify(description, null, 2) + "\n");
 }
 
-// ─── Phase Configuration ────────────────────────────────────
+// ─── Arg Parsing ─────────────────────────────────────────────
 
-/** Map phase to task mode: read-only phases use "plan", mutating phases use "act". */
-function phaseToMode(phase: WorkflowPhase): TaskMode {
-  switch (phase) {
-    case "triage":
-    case "plan":
-    case "review":
-      return "plan";
-    case "implement":
-    case "verify":
-    case "repair":
-      return "act";
-  }
+interface RawWorkflowArgs {
+  subcommand: string | null;
+  phase: string | null;
+  input: string | null;
+  output: string | null;
+  events: string | null;
+  repo: string | null;
+  provider: string | null;
+  model: string | null;
+  maxIterations: number | null;
+  approvalMode: string | null;
+  reasoning: string | null;
 }
 
-/** Map phase to approval mode: plan-mode phases use suggest, act-mode phases use full-auto. */
-function phaseToApprovalMode(phase: WorkflowPhase, override?: string): ApprovalMode {
-  if (override) {
-    if (override === "suggest") return ApprovalMode.SUGGEST;
-    if (override === "auto-edit") return ApprovalMode.AUTO_EDIT;
-    if (override === "full-auto") return ApprovalMode.FULL_AUTO;
-  }
-  // Default: read-only phases get suggest, mutating phases get full-auto
-  const mode = phaseToMode(phase);
-  return mode === "plan" ? ApprovalMode.SUGGEST : ApprovalMode.FULL_AUTO;
-}
+export function parseWorkflowArgs(argv: string[]): RawWorkflowArgs {
+  const args = argv.slice(2); // skip bun + script
+  const result: RawWorkflowArgs = {
+    subcommand: null,
+    phase: null,
+    input: null,
+    output: null,
+    events: null,
+    repo: null,
+    provider: null,
+    model: null,
+    maxIterations: null,
+    approvalMode: null,
+    reasoning: null,
+  };
 
-/** Build a phase-specific system prompt suffix instructing the agent to output structured JSON. */
-function phasePromptSuffix(phase: WorkflowPhase): string {
-  const common = `\n\n## Output Format\nYou MUST end your response with a single JSON block wrapped in \`\`\`json fences. This JSON is your structured output for this workflow phase. Do not include any text after the closing fence.`;
+  // Expect: workflow run --phase ... etc
+  if (args[0] !== "workflow") return result;
+  result.subcommand = args[1] ?? null;
 
-  switch (phase) {
-    case "triage":
-      return `${common}\nThe JSON must conform to the TriageReport schema: { issueId, title, acceptanceCriteria[], risks[], missingContext[], suggestedLabels[], complexity, duplicateSignals[] }.`;
-    case "plan":
-      return `${common}\nThe JSON must conform to the PlanDraft schema: { issueId, steps[{ order, description, files[], tests[], dependencies[] }], affectedFiles[], testStrategy, rollbackRisks[], estimatedPhases }.`;
-    case "implement":
-      return `${common}\nThe JSON must conform to the ExecutionReport schema: { issueId, planStepsCompleted, planStepsTotal, filesModified[], filesCreated[], testsAdded[], iterations, cost: { inputTokens, outputTokens, totalUsd } }.`;
-    case "verify":
-      return `${common}\nThe JSON must conform to the VerificationReport schema: { commands[{ command, exitCode, passed, stdout, stderr, durationMs }], allPassed, failingSummary }.`;
-    case "review":
-      return `${common}\nThe JSON must conform to the ReviewReport schema: { findings[{ severity, file, line?, message, suggestion? }], blockingCount, warningCount, infoCount, verdict }.`;
-    case "repair":
-      return `${common}\nThe JSON must conform to the RepairReport schema: { round, inputFindings, fixedFindings, remainingFindings, filesModified[], verificationPassed }.`;
-  }
-}
-
-// ─── Argument Parsing ───────────────────────────────────────
-
-export function parseWorkflowArgs(argv: string[]): WorkflowRunArgs | null {
-  // Expected: devagent workflow run --phase <p> --repo <r> --input <i> --output <o> [opts]
-  // argv already has "workflow" and "run" stripped by the time we get here,
-  // or we parse from the raw argv.
-  const args = argv;
-  let phase: WorkflowPhase | null = null;
-  let repo: string | null = null;
-  let inputFile: string | null = null;
-  let outputFile: string | null = null;
-  let eventsFile: string | undefined;
-  let provider: string | undefined;
-  let model: string | undefined;
-  let maxIterations: number | undefined;
-  let approval: string | undefined;
-
-  for (let i = 0; i < args.length; i++) {
+  for (let i = 2; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === "--phase" && i + 1 < args.length) {
-      phase = args[++i]! as WorkflowPhase;
-    } else if (arg === "--repo" && i + 1 < args.length) {
-      repo = args[++i]!;
-    } else if (arg === "--input" && i + 1 < args.length) {
-      inputFile = args[++i]!;
-    } else if (arg === "--output" && i + 1 < args.length) {
-      outputFile = args[++i]!;
-    } else if (arg === "--events" && i + 1 < args.length) {
-      eventsFile = args[++i]!;
-    } else if (arg === "--provider" && i + 1 < args.length) {
-      provider = args[++i]!;
-    } else if (arg === "--model" && i + 1 < args.length) {
-      model = args[++i]!;
-    } else if (arg === "--max-iterations" && i + 1 < args.length) {
-      const val = parseInt(args[++i]!, 10);
-      if (!isNaN(val)) maxIterations = val;
-    } else if (arg === "--approval" && i + 1 < args.length) {
-      approval = args[++i]!;
+    switch (arg) {
+      case "--phase":
+        result.phase = args[++i] ?? null;
+        break;
+      case "--input":
+        result.input = args[++i] ?? null;
+        break;
+      case "--output":
+        result.output = args[++i] ?? null;
+        break;
+      case "--events":
+        result.events = args[++i] ?? null;
+        break;
+      case "--repo":
+        result.repo = args[++i] ?? null;
+        break;
+      case "--provider":
+        result.provider = args[++i] ?? null;
+        break;
+      case "--model":
+        result.model = args[++i] ?? null;
+        break;
+      case "--max-iterations": {
+        const val = parseInt(args[++i] ?? "", 10);
+        result.maxIterations = isNaN(val) ? null : val;
+        break;
+      }
+      case "--approval-mode":
+        result.approvalMode = args[++i] ?? null;
+        break;
+      case "--suggest":
+        result.approvalMode = "suggest";
+        break;
+      case "--auto-edit":
+        result.approvalMode = "auto-edit";
+        break;
+      case "--full-auto":
+        result.approvalMode = "full-auto";
+        break;
+      case "--reasoning":
+        result.reasoning = args[++i] ?? null;
+        break;
     }
   }
 
-  const validPhases: ReadonlyArray<string> = ["triage", "plan", "implement", "verify", "review", "repair"];
-  if (!phase || !validPhases.includes(phase)) {
-    return null;
-  }
-  if (!repo || !inputFile || !outputFile) {
-    return null;
-  }
-
-  return { phase, repo, inputFile, outputFile, eventsFile, provider, model, maxIterations, approval };
+  return result;
 }
 
-// ─── JSON Extraction ────────────────────────────────────────
+function die(msg: string): never {
+  process.stderr.write(`[devagent workflow] Error: ${msg}\n`);
+  process.exit(EXIT_CODE.INVALID_ARGS);
+}
+
+export function validateWorkflowArgs(raw: RawWorkflowArgs): WorkflowRunArgs {
+  if (raw.subcommand !== "run") {
+    die(`Unknown workflow subcommand "${raw.subcommand}". Use: devagent workflow run`);
+  }
+  if (!raw.phase) {
+    die(`--phase is required. Valid phases: ${WORKFLOW_PHASES.join(", ")}`);
+  }
+  if (!isValidPhase(raw.phase)) {
+    die(`Invalid phase "${raw.phase}". Valid phases: ${WORKFLOW_PHASES.join(", ")}`);
+  }
+  if (!raw.input) die("--input <path> is required");
+  if (!raw.output) die("--output <path> is required");
+  if (!raw.events) die("--events <path> is required");
+  if (!raw.repo) die("--repo <path> is required");
+
+  if (raw.approvalMode && !isValidApprovalMode(raw.approvalMode)) {
+    die(`Invalid approval mode "${raw.approvalMode}". Valid modes: ${WORKFLOW_APPROVAL_MODES.join(", ")}`);
+  }
+  if (raw.reasoning && !isValidReasoningLevel(raw.reasoning)) {
+    die(`Invalid reasoning level "${raw.reasoning}". Valid levels: ${REASONING_LEVELS.join(", ")}`);
+  }
+
+  return {
+    phase: raw.phase as WorkflowPhase,
+    inputPath: resolve(raw.input),
+    outputPath: resolve(raw.output),
+    eventsPath: resolve(raw.events),
+    repoPath: resolve(raw.repo),
+    provider: raw.provider ?? undefined,
+    model: raw.model ?? undefined,
+    maxIterations: raw.maxIterations ?? undefined,
+    approvalMode: raw.approvalMode as WorkflowApprovalMode | undefined,
+    reasoning: raw.reasoning as ReasoningLevel | undefined,
+  };
+}
+
+// ─── Event Logger ────────────────────────────────────────────
+
+function logEvent(eventsPath: string, event: Record<string, unknown>): void {
+  const line = JSON.stringify({ ...event, timestamp: new Date().toISOString() }) + "\n";
+  appendFileSync(eventsPath, line);
+}
+
+// ─── Input Validation ────────────────────────────────────────
+
+export function validateInput(phase: WorkflowPhase, input: Record<string, unknown>): void {
+  const missing = (field: string) => input[field] === undefined || input[field] === null;
+
+  switch (phase) {
+    case "triage":
+    case "plan":
+      if (missing("issueNumber")) throw new Error(`${phase} input requires "issueNumber"`);
+      if (missing("title")) throw new Error(`${phase} input requires "title"`);
+      break;
+    case "implement":
+      if (missing("issueNumber")) throw new Error('implement input requires "issueNumber"');
+      if (missing("acceptedPlan")) throw new Error('implement input requires "acceptedPlan"');
+      break;
+    case "verify":
+      if (!Array.isArray(input.commands)) throw new Error('verify input requires "commands" array');
+      break;
+    case "review":
+      if (missing("issueNumber")) throw new Error('review input requires "issueNumber"');
+      break;
+    case "repair":
+      if (missing("issueNumber")) throw new Error('repair input requires "issueNumber"');
+      if (missing("round")) throw new Error('repair input requires "round"');
+      break;
+    case "gate":
+      if (missing("sourcePhase")) throw new Error('gate input requires "sourcePhase"');
+      if (missing("issueNumber")) throw new Error('gate input requires "issueNumber"');
+      if (missing("stageOutput")) throw new Error('gate input requires "stageOutput"');
+      break;
+  }
+}
+
+// ─── Gate Prompt Builder ─────────────────────────────────────
+
+const GATE_CRITERIA: Record<string, string> = {
+  triage: `Evaluate the triage report quality:
+1. Does the summary clearly describe the issue scope?
+2. Is the complexity assessment reasonable?
+3. Are related files identified? (check the codebase if needed)
+4. Are blockers and prerequisites noted?
+5. Is the information sufficient to create an implementation plan?`,
+
+  plan: `Evaluate the implementation plan quality:
+1. Are the steps specific and actionable (not vague)?
+2. Are all files to modify/create identified?
+3. Is there a concrete test strategy?
+4. Are risks and edge cases considered?
+5. Does the plan address the full scope of the issue?
+6. Is the plan achievable without architectural overhaul?`,
+
+  implement: `Evaluate the implementation output quality:
+1. Were the planned changes actually made?
+2. Are all changed files listed?
+3. Does the commit message accurately describe the changes?
+4. Is the diff summary coherent?
+5. Check the actual code changes in the repository for correctness.`,
+};
+
+function buildGatePrompt(input: Record<string, unknown>): string {
+  const sourcePhase = input.sourcePhase as string;
+  const criteria = GATE_CRITERIA[sourcePhase] ?? "Evaluate the output quality and completeness.";
+  const stageOutput = input.stageOutput as Record<string, unknown>;
+
+  return `You are a quality gate reviewer evaluating the output of the "${sourcePhase}" phase in an automated development workflow.
+
+## Context
+- **Issue**: #${input.issueNumber}
+- **Source Phase**: ${sourcePhase}
+
+## Stage Output
+${JSON.stringify(stageOutput, null, 2)}
+
+## Evaluation Criteria
+${criteria}
+
+## Task
+Evaluate the stage output against the criteria above. Be strict but fair — the goal is to catch genuinely inadequate outputs that would cause problems in later stages, not to nitpick minor issues.
+
+If you need to verify claims in the output (e.g., that files exist or code patterns match), use the available tools to check.
+
+## Output Format
+Respond with a JSON object (and nothing else):
+\`\`\`json
+{
+  "summary": "Brief evaluation summary",
+  "verdict": "pass|block",
+  "findings": [
+    {"file": "", "severity": "major", "message": "Description of issue", "category": "quality"}
+  ],
+  "blockingCount": 0,
+  "confidence": 0.85
+}
+\`\`\`
+
+Use verdict "pass" if the output is good enough to proceed. Use "block" if it has serious gaps that would cause downstream failures.`;
+}
+
+// ─── Phase Prompt Builder ────────────────────────────────────
+
+function buildPhasePrompt(phase: WorkflowPhase, input: Record<string, unknown>): string {
+  switch (phase) {
+    case "triage":
+      return `You are triaging a GitHub issue for a development workflow.
+
+## Issue
+- **Number**: #${input.issueNumber}
+- **Title**: ${input.title}
+- **Author**: ${input.author}
+- **Labels**: ${(input.labels as string[])?.join(", ") || "none"}
+
+### Body
+${input.body}
+
+## Task
+Analyze this issue and produce a triage report. Determine:
+1. Complexity: trivial, small, medium, large, or epic
+2. Suggested labels for categorization
+3. Any blockers or prerequisites
+4. Related files that will likely need changes
+
+Explore the codebase to understand the scope. Use find_files and search_files to identify affected areas.
+
+## Output Format
+Respond with a JSON object (and nothing else) with this structure:
+\`\`\`json
+{
+  "summary": "Brief triage summary",
+  "complexity": "small|medium|large",
+  "suggestedLabels": ["label1"],
+  "blockers": [],
+  "relatedFiles": ["path/to/file.ts"]
+}
+\`\`\``;
+
+    case "plan":
+      return `You are creating an implementation plan for a GitHub issue.
+
+## Issue
+- **Number**: #${input.issueNumber}
+- **Title**: ${input.title}
+- **Author**: ${input.author}
+
+### Body
+${input.body}
+
+${input.triageReport ? `## Triage Report\n${JSON.stringify(input.triageReport, null, 2)}` : ""}
+
+## Task
+Create a detailed implementation plan. Explore the codebase thoroughly first, then:
+1. List specific steps with files to create or modify
+2. Define a testing strategy
+3. Identify risks and edge cases
+
+## Output Format
+Respond with a JSON object (and nothing else) with this structure:
+\`\`\`json
+{
+  "summary": "Plan summary",
+  "steps": [{"description": "...", "file": "path/to/file.ts", "type": "modify"}],
+  "filesToCreate": [],
+  "filesToModify": ["path/to/file.ts"],
+  "testStrategy": "How to test",
+  "risks": ["Risk description"]
+}
+\`\`\``;
+
+    case "implement":
+      return `You are implementing changes for a GitHub issue according to an accepted plan.
+
+## Issue
+- **Number**: #${input.issueNumber}
+- **Title**: ${input.title}
+
+### Body
+${input.body}
+
+## Accepted Plan
+${JSON.stringify(input.acceptedPlan, null, 2)}
+
+## Task
+Implement the changes described in the plan. Follow existing code patterns and conventions.
+- Create and modify files as specified in the plan
+- Write clean, well-tested code
+- Follow the project's coding standards
+
+After making all changes, produce a summary of what was done.
+
+## Output Format
+When done, respond with a JSON object (and nothing else):
+\`\`\`json
+{
+  "summary": "Implementation summary",
+  "changedFiles": ["path/to/file.ts"],
+  "suggestedCommitMessage": "feat: description of changes",
+  "diffSummary": "Brief description of the diff"
+}
+\`\`\``;
+
+    case "verify":
+      return `You are verifying that recent code changes are correct.
+
+## Verification Commands
+${(Array.isArray(input.commands) ? input.commands as string[] : []).map((c) => `- \`${c}\``).join("\n")}
+
+## Task
+Run each verification command and report the results. If any command fails, report the failure details.
+
+## Output Format
+Respond with a JSON object (and nothing else):
+\`\`\`json
+{
+  "summary": "Verification summary",
+  "passed": true,
+  "results": [
+    {"command": "bun run test", "exitCode": 0, "stdout": "...", "stderr": "", "passed": true}
+  ]
+}
+\`\`\``;
+
+    case "review":
+      return `You are reviewing code changes for a GitHub issue.
+
+## Context
+- **Issue**: #${input.issueNumber}
+${input.prNumber ? `- **PR**: #${input.prNumber}` : ""}
+${input.branch ? `- **Branch**: ${input.branch}` : ""}
+
+${input.diff ? `## Diff\n\`\`\`diff\n${input.diff}\n\`\`\`` : ""}
+${input.reviewComments ? `## Existing Review Comments\n${JSON.stringify(input.reviewComments, null, 2)}` : ""}
+${input.ciChecks ? `## CI Checks\n${JSON.stringify(input.ciChecks, null, 2)}` : ""}
+
+## Task
+Review all changes. Check for:
+1. Correctness and completeness
+2. Code quality and style
+3. Security issues
+4. Test coverage
+5. Edge cases
+
+Use git_diff to see the full diff if not provided above.
+
+## Output Format
+Respond with a JSON object (and nothing else):
+\`\`\`json
+{
+  "summary": "Review summary",
+  "verdict": "pass|block",
+  "findings": [
+    {"file": "path.ts", "line": 42, "severity": "major", "message": "...", "category": "bug"}
+  ],
+  "blockingCount": 0
+}
+\`\`\``;
+
+    case "repair":
+      return `You are repairing code based on review findings.
+
+## Context
+- **Issue**: #${input.issueNumber}
+- **Repair Round**: ${input.round}
+
+## Findings to Fix
+${JSON.stringify(input.findings, null, 2)}
+
+${Array.isArray(input.ciFailures) ? `## CI Failures\n${(input.ciFailures as string[]).map((f) => `- ${f}`).join("\n")}` : ""}
+
+## Task
+Fix each finding. After fixing, run verification to confirm the fixes work.
+
+## Output Format
+Respond with a JSON object (and nothing else):
+\`\`\`json
+{
+  "summary": "Repair summary",
+  "fixedFindings": ["description of fix"],
+  "remainingFindings": 0,
+  "verificationPassed": true,
+  "changedFiles": ["path/to/file.ts"]
+}
+\`\`\``;
+
+    case "gate":
+      return buildGatePrompt(input);
+  }
+}
+
+// ─── Output Extraction ──────────────────────────────────────
 
 /**
- * Extract JSON from the agent's final response text.
- * Looks for ```json fenced blocks first, then tries raw JSON parse.
+ * Extract a JSON object from the LLM's text response.
+ * Tries to find a JSON code block first, then falls back to parsing the whole string.
  */
-function extractJsonFromResponse(text: string): unknown | null {
-  // Try fenced JSON block
-  const fencedMatch = text.match(/```json\s*\n([\s\S]*?)\n\s*```/);
-  if (fencedMatch) {
+function extractJsonOutput(text: string): Record<string, unknown> | null {
+  // Try JSON code block first
+  const codeBlockMatch = text.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
+  if (codeBlockMatch) {
     try {
-      return JSON.parse(fencedMatch[1]!);
+      return JSON.parse(codeBlockMatch[1]!) as Record<string, unknown>;
     } catch {
-      // Fall through
+      // fall through
     }
   }
 
-  // Try raw JSON (find first { or [)
-  const jsonStart = text.search(/[{[]/);
-  if (jsonStart >= 0) {
-    const candidate = text.slice(jsonStart);
+  // Try to find a JSON object in the text
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
     try {
-      return JSON.parse(candidate);
+      return JSON.parse(jsonMatch[0]) as Record<string, unknown>;
     } catch {
-      // Try to find matching close brace by tracking depth.
-      // NOTE: This heuristic tracks unescaped double-quote characters to skip
-      // braces inside JSON string literals. It does NOT handle all edge cases,
-      // e.g. single-quoted strings (invalid JSON but sometimes seen), nested
-      // escaped sequences like \\", or non-string values that happen to
-      // contain quote-like characters. For those cases the JSON.parse above
-      // or the fenced-block path should be preferred.
-      let depth = 0;
-      let inString = false;
-      const opener = candidate[0];
-      const closer = opener === "{" ? "}" : "]";
-      for (let i = 0; i < candidate.length; i++) {
-        const ch = candidate[i];
-        if (inString) {
-          if (ch === "\\" ) {
-            i++; // skip escaped character
-            continue;
-          }
-          if (ch === '"') {
-            inString = false;
-          }
-          continue;
-        }
-        // Not inside a string
-        if (ch === '"') {
-          inString = true;
-          continue;
-        }
-        if (ch === opener) depth++;
-        if (ch === closer) depth--;
-        if (depth === 0) {
-          try {
-            return JSON.parse(candidate.slice(0, i + 1));
-          } catch {
-            break;
-          }
-        }
-      }
+      // fall through
     }
   }
 
   return null;
 }
 
-// ─── Event Emitter ──────────────────────────────────────────
+// ─── Main Runner ─────────────────────────────────────────────
 
-/** Wire event bus to emit JSONL events to a file. */
-function wireEventFile(bus: EventBus, eventsFile: string): void {
-  const write = (event: Record<string, unknown>) => {
-    const line = JSON.stringify({ ...event, ts: new Date().toISOString() });
-    appendFileSync(eventsFile, line + "\n");
-  };
+export async function runWorkflowPhase(args: WorkflowRunArgs): Promise<void> {
+  const { phase, inputPath, outputPath, eventsPath, repoPath } = args;
 
-  bus.on("tool:before", (e) => write({ type: "tool:before", name: e.name, callId: e.callId }));
-  bus.on("tool:after", (e) => write({ type: "tool:after", name: e.name, callId: e.callId }));
-  bus.on("message:assistant", (e) => write({ type: "message:assistant", content: e.content, partial: e.partial }));
-  bus.on("approval:request", (e) => write({ type: "approval:request", id: e.id, action: e.action }));
-  bus.on("iteration:start", (e) => write({ type: "iteration:start", iteration: e.iteration }));
-  bus.on("error", (e) => write({ type: "error", message: e.message, code: e.code }));
-}
-
-// ─── Main Runner ────────────────────────────────────────────
-
-/**
- * Execute a single workflow phase headlessly.
- * Reads structured JSON input, runs the agent, writes structured JSON output.
- */
-export async function runWorkflowPhase(wfArgs: WorkflowRunArgs): Promise<void> {
-  const startTime = Date.now();
+  logEvent(eventsPath, { type: "phase_start", phase });
 
   // 1. Read input
-  let input: unknown;
+  let input: Record<string, unknown>;
   try {
-    const inputRaw = readFileSync(wfArgs.inputFile, "utf-8");
-    input = JSON.parse(inputRaw);
+    input = JSON.parse(readFileSync(inputPath, "utf-8")) as Record<string, unknown>;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`Failed to read or parse input file "${wfArgs.inputFile}": ${message}\n`);
-    process.exit(1);
+    logEvent(eventsPath, { type: "error", message: `Failed to read input: ${err}` });
+    die(`Failed to read input file: ${inputPath}`);
   }
 
-  // 2. Load config
-  const approvalMode = phaseToApprovalMode(wfArgs.phase, wfArgs.approval);
-  const configOverrides: Partial<DevAgentConfig> = {
-    ...(wfArgs.provider ? { provider: wfArgs.provider } : {}),
-    ...(wfArgs.model ? { model: wfArgs.model } : {}),
-    approval: {
-      mode: approvalMode,
-      auditLog: false,
-      toolOverrides: {},
-      pathRules: [],
-    } as ApprovalPolicy,
-  };
+  logEvent(eventsPath, { type: "input_loaded", phase, keys: Object.keys(input) });
 
-  let config = loadConfig(wfArgs.repo, configOverrides);
-  config = await resolveProviderCredentials(config);
-
-  if (wfArgs.maxIterations) {
-    config = {
-      ...config,
-      budget: { ...config.budget, maxIterations: wfArgs.maxIterations },
-    };
-  }
-
-  // Load model registry
-  const cliDir = dirname(fileURLToPath(import.meta.url));
-  const devagentModelsDir = resolveBundledModelsDir(cliDir);
-  loadModelRegistry(wfArgs.repo, [devagentModelsDir]);
-
-  // Auto-size context budget
-  const registryEntry = lookupModelEntry(config.model);
-  if (registryEntry && config.budget.maxContextTokens === DEFAULT_BUDGET.maxContextTokens) {
-    config = {
-      ...config,
-      budget: {
-        ...config.budget,
-        maxContextTokens: registryEntry.contextWindow,
-        responseHeadroom: registryEntry.responseHeadroom,
-      },
-    };
-  }
-
-  // Scale keepRecentMessages
-  if (config.context.keepRecentMessages === DEFAULT_CONTEXT.keepRecentMessages) {
-    const effectiveBudget = config.budget.maxContextTokens - config.budget.responseHeadroom;
-    const scaledKeep = Math.floor(effectiveBudget / 1500);
-    if (scaledKeep > DEFAULT_CONTEXT.keepRecentMessages) {
-      config = {
-        ...config,
-        context: { ...config.context, keepRecentMessages: scaledKeep },
-      };
-    }
-  }
-
-  // 3. Create provider
-  const providerRegistry = createDefaultRegistry();
-  const baseProviderConfig = config.providers[config.provider] ?? {
-    model: config.model,
-    apiKey: process.env["DEVAGENT_API_KEY"],
-  };
-  const registryCaps = lookupModelCapabilities(config.model);
-  const providerConfig = {
-    ...baseProviderConfig,
-    ...(!baseProviderConfig.capabilities && registryCaps ? { capabilities: registryCaps } : {}),
-  };
-  const provider = providerRegistry.get(config.provider, providerConfig);
-
-  // 4. Create tools, bus, gate
-  const toolRegistry = createDefaultToolRegistry();
-  const bus = new EventBus();
-  const gate = new ApprovalGate(config.approval, bus);
-
-  // Wire events file
-  if (wfArgs.eventsFile) {
-    wireEventFile(bus, wfArgs.eventsFile);
-  }
-
-  // Minimal infrastructure — no interactive features
-  const contextManager = new ContextManager(config.context);
-  const memoryStore = new MemoryStore({
-    dailyDecay: config.memory.dailyDecay,
-    minRelevance: config.memory.minRelevance,
-    accessBoost: config.memory.accessBoost,
-  });
-  const sessionState = new SessionState(config.sessionState);
-  const checkpointManager = new CheckpointManager({
-    repoRoot: wfArgs.repo,
-    bus,
-    enabled: false, // No checkpoints in headless mode
-  });
-  const doubleCheck = new DoubleCheck(DEFAULT_DOUBLE_CHECK_OPTIONS, bus);
-
-  // 5. Build system prompt
-  const mode = phaseToMode(wfArgs.phase);
-  const skills = new SkillRegistry();
-  const baseSystemPrompt = assembleSystemPrompt({
-    mode,
-    repoRoot: wfArgs.repo,
-    skills,
-    approvalMode,
-    provider: config.provider,
-    model: config.model,
-  });
-  // Load repo instructions and prepend to system prompt
-  const instructionLoader = new RepositoryInstructionLoader(wfArgs.repo);
-  const repoInstructions = instructionLoader.load();
-  const instructionContext = repoInstructions
-    .map((i) => `## ${i.source}\n${i.content}`)
-    .join("\n\n");
-
-  const phaseSuffix = phasePromptSuffix(wfArgs.phase);
-  const systemPrompt = instructionContext
-    ? `${instructionContext}\n\n---\n\n${baseSystemPrompt}${phaseSuffix}`
-    : baseSystemPrompt + phaseSuffix;
-
-  // 6. Build user query from input
-  const query = buildPhaseQuery(wfArgs.phase, input);
-
-  // 7. Run task loop
-  const loop = new TaskLoop({
-    provider,
-    tools: toolRegistry,
-    bus,
-    approvalGate: gate,
-    config,
-    systemPrompt,
-    repoRoot: wfArgs.repo,
-    mode,
-    contextManager,
-    memoryStore,
-    checkpointManager,
-    doubleCheck,
-    sessionState,
-  });
-
-  const result: TaskLoopResult = await loop.run(query);
-
-  // 8. Extract structured output
-  const durationMs = Date.now() - startTime;
-  const extracted = result.lastText ? extractJsonFromResponse(result.lastText) : null;
-
-  const phaseResult: PhaseResult<unknown> = {
-    schemaVersion: WORKFLOW_SCHEMA_VERSION,
-    phase: wfArgs.phase,
-    timestamp: new Date().toISOString(),
-    durationMs,
-    result: extracted ?? { raw: result.lastText, parseError: "Could not extract structured JSON from agent response" },
-    summary: result.lastText ?? "(no response)",
-  };
-
-  // 9. Write output
+  // 1b. Validate required fields
   try {
-    writeFileSync(wfArgs.outputFile, JSON.stringify(phaseResult, null, 2) + "\n");
+    validateInput(phase, input);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`Failed to write output file "${wfArgs.outputFile}": ${message}\n`);
+    const msg = err instanceof Error ? err.message : String(err);
+    logEvent(eventsPath, { type: "error", message: `Input validation failed: ${msg}` });
+    die(msg);
   }
 
-  // 10. Save artifacts by run ID
-  const runId = `${wfArgs.phase}-${Date.now()}`;
-  const artifactStore = new ArtifactStore();
-  artifactStore.save(runId, "input.json", input);
-  artifactStore.save(runId, "output.json", phaseResult);
+  // 2. Build phase prompt
+  const prompt = buildPhasePrompt(phase, input);
 
-  // Emit completion event
-  if (wfArgs.eventsFile) {
-    const line = JSON.stringify({
-      type: "phase:complete",
-      phase: wfArgs.phase,
-      durationMs,
-      status: result.status,
-      iterations: result.iterations,
-      ts: new Date().toISOString(),
-    });
-    appendFileSync(wfArgs.eventsFile, line + "\n");
+  // 3. Set up and run the task
+  // We import main's setup functions dynamically to avoid circular deps
+  // and to reuse the full DevAgent engine (tools, providers, etc.)
+  const { setupAndRunWorkflowQuery } = await import("./workflow-engine.js");
+
+  const result = await setupAndRunWorkflowQuery({
+    query: prompt,
+    repoPath,
+    provider: args.provider,
+    model: args.model,
+    maxIterations: args.maxIterations,
+    approvalMode: args.approvalMode ?? "full-auto",
+    reasoning: args.reasoning,
+    eventsPath,
+  });
+
+  // 4. Extract structured output from the LLM response
+  const jsonOutput = extractJsonOutput(result.responseText);
+
+  if (jsonOutput) {
+    writeFileSync(outputPath, JSON.stringify(jsonOutput, null, 2));
+    logEvent(eventsPath, { type: "output_written", phase, hasOutput: true });
+  } else {
+    // Write a fallback output with the raw text as summary
+    const fallback = { summary: result.responseText, _raw: true };
+    writeFileSync(outputPath, JSON.stringify(fallback, null, 2));
+    logEvent(eventsPath, { type: "output_written", phase, hasOutput: true, raw: true });
   }
 
-  // Exit with non-zero if the agent aborted
-  if (result.aborted) {
-    process.stderr.write(`Workflow phase "${wfArgs.phase}" aborted after ${result.iterations} iterations\n`);
-    process.exit(1);
+  logEvent(eventsPath, {
+    type: "phase_end",
+    phase,
+    success: result.success,
+    iterations: result.iterations,
+  });
+
+  if (!result.success) {
+    process.exitCode = EXIT_CODE.PHASE_FAILED;
   }
 }
 
-/** Build a natural-language query for the agent from the phase input data. */
-function buildPhaseQuery(phase: WorkflowPhase, input: unknown): string {
-  const inputStr = JSON.stringify(input, null, 2);
-
-  switch (phase) {
-    case "triage":
-      return `Triage the following issue. Analyze it for complexity, acceptance criteria, risks, and missing context.\n\nInput:\n${inputStr}`;
-    case "plan":
-      return `Create a detailed implementation plan for the following issue. Break it into ordered steps with affected files and test strategy.\n\nInput:\n${inputStr}`;
-    case "implement":
-      return `Implement the following plan. Make the necessary code changes, create tests, and report what was done.\n\nInput:\n${inputStr}`;
-    case "verify":
-      return `Verify the implementation by running tests and checking for issues. Report all verification commands and their results.\n\nInput:\n${inputStr}`;
-    case "review":
-      return `Review the changes made in this implementation. Check for correctness, style, and potential issues.\n\nInput:\n${inputStr}`;
-    case "repair":
-      return `Fix the issues identified in the review. Apply the necessary repairs and verify they resolve the findings.\n\nInput:\n${inputStr}`;
-  }
-}
-
-// ─── CLI Entrypoint ─────────────────────────────────────────
-
-/**
- * Handle the `devagent workflow run` command.
- * Called from main.ts when the first positional arg is "workflow".
- */
 export async function handleWorkflowCommand(argv: string[]): Promise<void> {
-  // argv: full process.argv
-  const args = argv.slice(2); // strip node/bun + script
-
-  if (args[0] !== "workflow") {
-    process.stderr.write("Internal error: handleWorkflowCommand called without 'workflow' arg\n");
-    process.exit(1);
+  const raw = parseWorkflowArgs(argv);
+  if (raw.subcommand === "describe") {
+    printRunnerDescription();
+    return;
   }
 
-  const subcommand = args[1];
-  if (subcommand !== "run") {
-    process.stderr.write(`Unknown workflow subcommand: ${subcommand ?? "(none)"}\n`);
-    process.stderr.write("Usage: devagent workflow run --phase <phase> --repo <path> --input <file> --output <file> [--events <file>]\n");
-    process.exit(1);
-  }
-
-  const wfArgs = parseWorkflowArgs(args.slice(2)); // strip "workflow" and "run"
-  if (!wfArgs) {
-    process.stderr.write("Missing required arguments.\n");
-    process.stderr.write("Usage: devagent workflow run --phase <phase> --repo <path> --input <file> --output <file> [--events <file>]\n");
-    process.stderr.write("  --phase: triage | plan | implement | verify | review | repair\n");
-    process.stderr.write("  --repo: path to the repository\n");
-    process.stderr.write("  --input: path to input JSON file\n");
-    process.stderr.write("  --output: path to output JSON file\n");
-    process.stderr.write("  --events: (optional) path to JSONL events file\n");
-    process.stderr.write("  --provider: (optional) LLM provider\n");
-    process.stderr.write("  --model: (optional) model ID\n");
-    process.stderr.write("  --max-iterations: (optional) max iterations\n");
-    process.stderr.write("  --approval: (optional) suggest | auto-edit | full-auto\n");
-    process.exit(1);
-  }
-
-  await runWorkflowPhase(wfArgs);
+  const args = validateWorkflowArgs(raw);
+  await runWorkflowPhase(args);
 }

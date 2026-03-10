@@ -48,6 +48,35 @@ prompts/      # Shared prompt templates
 - `devagent chat` – Interactive chat session with persistent context
 - `devagent review <file> --rule <rule_file> [--json]` – Rule-based patch review with structured output
 
+### Workflow Commands (Headless Stage Runner)
+Used by DevAgent-Hub to run individual workflow phases with typed JSON I/O.
+
+```bash
+devagent workflow run \
+  --phase triage|plan|implement|verify|review|repair \
+  --input <input.json> \
+  --output <output.json> \
+  --events <events.jsonl> \
+  --repo <path> \
+  [--provider <name>] \
+  [--model <id>] \
+  [--max-iterations <n>] \
+  [--suggest|--auto-edit|--full-auto|--approval-mode <mode>] \
+  [--reasoning low|medium|high]
+```
+
+**Exit codes:** 0 = success, 1 = phase failed, 2 = invalid arguments.
+
+**Phases:**
+- `triage` – Analyze issue scope, complexity, and related files
+- `plan` – Create detailed implementation plan with steps, files, and test strategy
+- `implement` – Execute the accepted plan, write code changes
+- `verify` – Run verification commands (test, typecheck, build)
+- `review` – Review code changes for correctness, quality, and security
+- `repair` – Fix review findings and CI failures
+
+Each phase reads typed JSON input and writes typed JSON output. See `@devagent/core/workflow-contract` for type definitions.
+
 ### Auth Commands
 - `devagent auth login` – Store API key for a provider
 - `devagent auth status` – Show configured credentials

@@ -153,7 +153,7 @@ function mergeProviderConfig(
     model: (raw["model"] as string) ?? "claude-sonnet-4-20250514",
     maxTokens: raw["max_tokens"] as number | undefined ?? raw["maxTokens"] as number | undefined,
     temperature: raw["temperature"] as number | undefined,
-    reasoningEffort: raw["reasoning_effort"] as "low" | "medium" | "high" | undefined,
+    reasoningEffort: raw["reasoning_effort"] as "low" | "medium" | "high" | "xhigh" | undefined,
     ...(capabilities ? { capabilities } : {}),
   };
 }

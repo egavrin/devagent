@@ -18,6 +18,7 @@
   "dependencies": {
     "@devagent/arkts": "workspace:*",
     "@devagent/core": "workspace:*",
+    "@devagent/executor": "workspace:*",
     "@devagent/engine": "workspace:*",
     "@devagent/providers": "workspace:*",
     "@devagent/tools": "workspace:*"
