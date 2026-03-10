@@ -5,6 +5,11 @@
   "workspaces": [
     "packages/*"
   ],
+  "dependencies": {
+    "@devagent-sdk/schema": "file:../devagent-sdk/packages/schema",
+    "@devagent-sdk/types": "file:../devagent-sdk/packages/types",
+    "@devagent-sdk/validation": "file:../devagent-sdk/packages/validation"
+  },
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",

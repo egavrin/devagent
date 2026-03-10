@@ -6,7 +6,7 @@
 import { createInterface } from "node:readline";
 import { execSync } from "node:child_process";
 import { readFileSync as nodeReadFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   EventBus,
@@ -1128,6 +1128,41 @@ async function setupSessionPersistence(
 
 export async function main(): Promise<void> {
   const cliArgs = parseArgs(process.argv);
+
+  if (process.argv[2] === "execute") {
+    const {
+      executeTask,
+      loadTaskExecutionRequest,
+      parseExecuteArgs,
+    } = await import("@devagent/executor");
+    const executeArgs = parseExecuteArgs(process.argv);
+    if (!executeArgs) {
+      process.exit(1);
+    }
+    const request = await loadTaskExecutionRequest(executeArgs.requestPath);
+    const emit = (event: Record<string, unknown>): void => {
+      process.stdout.write(JSON.stringify(event) + "\n");
+    };
+
+    try {
+      const { setupAndRunWorkflowQuery } = await import("./workflow-engine.js");
+      const result = await executeTask({
+        request,
+        artifactDir: executeArgs.artifactDir,
+        repoRoot: process.cwd(),
+        runQuery: setupAndRunWorkflowQuery,
+        emit: (event) => {
+          emit(event);
+        },
+      });
+      if (result.status !== "success") {
+        process.exit(1);
+      }
+    } catch (error) {
+      process.exit(1);
+    }
+    return;
+  }
 
   // Auth commands — handle before config loading (doesn't need provider setup)
   if (cliArgs.authCommand) {

@@ -150,7 +150,7 @@ export interface ProviderConfig {
   readonly maxTokens?: number;
   readonly temperature?: number;
   /** Reasoning effort: none, low, medium, high, xhigh (model-dependent). */
-  readonly reasoningEffort?: "low" | "medium" | "high";
+  readonly reasoningEffort?: "low" | "medium" | "high" | "xhigh";
   readonly capabilities?: ModelCapabilities;
   /** ChatGPT Codex-specific options (store, include, instructions). */
   readonly codexOptions?: {

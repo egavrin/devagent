@@ -1,0 +1,25 @@
+{
+  "name": "@devagent/executor",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@devagent-sdk/schema": "file:../../../devagent-sdk/packages/schema",
+    "@devagent-sdk/types": "file:../../../devagent-sdk/packages/types",
+    "@devagent-sdk/validation": "file:../../../devagent-sdk/packages/validation",
+    "@devagent/core": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0"
+  }
+}

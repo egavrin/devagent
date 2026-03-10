@@ -56,6 +56,20 @@ devagent review changes.patch --rule rules/security.md --json
 devagent "review my last commit for issues"
 ```
 
+### Machine execution contract
+
+```bash
+devagent execute --request request.json --artifact-dir .devagent-runner/artifacts/task-123
+```
+
+`devagent execute` is the orchestration entrypoint used by `devagent-runner` and `devagent-hub`.
+It consumes SDK `TaskExecutionRequest` payloads, emits normalized JSONL events on stdout, writes
+the task artifact for the requested stage, and persists a machine-readable `result.json` in the
+artifact directory.
+
+During local multi-repo development the SDK packages are consumed through file dependencies from
+`../devagent-sdk`, and `devagent-hub` reaches this entrypoint through `devagent-runner`.
+
 ### Provider and model selection
 
 ```bash
@@ -69,6 +83,7 @@ devagent --provider ollama --model qwen2.5-coder "review main.ts"
 packages/
   cli/        # Terminal CLI entry point (bin: devagent)
   core/       # Types, config, events, approval gate, session management
+  executor/   # SDK request execution mode for runner/hub orchestration
   engine/     # TaskLoop, agents, orchestration, review pipeline, plugins
   tools/      # Tool registry, builtins, LSP, MCP support
   providers/  # LLM provider abstraction (Anthropic, OpenAI, Ollama, ChatGPT)
@@ -96,5 +111,15 @@ bun run typecheck
 # Watch mode
 bun run dev
 ```
+
+## Validated Flow
+
+The current validated machine path is:
+
+```text
+devagent-hub -> devagent-runner -> devagent execute --request ... --artifact-dir ...
+```
+
+Live validation is currently exercised with `provider: chatgpt` and `model: gpt-5.4`.
 
 See [AGENTS.md](AGENTS.md) for development philosophy and AI agent instructions.
