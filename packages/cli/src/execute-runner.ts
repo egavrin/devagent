@@ -22,7 +22,20 @@ type ExecuteArgs = {
 type WorkflowPhaseResult = {
   summary?: string;
   result?: unknown;
+  // Review-specific fields emitted by the review phase prompt
+  verdict?: "pass" | "block";
+  findings?: Array<{ file?: string; line?: number; severity?: string; message?: string; category?: string }>;
+  blockingCount?: number;
 };
+
+function extractInstructionBlock(instructions: string[] | undefined, label: string): string | undefined {
+  const prefix = `${label}:\n`;
+  const entry = instructions?.find((instruction) => instruction.startsWith(prefix));
+  if (!entry) {
+    return undefined;
+  }
+  return entry.slice(prefix.length).trim();
+}
 
 function parseExecuteArgs(argv: string[]): ExecuteArgs | null {
   const args = argv.slice(2);
@@ -189,13 +202,112 @@ async function runVerifyCommands(commands: string[]): Promise<{ ok: boolean; rep
   };
 }
 
+/**
+ * Transform a TaskExecutionRequest into the simplified input format
+ * expected by the workflow runner's validateInput / buildPhasePrompt.
+ *
+ * Each phase has its own required fields:
+ *   triage/plan: issueNumber, title
+ *   implement:   issueNumber, acceptedPlan
+ *   verify:      commands[]
+ *   review:      issueNumber
+ *   repair:      issueNumber, round
+ */
+export function buildWorkflowInput(request: TaskExecutionRequest): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    issueNumber: request.workItem.externalId,
+    title: request.workItem.title ?? "",
+    body: request.context.issueBody ?? request.context.summary ?? "",
+    author: "",
+    labels: [],
+  };
+
+  // Forward context fields if available
+  if (request.context.comments) {
+    base.comments = request.context.comments;
+  }
+  if (request.context.changedFilesHint) {
+    base.changedFilesHint = request.context.changedFilesHint;
+  }
+
+  // Phase-specific fields
+  switch (request.taskType) {
+    case "implement": {
+      const acceptedPlan = extractInstructionBlock(request.context.extraInstructions, "Accepted plan");
+      if (acceptedPlan) {
+        base.acceptedPlan = acceptedPlan;
+      } else if (request.context.summary && !/^implement for issue #.+$/i.test(request.context.summary.trim())) {
+        base.acceptedPlan = request.context.summary;
+      }
+      break;
+    }
+    case "verify":
+      base.commands = request.constraints.verifyCommands ?? [];
+      break;
+    case "review":
+      if (request.context.extraInstructions?.length) {
+        base.reviewComments = request.context.extraInstructions;
+      }
+      break;
+    case "repair":
+      base.round = 1;
+      base.findings = request.context.extraInstructions ?? [];
+      break;
+  }
+
+  return base;
+}
+
+/**
+ * Format a workflow phase result into a markdown report suitable as an artifact.
+ *
+ * For review phases, this produces a structured report that includes the hub's
+ * expected sentinel ("No defects found.") when the verdict is "pass", so the
+ * hub's `reviewRequiresRepair` check works correctly.
+ */
+export function formatPhaseReport(taskType: WorkflowTaskType, result: WorkflowPhaseResult): string {
+  if (taskType === "review") {
+    const hasFindings = (result.findings?.length ?? 0) > 0;
+    const passesReview = !hasFindings && (result.verdict === "pass" || result.blockingCount === 0);
+    const sections: string[] = [];
+    sections.push(`# Review Report`);
+    sections.push("");
+    sections.push(result.summary ?? "No summary provided.");
+    sections.push("");
+    if (passesReview) {
+      sections.push("No defects found.");
+    } else {
+      sections.push(`**Verdict**: ${result.verdict ?? "block"}`);
+      sections.push(`**Blocking findings**: ${result.blockingCount ?? 0}`);
+    }
+    if (result.findings && result.findings.length > 0) {
+      sections.push("");
+      sections.push("## Findings");
+      for (const f of result.findings) {
+        const loc = [f.file, f.line != null ? `:${f.line}` : ""].filter(Boolean).join("");
+        sections.push(`- **[${f.severity ?? "info"}]** ${loc ? `\`${loc}\` ` : ""}${f.message ?? ""} *(${f.category ?? "general"})*`);
+      }
+    }
+    return sections.join("\n");
+  }
+  // Default: use summary text
+  return result.summary ?? "";
+}
+
 async function runWorkflowFallback(
   request: TaskExecutionRequest,
-  requestFile: string,
+  _requestFile: string,
   artifactDir: string,
 ): Promise<WorkflowPhaseResult> {
   const cliPath = fileURLToPath(new URL("./index.js", import.meta.url));
   const outputFile = join(artifactDir, "workflow-output.json");
+  const eventsFile = join(artifactDir, "workflow-events.jsonl");
+
+  // Write a transformed input file for the workflow runner
+  const workflowInput = buildWorkflowInput(request);
+  const workflowInputFile = join(artifactDir, "workflow-input.json");
+  await writeFile(workflowInputFile, JSON.stringify(workflowInput, null, 2));
+
   const args = [
     cliPath,
     "workflow",
@@ -205,9 +317,11 @@ async function runWorkflowFallback(
     "--repo",
     process.cwd(),
     "--input",
-    requestFile,
+    workflowInputFile,
     "--output",
     outputFile,
+    "--events",
+    eventsFile,
   ];
 
   if (request.executor.provider) {
@@ -274,8 +388,16 @@ export async function handleExecuteCommand(argv: string[]): Promise<void> {
     if (request.taskType === "verify") {
       const commands = request.constraints.verifyCommands ?? [];
       const verification = await runVerifyCommands(commands);
+      artifact = await writeArtifact(request, executeArgs.artifactDir, verification.report);
+      writeEvent({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "artifact",
+        at: artifact.createdAt,
+        taskId: request.taskId,
+        artifact,
+      });
       if (!verification.ok) {
-        const failed = createResult(request, startedAt, "failed", [], {
+        const failed = createResult(request, startedAt, "failed", [artifact], {
           code: "EXECUTION_FAILED",
           message: "One or more verification commands failed.",
         });
@@ -289,22 +411,26 @@ export async function handleExecuteCommand(argv: string[]): Promise<void> {
         });
         process.exit(1);
       }
-      artifact = await writeArtifact(request, executeArgs.artifactDir, verification.report);
     } else {
       const fakeResponse = process.env[fakeResponseVar(request.taskType)];
-      const body = fakeResponse
-        ?? (await runWorkflowFallback(request, executeArgs.requestFile, executeArgs.artifactDir)).summary
-        ?? "";
-      artifact = await writeArtifact(request, executeArgs.artifactDir, body);
+      if (fakeResponse) {
+        artifact = await writeArtifact(request, executeArgs.artifactDir, fakeResponse);
+      } else {
+        const phaseResult = await runWorkflowFallback(request, executeArgs.requestFile, executeArgs.artifactDir);
+        const body = formatPhaseReport(request.taskType, phaseResult);
+        artifact = await writeArtifact(request, executeArgs.artifactDir, body);
+      }
     }
 
-    writeEvent({
-      protocolVersion: PROTOCOL_VERSION,
-      type: "artifact",
-      at: artifact.createdAt,
-      taskId: request.taskId,
-      artifact,
-    });
+    if (request.taskType !== "verify") {
+      writeEvent({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "artifact",
+        at: artifact.createdAt,
+        taskId: request.taskId,
+        artifact,
+      });
+    }
     const success = createResult(request, startedAt, "success", [artifact]);
     await writeResult(executeArgs.artifactDir, success);
     writeEvent({

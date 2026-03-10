@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildWorkflowInput, formatPhaseReport } from "../execute-runner.js";
+import type { TaskExecutionRequest } from "@devagent-sdk/types";
 
 const tempPaths: string[] = [];
 
@@ -65,6 +67,42 @@ async function createRequest(overrides: RequestOverrides = {}): Promise<{
   return { root, requestPath, artifactDir };
 }
 
+function makeRequest(overrides: Partial<TaskExecutionRequest> = {}): TaskExecutionRequest {
+  return {
+    protocolVersion: "0.1",
+    taskId: "task-123",
+    taskType: "plan",
+    project: {
+      id: "org/repo",
+      name: "repo",
+    },
+    workItem: {
+      kind: "github-issue",
+      externalId: "42",
+      title: "Test execute",
+    },
+    workspace: {
+      sourceRepoPath: "/tmp/repo",
+      workBranch: "test/execute",
+      isolation: "temp-copy",
+    },
+    executor: {
+      executorId: "devagent",
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      approvalMode: "full-auto",
+    },
+    constraints: {
+      allowNetwork: true,
+    },
+    context: {
+      summary: "Test execute path",
+    },
+    expectedArtifacts: ["plan"],
+    ...overrides,
+  };
+}
+
 async function runExecute(
   requestPath: string,
   artifactDir: string,
@@ -99,6 +137,29 @@ async function runExecute(
 }
 
 describe("execute-runner", () => {
+  it("builds implement workflow input from the accepted plan instruction", () => {
+    const input = buildWorkflowInput(makeRequest({
+      taskType: "implement",
+      expectedArtifacts: ["implementation-summary"],
+      context: {
+        summary: "implement for issue #42",
+        extraInstructions: ["Accepted plan:\n1. Update src/app.ts\n2. Add tests"],
+      },
+    }));
+
+    expect(input.acceptedPlan).toBe("1. Update src/app.ts\n2. Add tests");
+  });
+
+  it("does not emit the review pass sentinel when findings are present", () => {
+    const report = formatPhaseReport("review", {
+      summary: "Found issues.",
+      findings: [{ file: "src/app.ts", line: 7, severity: "major", message: "Bug", category: "bug" }],
+    });
+
+    expect(report).not.toContain("No defects found.");
+    expect(report).toContain("## Findings");
+  });
+
   it("writes protocol events and result files for fake responses", async () => {
     const { root, requestPath, artifactDir } = await createRequest();
     const result = await runExecute(requestPath, artifactDir, root, {
