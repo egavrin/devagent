@@ -11,6 +11,9 @@ export default [
       ecmaVersion: "latest",
       sourceType: "module",
     },
-    rules: {},
+    rules: {
+      "no-console": ["warn", { allow: ["error", "warn"] }],
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+    },
   },
 ];

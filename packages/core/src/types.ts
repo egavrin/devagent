@@ -126,7 +126,7 @@ export interface LLMProvider {
  */
 export interface ModelCapabilities {
   /** Use OpenAI Responses API (v1/responses) instead of Chat Completions.
-   *  Required for codex models; Chat Completions deprecated for codex (Feb 2026). */
+   *  Required for responses-api-only models such as codex. */
   readonly useResponsesApi?: boolean;
   /** Model supports extended reasoning (codex, o-series, gpt-5 family). */
   readonly reasoning?: boolean;
@@ -349,4 +349,3 @@ export interface JsonSchema {
   readonly additionalProperties?: boolean;
   readonly items?: Record<string, unknown>;
 }
-

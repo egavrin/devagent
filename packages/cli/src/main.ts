@@ -1134,6 +1134,12 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (process.argv[2] === "execute") {
+    const { handleExecuteCommand } = await import("./execute-runner.js");
+    await handleExecuteCommand(process.argv);
+    return;
+  }
+
   const cliArgs = parseArgs(process.argv);
 
   // Auth commands — handle before config loading (doesn't need provider setup)
