@@ -268,7 +268,9 @@ export function buildWorkflowInput(request: TaskExecutionRequest): Record<string
 export function formatPhaseReport(taskType: WorkflowTaskType, result: WorkflowPhaseResult): string {
   if (taskType === "review") {
     const hasFindings = (result.findings?.length ?? 0) > 0;
-    const passesReview = !hasFindings && (result.verdict === "pass" || result.blockingCount === 0);
+    const passesReview = result.verdict !== "block"
+      && !hasFindings
+      && (result.verdict === "pass" || result.blockingCount === 0);
     const sections: string[] = [];
     sections.push(`# Review Report`);
     sections.push("");

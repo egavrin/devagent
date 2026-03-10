@@ -160,6 +160,18 @@ describe("execute-runner", () => {
     expect(report).toContain("## Findings");
   });
 
+  it("does not emit the review pass sentinel for an explicit block verdict", () => {
+    const report = formatPhaseReport("review", {
+      summary: "Blocked pending investigation.",
+      verdict: "block",
+      blockingCount: 0,
+      findings: [],
+    });
+
+    expect(report).not.toContain("No defects found.");
+    expect(report).toContain("**Verdict**: block");
+  });
+
   it("writes protocol events and result files for fake responses", async () => {
     const { root, requestPath, artifactDir } = await createRequest();
     const result = await runExecute(requestPath, artifactDir, root, {
