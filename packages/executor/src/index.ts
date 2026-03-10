@@ -274,10 +274,30 @@ export async function writeTaskResult(
 }
 
 function runShellCommand(command: string, cwd: string): Promise<VerifyCommandRun> {
+  const pathSegments = [
+    process.env["PATH"] ?? "",
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/bin",
+    "/usr/sbin",
+    "/bin",
+    "/sbin",
+  ].filter(Boolean);
+
   return new Promise((resolveCommand) => {
     exec(
       command,
-      { cwd, encoding: "utf-8", shell: process.env["SHELL"] ?? "/bin/sh" },
+      {
+        cwd,
+        encoding: "utf-8",
+        shell: process.env["SHELL"] ?? "/bin/sh",
+        env: {
+          ...process.env,
+          PATH: Array.from(new Set(pathSegments)).join(":"),
+        },
+      },
       (error: ExecException | null, stdout: string, stderr: string) => {
       const exitCode =
         typeof (error as { code?: unknown } | null)?.code === "number"
