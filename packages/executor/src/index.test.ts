@@ -10,6 +10,7 @@ import {
   executeVerifyCommands,
   loadTaskExecutionRequest,
   parseExecuteArgs,
+  readFakeTaskResponse,
   resolveRequestedSkills,
   validateExecutionCapabilities,
 } from "./index.js";
@@ -153,6 +154,38 @@ describe("verify commands", () => {
 });
 
 describe("task execution", () => {
+  it("uses fake executor responses for non-verify tasks when configured", async () => {
+    const repoRoot = await createRepoRoot();
+    const artifactDir = join(repoRoot, "artifacts");
+    const request = createRequest("plan");
+    const original = process.env["DEVAGENT_EXECUTOR_FAKE_RESPONSE_PLAN"];
+    process.env["DEVAGENT_EXECUTOR_FAKE_RESPONSE_PLAN"] = "Fake baseline response";
+
+    try {
+      expect(readFakeTaskResponse("plan")).toBe("Fake baseline response");
+      const result = await executeTask({
+        request,
+        artifactDir,
+        repoRoot,
+        runQuery: async () => {
+          throw new Error("runQuery should not be called when fake responses are configured");
+        },
+        emit: () => {},
+      });
+
+      expect(result.status).toBe("success");
+      const artifactText = await readFile(result.artifacts[0]!.path, "utf-8");
+      expect(artifactText).toContain("Fake baseline response");
+    } finally {
+      if (original === undefined) {
+        delete process.env["DEVAGENT_EXECUTOR_FAKE_RESPONSE_PLAN"];
+      } else {
+        process.env["DEVAGENT_EXECUTOR_FAKE_RESPONSE_PLAN"] = original;
+      }
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   for (const taskType of ["triage", "plan", "implement", "verify", "review", "repair"] as const) {
     it(`emits artifacts and events for ${taskType}`, async () => {
       const repoRoot = await createRepoRoot();

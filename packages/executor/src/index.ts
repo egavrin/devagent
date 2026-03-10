@@ -61,6 +61,14 @@ export interface VerifyCommandRun {
   stderr: string;
 }
 
+function fakeResponseEnvKey(taskType: TaskExecutionRequest["taskType"]): string {
+  return `DEVAGENT_EXECUTOR_FAKE_RESPONSE_${taskType.toUpperCase()}`;
+}
+
+export function readFakeTaskResponse(taskType: TaskExecutionRequest["taskType"]): string | undefined {
+  return process.env[fakeResponseEnvKey(taskType)] ?? process.env["DEVAGENT_EXECUTOR_FAKE_RESPONSE"];
+}
+
 export function parseExecuteArgs(argv: string[]): ExecuteArgs | null {
   const args = argv.slice(2);
   if (args[0] !== "execute") return null;
@@ -382,22 +390,29 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<TaskExec
         ? undefined
         : { code: "EXECUTION_FAILED", message: "One or more verification commands failed" };
     } else {
-      const queryResult = await runQuery({
-        query: buildTaskQuery(request, resolvedSkills),
-        repoPath: repoRoot,
-        provider: request.executor.provider,
-        model: request.executor.model,
-        maxIterations: request.constraints.maxIterations,
-        approvalMode: request.executor.approvalMode ?? "full-auto",
-        reasoning: request.executor.reasoning,
-        eventsPath: resolve(artifactDir, "engine-events.jsonl"),
-        requestedSkills: request.context.skills,
-      });
-      artifactContent = queryResult.responseText;
-      status = queryResult.success ? "success" : "failed";
-      error = queryResult.success
-        ? undefined
-        : { code: "EXECUTION_FAILED", message: "Task loop failed" };
+      const fakeResponse = readFakeTaskResponse(request.taskType);
+      if (fakeResponse !== undefined) {
+        artifactContent = fakeResponse;
+        status = "success";
+        error = undefined;
+      } else {
+        const queryResult = await runQuery({
+          query: buildTaskQuery(request, resolvedSkills),
+          repoPath: repoRoot,
+          provider: request.executor.provider,
+          model: request.executor.model,
+          maxIterations: request.constraints.maxIterations,
+          approvalMode: request.executor.approvalMode ?? "full-auto",
+          reasoning: request.executor.reasoning,
+          eventsPath: resolve(artifactDir, "engine-events.jsonl"),
+          requestedSkills: request.context.skills,
+        });
+        artifactContent = queryResult.responseText;
+        status = queryResult.success ? "success" : "failed";
+        error = queryResult.success
+          ? undefined
+          : { code: "EXECUTION_FAILED", message: "Task loop failed" };
+      }
     }
 
     const artifact = await writeTaskArtifact(request, artifactDir, artifactContent);
