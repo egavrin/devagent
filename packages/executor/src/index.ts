@@ -61,6 +61,11 @@ export interface VerifyCommandRun {
   stderr: string;
 }
 
+type TaskLoopEnvelope = {
+  result?: string;
+  responseText?: string;
+};
+
 function fakeResponseEnvKey(taskType: TaskExecutionRequest["taskType"]): string {
   return `DEVAGENT_EXECUTOR_FAKE_RESPONSE_${taskType.toUpperCase()}`;
 }
@@ -112,9 +117,6 @@ export function validateExecutionCapabilities(request: TaskExecutionRequest): vo
     (!Number.isInteger(request.constraints.maxIterations) || request.constraints.maxIterations < 1)
   ) {
     throw new Error("Unsupported maxIterations: expected integer >= 1");
-  }
-  if (request.constraints.timeoutSec !== undefined) {
-    throw new Error("Unsupported constraint: timeoutSec");
   }
   if (request.constraints.allowNetwork === false) {
     throw new Error("Unsupported constraint: allowNetwork=false");
@@ -230,6 +232,34 @@ export function artifactInfoForTask(taskType: TaskExecutionRequest["taskType"]):
     case "repair":
       return { kind: "final-summary", fileName: "final-summary.md" };
   }
+}
+
+export function extractArtifactBody(responseText: string): string {
+  const trimmed = responseText.trim();
+  const candidates = [trimmed];
+  const wrappedJsonMatch = trimmed.match(/^# [^\n]+\n\n(\{[\s\S]*\})$/);
+  if (wrappedJsonMatch?.[1]) {
+    candidates.push(wrappedJsonMatch[1]);
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate.startsWith("{")) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(candidate) as TaskLoopEnvelope;
+      if (typeof parsed.result === "string" && parsed.result.trim().length > 0) {
+        return parsed.result;
+      }
+      if (typeof parsed.responseText === "string" && parsed.responseText.trim().length > 0) {
+        return parsed.responseText;
+      }
+    } catch {
+      // Keep the original response when it is plain text or non-envelope JSON.
+    }
+  }
+
+  return responseText;
 }
 
 export async function writeTaskArtifact(
@@ -427,7 +457,7 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<TaskExec
           eventsPath: resolve(artifactDir, "engine-events.jsonl"),
           requestedSkills: request.context.skills,
         });
-        artifactContent = queryResult.responseText;
+        artifactContent = extractArtifactBody(queryResult.responseText);
         status = queryResult.success ? "success" : "failed";
         error = queryResult.success
           ? undefined

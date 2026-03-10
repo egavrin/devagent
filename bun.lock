@@ -603,7 +603,7 @@
 
     "@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
-    "@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", {}],
+    "@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", { "dependencies": { "@devagent-sdk/types": "file:../types" } }],
 
     "@devagent-sdk/validation/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
@@ -627,9 +627,11 @@
 
     "vscode-languageserver-protocol/vscode-jsonrpc": ["vscode-jsonrpc@8.2.0", "", {}, "sha512-C+r0eKJUIfiDIfwJhria30+TYWPtuHJXHtI7J0YlOmKAo7ogxP20T0zxB7HZQIFhIyvoBPwWskjxrvAtfjyZfA=="],
 
+    "@devagent-sdk/validation/@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
+
     "@devagent/executor/@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
-    "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", {}],
+    "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", { "dependencies": { "@devagent-sdk/types": "file:../types" } }],
 
     "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
@@ -638,6 +640,8 @@
     "@typescript-eslint/typescript-estree/minimatch/brace-expansion": ["brace-expansion@5.0.3", "", { "dependencies": { "balanced-match": "^4.0.2" } }, "sha512-fy6KJm2RawA5RcHkLa1z/ScpBeA762UF9KmZQxwIbDtRJrgLzM10depAiEQ+CXYcoiqW1/m96OAAoke2nE9EeA=="],
 
     "eslint/ajv/json-schema-traverse": ["json-schema-traverse@0.4.1", "", {}, "sha512-xbbCH5dCYU5T8LcEhhuh7HJ88HXuW3qsI3Y0zOZFKfZEHcpWiHU/Jxzk629Brsab/mMiHQti9wMP+845RPe3Vg=="],
+
+    "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
     "@typescript-eslint/typescript-estree/minimatch/brace-expansion/balanced-match": ["balanced-match@4.0.4", "", {}, "sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA=="],
   }

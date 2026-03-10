@@ -12,6 +12,9 @@ bun run build
 bun run install-cli
 ```
 
+For the full local four-repo workflow stack, prefer the bootstrap flow documented in
+[`../devagent-hub/README.md`](../devagent-hub/README.md) instead of wiring sibling repos by hand.
+
 ## Setup
 
 Store your API key:
@@ -88,7 +91,7 @@ packages/
   tools/      # Tool registry, builtins, LSP, MCP support
   providers/  # LLM provider abstraction (Anthropic, OpenAI, Ollama, ChatGPT)
   arkts/      # ArkTS linter support
-  desktop/    # Tauri desktop app (SolidJS frontend)
+  desktop/    # Desktop app work, separate from the validated runner/hub execution path
 models/       # LLM provider config files (TOML)
 prompts/      # Shared prompt templates
 ```

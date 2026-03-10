@@ -8,6 +8,7 @@ import {
   buildTaskQuery,
   executeTask,
   executeVerifyCommands,
+  extractArtifactBody,
   loadTaskExecutionRequest,
   parseExecuteArgs,
   readFakeTaskResponse,
@@ -150,6 +151,23 @@ describe("verify commands", () => {
     expect(result.report).toContain("warn");
 
     await rm(repoRoot, { recursive: true, force: true });
+  });
+});
+
+describe("artifact body extraction", () => {
+  it("extracts the plain result body from task-loop envelopes", () => {
+    const body = extractArtifactBody(JSON.stringify({
+      subtype: "success",
+      result: "## Plan\n\nKeep the change set small.",
+    }));
+    expect(body).toBe("## Plan\n\nKeep the change set small.");
+  });
+
+  it("extracts the plain result body from heading-wrapped task-loop envelopes", () => {
+    const body = extractArtifactBody(
+      '# Plan\n\n{"result":"# Plan\\n\\nKeep the change set small."}',
+    );
+    expect(body).toBe("# Plan\n\nKeep the change set small.");
   });
 });
 

@@ -9,9 +9,9 @@ workspace:
   mode: worktree
   root: "."
 runner:
-  bin: "bun /Users/eg/Documents/devagent/packages/cli/dist/index.js"
+  bin: "devagent"
   provider: chatgpt
-  model: gpt-5.2-codex
+  model: gpt-5.4
   approval_mode: full-auto
   max_iterations: 50
 verify:
