@@ -114,7 +114,7 @@ bun run dev
 
 ## Workflow configuration and skills
 
-`WORKFLOW.md` configures devagent-hub orchestration (provider/model defaults, verification commands, and workflow settings). It does not pick skills. Skills are discovered from project directories in priority order `.devagent/skills/`, `.claude/skills/`, `.agents/skills/` (project overrides global when names match), then global directories `~/.claude/skills/`, `~/.agents/skills/`, `~/.config/devagent/skills/`.
+`WORKFLOW.md` configures devagent-hub orchestration (provider/model defaults, verification commands, and workflow settings). Its stage configuration determines which validation skills are selected during hub-driven runs, while skill discovery still comes from project directories in priority order `.devagent/skills/`, `.claude/skills/`, `.agents/skills/` (project overrides global when names match), then global directories `~/.claude/skills/`, `~/.agents/skills/`, `~/.config/devagent/skills/`.
 
 ## Validated Flow
 
