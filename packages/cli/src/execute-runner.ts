@@ -3,111 +3,16 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-
-type WorkflowTaskType =
-  | "triage"
-  | "plan"
-  | "implement"
-  | "verify"
-  | "review"
-  | "repair";
-
-type ArtifactKind =
-  | "triage-report"
-  | "plan"
-  | "implementation-summary"
-  | "verification-report"
-  | "review-report"
-  | "final-summary";
-
-type ExecutorSpec = {
-  executorId: "devagent" | "codex" | "claude" | "opencode";
-  profileName?: string;
-  provider?: string;
-  model?: string;
-  reasoning?: "low" | "medium" | "high";
-  approvalMode?: "suggest" | "auto-edit" | "full-auto";
-};
-
-type TaskExecutionRequest = {
-  protocolVersion: string;
-  taskId: string;
-  taskType: WorkflowTaskType;
-  project: {
-    id: string;
-    name: string;
-    repoRoot?: string;
-    repoFullName?: string;
-  };
-  workspace: {
-    sourceRepoPath: string;
-    baseRef?: string;
-    workBranch: string;
-    isolation: "git-worktree" | "temp-copy";
-    readOnly?: boolean;
-  };
-  executor: ExecutorSpec;
-  constraints: {
-    maxIterations?: number;
-    timeoutSec?: number;
-    allowNetwork?: boolean;
-    verifyCommands?: string[];
-  };
-  context: {
-    summary?: string;
-    issueBody?: string;
-    comments?: Array<{ author?: string; body: string }>;
-    changedFilesHint?: string[];
-    skills?: string[];
-    extraInstructions?: string[];
-  };
-  expectedArtifacts: ArtifactKind[];
-};
-
-type ArtifactRef = {
-  kind: ArtifactKind;
-  path: string;
-  mimeType?: string;
-  createdAt: string;
-};
-
-type TaskExecutionResult = {
-  protocolVersion: string;
-  taskId: string;
-  status: "success" | "failed" | "cancelled";
-  artifacts: ArtifactRef[];
-  metrics: {
-    startedAt: string;
-    finishedAt: string;
-    durationMs: number;
-  };
-  error?: {
-    code: string;
-    message: string;
-  };
-};
-
-type TaskExecutionEvent =
-  | {
-      protocolVersion: string;
-      type: "started";
-      at: string;
-      taskId: string;
-    }
-  | {
-      protocolVersion: string;
-      type: "artifact";
-      at: string;
-      taskId: string;
-      artifact: ArtifactRef;
-    }
-  | {
-      protocolVersion: string;
-      type: "completed";
-      at: string;
-      taskId: string;
-      status: TaskExecutionResult["status"];
-    };
+import { validateTaskExecutionRequest } from "@devagent-sdk/validation";
+import {
+  PROTOCOL_VERSION,
+  type ArtifactKind,
+  type ArtifactRef,
+  type TaskExecutionEvent,
+  type TaskExecutionRequest,
+  type TaskExecutionResult,
+  type WorkflowTaskType,
+} from "@devagent-sdk/types";
 
 type ExecuteArgs = {
   requestFile: string;
@@ -118,8 +23,6 @@ type WorkflowPhaseResult = {
   summary?: string;
   result?: unknown;
 };
-
-const PROTOCOL_VERSION = "0.1";
 
 function parseExecuteArgs(argv: string[]): ExecuteArgs | null {
   const args = argv.slice(2);
@@ -351,7 +254,7 @@ export async function handleExecuteCommand(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const request = JSON.parse(await readFile(executeArgs.requestFile, "utf-8")) as TaskExecutionRequest;
+  const request = validateTaskExecutionRequest(JSON.parse(await readFile(executeArgs.requestFile, "utf-8")));
   const startedAt = new Date().toISOString();
   await mkdir(executeArgs.artifactDir, { recursive: true });
   writeEvent({
