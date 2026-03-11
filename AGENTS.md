@@ -12,9 +12,12 @@ entrypoint is `devagent execute --request ... --artifact-dir ...`.
 ## Core Expectations
 
 - Run `bun run test` and `bun run typecheck` before and after meaningful changes.
+- Run `bun run check:oss` when changing public docs, contributor workflow, or package metadata.
 - Keep changes small and test-backed.
 - Do not document or depend on deprecated Hub integration paths.
 - Treat `devagent execute` as the only public machine interface for Hub/Runner orchestration.
+- Keep generated artifacts in runner-managed artifact directories, not in repo-tracked paths.
+- Treat any non-DevAgent executor story as experimental unless the repo docs explicitly say otherwise.
 
 ## Project Structure
 
@@ -50,4 +53,5 @@ bun install
 bun run build
 bun run test
 bun run typecheck
+bun run check:oss
 ```

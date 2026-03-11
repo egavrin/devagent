@@ -2,6 +2,11 @@
 
 A local coding agent for codebase exploration, implementation, review, and machine execution.
 
+## Maturity
+
+Public alpha. `devagent` is the first-party executor and the only production-grade executor path in
+the current four-repo stack.
+
 ## Install
 
 ```bash
@@ -65,7 +70,11 @@ prompts/      # Shared prompt templates
 ## Development
 
 ```bash
+bun install
 bun run dev
+bun run typecheck
+bun run test
+bun run check:oss
 ```
 
 ## Validated Flow
@@ -77,5 +86,11 @@ devagent-hub -> devagent-runner -> devagent execute --request ... --artifact-dir
 ```
 
 Live validation is currently exercised with `provider: chatgpt` and `model: gpt-5.4`.
+
+## Limitations
+
+- the repo is public, but the workspace packages are not published to a registry yet
+- the supported contributor path is the sibling checkout plus Hub bootstrap flow
+- only the DevAgent executor path is production-grade; other executors remain experimental in Runner
 
 See [AGENTS.md](AGENTS.md) for development philosophy and AI agent instructions.

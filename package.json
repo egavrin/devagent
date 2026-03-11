@@ -1,7 +1,21 @@
 {
   "name": "devagent-ts",
+  "version": "0.1.0",
   "private": true,
   "packageManager": "bun@1.3.10",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/egavrin/devagent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/egavrin/devagent/issues"
+  },
+  "homepage": "https://github.com/egavrin/devagent#readme",
+  "engines": {
+    "bun": ">=1.3.10",
+    "node": ">=20"
+  },
   "workspaces": [
     "packages/*"
   ],
@@ -19,7 +33,8 @@
     "clean": "turbo run clean",
     "dev": "turbo run dev",
     "install-cli": "cd packages/cli && bun link",
-    "install-lsp": "bash scripts/install-lsp-servers.sh"
+    "install-lsp": "bash scripts/install-lsp-servers.sh",
+    "check:oss": "node ./scripts/check-oss.mjs"
   },
   "devDependencies": {
     "@types/bun": "^1.3.10",

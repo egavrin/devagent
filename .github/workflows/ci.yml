@@ -47,3 +47,7 @@ jobs:
       - name: Test
         working-directory: devagent
         run: bun run test
+
+      - name: OSS readiness
+        working-directory: devagent
+        run: bun run check:oss

@@ -40,3 +40,24 @@ This file configures how devagent-hub orchestrates work on this repository.
 The intended path is: triage, plan, implement in an isolated worktree, verify,
 open a draft PR, run review and repair loops, then hand off once CI is green or
 a human decision is required.
+
+## How work enters this repo
+
+Most changes land through the validated Hub -> Runner -> DevAgent path or through direct
+contributor work on the executor, CLI, providers, and tools.
+
+## Supported vs experimental
+
+- Supported: `devagent` as the first-party executor through `devagent execute --request --artifact-dir`
+- Experimental: any alternative executor story outside the validated DevAgent path
+
+## Contributor completion bar
+
+Before merge, contributors should run:
+
+```bash
+bun run lint
+bun run typecheck
+bun run test
+bun run check:oss
+```
