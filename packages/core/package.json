@@ -8,10 +8,6 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./workflow-contract": {
-      "import": "./dist/workflow-contract.js",
-      "types": "./dist/workflow-contract.d.ts"
     }
   },
   "scripts": {

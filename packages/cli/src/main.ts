@@ -1127,22 +1127,6 @@ async function setupSessionPersistence(
 // ─── Main ──────────────────────────────────────────────────
 
 export async function main(): Promise<void> {
-  // Internal legacy stage runner used by execute-runner compatibility glue.
-  // Do not document this as a public orchestration contract.
-  if (process.argv[2] === "workflow") {
-    const { handleWorkflowCommand } = await import("./workflow-runner.js");
-    await handleWorkflowCommand(process.argv);
-    return;
-  }
-
-  if (process.argv[2] === "execute") {
-    const { handleExecuteCommand } = await import("./execute-runner.js");
-    await handleExecuteCommand(process.argv);
-    return;
-  }
-
-  const cliArgs = parseArgs(process.argv);
-
   if (process.argv[2] === "execute") {
     const {
       executeTask,
@@ -1177,6 +1161,8 @@ export async function main(): Promise<void> {
     }
     return;
   }
+
+  const cliArgs = parseArgs(process.argv);
 
   // Auth commands — handle before config loading (doesn't need provider setup)
   if (cliArgs.authCommand) {
