@@ -1,6 +1,6 @@
 # DevAgent
 
-A local coding agent for codebase exploration, implementation, review, and workflow execution.
+A local coding agent for codebase exploration, implementation, review, and machine execution.
 
 ## Install
 
@@ -58,7 +58,6 @@ packages/
   tools/      # Tool registry, builtins, LSP, MCP support
   providers/  # LLM provider abstraction (Anthropic, OpenAI, Ollama, ChatGPT)
   arkts/      # ArkTS linter support
-  desktop/    # Desktop app work, separate from the validated runner/hub execution path
 models/       # LLM provider config files (TOML)
 prompts/      # Shared prompt templates
 ```

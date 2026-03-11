@@ -1127,7 +1127,8 @@ async function setupSessionPersistence(
 // ─── Main ──────────────────────────────────────────────────
 
 export async function main(): Promise<void> {
-  // Workflow commands — intercept before normal arg parsing (headless mode)
+  // Internal legacy stage runner used by execute-runner compatibility glue.
+  // Do not document this as a public orchestration contract.
   if (process.argv[2] === "workflow") {
     const { handleWorkflowCommand } = await import("./workflow-runner.js");
     await handleWorkflowCommand(process.argv);

@@ -1,12 +1,9 @@
 /**
- * Headless workflow runner — executes a single workflow phase
- * with typed JSON input/output for Hub integration.
+ * Internal headless workflow runner retained as compatibility machinery for
+ * `devagent execute`. This is not the supported public orchestration contract.
  *
- * Usage:
- *   devagent workflow run --phase <phase> --input <json> --output <json>
- *     --events <jsonl> --repo <path> [--provider <p>] [--model <m>]
- *     [--max-iterations <n>] [--suggest|--auto-edit|--full-auto]
- *     [--reasoning low|medium|high]
+ * The supported machine entrypoint is:
+ *   devagent execute --request <request.json> --artifact-dir <path>
  *
  * Exit codes:
  *   0 = success (output JSON written)
