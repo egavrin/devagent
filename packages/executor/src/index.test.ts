@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -12,6 +12,8 @@ import {
   loadTaskExecutionRequest,
   parseExecuteArgs,
   readFakeTaskResponse,
+  resolveVerifyNodeBinary,
+  rewriteVerifyCommand,
   resolveRequestedSkills,
   validateExecutionCapabilities,
 } from "./index.js";
@@ -135,6 +137,39 @@ describe("skills", () => {
 });
 
 describe("verify commands", () => {
+  it("resolves the first real Node binary instead of a Bun shim", async () => {
+    const repoRoot = await createRepoRoot();
+    const bunBin = join(repoRoot, "bun-bin");
+    const nodeBin = join(repoRoot, "node-bin");
+    await mkdir(bunBin, { recursive: true });
+    await mkdir(nodeBin, { recursive: true });
+    const bunNodePath = join(bunBin, "node");
+    const realNodePath = join(nodeBin, "node");
+    await writeFile(
+      bunNodePath,
+      "#!/bin/sh\nif [ \"$1\" = \"-p\" ]; then\n  echo bun\n  exit 0\nfi\necho bun\n",
+    );
+    await writeFile(
+      realNodePath,
+      "#!/bin/sh\nif [ \"$1\" = \"-p\" ]; then\n  echo node\n  exit 0\nfi\necho node\n",
+    );
+    await chmod(bunNodePath, 0o755);
+    await chmod(realNodePath, 0o755);
+
+    await expect(resolveVerifyNodeBinary(`${bunBin}:${nodeBin}`)).resolves.toBe(realNodePath);
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("rewrites only leading node invocations to an explicit binary", () => {
+    expect(rewriteVerifyCommand("node ./node_modules/vitest/vitest.mjs run", "/tmp/node"))
+      .toBe("'/tmp/node' ./node_modules/vitest/vitest.mjs run");
+    expect(rewriteVerifyCommand("NODE_OPTIONS=--trace-warnings node script.js", "/tmp/node"))
+      .toBe("NODE_OPTIONS=--trace-warnings '/tmp/node' script.js");
+    expect(rewriteVerifyCommand("bunx vitest run", "/tmp/node"))
+      .toBe("bunx vitest run");
+  });
+
   it("executes verify commands and returns a markdown report", async () => {
     const repoRoot = await createRepoRoot();
     const result = await executeVerifyCommands(

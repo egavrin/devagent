@@ -1,6 +1,7 @@
-import { exec, type ExecException } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { exec, execFile, type ExecException, type ExecFileException } from "node:child_process";
+import { constants } from "node:fs";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { delimiter, join, resolve } from "node:path";
 import {
   SkillLoader,
   SkillRegistry,
@@ -65,6 +66,77 @@ type TaskLoopEnvelope = {
   result?: string;
   responseText?: string;
 };
+
+const PREFERRED_VERIFY_PATHS = [
+  "/opt/homebrew/bin",
+  "/opt/homebrew/sbin",
+  "/usr/local/bin",
+  "/usr/local/sbin",
+  "/usr/bin",
+  "/usr/sbin",
+  "/bin",
+  "/sbin",
+];
+
+const LEADING_NODE_COMMAND = /^(\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+)\s+)*)((?:\/usr\/bin\/env|env)\s+)?node(?=\s|$)/;
+
+function buildVerifyNodeSearchPath(currentPath = process.env["PATH"] ?? ""): string[] {
+  return Array.from(new Set([
+    ...currentPath.split(delimiter).filter(Boolean),
+    ...PREFERRED_VERIFY_PATHS,
+  ]));
+}
+
+function quoteShellArgument(value: string): string {
+  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
+}
+
+async function isExecutable(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isRealNodeBinary(path: string): Promise<boolean> {
+  return await new Promise((resolveCommand) => {
+    execFile(
+      path,
+      ["-p", "process.versions && process.versions.bun ? 'bun' : ((process.release && process.release.name) || '')"],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+      },
+      (error: ExecFileException | null, stdout: string) => {
+        resolveCommand(!error && stdout.trim() === "node");
+      },
+    );
+  });
+}
+
+export async function resolveVerifyNodeBinary(currentPath = process.env["PATH"] ?? ""): Promise<string | null> {
+  for (const entry of buildVerifyNodeSearchPath(currentPath)) {
+    const candidate = join(entry, "node");
+    if (!await isExecutable(candidate)) {
+      continue;
+    }
+    if (await isRealNodeBinary(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+export function rewriteVerifyCommand(command: string, nodeBinary: string): string {
+  if (!LEADING_NODE_COMMAND.test(command)) {
+    return command;
+  }
+
+  return command.replace(LEADING_NODE_COMMAND, (_, prefix: string) => `${prefix}${quoteShellArgument(nodeBinary)}`);
+}
 
 function fakeResponseEnvKey(taskType: TaskExecutionRequest["taskType"]): string {
   return `DEVAGENT_EXECUTOR_FAKE_RESPONSE_${taskType.toUpperCase()}`;
@@ -303,30 +375,30 @@ export async function writeTaskResult(
   return result;
 }
 
-function runShellCommand(command: string, cwd: string): Promise<VerifyCommandRun> {
-  const pathSegments = [
-    process.env["PATH"] ?? "",
-    "/opt/homebrew/bin",
-    "/opt/homebrew/sbin",
-    "/usr/local/bin",
-    "/usr/local/sbin",
-    "/usr/bin",
-    "/usr/sbin",
-    "/bin",
-    "/sbin",
-  ].filter(Boolean);
+async function runShellCommand(command: string, cwd: string): Promise<VerifyCommandRun> {
+  let resolvedCommand = command;
+  if (LEADING_NODE_COMMAND.test(command)) {
+    const nodeBinary = await resolveVerifyNodeBinary();
+    if (!nodeBinary) {
+      return {
+        command,
+        status: "failed",
+        exitCode: 1,
+        stdout: "",
+        stderr: "Unable to locate a real Node.js binary for verification. Install Node.js or add it to PATH.",
+      };
+    }
+    resolvedCommand = rewriteVerifyCommand(command, nodeBinary);
+  }
 
   return new Promise((resolveCommand) => {
     exec(
-      command,
+      resolvedCommand,
       {
         cwd,
         encoding: "utf-8",
         shell: process.env["SHELL"] ?? "/bin/sh",
-        env: {
-          ...process.env,
-          PATH: Array.from(new Set(pathSegments)).join(":"),
-        },
+        env: process.env,
       },
       (error: ExecException | null, stdout: string, stderr: string) => {
       const exitCode =
