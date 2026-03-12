@@ -9,8 +9,8 @@
  */
 
 import { tool as aiTool, jsonSchema, type CoreMessage, type TextStreamPart, type ToolSet } from "ai";
-import type { Message, ModelCapabilities, StreamChunk, ToolSpec } from "@devagent/core";
-import { MessageRole, ProviderError, extractErrorMessage } from "@devagent/core";
+import type { Message, ModelCapabilities, StreamChunk, ToolSpec } from "@devagent/runtime";
+import { MessageRole, ProviderError, extractErrorMessage } from "@devagent/runtime";
 
 // ─── Stream Processing ───────────────────────────────────────
 

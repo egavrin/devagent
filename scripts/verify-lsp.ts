@@ -13,7 +13,7 @@
  *   bun scripts/verify-lsp.ts typescript   # Test one language
  */
 
-import { LSPClient } from "../packages/tools/src/lsp/client.js";
+import { LSPClient } from "../packages/runtime/src/tools/lsp/client.js";
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 

@@ -5,7 +5,7 @@
 
 export { validateOllamaModel } from "./ollama-preflight.js";
 
-import type { LLMProvider, ProviderConfig } from "@devagent/core";
+import type { LLMProvider, ProviderConfig } from "@devagent/runtime";
 import { ProviderRegistry } from "./registry.js";
 import { createAnthropicProvider } from "./anthropic.js";
 import { createOpenAIProvider } from "./openai.js";

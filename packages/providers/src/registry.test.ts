@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ProviderRegistry } from "./registry.js";
-import type { LLMProvider, ProviderConfig, StreamChunk } from "@devagent/core";
+import type { LLMProvider, ProviderConfig, StreamChunk } from "@devagent/runtime";
 
 function makeMockProvider(id: string): LLMProvider {
   return {

@@ -1,16 +1,16 @@
 #!/usr/bin/env bun
 /**
  * @devagent/cli — CLI frontend.
- * Supports single-query and interactive chat modes.
+ * Supports single-query execution, review, and machine orchestration.
  *
  * Usage:
  *   devagent "explain the config system"     # Single query
- *   devagent chat                            # Interactive mode
- *   devagent --plan "analyze the codebase"   # Plan mode (read-only)
+ *   devagent review patch.diff --rule rule.md
+ *   devagent execute --request request.json --artifact-dir out/
  */
 
 import { main } from "./main.js";
-import { extractErrorMessage } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/runtime";
 
 main().catch((err) => {
   console.error(extractErrorMessage(err));

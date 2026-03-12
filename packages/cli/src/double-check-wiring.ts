@@ -8,10 +8,10 @@
 
 import { execFile } from "node:child_process";
 import { extname } from "node:path";
-import { LSPClient, spawnAndCapture } from "@devagent/tools";
-import type { LSPServerConfig } from "@devagent/core";
-import { extractErrorMessage, LANGUAGE_EXTENSIONS } from "@devagent/core";
-import type { DiagnosticProvider, TestRunner, DoubleCheck } from "@devagent/engine";
+import { LSPClient, spawnAndCapture } from "@devagent/runtime";
+import type { LSPServerConfig } from "@devagent/runtime";
+import { extractErrorMessage, LANGUAGE_EXTENSIONS } from "@devagent/runtime";
+import type { DiagnosticProvider, TestRunner, DoubleCheck } from "@devagent/runtime";
 
 // ─── Language Map ───────────────────────────────────────────
 

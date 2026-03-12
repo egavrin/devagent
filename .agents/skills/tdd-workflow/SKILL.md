@@ -53,7 +53,7 @@ For tool tests, use the tmp directory pattern:
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { ToolContext } from "@devagent/core";
+import type { ToolContext } from "@devagent/runtime";
 
 let tmpDir: string;
 let ctx: ToolContext;
@@ -117,8 +117,6 @@ Go back to step 2 for the next behavior.
 
 | Package | Test focus | Mock pattern |
 |---------|-----------|-------------|
-| `core` | Pure logic, types, config parsing | Direct function calls |
-| `tools` | File operations, git commands | `mkdtempSync` tmp dirs |
-| `engine` | TaskLoop, judges, plugins | Mock `LLMProvider` + `EventBus` |
+| `runtime` | Types/config, TaskLoop, review, tools | Direct calls or mock `LLMProvider` + `EventBus` |
 | `providers` | API integration | Mock HTTP responses |
 | `cli` | Prompt assembly, argument parsing | Config fixtures |

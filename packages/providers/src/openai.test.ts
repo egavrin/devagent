@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createOpenAIProvider, resolveCapabilities, stripNullArgs } from "./openai.js";
-import type { ProviderConfig, ModelCapabilities } from "@devagent/core";
+import type { ProviderConfig, ModelCapabilities } from "@devagent/runtime";
 
 describe("createOpenAIProvider", () => {
   it("creates a provider without API key (for local endpoints)", () => {

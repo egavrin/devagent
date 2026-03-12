@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { validateOllamaModel } from "./ollama-preflight.js";
-import { ProviderError } from "@devagent/core";
+import { ProviderError } from "@devagent/runtime";
 
 describe("validateOllamaModel", () => {
   const originalFetch = globalThis.fetch;

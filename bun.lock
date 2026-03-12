@@ -20,7 +20,7 @@
       "name": "@devagent/arkts",
       "version": "0.1.0",
       "dependencies": {
-        "@devagent/core": "workspace:*",
+        "@devagent/runtime": "workspace:*",
       },
       "devDependencies": {
         "eslint": "^9.0.0",
@@ -36,37 +36,9 @@
       },
       "dependencies": {
         "@devagent/arkts": "workspace:*",
-        "@devagent/core": "workspace:*",
-        "@devagent/engine": "workspace:*",
         "@devagent/executor": "workspace:*",
         "@devagent/providers": "workspace:*",
-        "@devagent/tools": "workspace:*",
-      },
-      "devDependencies": {
-        "eslint": "^9.0.0",
-        "typescript": "^5.7.0",
-        "vitest": "^3.0.0",
-      },
-    },
-    "packages/core": {
-      "name": "@devagent/core",
-      "version": "0.1.0",
-      "dependencies": {
-        "smol-toml": "^1.3.0",
-      },
-      "devDependencies": {
-        "eslint": "^9.0.0",
-        "typescript": "^5.7.0",
-        "vitest": "^3.0.0",
-      },
-    },
-    "packages/engine": {
-      "name": "@devagent/engine",
-      "version": "0.1.0",
-      "dependencies": {
-        "@devagent/core": "workspace:*",
-        "@devagent/providers": "workspace:*",
-        "@devagent/tools": "workspace:*",
+        "@devagent/runtime": "workspace:*",
       },
       "devDependencies": {
         "eslint": "^9.0.0",
@@ -81,7 +53,7 @@
         "@devagent-sdk/schema": "file:../../../devagent-sdk/packages/schema",
         "@devagent-sdk/types": "file:../../../devagent-sdk/packages/types",
         "@devagent-sdk/validation": "file:../../../devagent-sdk/packages/validation",
-        "@devagent/core": "workspace:*",
+        "@devagent/runtime": "workspace:*",
       },
       "devDependencies": {
         "eslint": "^9.0.0",
@@ -95,7 +67,7 @@
       "dependencies": {
         "@ai-sdk/anthropic": "^1.0.0",
         "@ai-sdk/openai": "^1.0.0",
-        "@devagent/core": "workspace:*",
+        "@devagent/runtime": "workspace:*",
         "ai": "^4.0.0",
       },
       "devDependencies": {
@@ -104,11 +76,11 @@
         "vitest": "^3.0.0",
       },
     },
-    "packages/tools": {
-      "name": "@devagent/tools",
+    "packages/runtime": {
+      "name": "@devagent/runtime",
       "version": "0.1.0",
       "dependencies": {
-        "@devagent/core": "workspace:*",
+        "smol-toml": "^1.3.0",
         "vscode-jsonrpc": "^8.2.1",
         "vscode-languageserver-protocol": "^3.17.5",
       },
@@ -145,15 +117,11 @@
 
     "@devagent/cli": ["@devagent/cli@workspace:packages/cli"],
 
-    "@devagent/core": ["@devagent/core@workspace:packages/core"],
-
-    "@devagent/engine": ["@devagent/engine@workspace:packages/engine"],
-
     "@devagent/executor": ["@devagent/executor@workspace:packages/executor"],
 
     "@devagent/providers": ["@devagent/providers@workspace:packages/providers"],
 
-    "@devagent/tools": ["@devagent/tools@workspace:packages/tools"],
+    "@devagent/runtime": ["@devagent/runtime@workspace:packages/runtime"],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.27.3", "", { "os": "aix", "cpu": "ppc64" }, "sha512-9fJMTNFTWZMh5qwrBItuziu834eOCUcEqymSH7pY+zoMVEZg3gcPuBNxH1EvfVYe9h0x/Ptw8KBzv7qxb7l8dg=="],
 
@@ -603,7 +571,7 @@
 
     "@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
-    "@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", { "dependencies": { "@devagent-sdk/types": "file:../types" } }],
+    "@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", {}],
 
     "@devagent-sdk/validation/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
@@ -627,11 +595,9 @@
 
     "vscode-languageserver-protocol/vscode-jsonrpc": ["vscode-jsonrpc@8.2.0", "", {}, "sha512-C+r0eKJUIfiDIfwJhria30+TYWPtuHJXHtI7J0YlOmKAo7ogxP20T0zxB7HZQIFhIyvoBPwWskjxrvAtfjyZfA=="],
 
-    "@devagent-sdk/validation/@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
-
     "@devagent/executor/@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
-    "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", { "dependencies": { "@devagent-sdk/types": "file:../types" } }],
+    "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", {}],
 
     "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
@@ -640,8 +606,6 @@
     "@typescript-eslint/typescript-estree/minimatch/brace-expansion": ["brace-expansion@5.0.3", "", { "dependencies": { "balanced-match": "^4.0.2" } }, "sha512-fy6KJm2RawA5RcHkLa1z/ScpBeA762UF9KmZQxwIbDtRJrgLzM10depAiEQ+CXYcoiqW1/m96OAAoke2nE9EeA=="],
 
     "eslint/ajv/json-schema-traverse": ["json-schema-traverse@0.4.1", "", {}, "sha512-xbbCH5dCYU5T8LcEhhuh7HJ88HXuW3qsI3Y0zOZFKfZEHcpWiHU/Jxzk629Brsab/mMiHQti9wMP+845RPe3Vg=="],
-
-    "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
     "@typescript-eslint/typescript-estree/minimatch/brace-expansion/balanced-match": ["balanced-match@4.0.4", "", {}, "sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA=="],
   }

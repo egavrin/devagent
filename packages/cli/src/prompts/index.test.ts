@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SkillRegistry } from "@devagent/core";
+import type { SkillRegistry } from "@devagent/runtime";
 import { assembleSystemPrompt } from "./index.js";
 
 function createTempRepo(): string {
@@ -62,7 +62,7 @@ describe("assembleSystemPrompt", () => {
     writeFileSync(join(repoRoot, "AGENTS.md"), "# Rules\nStay consistent.\n", "utf-8");
 
     const prompt = assembleSystemPrompt({
-      mode: "plan",
+      mode: "act",
       repoRoot,
       skills: mockSkills([{ name: "reviewer", description: "Review code quality." }]),
     });

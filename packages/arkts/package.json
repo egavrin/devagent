@@ -18,7 +18,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@devagent/core": "workspace:*"
+    "@devagent/runtime": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^3.0.0",

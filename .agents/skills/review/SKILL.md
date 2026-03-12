@@ -38,8 +38,7 @@ DevAgent's core principle. Flag any violations:
 - Test names describe what is being tested, not how
 - Tests use the standard patterns:
   - Tool tests: `mkdtempSync` + `ToolContext` fixture
-  - Engine tests: mock `LLMProvider` + `makeConfig` fixture
-  - Plugin tests: `makeContext()` with `EventBus`
+  - Runtime task-loop/review tests: mock `LLMProvider` + `makeConfig` fixture
 - Edge cases covered: empty input, missing data, error paths
 
 ## 5. Module Boundaries
@@ -47,15 +46,14 @@ DevAgent's core principle. Flag any violations:
 Enforce the dependency DAG:
 
 ```
-core ← tools, providers
-core, tools, providers ← engine
-core, engine ← cli
+runtime ← cli, executor, providers, arkts
+providers ← cli
 ```
 
-- `core` must NEVER import from `tools`, `engine`, `providers`, or `cli`
-- `tools` must NEVER import from `engine` or `cli`
-- `engine` must NEVER import from `cli`
-- Cross-package imports use the package name (`@devagent/core`), not relative paths
+- `runtime` must NEVER import from `cli`, `executor`, `providers`, or `arkts`
+- `providers` must NEVER import from `cli`, `executor`, or `arkts`
+- `executor` must preserve the `devagent execute` machine contract
+- Cross-package imports use the package name (`@devagent/runtime`), not relative paths
 
 ## 6. Error Handling
 
@@ -68,8 +66,8 @@ core, engine ← cli
 
 If the change adds or modifies config:
 
-- Type defined in `packages/core/src/types.ts`
-- Default value provided in `packages/core/src/config.ts`
+- Type defined in `packages/runtime/src/core/types.ts`
+- Default value provided in `packages/runtime/src/core/config.ts`
 - TOML parsing handles the new field
 - Validation rejects invalid values with clear error messages
 - Documented in AGENTS.md if user-facing

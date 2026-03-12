@@ -7,7 +7,7 @@ import {
   SkillRegistry,
   SkillResolver,
   extractErrorMessage,
-} from "@devagent/core";
+} from "@devagent/runtime";
 import { validateTaskExecutionRequest } from "@devagent-sdk/validation";
 import {
   PROTOCOL_VERSION,

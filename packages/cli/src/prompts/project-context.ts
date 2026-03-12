@@ -11,7 +11,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { extractErrorMessage } from "@devagent/core";
+import { extractErrorMessage } from "@devagent/runtime";
 
 interface InstructionFileSpec {
   readonly filename: string;

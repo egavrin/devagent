@@ -43,9 +43,10 @@ type(scope): imperative summary
 Derive from the package or module changed:
 
 - `feat(cli):` — change in `packages/cli`
-- `fix(tools):` — change in `packages/tools`
-- `refactor(engine):` — change in `packages/engine`
-- `test(core):` — change in `packages/core`
+- `fix(runtime):` — change in `packages/runtime`
+- `refactor(executor):` — change in `packages/executor`
+- `test(providers):` — change in `packages/providers`
+- `chore(arkts):` — change in `packages/arkts`
 - Omit scope for cross-cutting changes
 
 ## Body
@@ -62,10 +63,10 @@ Derive from the package or module changed:
 Use `!` after type/scope and explain in body:
 
 ```
-feat(core)!: remove legacy config format
+feat(runtime)!: remove legacy session schema
 
-- Drop support for v1 TOML config
-- Migration: run `devagent config migrate` first
+- Drop support for the pre-merge session payload format
+- Migration: clear stale local session fixtures before rerunning tests
 ```
 
 Or add a `BREAKING CHANGE:` footer.
@@ -75,7 +76,7 @@ Or add a `BREAKING CHANGE:` footer.
 Every commit made by devagent must include a co-authorship trailer:
 
 ```
-Co-Authored-By: devagent <devagent@noreply>
+Co-Authored-By: devagent <devagent@egavrin>
 ```
 
 Place it as the last line after a blank line following the body (or subject if no body).
@@ -97,10 +98,10 @@ Place it as the last line after a blank line following the body (or subject if n
 ## Quick Reference
 
 ```
-feat(cli): add interactive mode flag          # new feature
-fix(engine): handle empty tool response       # bug fix
-refactor(core)!: simplify config schema       # breaking refactor
-test(tools): cover patch-parser edge cases    # test addition
+feat(cli): add resume help example            # new feature
+fix(runtime): handle empty tool response      # bug fix
+refactor(runtime)!: simplify config schema    # breaking refactor
+test(runtime): cover patch-parser edge cases  # test addition
 chore: bump vitest to 3.x                     # dependency update
 docs: update CLI commands reference           # docs only
 ```

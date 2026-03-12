@@ -4,7 +4,7 @@
  * Fails fast with actionable error messages.
  */
 
-import { ProviderError } from "@devagent/core";
+import { ProviderError } from "@devagent/runtime";
 
 interface OllamaModel {
   name: string;

@@ -23,7 +23,7 @@ import {
   formatToolGroupEnd,
   StatusBar,
 } from "./format.js";
-import type { VerbosityConfig } from "@devagent/core";
+import type { VerbosityConfig } from "@devagent/runtime";
 
 // ─── Improvement 5: Categorical Verbosity ─────────────────────
 

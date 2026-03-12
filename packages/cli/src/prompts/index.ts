@@ -6,9 +6,9 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SkillRegistry, Memory } from "@devagent/core";
-import type { TaskMode, TurnBriefing } from "@devagent/engine";
-import { formatBriefing } from "@devagent/engine";
+import type { SkillRegistry } from "@devagent/runtime";
+import type { TaskMode, TurnBriefing } from "@devagent/runtime";
+import { formatBriefing } from "@devagent/runtime";
 import { loadProjectContext } from "./project-context.js";
 
 const PROMPTS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -21,7 +21,6 @@ function loadPromptFile(filename: string): string {
 let cachedBase: string | null = null;
 let cachedTools: string | null = null;
 let cachedModeAct: string | null = null;
-let cachedModePlan: string | null = null;
 let cachedReview: string | null = null;
 
 function getBase(): string {
@@ -39,11 +38,6 @@ function getModeAct(): string {
   return cachedModeAct;
 }
 
-function getModePlan(): string {
-  cachedModePlan ??= loadPromptFile("mode-plan.md");
-  return cachedModePlan;
-}
-
 function getReview(): string {
   cachedReview ??= loadPromptFile("review.md");
   return cachedReview;
@@ -53,12 +47,6 @@ export interface AssemblePromptOptions {
   readonly mode: TaskMode;
   readonly repoRoot: string;
   readonly skills: SkillRegistry;
-  readonly memories?: ReadonlyArray<Memory>;
-  /** Memory config for controlling prompt injection limits. */
-  readonly memoryConfig?: {
-    readonly promptMaxMemories: number;
-    readonly promptMaxChars: number;
-  };
   readonly approvalMode?: string;
   readonly provider?: string;
   readonly model?: string;
@@ -81,7 +69,7 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
   sections.push(getTools());
 
   // Mode-specific constraints
-  sections.push(opts.mode === "plan" ? getModePlan() : getModeAct());
+  sections.push(getModeAct());
 
   // Review guidelines (loaded conditionally)
   if (opts.includeReview) {
@@ -123,26 +111,6 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
       `Use the \`invoke_skill\` tool to load a skill's full instructions when the ` +
       `user's task matches a skill description. Always invoke a relevant skill before starting work.`,
     );
-  }
-
-  // Cross-session memories (configurable limits, defaults: 10 entries, ~2000 chars)
-  if (opts.memories && opts.memories.length > 0) {
-    const MAX_MEMORIES = opts.memoryConfig?.promptMaxMemories ?? 10;
-    const MAX_CHARS = opts.memoryConfig?.promptMaxChars ?? 2000;
-    const capped = opts.memories.slice(0, MAX_MEMORIES);
-    let totalChars = 0;
-    const memoryLines: string[] = [];
-    for (const m of capped) {
-      const line = `- [${m.category}] ${m.key}: ${m.content}`;
-      if (totalChars + line.length > MAX_CHARS) break;
-      memoryLines.push(line);
-      totalChars += line.length;
-    }
-    if (memoryLines.length > 0) {
-      sections.push(
-        `## Learned Patterns\n\nThe following are lessons from previous sessions. Apply them when relevant:\n\n${memoryLines.join("\n")}`,
-      );
-    }
   }
 
   // Session context briefing (turn isolation — replaces raw history)

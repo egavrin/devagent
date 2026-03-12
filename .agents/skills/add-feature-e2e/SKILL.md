@@ -11,11 +11,11 @@ Step-by-step guide for adding a feature to DevAgent, from understanding the code
 
 1. Read `AGENTS.md` — understand fail-fast philosophy, anti-patterns, project structure
 2. Identify which packages your feature touches:
-   - **Types/config** → `packages/core/`
-   - **Tool** → `packages/tools/`
-   - **Engine feature** (judge, plugin, agent) → `packages/engine/`
+   - **Runtime types/config/tool/review/task-loop work** → `packages/runtime/`
    - **LLM provider** → `packages/providers/`
    - **CLI/prompt** → `packages/cli/`
+   - **Machine execution contract** → `packages/executor/`
+   - **ArkTS integration** → `packages/arkts/`
 3. Read existing similar features to understand the pattern
 
 ## Phase 2: Design
@@ -29,7 +29,7 @@ Draft the approach before writing code:
 
 ## Phase 3: Types First
 
-Add or extend types in `packages/core/src/types.ts`:
+Add or extend types in `packages/runtime/src/core/types.ts`:
 
 ```typescript
 export interface MyFeatureConfig {
@@ -38,7 +38,7 @@ export interface MyFeatureConfig {
 }
 ```
 
-Export from `packages/core/src/index.ts`:
+Export from `packages/runtime/src/core/index.ts`:
 
 ```typescript
 export type { MyFeatureConfig } from "./types.js";
@@ -78,27 +78,22 @@ cd packages/<pkg> && bunx vitest run src/<module>.test.ts
 
 Write minimal code to make tests pass. Follow these patterns per package:
 
-### Adding a Tool (`packages/tools/`)
+### Adding a Tool (`packages/runtime/`)
 
-1. Create `packages/tools/src/builtins/my-tool.ts` implementing `ToolSpec`
-2. Add to `builtinTools` array in `packages/tools/src/builtins/index.ts`
+1. Create `packages/runtime/src/tools/builtins/my-tool.ts` implementing `ToolSpec`
+2. Add to `builtinTools` array in `packages/runtime/src/tools/builtins/index.ts`
 
 ### Adding a Provider (`packages/providers/`)
 
 1. Create factory function: `(config: ProviderConfig) => LLMProvider`
 2. Register in `createDefaultRegistry()` in `packages/providers/src/index.ts`
 
-### Adding a Plugin (`packages/engine/`)
+### Adding a Judge or Runtime Helper (`packages/runtime/`)
 
-1. Create `packages/engine/src/plugins/my-plugin.ts` implementing `Plugin`
-2. Add factory to `createBuiltinPlugins()` in `packages/engine/src/plugins/index.ts`
-
-### Adding a Judge (`packages/engine/`)
-
-1. Create `packages/engine/src/my-judge.ts` using `llm-judge.ts` utilities
+1. Create `packages/runtime/src/engine/my-judge.ts` using `llm-judge.ts` utilities
 2. Wire into TaskLoop or appropriate caller
 
-### Adding Config (`packages/core/`)
+### Adding Config (`packages/runtime/`)
 
 1. Add type to `types.ts`
 2. Add parsing in `config.ts` with defaults
@@ -107,7 +102,7 @@ Write minimal code to make tests pass. Follow these patterns per package:
 ## Phase 6: Wire Up
 
 1. Export new public APIs from the package's `index.ts`
-2. Register tools/plugins/providers in the appropriate registry
+2. Register runtime tools/providers in the appropriate registry or bootstrap
 3. If CLI-visible, update `packages/cli/src/main.ts`
 4. If prompt-relevant, update `packages/cli/src/prompts/`
 
@@ -146,9 +141,10 @@ git diff            # Content review
 ## Module Dependency Rules
 
 ```
-core ← tools, providers (core imports nothing from other packages)
-core, tools, providers ← engine
-core, engine ← cli
+runtime ← cli, executor, providers, arkts
+providers ← cli
+runtime provides the internal task loop, review pipeline, and tool layer
 ```
 
-Never import from a dependent package (e.g., core must never import from engine).
+Keep `runtime` as the internal center of gravity. Do not recreate the old
+`core` / `engine` / `tools` package split in new guidance or code.

@@ -8,8 +8,8 @@
 
 import { createOpenAI } from "@ai-sdk/openai";
 import { streamText } from "ai";
-import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/core";
-import { ProviderError } from "@devagent/core";
+import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
+import { ProviderError } from "@devagent/runtime";
 import { convertMessages, convertTools, processProviderStream, resolveCapabilities, stripNullArgs } from "./shared.js";
 
 // Re-export shared utilities so existing consumers (tests, index.ts) don't break.

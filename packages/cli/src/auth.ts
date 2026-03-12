@@ -24,8 +24,8 @@ import {
   extractAccountIdFromIdToken,
   openUrl,
   extractErrorMessage,
-} from "@devagent/core";
-import type { OAuthProviderConfig, CredentialInfo } from "@devagent/core";
+} from "@devagent/runtime";
+import type { OAuthProviderConfig, CredentialInfo } from "@devagent/runtime";
 import { bold, cyan, dim, green, red, yellow } from "./format.js";
 
 // ─── Known Providers ────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createAnthropicProvider } from "./anthropic.js";
-import type { ProviderConfig } from "@devagent/core";
+import type { ProviderConfig } from "@devagent/runtime";
 
 describe("createAnthropicProvider", () => {
   it("throws when no API key provided", () => {

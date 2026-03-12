@@ -3,8 +3,8 @@
  * Fail fast: throws on unknown provider or missing config.
  */
 
-import type { LLMProvider, ProviderConfig } from "@devagent/core";
-import { ProviderError } from "@devagent/core";
+import type { LLMProvider, ProviderConfig } from "@devagent/runtime";
+import { ProviderError } from "@devagent/runtime";
 
 export type ProviderFactory = (config: ProviderConfig) => LLMProvider;
 

@@ -20,7 +20,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@devagent/core": "workspace:*",
+    "@devagent/runtime": "workspace:*",
     "ai": "^4.0.0",
     "@ai-sdk/anthropic": "^1.0.0",
     "@ai-sdk/openai": "^1.0.0"

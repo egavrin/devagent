@@ -138,5 +138,7 @@ describe("execute command", () => {
 
     expect(mainSource).not.toContain('process.argv[2] === "workflow"');
     expect(mainSource).not.toContain('import("./workflow-runner.js")');
+    expect(mainSource).not.toContain("runInteractive(");
+    expect(mainSource).not.toContain('arg === "chat"');
   });
 });

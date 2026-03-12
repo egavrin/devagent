@@ -1,7 +1,7 @@
 /**
  * Lightweight engine setup for headless workflow execution.
  * Reuses DevAgent's core engine (provider, tools, TaskLoop) but
- * skips interactive UI, session persistence, status bar, and LSP.
+ * skips human-CLI-only systems and keeps bootstrap minimal.
  */
 
 import { dirname } from "node:path";
@@ -10,12 +10,10 @@ import { appendFileSync } from "node:fs";
 import {
   EventBus,
   ApprovalGate,
-  PluginManager,
   SkillLoader,
   SkillRegistry,
   SkillResolver,
   ContextManager,
-  MemoryStore,
   loadConfig,
   resolveProviderCredentials,
   loadModelRegistry,
@@ -24,25 +22,22 @@ import {
   DEFAULT_BUDGET,
   ApprovalMode,
   extractErrorMessage,
-} from "@devagent/core";
-import type { DevAgentConfig, ApprovalPolicy } from "@devagent/core";
+} from "@devagent/runtime";
+import type { DevAgentConfig, ApprovalPolicy } from "@devagent/runtime";
 import { createDefaultRegistry } from "@devagent/providers";
-import { createDefaultToolRegistry, McpHub, ToolRegistry } from "@devagent/tools";
+import { createDefaultToolRegistry, ToolRegistry } from "@devagent/runtime";
 import {
   TaskLoop,
-  createBuiltinPlugins,
   createPlanTool,
-  createMemoryTools,
   createFindingTool,
   createToolScriptTool,
   createDelegateTool,
   createSkillTool,
   AgentRegistry,
-  CheckpointManager,
   DoubleCheck,
   DEFAULT_DOUBLE_CHECK_OPTIONS,
   SessionState,
-} from "@devagent/engine";
+} from "@devagent/runtime";
 import { assembleSystemPrompt } from "./prompts/index.js";
 import { detectProjectTestCommand } from "./test-command-detect.js";
 import { loadRepoContext, buildContextPrompt } from "./repo-context.js";
@@ -123,7 +118,7 @@ export async function setupAndRunWorkflowQuery(
 
   const provider = providerRegistry.get(config.provider, providerConfig);
 
-  // 3. Set up tools (lightweight — no LSP, no status bar, no interactive features)
+  // 3. Set up tools (lightweight shared runtime bootstrap)
   const toolRegistry = createDefaultToolRegistry();
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
@@ -146,38 +141,6 @@ export async function setupAndRunWorkflowQuery(
   skills.register(skillMetadata);
   const skillResolver = new SkillResolver();
   toolRegistry.register(createSkillTool(skills, skillResolver));
-
-  // Plugins
-  const pluginManager = new PluginManager();
-  pluginManager.init({ bus, config, repoRoot: projectRoot });
-  for (const plugin of createBuiltinPlugins()) {
-    pluginManager.register(plugin);
-    if (plugin.tools) {
-      for (const tool of plugin.tools) {
-        toolRegistry.register(tool);
-      }
-    }
-  }
-
-  // MCP
-  const mcpHub = new McpHub({ repoRoot: projectRoot, watchConfig: false });
-  await mcpHub.init();
-  for (const tool of mcpHub.getToolSpecs()) {
-    toolRegistry.register(tool);
-  }
-
-  // Memory (read-only in headless mode)
-  const memoryStore = new MemoryStore({
-    dailyDecay: config.memory.dailyDecay,
-    minRelevance: config.memory.minRelevance,
-    accessBoost: config.memory.accessBoost,
-  });
-  for (const tool of createMemoryTools(memoryStore, {
-    recallMinRelevance: config.memory.recallMinRelevance,
-    recallLimit: config.memory.recallLimit,
-  })) {
-    toolRegistry.register(tool);
-  }
 
   // Tool scripts + delegate
   toolRegistry.register(createToolScriptTool({ registry: toolRegistry, bus }));
@@ -229,14 +192,9 @@ export async function setupAndRunWorkflowQuery(
   const repoContextPrompt = buildContextPrompt(repoContext);
 
   // 6. Assemble system prompt
-  const memories = memoryStore.search({
-    minRelevance: config.memory.recallMinRelevance,
-    limit: config.memory.promptMaxMemories,
-  });
   const baseSystemPrompt = assembleSystemPrompt({
     mode: "act",
     skills,
-    memories,
     repoRoot: projectRoot,
     approvalMode: options.approvalMode,
     provider: options.provider,
@@ -262,7 +220,6 @@ export async function setupAndRunWorkflowQuery(
     repoRoot: projectRoot,
     mode: "act",
     contextManager,
-    memoryStore,
     doubleCheck,
     sessionState,
   });
@@ -280,9 +237,6 @@ export async function setupAndRunWorkflowQuery(
     responseText = extractErrorMessage(err);
     success = false;
   }
-
-  // Cleanup
-  mcpHub.dispose();
 
   return { success, responseText, iterations };
 }

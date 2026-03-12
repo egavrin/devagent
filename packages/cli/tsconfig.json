@@ -9,9 +9,7 @@
   "exclude": ["src/**/*.test.ts"],
   "references": [
     { "path": "../arkts" },
-    { "path": "../core" },
-    { "path": "../engine" },
     { "path": "../providers" },
-    { "path": "../tools" }
+    { "path": "../runtime" }
   ]
 }

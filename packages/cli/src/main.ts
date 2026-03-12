@@ -1,22 +1,20 @@
 /**
  * CLI main entry point — parses arguments, wires up engine, runs queries.
- * Integrates: plugins, skills, MCP, context management.
+ * Integrates: skills, session persistence, and task execution.
  */
 
-import { createInterface } from "node:readline";
 import { execSync } from "node:child_process";
 import { readFileSync as nodeReadFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
   EventBus,
   ApprovalGate,
-  PluginManager,
   SkillLoader,
   SkillRegistry,
   SkillResolver,
   ContextManager,
-  MemoryStore,
   SessionStore,
   loadConfig,
   resolveProviderCredentials,
@@ -27,31 +25,27 @@ import {
   DEFAULT_BUDGET,
   DEFAULT_CONTEXT,
   EventLogger,
-} from "@devagent/core";
-import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, Memory, VerbosityConfig } from "@devagent/core";
-import { ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/core";
+} from "@devagent/runtime";
+import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, VerbosityConfig } from "@devagent/runtime";
+import { ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
-import { createDefaultToolRegistry, McpHub, createRoutingLSPTools, ToolRegistry } from "@devagent/tools";
+import { createDefaultToolRegistry, createRoutingLSPTools, ToolRegistry } from "@devagent/runtime";
 import {
   TaskLoop,
   truncateToolOutput,
-  createBuiltinPlugins,
   createPlanTool,
-  judgePlanQuality,
-  createMemoryTools,
   createFindingTool,
   createToolScriptTool,
   createDelegateTool,
   createSkillTool,
   AgentRegistry,
-  CheckpointManager,
   DoubleCheck,
   DEFAULT_DOUBLE_CHECK_OPTIONS,
   synthesizeBriefing,
   findLastUserContent,
   SessionState,
-} from "@devagent/engine";
-import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback, SessionStatePersistence, SessionStateJSON } from "@devagent/engine";
+} from "@devagent/runtime";
+import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback, SessionStatePersistence, SessionStateJSON } from "@devagent/runtime";
 import { LSPRouter, createRoutingDiagnosticProvider, createCompilerFallbackProvider, createShellTestRunner, lazyUpgradeLSP } from "./double-check-wiring.js";
 import { createArkTSDiagnosticProvider } from "@devagent/arkts";
 import { assembleSystemPrompt } from "./prompts/index.js";
@@ -77,7 +71,6 @@ import {
   formatSessionSummary,
   formatCompactionResult,
   formatReasoning,
-  StatusBar,
 } from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { OutputState } from "./output-state.js";
@@ -98,26 +91,16 @@ interface RunOptions {
   readonly mode: TaskMode;
   readonly skills: SkillRegistry;
   readonly contextManager: ContextManager;
-  readonly memoryStore: MemoryStore;
-  readonly checkpointManager: CheckpointManager;
   readonly doubleCheck: DoubleCheck;
   readonly initialMessages: Message[] | undefined;
   readonly verbosity: Verbosity;
   readonly verbosityConfig: VerbosityConfig;
   readonly sessionState: SessionState;
   readonly briefing?: TurnBriefing;
-  readonly statusBar?: StatusBar;
 }
 
 interface RunSingleQueryOptions extends RunOptions {
   readonly query: string;
-  readonly memories: ReadonlyArray<Memory>;
-}
-
-interface RunInteractiveOptions extends RunOptions {
-  readonly pluginManager: PluginManager;
-  readonly skillResolver: SkillResolver;
-  readonly loadMemories: () => ReadonlyArray<Memory>;
 }
 
 interface ReviewArgs {
@@ -129,8 +112,6 @@ interface ReviewArgs {
 interface CliArgs {
   query: string | null;
   file: string | null;
-  interactive: boolean;
-  mode: TaskMode;
   provider: string | null;
   model: string | null;
   maxIterations: number | null;
@@ -138,11 +119,9 @@ interface CliArgs {
   verbosity: Verbosity;
   verboseCategories: string | undefined;
   authCommand: string | null;
-  sessionCommand: { action: string; sessionId: string } | null;
   resume: string | null;
   continue_: boolean;
   review: ReviewArgs | null;
-  noStatusBar: boolean;
 }
 
 export function loadQueryFromFile(
@@ -234,8 +213,6 @@ export function parseArgs(argv: string[]): CliArgs {
   const result: CliArgs = {
     query: null,
     file: null,
-    interactive: false,
-    mode: "act",
     provider: null,
     model: null,
     maxIterations: null,
@@ -243,11 +220,9 @@ export function parseArgs(argv: string[]): CliArgs {
     verbosity: "normal",
     verboseCategories: undefined,
     authCommand: null,
-    sessionCommand: null,
     resume: null,
     continue_: false,
     review: null,
-    noStatusBar: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -278,15 +253,6 @@ export function parseArgs(argv: string[]): CliArgs {
       result.authCommand = args[i + 1] ?? "login";
       i++;
       return result; // auth is handled before anything else
-    } else if (arg === "session") {
-      const action = args[i + 1] ?? "";
-      const sessionId = args[i + 2] ?? "";
-      result.sessionCommand = { action, sessionId };
-      return result;
-    } else if (arg === "chat") {
-      result.interactive = true;
-    } else if (arg === "--plan") {
-      result.mode = "plan";
     } else if (arg === "--suggest") {
       // handled in config override
     } else if (arg === "--auto-edit") {
@@ -318,19 +284,12 @@ export function parseArgs(argv: string[]): CliArgs {
       result.resume = args[++i]!;
     } else if (arg === "--continue") {
       result.continue_ = true;
-    } else if (arg === "--no-status-bar") {
-      result.noStatusBar = true;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
     } else if (!arg.startsWith("-")) {
       result.query = arg;
     }
-  }
-
-  // Default to interactive if no query or file
-  if (!result.query && !result.file) {
-    result.interactive = true;
   }
 
   return result;
@@ -350,8 +309,6 @@ devagent — AI-powered development agent
 Usage:
   devagent "<query>"              Natural language query
   devagent -f <path>               Read query from file
-  devagent chat                   Interactive chat mode
-  devagent --plan "<query>"       Plan mode (read-only analysis)
   devagent review <file> --rule <rule_file> [--json]
                                   Rule-based patch review
 
@@ -374,21 +331,6 @@ Options:
   -v, --verbose         Verbose output (show full tool params and results)
   -q, --quiet           Quiet output (errors only)
   -h, --help            Show this help
-
-Interactive Commands:
-  /plan                        Switch to plan mode (read-only)
-  /act                         Switch to act mode
-  /clear                       Clear conversation history
-  /help                        Show interactive commands
-  /status                      Show session status
-  /checkpoint list             List all checkpoints
-  /checkpoint restore <id>     Restore workspace to checkpoint
-  /checkpoint diff <id> [<id2>] Show changes between checkpoints
-  /skills                      List available skills
-  /<skill-name> [args]         Invoke a skill by name
-  /commands                    List available plugin commands
-  /<command> [args]             Run a plugin command
-  exit                         Quit
 
 Environment:
   DEVAGENT_PROVIDER     Default provider
@@ -544,33 +486,25 @@ interface ToolsSetupResult {
   sessionState: SessionState;
   readonly skills: SkillRegistry;
   readonly skillResolver: SkillResolver;
-  readonly pluginManager: PluginManager;
-  readonly mcpHub: McpHub;
-  readonly memoryStore: MemoryStore;
-  readonly loadFreshMemories: () => ReadonlyArray<import("@devagent/core").Memory>;
-  readonly initialMemories: ReadonlyArray<import("@devagent/core").Memory>;
-  readonly checkpointManager: CheckpointManager;
   readonly doubleCheck: DoubleCheck;
   readonly contextManager: ContextManager;
 }
 
 /**
  * Wire up the tool registry, event bus, approval gate, session state, skills,
- * plugins, MCP, memory store, delegate tool, checkpoints, double-check, and
- * context manager.
+ * delegate tool, double-check, and context manager.
  */
 async function setupTools(
   config: DevAgentConfig,
   cliArgs: CliArgs,
   projectRoot: string,
   provider: LLMProvider,
-  statusBar?: StatusBar,
 ): Promise<ToolsSetupResult> {
   const toolRegistry = createDefaultToolRegistry();
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
   const verbosityConfig = buildVerbosityConfig(cliArgs.verbosity, cliArgs.verboseCategories);
-  const { lspToolCounts } = setupEventHandlers(bus, config, cliArgs.verbosity, verbosityConfig, undefined, statusBar);
+  const { lspToolCounts } = setupEventHandlers(bus, config, cliArgs.verbosity, verbosityConfig);
   const trackInternalLSPDiagnostics = () => {
     const key = "diagnostics(double-check)";
     lspToolCounts.set(key, (lspToolCounts.get(key) ?? 0) + 1);
@@ -582,33 +516,11 @@ async function setupTools(
   let sessionState = new SessionState(config.sessionState);
 
   // Register state tools (getter indirection so resume can swap the instance)
-  // Plan judge rate-limiting: track updates to skip judge on frequent calls
-  let planUpdateCount = 0;
-  let lastJudgedPlanUpdate = 0;
   toolRegistry.register(createPlanTool(
     bus,
     () => sessionState,
     () => outputState.currentIteration,
-    async (steps, oldPlan) => {
-      planUpdateCount++;
-      const iteration = outputState.currentIteration;
-      // Gating: skip for tiny plans, early iterations, or rate-limited
-      if (steps.length <= 2) return null;
-      if (iteration < 3) return null;
-      if (planUpdateCount - lastJudgedPlanUpdate < 3) return null;
-
-      lastJudgedPlanUpdate = planUpdateCount;
-      const originalRequest = cliArgs.query ?? "(interactive session)";
-      const result = await judgePlanQuality(
-        provider, originalRequest, steps, oldPlan,
-        sessionState, iteration,
-      );
-      if (!result) return null;
-      if (result.quality_score < 0.5) {
-        return `PLAN QUALITY WARNING (score: ${result.quality_score.toFixed(2)}): ${result.issues.join("; ")}. ${result.suggestion ?? ""}`;
-      }
-      return null;
-    },
+    async () => null,
   ));
   // Finding tool: tracks iteration via tool:after event count
   let findingToolCallCount = 0;
@@ -628,80 +540,8 @@ async function setupTools(
   // Register skill tool (LLM can invoke skills during conversation)
   toolRegistry.register(createSkillTool(skills, skillResolver));
 
-  // ─── Plugins ───────────────────────────────────────────────
-  const pluginManager = new PluginManager();
-  pluginManager.init({ bus, config, repoRoot: projectRoot });
-
-  // Register built-in plugins
-  const builtinPlugins = createBuiltinPlugins();
-  for (const plugin of builtinPlugins) {
-    pluginManager.register(plugin);
-
-    // Register plugin tools in the tool registry
-    if (plugin.tools) {
-      for (const tool of plugin.tools) {
-        toolRegistry.register(tool);
-      }
-    }
-  }
-
-  // ─── MCP ───────────────────────────────────────────────────
-  const mcpHub = new McpHub({ repoRoot: projectRoot, watchConfig: true });
-  await mcpHub.init();
-
-  // Register MCP tools
-  const mcpTools = mcpHub.getToolSpecs();
-  for (const tool of mcpTools) {
-    toolRegistry.register(tool);
-  }
-
-  const mcpServers = mcpHub.getServers();
-  if (mcpServers.length > 0 && cliArgs.verbosity !== "quiet") {
-    process.stderr.write(dim(`[mcp] ${mcpServers.length} server(s) connected`) + "\n");
-  }
-
-  // ─── Memory (cross-session learning) ──────────────────────
-  const memoryStore = new MemoryStore({
-    dailyDecay: config.memory.dailyDecay,
-    minRelevance: config.memory.minRelevance,
-    accessBoost: config.memory.accessBoost,
-  });
-
-  // Run startup maintenance (decay + prune + dedup)
-  if (config.memory.maintenanceOnStartup) {
-    const maint = memoryStore.runMaintenance(config.memory.dedupEveryStartups);
-    if ((maint.decayed > 0 || maint.pruned > 0 || maint.merged > 0) && cliArgs.verbosity !== "quiet") {
-      process.stderr.write(
-        dim(`[memory] Maintenance: ${maint.decayed} decayed, ${maint.pruned} pruned, ${maint.merged} merged`) + "\n",
-      );
-    }
-  }
-
-  // Helper to load fresh memories (re-queries each time for turn isolation)
-  function loadFreshMemories(): ReadonlyArray<import("@devagent/core").Memory> {
-    return memoryStore.search({
-      minRelevance: config.memory.recallMinRelevance,
-      limit: config.memory.promptMaxMemories,
-    });
-  }
-
-  const initialMemories = loadFreshMemories();
-
-  // Register memory tools so the agent can store/recall learnings
-  for (const tool of createMemoryTools(memoryStore, {
-    recallMinRelevance: config.memory.recallMinRelevance,
-    recallLimit: config.memory.recallLimit,
-  })) {
-    toolRegistry.register(tool);
-  }
-
-  if (initialMemories.length > 0 && cliArgs.verbosity !== "quiet") {
-    process.stderr.write(dim(`[memory] ${initialMemories.length} relevant memory(s) loaded`) + "\n");
-  }
-
   // ─── Batched Readonly Tool Scripts ──────────────────────────
   // Register after all readonly tools so the script engine can access them.
-  // Passes registry by reference — tools registered later (MCP, plugins) are also accessible.
   toolRegistry.register(createToolScriptTool({ registry: toolRegistry, bus }));
 
   // ─── Delegate (subagent spawning) ─────────────────────────────
@@ -718,14 +558,7 @@ async function setupTools(
     getParentSessionState: () => sessionState,
   }));
 
-  // ─── Checkpoints + Double-Check ─────────────────────────────
-  const checkpointManager = new CheckpointManager({
-    repoRoot: projectRoot,
-    bus,
-    enabled: config.checkpoints?.enabled ?? false,
-  });
-  checkpointManager.init();
-
+  // ─── Double-Check ──────────────────────────────────────────
   // Auto-enable DoubleCheck in full-auto mode unless explicitly disabled.
   // When enabled with no explicit test command, auto-detect from package.json
   // and enable test running so the LLM can self-correct from test failures.
@@ -771,12 +604,6 @@ async function setupTools(
     sessionState,
     skills,
     skillResolver,
-    pluginManager,
-    mcpHub,
-    memoryStore,
-    loadFreshMemories,
-    initialMemories,
-    checkpointManager,
     doubleCheck,
     contextManager,
   };
@@ -941,7 +768,7 @@ async function setupLSP(
 /** Result of session persistence setup. */
 interface SessionPersistenceResult {
   readonly sessionStore: SessionStore;
-  readonly session: import("@devagent/core").Session;
+  readonly session: import("@devagent/runtime").Session;
   readonly initialMessages: Message[] | undefined;
   readonly resumeBriefing: TurnBriefing | undefined;
   readonly eventLogger: EventLogger | null;
@@ -968,7 +795,7 @@ async function setupSessionPersistence(
   // This prevents accumulated history from degrading LLM accuracy (Manager-Worker pattern).
   let initialMessages: Message[] | undefined;
   let resumeBriefing: TurnBriefing | undefined;
-  let prevSession: import("@devagent/core").Session | null = null;
+  let prevSession: import("@devagent/runtime").Session | null = null;
   if (cliArgs.resume || cliArgs.continue_) {
     prevSession = cliArgs.resume
       ? sessionStore.getSession(cliArgs.resume)
@@ -977,7 +804,7 @@ async function setupSessionPersistence(
     if (prevSession) {
       const useTurnIsolation = config.context.turnIsolation !== false;
       if (useTurnIsolation) {
-        // Synthesize briefing from prior session (both interactive AND single-query)
+        // Synthesize briefing from the prior session instead of replaying raw history.
         // This prevents accumulated history from degrading LLM accuracy.
         try {
           resumeBriefing = await synthesizeBriefing(
@@ -1017,15 +844,15 @@ async function setupSessionPersistence(
 
   // Create session record for this run
   const session = sessionStore.createSession({
-    query: cliArgs.query ?? "(interactive)",
+    query: cliArgs.query ?? "(file query)",
     provider: config.provider,
     model: config.model,
-    mode: cliArgs.mode,
+    mode: "act",
   });
 
   // ─── Disk-backed SessionState ────────────────────────────────
   // Adapter: bridge SessionStore's object-typed methods with
-  // the typed SessionStatePersistence interface from @devagent/engine.
+  // the typed SessionStatePersistence interface from @devagent/runtime.
   const sessionStatePersistence: SessionStatePersistence = {
     save: (id: string, state: SessionStateJSON) =>
       sessionStore.saveSessionState(id, state),
@@ -1171,52 +998,15 @@ export async function main(): Promise<void> {
     return;
   }
 
-  // Session commands — handle before full setup
-  if (cliArgs.sessionCommand) {
-    if (cliArgs.sessionCommand.action === "inspect") {
-      const { buildTimeline, renderTimeline } = await import("./session-inspect.js");
-      const sessionId = cliArgs.sessionCommand.sessionId;
-      if (!sessionId) {
-        process.stderr.write(red("Usage: devagent session inspect <session-id>") + "\n");
-        process.exit(1);
-      }
-      const config = loadConfig(findProjectRoot() ?? undefined);
-      const entries = EventLogger.readLog(sessionId, config.logging?.logDir);
-      if (entries.length === 0) {
-        process.stderr.write(dim(`No log found for session "${sessionId}".`) + "\n");
-        process.exit(1);
-      }
-      const timeline = buildTimeline(entries);
-      process.stdout.write(renderTimeline(timeline) + "\n");
-      return;
-    }
-    process.stderr.write(red(`Unknown session command: ${cliArgs.sessionCommand.action}`) + "\n");
-    process.exit(1);
-  }
-
   // ─── 1. Config ─────────────────────────────────────────────
   const { config, projectRoot } = await setupConfig(cliArgs);
-
-  // Detect git branch for status bar
-  let gitBranch: string | undefined;
-  try {
-    gitBranch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: projectRoot, encoding: "utf-8" }).trim();
-  } catch {
-    // Not in a git repo or git not available
-  }
-
-  // Create status bar
-  const statusBarEnabled = cliArgs.verbosity !== "quiet" && !cliArgs.noStatusBar;
-  const statusBar = new StatusBar(statusBarEnabled);
-  if (gitBranch) statusBar.update({ branch: gitBranch });
-  process.on("exit", () => statusBar.cleanup());
 
   // ─── 2. Provider ───────────────────────────────────────────
   const { provider } = setupProvider(config, cliArgs);
 
   // ─── Review Command (needs provider but not full tool setup) ──
   if (cliArgs.review) {
-    const { runReviewPipeline } = await import("@devagent/engine");
+    const { runReviewPipeline } = await import("@devagent/runtime");
     const reviewArgs = cliArgs.review;
 
     if (!reviewArgs.patchFile) {
@@ -1278,8 +1068,8 @@ export async function main(): Promise<void> {
     }
   }
 
-  // ─── 3. Tools, bus, gate, plugins, MCP, memory, checkpoints ──
-  const tools = await setupTools(config, cliArgs, projectRoot, provider, statusBar);
+  // ─── 3. Tools, bus, gate, skills, delegate, double-check ──
+  const tools = await setupTools(config, cliArgs, projectRoot, provider);
 
   // ─── 4. LSP ────────────────────────────────────────────────
   const lsp = await setupLSP(
@@ -1308,39 +1098,28 @@ export async function main(): Promise<void> {
       gate: tools.gate,
       config,
       repoRoot: projectRoot,
-      mode: cliArgs.mode,
+      mode: "act" as TaskMode,
       skills: tools.skills,
       contextManager: tools.contextManager,
-      memoryStore: tools.memoryStore,
-      checkpointManager: tools.checkpointManager,
       doubleCheck: tools.doubleCheck,
       initialMessages: persistence.initialMessages,
       verbosity: cliArgs.verbosity,
       verbosityConfig: tools.verbosityConfig,
       sessionState: tools.sessionState,
       briefing: persistence.resumeBriefing,
-      statusBar,
     };
 
-    if (cliArgs.interactive) {
-      await runInteractive({
-        ...commonOptions,
-        pluginManager: tools.pluginManager,
-        skillResolver: tools.skillResolver,
-        loadMemories: tools.loadFreshMemories,
-      });
-    } else {
-      const query = cliArgs.file
-        ? loadQueryFromFile(cliArgs.file, nodeReadFileSync, cliArgs.query)
-        : cliArgs.query;
-      if (query) {
-        await runSingleQuery({
-          ...commonOptions,
-          query,
-          memories: tools.loadFreshMemories(),
-        });
-      }
+    const query = cliArgs.file
+      ? loadQueryFromFile(cliArgs.file, nodeReadFileSync, cliArgs.query)
+      : cliArgs.query;
+    if (!query) {
+      process.stderr.write(formatError("Query required. Use `devagent \"<query>\"`, `-f <path>`, or `devagent review ...`.") + "\n");
+      process.exit(1);
     }
+    await runSingleQuery({
+      ...commonOptions,
+      query,
+    });
   } finally {
     crashSessionReporter.dispose();
 
@@ -1352,8 +1131,8 @@ export async function main(): Promise<void> {
       process.stderr.write(dim(`[lsp-usage] ${parts}`) + "\n");
     }
 
-    // Session summary (interactive mode or verbose)
-    if (cliArgs.verbosity !== "quiet" && (cliArgs.interactive || isCategoryEnabled("session", tools.verbosityConfig))) {
+    // Session summary
+    if (cliArgs.verbosity !== "quiet" && isCategoryEnabled("session", tools.verbosityConfig)) {
       const planSteps = tools.sessionState.getPlan();
       process.stderr.write(formatSessionSummary({
         sessionId: persistence.session.id,
@@ -1385,9 +1164,6 @@ export async function main(): Promise<void> {
         // Servers might already be dead
       }
     }
-    tools.pluginManager.destroy();
-    tools.mcpHub.dispose();
-    tools.memoryStore.close();
     persistence.eventLogger?.close();
     persistence.sessionStore.close();
   }
@@ -1407,7 +1183,6 @@ function setupEventHandlers(
   verbosity: Verbosity,
   verbosityConfig?: VerbosityConfig,
   os: OutputState = outputState,
-  statusBar?: StatusBar,
 ): { lspToolCounts: Map<string, number> } {
   const maxIter = config.budget.maxIterations;
   const vc = verbosityConfig ?? buildVerbosityConfig(verbosity, undefined);
@@ -1692,23 +1467,6 @@ function setupEventHandlers(
     );
   });
 
-  // ─── Status bar ──────────────────────────────────────────────
-
-  if (statusBar) {
-    bus.on("iteration:start", (event) => {
-      statusBar.update({
-        iteration: event.iteration,
-        maxIter: event.maxIterations,
-        tokens: event.estimatedTokens,
-        maxTokens: event.maxContextTokens,
-      });
-    });
-
-    bus.on("cost:update", () => {
-      statusBar.update({ cost: os.sessionTotalCost });
-    });
-  }
-
   return { lspToolCounts };
 }
 
@@ -1817,11 +1575,10 @@ function flushOutput(result: TaskLoopResult, verbosity: Verbosity, os: OutputSta
 // ─── Midpoint Callback Factory ───────────────────────────────
 
 function createMidpointCallback(opts: {
-  provider: import("@devagent/core").LLMProvider;
+  provider: import("@devagent/runtime").LLMProvider;
   mode: TaskMode;
   repoRoot: string;
   skills: SkillRegistry;
-  getMemories: () => ReadonlyArray<import("@devagent/core").Memory>;
   config: DevAgentConfig;
   getTurnNumber: () => number;
 }): MidpointCallback {
@@ -1834,8 +1591,6 @@ function createMidpointCallback(opts: {
       mode: opts.mode,
       repoRoot: opts.repoRoot,
       skills: opts.skills,
-      memories: opts.getMemories(),
-      memoryConfig: opts.config.memory,
       approvalMode: opts.config.approval.mode,
       provider: opts.config.provider,
       model: opts.config.model,
@@ -1901,16 +1656,13 @@ async function maybePreloadReviewDiff(
 async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
   const {
     query, provider, toolRegistry, bus, gate, config, repoRoot, mode,
-    skills, contextManager, memoryStore, memories, checkpointManager,
-    doubleCheck, initialMessages, verbosity, sessionState, briefing, statusBar,
+    skills, contextManager, doubleCheck, initialMessages, verbosity, sessionState, briefing,
   } = options;
 
   const systemPrompt = assembleSystemPrompt({
     mode,
     repoRoot,
     skills,
-    memories,
-    memoryConfig: config.memory,
     approvalMode: config.approval.mode,
     provider: config.provider,
     model: config.model,
@@ -1925,7 +1677,6 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     mode,
     repoRoot,
     skills,
-    getMemories: () => memories,
     config,
     getTurnNumber: () => 0,
   });
@@ -1955,15 +1706,11 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     repoRoot,
     mode,
     contextManager,
-    memoryStore,
-    checkpointManager,
     doubleCheck,
     initialMessages: effectiveInitialMessages,
     sessionState,
     midpointCallback,
   });
-
-  statusBar?.init();
   const result = await loop.run(query);
 
   // Stop spinner in case LLM finished without emitting text
@@ -1983,415 +1730,4 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
       elapsedMs: elapsed,
     }) + "\n");
   }
-}
-
-// ─── Interactive Mode ────────────────────────────────────────
-
-async function runInteractive(options: RunInteractiveOptions): Promise<void> {
-  const {
-    provider, toolRegistry, bus, gate, config, repoRoot,
-    pluginManager, skills, skillResolver, contextManager, memoryStore, loadMemories,
-    checkpointManager, doubleCheck, initialMessages, verbosity, verbosityConfig: vc,
-    sessionState, briefing: resumeBriefing, statusBar,
-  } = options;
-  let { mode } = options;
-  process.stderr.write(bold("DevAgent") + " interactive mode\n");
-  process.stderr.write(
-    dim(`Mode: ${mode} | Provider: ${config.provider} | Model: ${config.model}`) + "\n",
-  );
-
-  // Show available plugins and skills
-  const pluginNames = pluginManager.list();
-  if (pluginNames.length > 0) {
-    process.stderr.write(dim(`Plugins: ${pluginNames.join(", ")}`) + "\n");
-  }
-  if (skills.size > 0) {
-    process.stderr.write(
-      dim(`Skills: ${skills.list().map((s) => s.name).join(", ")}`) + "\n",
-    );
-  }
-
-  process.stderr.write(
-    dim('Type your query, "/commands" for commands, or "exit" to quit.') + "\n\n",
-  );
-
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: cyan("> "),
-  });
-
-  // Set up LLM-based summarization for context compaction (safety net)
-  setupSummarizeCallback(contextManager, provider, sessionState);
-
-  // ─── Turn Isolation State ──────────────────────────────
-  // Each interactive turn creates a fresh TaskLoop with a synthesized
-  // briefing instead of accumulating raw message history (Manager-Worker pattern).
-  const useTurnIsolation = config.context.turnIsolation !== false;
-  let turnNumber = resumeBriefing?.turnNumber ?? 0;
-  let currentBriefing: TurnBriefing | undefined = resumeBriefing;
-  let cumulativeCost = 0;
-  const costUnsub = bus.on("cost:update", (event) => {
-    cumulativeCost += event.totalCost;
-  });
-
-  const midpointCallback = createMidpointCallback({
-    provider,
-    mode,
-    repoRoot,
-    skills,
-    getMemories: loadMemories,
-    config,
-    getTurnNumber: () => turnNumber,
-  });
-
-  // Fallback: persistent TaskLoop when turn isolation is disabled
-  let legacyLoop: TaskLoop | null = null;
-  if (!useTurnIsolation) {
-    const systemPrompt = assembleSystemPrompt({
-      mode,
-      repoRoot,
-      skills,
-      memories: loadMemories(),
-      memoryConfig: config.memory,
-      approvalMode: config.approval.mode,
-      provider: config.provider,
-      model: config.model,
-    });
-    legacyLoop = new TaskLoop({
-      provider,
-      tools: toolRegistry,
-      bus,
-      approvalGate: gate,
-      config,
-      systemPrompt,
-      repoRoot,
-      mode,
-      contextManager,
-      memoryStore,
-      checkpointManager,
-      doubleCheck,
-      initialMessages,
-      sessionState,
-    });
-  }
-
-  statusBar?.init();
-  rl.prompt();
-
-  for await (const line of rl) {
-    let input = line.trim();
-    if (!input) {
-      rl.prompt();
-      continue;
-    }
-
-    if (input === "exit" || input === "quit" || input === "/exit") {
-      process.stderr.write(dim("Goodbye!") + "\n");
-      break;
-    }
-
-    // ─── Built-in CLI Commands ─────────────────────────────
-    if (input === "/plan") {
-      mode = "plan";
-      if (legacyLoop) legacyLoop.setMode("plan");
-      process.stderr.write(yellow("Switched to plan mode (read-only).") + "\n");
-      rl.prompt();
-      continue;
-    }
-
-    if (input === "/act") {
-      mode = "act";
-      if (legacyLoop) legacyLoop.setMode("act");
-      process.stderr.write(green("Switched to act mode.") + "\n");
-      rl.prompt();
-      continue;
-    }
-
-    if (input === "/clear") {
-      currentBriefing = undefined;
-      turnNumber = 0;
-      process.stderr.write(dim("Conversation cleared. Starting fresh.") + "\n");
-      rl.prompt();
-      continue;
-    }
-
-    if (input === "/help") {
-      process.stderr.write(bold("Interactive Commands:") + "\n");
-      process.stderr.write(`  ${cyan("/plan")}                        Switch to plan mode (read-only)\n`);
-      process.stderr.write(`  ${cyan("/act")}                         Switch to act mode\n`);
-      process.stderr.write(`  ${cyan("/clear")}                       Clear conversation history\n`);
-      process.stderr.write(`  ${cyan("/help")}                        Show this help\n`);
-      process.stderr.write(`  ${cyan("/status")}                      Show session status\n`);
-      process.stderr.write(`  ${cyan("/checkpoint list")}             List all checkpoints\n`);
-      process.stderr.write(`  ${cyan("/checkpoint restore <id>")}     Restore workspace to checkpoint\n`);
-      process.stderr.write(`  ${cyan("/checkpoint diff <id> [<id2>]")} Show changes between checkpoints\n`);
-      process.stderr.write(`  ${cyan("/skills")}                      List available skills\n`);
-      process.stderr.write(`  ${cyan("/<skill-name> [args]")}         Invoke a skill by name\n`);
-      process.stderr.write(`  ${cyan("/commands")}                    List plugin commands\n`);
-      process.stderr.write(`  ${cyan("exit")}                         Quit\n`);
-      rl.prompt();
-      continue;
-    }
-
-    if (input === "/status") {
-      const checkpoints = checkpointManager.list();
-      const memories = loadMemories();
-      process.stderr.write(bold("Session Status:") + "\n");
-      process.stderr.write(`  Provider:     ${cyan(config.provider)}  Model: ${cyan(config.model)}\n`);
-      process.stderr.write(`  Mode:         ${mode === "plan" ? yellow("plan (read-only)") : green("act")}\n`);
-      process.stderr.write(`  Turn:         ${turnNumber}\n`);
-      process.stderr.write(`  Approval:     ${config.approval.mode}\n`);
-      process.stderr.write(`  Checkpoints:  ${checkpoints.length}\n`);
-      process.stderr.write(`  Memories:     ${memories.length}\n`);
-      rl.prompt();
-      continue;
-    }
-
-    if (input.startsWith("/checkpoint")) {
-      const parts = input.split(/\s+/);
-      const subCmd = parts[1] ?? "";
-
-      if (subCmd === "list") {
-        const checkpoints = checkpointManager.list();
-        if (checkpoints.length === 0) {
-          process.stderr.write(dim("No checkpoints yet. Checkpoints are created automatically after file edits.") + "\n");
-        } else {
-          process.stderr.write(bold("Checkpoints:") + "\n");
-          for (const cp of checkpoints) {
-            const time = new Date(cp.timestamp).toLocaleTimeString();
-            process.stderr.write(`  ${cyan(cp.id)}  ${dim(time)}  ${cp.description}\n`);
-          }
-        }
-        rl.prompt();
-        continue;
-      }
-
-      if (subCmd === "restore" && parts[2]) {
-        const cpId = parts[2];
-        try {
-          const success = checkpointManager.restore(cpId);
-          if (success) {
-            process.stderr.write(green(`Restored workspace to checkpoint ${cpId}.`) + "\n");
-          } else {
-            process.stderr.write(yellow(`No changes to restore (workspace matches ${cpId}).`) + "\n");
-          }
-        } catch (err) {
-          const msg = extractErrorMessage(err);
-          process.stderr.write(formatError(`Checkpoint restore failed: ${msg}`) + "\n");
-        }
-        rl.prompt();
-        continue;
-      }
-
-      if (subCmd === "diff" && parts[2]) {
-        const fromId = parts[2];
-        const toId = parts[3] ?? undefined;
-        try {
-          const diffOutput = checkpointManager.diff(fromId, toId);
-          if (diffOutput.length === 0) {
-            process.stderr.write(dim("No differences.") + "\n");
-          } else {
-            process.stderr.write(diffOutput + "\n");
-          }
-        } catch (err) {
-          const msg = extractErrorMessage(err);
-          process.stderr.write(formatError(`Checkpoint diff failed: ${msg}`) + "\n");
-        }
-        rl.prompt();
-        continue;
-      }
-
-      // /checkpoint with no valid subcommand — show usage
-      process.stderr.write(bold("Checkpoint commands:") + "\n");
-      process.stderr.write(`  ${cyan("/checkpoint list")}             List all checkpoints\n`);
-      process.stderr.write(`  ${cyan("/checkpoint restore <id>")}     Restore workspace to checkpoint\n`);
-      process.stderr.write(`  ${cyan("/checkpoint diff <id> [<id2>]")} Show changes between checkpoints\n`);
-      rl.prompt();
-      continue;
-    }
-
-    if (input === "/commands") {
-      const cmds = pluginManager.listCommands();
-      if (cmds.length === 0) {
-        process.stderr.write(dim("No plugin commands available.") + "\n");
-      } else {
-        process.stderr.write(bold("Available commands:") + "\n");
-        for (const cmd of cmds) {
-          process.stderr.write(`  ${cyan("/" + cmd.name)} ${dim("—")} ${cmd.description} ${dim(`(${cmd.plugin})`)}` + "\n");
-        }
-      }
-      rl.prompt();
-      continue;
-    }
-
-    if (input === "/skills") {
-      const skillList = skills.list();
-      if (skillList.length === 0) {
-        process.stderr.write(dim("No skills discovered. Add skills as <name>/SKILL.md directories in .devagent/skills/") + "\n");
-      } else {
-        process.stderr.write(bold("Available skills:") + "\n");
-        for (const skill of skillList) {
-          process.stderr.write(`  ${cyan(skill.name)} ${dim("—")} ${skill.description} ${dim(`(${skill.source})`)}` + "\n");
-        }
-      }
-      rl.prompt();
-      continue;
-    }
-
-    // ─── Plugin Commands ──────────────────────────────────
-    if (input.startsWith("/")) {
-      const spaceIdx = input.indexOf(" ");
-      const cmdName = spaceIdx > 0 ? input.substring(1, spaceIdx) : input.substring(1);
-      const cmdArgs = spaceIdx > 0 ? input.substring(spaceIdx + 1) : "";
-
-      if (pluginManager.hasCommand(cmdName)) {
-        try {
-          const result = await pluginManager.executeCommand(cmdName, cmdArgs);
-          process.stderr.write(result + "\n");
-        } catch (err) {
-          const msg = extractErrorMessage(err);
-          process.stderr.write(formatError(`Command error: ${msg}`) + "\n");
-        }
-        rl.prompt();
-        continue;
-      }
-
-      // ─── Skill Commands ──────────────────────────────────
-      if (skills.has(cmdName)) {
-        try {
-          const skill = await skills.load(cmdName);
-          const resolved = await skillResolver.resolve(skill, cmdArgs, {
-            sessionId: "interactive",
-            allowShellPreprocess: skill.source === "project",
-          });
-          // Inject resolved skill instructions as the next user message to the LLM
-          input = `[Skill: ${cmdName}]\n\n${resolved.resolvedInstructions}${cmdArgs ? `\n\nArguments: ${cmdArgs}` : ""}`;
-          // Fall through to LLM query processing below
-        } catch (err) {
-          const msg = extractErrorMessage(err);
-          process.stderr.write(formatError(`Skill error: ${msg}`) + "\n");
-          rl.prompt();
-          continue;
-        }
-      } else {
-        // Unknown slash command
-        process.stderr.write(
-          yellow(`Unknown command: /${cmdName}. Use /help to see available commands.`) + "\n",
-        );
-        rl.prompt();
-        continue;
-      }
-    }
-
-    // ─── LLM Query ────────────────────────────────────────
-    try {
-      outputState.resetTurn();
-      const turnStart = Date.now();
-      let result: TaskLoopResult;
-
-      if (useTurnIsolation) {
-        // ─── Turn Isolation Mode ──────────────────────────
-        // Fresh TaskLoop per turn — no accumulated raw history.
-        // The briefing from the prior turn provides continuity.
-        turnNumber++;
-
-        // Turn separator header
-        if (verbosity !== "quiet") {
-          const tokenInfo = outputState.currentTokens > 0
-            ? { estimated: outputState.currentTokens, max: outputState.maxContextTokens }
-            : undefined;
-          const costInfoData = cumulativeCost > 0
-            ? { totalCost: cumulativeCost }
-            : undefined;
-          process.stderr.write(
-            "\n" + formatTurnHeader(turnNumber, tokenInfo, costInfoData) + "\n",
-          );
-        }
-
-        const turnSystemPrompt = assembleSystemPrompt({
-          mode,
-          repoRoot,
-          skills,
-          memories: loadMemories(),
-          memoryConfig: config.memory,
-          approvalMode: config.approval.mode,
-          provider: config.provider,
-          model: config.model,
-          briefing: currentBriefing,
-        });
-
-        const turnLoop = new TaskLoop({
-          provider,
-          tools: toolRegistry,
-          bus,
-          approvalGate: gate,
-          config,
-          systemPrompt: turnSystemPrompt,
-          repoRoot,
-          mode,
-          contextManager,
-          memoryStore,
-          checkpointManager,
-          doubleCheck,
-          midpointCallback,
-          sessionState,
-        });
-
-        result = await turnLoop.run(input);
-
-        // Synthesize briefing for the next turn (proactive, between-turn)
-        try {
-          currentBriefing = await synthesizeBriefing(
-            result.messages,
-            turnNumber,
-            {
-              strategy: config.context.briefingStrategy ?? "auto",
-              provider,
-            },
-          );
-        } catch {
-          // Non-fatal: next turn starts without briefing
-          if (verbosity !== "quiet") {
-            process.stderr.write(
-              dim("[briefing] Synthesis failed — next turn starts without prior context") + "\n",
-            );
-          }
-          currentBriefing = undefined;
-        }
-      } else {
-        // ─── Legacy Mode (turn isolation disabled) ────────
-        // Single persistent TaskLoop across all turns.
-        legacyLoop!.resetIterations();
-        result = await legacyLoop!.run(input);
-      }
-
-      // Stop spinner in case LLM finished without emitting text
-      spinner.stop();
-
-      // Flush buffered final response to stdout
-      flushOutput(result, verbosity);
-
-      if (verbosity !== "quiet") {
-        const elapsed = Date.now() - turnStart;
-        process.stderr.write(formatTurnSummary({
-          iterationCount: result.iterations,
-          toolCallCount: outputState.turnToolCallCount,
-          inputTokens: outputState.turnInputTokens,
-          outputTokens: outputState.turnOutputTokens,
-          costDelta: outputState.turnCostDelta,
-          elapsedMs: elapsed,
-        }) + "\n");
-      }
-    } catch (err) {
-      spinner.stop();
-      const msg = extractErrorMessage(err);
-      process.stderr.write(formatError(msg) + "\n");
-    }
-
-    rl.prompt();
-  }
-
-  costUnsub();
-  rl.close();
 }

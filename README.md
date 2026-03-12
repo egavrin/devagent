@@ -1,6 +1,6 @@
 # DevAgent
 
-A local coding agent for codebase exploration, implementation, review, and machine execution.
+A local coding agent centered on single-shot execution, review, and machine orchestration.
 
 ## Maturity
 
@@ -30,6 +30,9 @@ devagent auth login
 ```bash
 devagent "fix failing tests in the CLI"
 devagent "review my last commit for issues"
+devagent --resume <session-id> "finish the verification step"
+devagent --continue "address the remaining review findings"
+devagent review patch.diff --rule rules/security.md
 ```
 
 ### Machine execution contract
@@ -57,15 +60,25 @@ devagent --provider chatgpt --model gpt-5.4 "review the last diff"
 ```text
 packages/
   cli/        # Terminal CLI entry point (bin: devagent)
-  core/       # Types, config, events, approval gate, session management
+  runtime/    # Consolidated runtime: core types/config, task loop, review, tools
   executor/   # SDK request execution mode for runner/hub orchestration
-  engine/     # TaskLoop, agents, orchestration, review pipeline, plugins
-  tools/      # Tool registry, builtins, LSP, MCP support
   providers/  # LLM provider abstraction (Anthropic, OpenAI, Ollama, ChatGPT)
   arkts/      # ArkTS linter support
 models/       # LLM provider config files (TOML)
 prompts/      # Shared prompt templates
 ```
+
+## Supported CLI surface
+
+- `devagent "<query>"`
+- `devagent review <patch> --rule <rule_file> [--json]`
+- `devagent execute --request <request.json> --artifact-dir <path>`
+- `devagent auth login|status|logout`
+- `--resume <session-id>`
+- `--continue`
+
+DevAgent no longer exposes chat/TUI mode, public plan mode, plugins, MCP, or internal checkpoints.
+Sessions remain supported for continuation and debugging, and workspace rollback is delegated to Git.
 
 ## Development
 

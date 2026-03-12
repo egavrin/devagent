@@ -4,7 +4,7 @@
  * All output goes to stderr (stdout reserved for LLM content).
  */
 
-import type { VerbosityConfig } from "@devagent/core";
+import type { VerbosityConfig } from "@devagent/runtime";
 
 // ─── Color Helpers ──────────────────────────────────────────
 
@@ -191,7 +191,7 @@ export function summarizeToolParams(name: string, params: Record<string, unknown
       return "";
 
     default:
-      // For unknown tools (MCP, plugins), show first string param
+      // For unknown tools, show the first string parameter.
       for (const value of Object.values(params)) {
         if (typeof value === "string" && value.length > 0) {
           return truncate(value, 40);

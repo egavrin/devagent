@@ -3,8 +3,8 @@
  * previously scattered across module-level `let` declarations in main.ts.
  *
  * Two tiers of counters:
- *   - **Per-turn**: reset at the start of each user query / interactive turn.
- *   - **Per-session**: accumulate across every turn in the CLI session.
+ *   - **Per-query**: reset at the start of each user query.
+ *   - **Per-session**: accumulate across resumed or related CLI queries.
  *
  * Also owns the text-buffering state used to defer streamed assistant output
  * until we know whether tool calls follow (thinking text) or not (final response).
@@ -60,7 +60,7 @@ export class OutputState {
 
   // ─── Methods ────────────────────────────────────────────────
 
-  /** Reset per-turn counters at the start of each query / interactive turn. */
+  /** Reset per-query counters at the start of each query. */
   resetTurn(): void {
     this.currentIteration = 0;
     this.hadToolCalls = false;

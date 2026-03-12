@@ -1,0 +1,35 @@
+{
+  "name": "@devagent/runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./builtins/patch-parser": {
+      "import": "./dist/tools/builtins/patch-parser.js",
+      "types": "./dist/tools/builtins/patch-parser.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc && mkdir -p dist/engine/prompts && cp src/engine/prompts/*.md dist/engine/prompts/",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src/",
+    "lint:arkts": "eslint --config eslint.arkts.cjs src/",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "smol-toml": "^1.3.0",
+    "vscode-jsonrpc": "^8.2.1",
+    "vscode-languageserver-protocol": "^3.17.5"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -110,17 +110,6 @@ When tools fail:
 - Inspect stderr before stdout — the earliest stderr line is usually the root cause;
   later errors are often cascading.
 
-## Memory Tools
-
-Use memory tools intentionally:
-- `memory_recall`: check relevant past lessons before deep work in unfamiliar areas.
-- `memory_store`: persist high-value, reusable findings.
-- `memory_list`: audit stored memory state.
-- `memory_delete`: remove outdated or incorrect memories.
-
-Quality gate for storing memory: only store information that will likely improve a
-future session's behavior.
-
 ## Delegate Tool
 
 If `delegate` is available, use it for specialized sub-work:

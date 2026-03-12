@@ -11,9 +11,9 @@ import {
   LSPRouter,
   LANGUAGE_MAP,
 } from "./double-check-wiring.js";
-import type { LSPClient } from "@devagent/tools";
-import { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS } from "@devagent/engine";
-import { EventBus } from "@devagent/core";
+import type { LSPClient } from "@devagent/runtime";
+import { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS } from "@devagent/runtime";
+import { EventBus } from "@devagent/runtime";
 
 // ─── Language Detection ──────────────────────────────────────
 

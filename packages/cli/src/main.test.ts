@@ -5,12 +5,12 @@ import { loadQueryFromFile, parseArgs, renderHelpText } from "./main.js";
 describe("parseArgs", () => {
   it("parses --file <path>", () => {
     expect(parseArgs(["node", "devagent", "--file", "task.md"]))
-      .toMatchObject({ file: "task.md", query: null, interactive: false });
+      .toMatchObject({ file: "task.md", query: null });
   });
 
   it("parses -f <path> with other flags", () => {
     expect(parseArgs(["node", "devagent", "-f", "task.md", "--full-auto", "--provider", "openai"]))
-      .toMatchObject({ file: "task.md", provider: "openai", query: null, interactive: false });
+      .toMatchObject({ file: "task.md", provider: "openai", query: null });
   });
 });
 
@@ -49,5 +49,12 @@ describe("loadQueryFromFile", () => {
 describe("renderHelpText", () => {
   it("includes the file flag", () => {
     expect(renderHelpText()).toContain("-f, --file <path>    Read query from file");
+  });
+
+  it("does not advertise removed interactive or plan surfaces", () => {
+    const help = renderHelpText();
+    expect(help).not.toContain("devagent chat");
+    expect(help).not.toContain("--plan");
+    expect(help).not.toContain("session inspect");
   });
 });

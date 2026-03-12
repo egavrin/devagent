@@ -3,10 +3,10 @@
  * the DevAgent DoubleCheck diagnostic pipeline.
  *
  * Uses structural typing to match the DiagnosticProvider signature
- * from @devagent/engine without importing it (avoids circular deps).
+ * from @devagent/runtime without importing it (avoids circular deps).
  */
 
-import type { ArkTSConfig } from "@devagent/core";
+import type { ArkTSConfig } from "@devagent/runtime";
 import { ArkTSLinter, isTsLinterAvailable } from "./linter.js";
 import { mapSeverity } from "./rules.js";
 

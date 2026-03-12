@@ -58,7 +58,10 @@ File pattern that scopes which files the rule applies to. Supports:
 
 - `**/*.ts` — all TypeScript files
 - `src/**/*.test.ts` — only test files under src/
-- `packages/core/**` — all files in core package
+- `packages/runtime/**` — all files in the consolidated runtime package
+- `packages/runtime/src/core/**` — runtime core/config/types only
+- `packages/runtime/src/engine/**` — task loop, review, and subagent logic
+- `packages/runtime/src/tools/**` — built-in tools and LSP integration
 - `regex:.*\.(ts|js)$` — custom regex (prefix with `regex:`)
 - Multiple patterns separated by commas: `**/*.ts, **/*.js`
 
@@ -128,9 +131,9 @@ The `--json` flag outputs structured results for inspection:
 |------|---------|-------|
 | no-silent-catch | Empty catch blocks, caught-and-ignored errors | `**/*.ts` |
 | no-any-cast | `as any` type assertions | `**/*.ts` |
-| fail-fast | Defensive fallbacks, best-effort returns | `packages/**/*.ts` |
-| test-coverage | Functions without corresponding test | `packages/*/src/*.ts` |
-| proper-errors | Raw `throw new Error()` instead of `DevAgentError` hierarchy | `packages/**/*.ts` |
+| fail-fast | Defensive fallbacks, best-effort returns | `packages/runtime/**/*.ts` |
+| test-coverage | Functions without corresponding test | `packages/runtime/src/**/*.ts` |
+| proper-errors | Raw `throw new Error()` instead of `DevAgentError` hierarchy | `packages/runtime/**/*.ts` |
 
 ## Severity Mapping
 

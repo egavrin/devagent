@@ -15,7 +15,8 @@ When a task changes behavior, update or add the smallest relevant test coverage.
 
 ## Package hints
 
-- `packages/core`: shared contracts, config, skills
+- `packages/runtime`: shared contracts, config, task loop, review, tools, skills
 - `packages/executor`: machine execution mode
-- `packages/engine`: task loop, judges, planning
-- `packages/cli`: user and machine entrypoints
+- `packages/cli`: human entrypoint and prompt assembly
+- `packages/providers`: LLM provider adapters
+- `packages/arkts`: ArkTS lint and diagnostics integration
