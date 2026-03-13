@@ -28,24 +28,46 @@ async function createRequest(overrides: RequestOverrides = {}): Promise<{
   await mkdir(artifactDir, { recursive: true });
   const requestPath = join(root, "request.json");
   const taskType = overrides.taskType ?? "plan";
+  const workspaceId = "workspace-1";
+  const repositoryId = "repo-1";
   await writeFile(requestPath, JSON.stringify({
     protocolVersion: "0.1",
     taskId: "task-123",
     taskType,
-    project: {
-      id: "org/repo",
+    workspaceRef: {
+      id: workspaceId,
       name: "repo",
+      provider: "github",
+      primaryRepositoryId: repositoryId,
     },
+    repositories: [{
+      id: repositoryId,
+      workspaceId,
+      alias: "primary",
+      name: "repo",
+      repoRoot: root,
+      repoFullName: "org/repo",
+      defaultBranch: "main",
+      provider: "github",
+    }],
     workItem: {
+      id: "issue-42",
       kind: "github-issue",
       externalId: "42",
       title: "Test execute",
+      repositoryId,
     },
-    workspace: {
-      sourceRepoPath: root,
-      workBranch: "test/execute",
-      isolation: "temp-copy",
+    execution: {
+      primaryRepositoryId: repositoryId,
+      repositories: [{
+        repositoryId,
+        alias: "primary",
+        sourceRepoPath: root,
+        workBranch: "test/execute",
+        isolation: "temp-copy",
+      }],
     },
+    targetRepositoryIds: [repositoryId],
     executor: {
       executorId: "devagent",
       provider: "chatgpt",
@@ -55,6 +77,14 @@ async function createRequest(overrides: RequestOverrides = {}): Promise<{
     constraints: {
       verifyCommands: overrides.verifyCommands,
       allowNetwork: overrides.allowNetwork ?? true,
+    },
+    capabilities: {
+      canSyncTasks: true,
+      canCreateTask: true,
+      canComment: true,
+      canReview: true,
+      canMerge: true,
+      canOpenReviewable: true,
     },
     context: {
       summary: "Test execute path",
