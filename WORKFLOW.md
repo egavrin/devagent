@@ -14,11 +14,30 @@ runner:
   model: gpt-5.4
   approval_mode: auto-edit
   max_iterations: 60
+profiles:
+  default:
+    bin: "devagent"
+    provider: chatgpt
+    model: gpt-5.4
+    approval_mode: auto-edit
+  reviewer:
+    bin: "devagent"
+    provider: chatgpt
+    model: gpt-5.4
+    approval_mode: auto-edit
+  repair:
+    bin: "devagent"
+    provider: chatgpt
+    model: gpt-5.4
+    approval_mode: auto-edit
 roles:
-  triage: architect
-  plan: architect
-  implement: general
+  triage: default
+  plan: default
+  implement: default
+  verify: default
   review: reviewer
+  repair: repair
+  gate: default
 verify:
   commands:
     - "bun run lint"

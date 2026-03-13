@@ -13,8 +13,14 @@
     "skipLibCheck": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
-    "outDir": "dist",
-    "rootDir": "src"
-  }
+    "sourceMap": true
+  },
+  "files": [],
+  "references": [
+    { "path": "./packages/arkts" },
+    { "path": "./packages/providers" },
+    { "path": "./packages/runtime" },
+    { "path": "./packages/executor" },
+    { "path": "./packages/cli" }
+  ]
 }
