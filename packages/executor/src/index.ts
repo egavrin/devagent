@@ -13,6 +13,8 @@ import {
   PROTOCOL_VERSION,
   type ArtifactKind,
   type ArtifactRef,
+  type RepositoryRef,
+  type ReviewableRef,
   type TaskExecutionEvent,
   type TaskExecutionRequest,
   type TaskExecutionResult,
@@ -52,6 +54,54 @@ export interface ExecuteTaskOptions {
     requestedSkills?: string[];
   }) => Promise<WorkflowQueryResult>;
   emit: (event: TaskExecutionEvent) => void;
+}
+
+function primaryRepositoryForRequest(request: TaskExecutionRequest): RepositoryRef | undefined {
+  return request.repositories.find((repository) => repository.id === request.workspaceRef.primaryRepositoryId);
+}
+
+function buildRepositoryContext(request: TaskExecutionRequest): string[] {
+  const repositoryNames = request.repositories.map((repository) => {
+    const role = repository.id === request.workspaceRef.primaryRepositoryId ? "primary" : "secondary";
+    return `- ${repository.alias} (${role}): ${repository.repoRoot}`;
+  });
+
+  const targetRepositories = request.targetRepositoryIds
+    .map((targetId) => request.repositories.find((repository) => repository.id === targetId))
+    .filter((repository): repository is RepositoryRef => Boolean(repository))
+    .map((repository) => repository.alias);
+
+  const lines = [
+    `Workspace: ${request.workspaceRef.name}`,
+    `Workspace provider: ${request.workspaceRef.provider}`,
+  ];
+
+  if (repositoryNames.length) {
+    lines.push(`Repositories:\n${repositoryNames.join("\n")}`);
+  }
+
+  if (targetRepositories.length) {
+    lines.push(`Target repositories: ${targetRepositories.join(", ")}`);
+  }
+
+  return lines;
+}
+
+function buildReviewableContext(reviewable: ReviewableRef | undefined): string[] {
+  if (!reviewable) {
+    return [];
+  }
+
+  const lines = [
+    `Review target: ${reviewable.type} ${reviewable.externalId}`,
+  ];
+  if (reviewable.title) {
+    lines.push(`Review title: ${reviewable.title}`);
+  }
+  if (reviewable.url) {
+    lines.push(`Review URL: ${reviewable.url}`);
+  }
+  return lines;
 }
 
 export interface VerifyCommandRun {
@@ -199,6 +249,7 @@ export async function resolveRequestedSkills(
   repoRoot: string,
   requestedSkills: string[] | undefined,
   sessionId: string,
+  onWarning?: (message: string) => void,
 ): Promise<ResolvedRequestedSkill[]> {
   if (!requestedSkills?.length) {
     return [];
@@ -211,17 +262,22 @@ export async function resolveRequestedSkills(
 
   const resolved: ResolvedRequestedSkill[] = [];
   for (const skillName of requestedSkills) {
-    const skill = await registry.load(skillName);
-    const loaded = await resolver.resolve(skill, "", {
-      sessionId,
-      allowShellPreprocess: skill.source === "project",
-    });
-    resolved.push({
-      name: loaded.name,
-      description: loaded.description,
-      source: loaded.source,
-      instructions: loaded.resolvedInstructions,
-    });
+    try {
+      const skill = await registry.load(skillName);
+      const loaded = await resolver.resolve(skill, "", {
+        sessionId,
+        allowShellPreprocess: skill.source === "project",
+      });
+      resolved.push({
+        name: loaded.name,
+        description: loaded.description,
+        source: loaded.source,
+        instructions: loaded.resolvedInstructions,
+      });
+    } catch (error) {
+      const message = `Requested skill "${skillName}" could not be loaded and will be skipped: ${extractErrorMessage(error)}`;
+      onWarning?.(message);
+    }
   }
 
   return resolved;
@@ -231,10 +287,25 @@ export function buildTaskQuery(
   request: TaskExecutionRequest,
   resolvedSkills: ResolvedRequestedSkill[] = [],
 ): string {
+  const primaryRepository = primaryRepositoryForRequest(request);
+  const workItemLabel = request.workItem.kind === "local-task" ? "Task" : "Issue";
   const lines = [
     `Task type: ${request.taskType}`,
-    `Issue: ${request.workItem.title ?? request.workItem.externalId}`,
+    `${workItemLabel}: ${request.workItem.title ?? request.workItem.externalId}`,
   ];
+
+  if (request.workItem.kind === "local-task") {
+    lines.push("Task source: local/manual");
+  } else {
+    lines.push(`Task source: ${request.workItem.kind}`);
+  }
+
+  if (primaryRepository) {
+    lines.push(`Primary repository: ${primaryRepository.alias} (${primaryRepository.repoRoot})`);
+  }
+
+  lines.push(...buildRepositoryContext(request));
+  lines.push(...buildReviewableContext(request.reviewable));
 
   if (request.context.summary) lines.push(`Summary: ${request.context.summary}`);
   if (request.context.issueBody) lines.push(`Issue body:\n${request.context.issueBody}`);
@@ -479,7 +550,21 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<TaskExec
   });
 
   try {
-    const resolvedSkills = await resolveRequestedSkills(repoRoot, request.context.skills, request.taskId);
+    const resolvedSkills = await resolveRequestedSkills(
+      repoRoot,
+      request.context.skills,
+      request.taskId,
+      (message) => {
+        emit({
+          protocolVersion: PROTOCOL_VERSION,
+          type: "log",
+          at: new Date().toISOString(),
+          taskId: request.taskId,
+          stream: "stderr",
+          message,
+        });
+      },
+    );
     if (resolvedSkills.length) {
       emit({
         protocolVersion: PROTOCOL_VERSION,

@@ -19,17 +19,46 @@ import {
 } from "./index.js";
 
 function createRequest(taskType: TaskExecutionRequest["taskType"]): TaskExecutionRequest {
+  const workspaceId = "workspace-1";
+  const repositoryId = "repo-1";
   return {
     protocolVersion: PROTOCOL_VERSION,
     taskId: `task-${taskType}`,
     taskType,
-    project: { id: "p1", name: "repo" },
-    workItem: { kind: "github-issue", externalId: "42", title: "Refactor runner" },
-    workspace: {
-      sourceRepoPath: "/tmp/repo",
-      workBranch: `devagent/${taskType}/task-${taskType}`,
-      isolation: "temp-copy",
+    workspaceRef: {
+      id: workspaceId,
+      name: "Executor Workspace",
+      provider: "github",
+      primaryRepositoryId: repositoryId,
     },
+    repositories: [{
+      id: repositoryId,
+      workspaceId,
+      alias: "primary",
+      name: "repo",
+      repoRoot: "/tmp/repo",
+      repoFullName: "example/repo",
+      defaultBranch: "main",
+      provider: "github",
+    }],
+    workItem: {
+      id: "item-42",
+      kind: "github-issue",
+      externalId: "42",
+      title: "Refactor runner",
+      repositoryId,
+    },
+    execution: {
+      primaryRepositoryId: repositoryId,
+      repositories: [{
+        repositoryId,
+        alias: "primary",
+        sourceRepoPath: "/tmp/repo",
+        workBranch: `devagent/${taskType}/task-${taskType}`,
+        isolation: "temp-copy",
+      }],
+    },
+    targetRepositoryIds: [repositoryId],
     executor: {
       executorId: "devagent",
       provider: "chatgpt",
@@ -39,6 +68,14 @@ function createRequest(taskType: TaskExecutionRequest["taskType"]): TaskExecutio
     },
     constraints: {
       maxIterations: 5,
+    },
+    capabilities: {
+      canSyncTasks: true,
+      canCreateTask: true,
+      canComment: true,
+      canReview: true,
+      canMerge: true,
+      canOpenReviewable: true,
     },
     context: {
       summary: `Handle ${taskType}`,
@@ -122,6 +159,21 @@ describe("skills", () => {
     await rm(repoRoot, { recursive: true, force: true });
   });
 
+  it("skips missing requested skills instead of failing resolution", async () => {
+    const repoRoot = await createRepoRoot();
+
+    const warnings: string[] = [];
+    const resolved = await resolveRequestedSkills(repoRoot, ["testing"], "session-1", (message) => {
+      warnings.push(message);
+    });
+
+    expect(resolved).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/Requested skill "testing" could not be loaded and will be skipped/i);
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
   it("injects resolved skill instructions into the task query", () => {
     const query = buildTaskQuery(createRequest("plan"), [
       {
@@ -133,6 +185,59 @@ describe("skills", () => {
     ]);
     expect(query).toContain("Requested skills");
     expect(query).toContain("Check the test suite.");
+    expect(query).toContain("Workspace: Executor Workspace");
+    expect(query).toContain("Target repositories: primary");
+  });
+
+  it("includes imported reviewable context in the task query", () => {
+    const request = createRequest("review");
+    request.reviewable = {
+      id: "review-1",
+      provider: "github",
+      type: "github-pr",
+      externalId: "123",
+      title: "Stabilize multi-repo runner",
+      url: "https://github.com/example/repo/pull/123",
+      repositoryId: "repo-1",
+    };
+
+    const query = buildTaskQuery(request);
+
+    expect(query).toContain("Review target: github-pr 123");
+    expect(query).toContain("Review title: Stabilize multi-repo runner");
+  });
+
+  it("emits a warning log and continues when a requested skill is missing", async () => {
+    const repoRoot = await createRepoRoot();
+    const artifactDir = join(repoRoot, "artifacts");
+    await mkdir(artifactDir, { recursive: true });
+
+    const events: TaskExecutionEvent[] = [];
+    const request = createRequest("plan");
+    request.context.skills = ["testing"];
+
+    const result = await executeTask({
+      request,
+      artifactDir,
+      repoRoot,
+      emit: (event) => {
+        events.push(event);
+      },
+      runQuery: async () => ({
+        success: true,
+        responseText: "<final_artifact>Plan complete.</final_artifact>",
+        iterations: 1,
+      }),
+    });
+
+    expect(result.status).toBe("success");
+    expect(events.some((event) =>
+      event.type === "log" &&
+      event.stream === "stderr" &&
+      event.message.includes('Requested skill "testing" could not be loaded and will be skipped'),
+    )).toBe(true);
+
+    await rm(repoRoot, { recursive: true, force: true });
   });
 });
 
