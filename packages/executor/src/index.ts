@@ -13,6 +13,7 @@ import {
   PROTOCOL_VERSION,
   type ArtifactKind,
   type ArtifactRef,
+  type ContinuationSession,
   type RepositoryRef,
   type ReviewableRef,
   type TaskExecutionEvent,
@@ -36,6 +37,9 @@ export interface WorkflowQueryResult {
   success: boolean;
   responseText: string;
   iterations: number;
+  session?: ContinuationSession;
+  outcome?: TaskExecutionResult["outcome"];
+  outcomeReason?: TaskExecutionResult["outcomeReason"];
 }
 
 export interface ExecuteTaskOptions {
@@ -52,6 +56,7 @@ export interface ExecuteTaskOptions {
     reasoning?: string;
     eventsPath: string;
     requestedSkills?: string[];
+    continuation?: TaskExecutionRequest["continuation"];
   }) => Promise<WorkflowQueryResult>;
   emit: (event: TaskExecutionEvent) => void;
 }
@@ -116,6 +121,25 @@ type TaskLoopEnvelope = {
   result?: string;
   responseText?: string;
 };
+
+function classifyFailedWorkflowResult(result: WorkflowQueryResult): TaskExecutionResult["outcomeReason"] | undefined {
+  if (result.outcomeReason) {
+    return result.outcomeReason;
+  }
+  return undefined;
+}
+
+function classifySuccessArtifactOutcome(content: string): Pick<TaskExecutionResult, "outcome" | "outcomeReason"> {
+  if (content.trim().length === 0) {
+    return {
+      outcome: "no_progress",
+      outcomeReason: "empty_artifact",
+    };
+  }
+  return {
+    outcome: "completed",
+  };
+}
 
 const PREFERRED_VERIFY_PATHS = [
   "/opt/homebrew/bin",
@@ -332,9 +356,13 @@ export function buildTaskQuery(
 
   switch (request.taskType) {
     case "triage":
+      lines.push("Workspace is analysis-only for triage. No file changes are allowed.");
+      lines.push("Do not run project verification commands unless the request explicitly requires them.");
       lines.push("Produce a concise triage report covering issue understanding, impact area, risks, unknowns, and next step.");
       break;
     case "plan":
+      lines.push("Workspace is planning-only for plan. No file changes are allowed.");
+      lines.push("Do not run project verification commands unless the request explicitly requires them.");
       lines.push("Produce a concise implementation plan covering steps, affected files/components, test strategy, and rollback/risk notes.");
       break;
     case "implement":
@@ -429,12 +457,16 @@ export async function writeTaskResult(
   startedAt: string,
   artifacts: ArtifactRef[],
   error?: TaskExecutionResult["error"],
+  metadata: Pick<TaskExecutionResult, "session" | "outcome" | "outcomeReason"> = {},
 ): Promise<TaskExecutionResult> {
   const result: TaskExecutionResult = {
     protocolVersion: PROTOCOL_VERSION,
     taskId: request.taskId,
     status,
     artifacts,
+    session: metadata.session,
+    outcome: metadata.outcome,
+    outcomeReason: metadata.outcomeReason,
     metrics: {
       startedAt,
       finishedAt: new Date().toISOString(),
@@ -579,6 +611,9 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<TaskExec
     let artifactContent: string;
     let status: TaskExecutionResult["status"];
     let error: TaskExecutionResult["error"] | undefined;
+    let session: ContinuationSession | undefined;
+    let outcome: TaskExecutionResult["outcome"] | undefined;
+    let outcomeReason: TaskExecutionResult["outcomeReason"] | undefined;
 
     if (request.taskType === "verify") {
       const verifyResult = await executeVerifyCommands(request.constraints.verifyCommands, repoRoot, (line) => {
@@ -596,12 +631,14 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<TaskExec
       error = verifyResult.success
         ? undefined
         : { code: "EXECUTION_FAILED", message: "One or more verification commands failed" };
+      outcome = verifyResult.success ? "completed" : undefined;
     } else {
       const fakeResponse = readFakeTaskResponse(request.taskType);
       if (fakeResponse !== undefined) {
         artifactContent = fakeResponse;
         status = "success";
         error = undefined;
+        ({ outcome, outcomeReason } = classifySuccessArtifactOutcome(artifactContent));
       } else {
         const queryResult = await runQuery({
           query: buildTaskQuery(request, resolvedSkills),
@@ -613,12 +650,27 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<TaskExec
           reasoning: request.executor.reasoning,
           eventsPath: resolve(artifactDir, "engine-events.jsonl"),
           requestedSkills: request.context.skills,
+          continuation: request.continuation,
         });
         artifactContent = extractArtifactBody(queryResult.responseText);
+        session = queryResult.session;
         status = queryResult.success ? "success" : "failed";
         error = queryResult.success
           ? undefined
-          : { code: "EXECUTION_FAILED", message: "Task loop failed" };
+          : {
+            code: "EXECUTION_FAILED",
+            message: queryResult.outcomeReason === "iteration_limit"
+              ? "Task loop exhausted the iteration limit"
+              : queryResult.outcomeReason === "no_code"
+              ? "Task loop produced no final answer"
+              : "Task loop failed",
+          };
+        if (queryResult.success) {
+          ({ outcome, outcomeReason } = classifySuccessArtifactOutcome(artifactContent));
+        } else {
+          outcome = "no_progress";
+          outcomeReason = classifyFailedWorkflowResult(queryResult);
+        }
       }
     }
 
@@ -631,7 +683,19 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<TaskExec
       artifact,
     });
 
-    const result = await writeTaskResult(request, artifactDir, status, startedAt, [artifact], error);
+    const result = await writeTaskResult(
+      request,
+      artifactDir,
+      status,
+      startedAt,
+      [artifact],
+      error,
+      {
+        session,
+        outcome,
+        outcomeReason,
+      },
+    );
     emit({
       protocolVersion: PROTOCOL_VERSION,
       type: "completed",
@@ -648,6 +712,9 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<TaskExec
       startedAt,
       [],
       { code: "EXECUTION_FAILED", message: extractErrorMessage(error) },
+      {
+        outcome: "no_progress",
+      },
     );
     emit({
       protocolVersion: PROTOCOL_VERSION,

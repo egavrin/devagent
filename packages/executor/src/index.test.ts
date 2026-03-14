@@ -207,6 +207,22 @@ describe("skills", () => {
     expect(query).toContain("Review title: Stabilize multi-repo runner");
   });
 
+  it("marks triage as analysis-only and forbids verification commands by default", () => {
+    const request = createRequest("triage");
+    const query = buildTaskQuery(request);
+
+    expect(query).toContain("Workspace is analysis-only for triage. No file changes are allowed.");
+    expect(query).toContain("Do not run project verification commands unless the request explicitly requires them.");
+  });
+
+  it("marks plan as planning-only and forbids verification commands by default", () => {
+    const request = createRequest("plan");
+    const query = buildTaskQuery(request);
+
+    expect(query).toContain("Workspace is planning-only for plan. No file changes are allowed.");
+    expect(query).toContain("Do not run project verification commands unless the request explicitly requires them.");
+  });
+
   it("emits a warning log and continues when a requested skill is missing", async () => {
     const repoRoot = await createRepoRoot();
     const artifactDir = join(repoRoot, "artifacts");
@@ -377,6 +393,7 @@ describe("task execution", () => {
       });
 
       expect(result.status).toBe("success");
+      expect(result.outcome).toBe("completed");
       expect(result.artifacts).toHaveLength(1);
       expect(result.artifacts[0]?.kind).toBe(artifactInfoForTask(taskType).kind);
       expect(events.map((event) => event.type)).toContain("started");
@@ -419,6 +436,80 @@ describe("task execution", () => {
     expect(result.status).toBe("failed");
     expect(result.error?.message).toMatch(/verification commands failed/i);
     expect(events.at(-1)).toMatchObject({ type: "completed", status: "failed" });
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("passes continuation state through runQuery and persists returned session metadata", async () => {
+    const repoRoot = await createRepoRoot();
+    const artifactDir = join(repoRoot, "artifacts");
+    const request = createRequest("implement");
+    request.continuation = {
+      mode: "resume",
+      reason: "retry_no_progress",
+      instructions: "Continue the previous session and make the code change.",
+      session: {
+        kind: "devagent-headless-v1",
+        payload: {
+          version: 1,
+          messages: [],
+        },
+      },
+    };
+
+    let seenContinuation: TaskExecutionRequest["continuation"] | undefined;
+    const result = await executeTask({
+      request,
+      artifactDir,
+      repoRoot,
+      runQuery: async (options) => {
+        seenContinuation = options.continuation;
+        return {
+          success: true,
+          responseText: "Implemented the change.",
+          iterations: 2,
+          session: {
+            kind: "devagent-headless-v1",
+            payload: {
+              version: 1,
+              messages: [{ role: "assistant", content: "Implemented the change." }],
+            },
+          },
+        };
+      },
+      emit: () => {},
+    });
+
+    expect(seenContinuation?.mode).toBe("resume");
+    expect(result.status).toBe("success");
+    expect(result.session?.kind).toBe("devagent-headless-v1");
+    expect(result.outcome).toBe("completed");
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("classifies exhausted iterations as no-progress", async () => {
+    const repoRoot = await createRepoRoot();
+    const artifactDir = join(repoRoot, "artifacts");
+    const request = createRequest("plan");
+
+    const result = await executeTask({
+      request,
+      artifactDir,
+      repoRoot,
+      runQuery: async () => ({
+        success: false,
+        responseText: "Stopped after reaching the iteration limit.",
+        iterations: 6,
+        outcome: "no_progress",
+        outcomeReason: "iteration_limit",
+      }),
+      emit: () => {},
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.outcome).toBe("no_progress");
+    expect(result.outcomeReason).toBe("iteration_limit");
 
     await rm(repoRoot, { recursive: true, force: true });
   });
