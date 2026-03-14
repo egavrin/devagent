@@ -37,7 +37,10 @@ import {
   DoubleCheck,
   DEFAULT_DOUBLE_CHECK_OPTIONS,
   SessionState,
+  type Message,
+  type SessionStateJSON,
 } from "@devagent/runtime";
+import type { ContinuationSession } from "@devagent-sdk/types";
 import { assembleSystemPrompt } from "./prompts/index.js";
 import { detectProjectTestCommand } from "./test-command-detect.js";
 import { loadRepoContext, buildContextPrompt } from "./repo-context.js";
@@ -54,12 +57,55 @@ export interface WorkflowQueryOptions {
   reasoning?: string;
   eventsPath: string;
   requestedSkills?: string[];
+  continuation?: {
+    session?: ContinuationSession;
+    mode?: "fresh" | "resume";
+    reason?: string;
+    instructions?: string;
+  };
 }
 
 export interface WorkflowQueryResult {
   success: boolean;
   responseText: string;
   iterations: number;
+  session?: ContinuationSession;
+  outcome?: "completed" | "no_progress";
+  outcomeReason?: "no_code" | "iteration_limit" | "empty_artifact" | "no_repo_changes";
+}
+
+type HeadlessSessionPayload = {
+  version: 1;
+  messages: Message[];
+  sessionState?: SessionStateJSON;
+};
+
+function loadContinuationPayload(session: ContinuationSession | undefined): HeadlessSessionPayload | null {
+  if (!session || session.kind !== "devagent-headless-v1") {
+    return null;
+  }
+  const rawMessages = Array.isArray(session.payload.messages) ? session.payload.messages : null;
+  if (!rawMessages) {
+    return null;
+  }
+  return {
+    version: 1,
+    messages: rawMessages as Message[],
+    sessionState: session.payload.sessionState as SessionStateJSON | undefined,
+  };
+}
+
+function buildContinuationQuery(query: string, options: WorkflowQueryOptions["continuation"]): string {
+  if (!options || options.mode !== "resume") {
+    return query;
+  }
+  const parts = [
+    "Continue the prior session using the preserved context below.",
+    options.reason ? `Continuation reason: ${options.reason}` : "",
+    options.instructions ? `Continuation instructions:\n${options.instructions}` : "",
+    query,
+  ];
+  return parts.filter(Boolean).join("\n\n");
 }
 
 export async function setupAndRunWorkflowQuery(
@@ -123,7 +169,10 @@ export async function setupAndRunWorkflowQuery(
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
 
-  const sessionState = new SessionState(config.sessionState);
+  const previousSession = loadContinuationPayload(options.continuation?.session);
+  const sessionState = previousSession?.sessionState
+    ? SessionState.fromJSON(previousSession.sessionState, config.sessionState)
+    : new SessionState(config.sessionState);
 
   // Plan tool (minimal — no quality judgment in headless mode)
   toolRegistry.register(createPlanTool(
@@ -222,21 +271,47 @@ export async function setupAndRunWorkflowQuery(
     contextManager,
     doubleCheck,
     sessionState,
+    initialMessages: options.continuation?.mode === "resume" ? previousSession?.messages : undefined,
   });
 
   let responseText = "";
   let iterations = 0;
   let success = true;
+  let resultSession: ContinuationSession | undefined;
+  let outcome: WorkflowQueryResult["outcome"] = "completed";
+  let outcomeReason: WorkflowQueryResult["outcomeReason"] | undefined;
 
   try {
-    const result = await taskLoop.run(options.query);
+    const result = await taskLoop.run(buildContinuationQuery(options.query, options.continuation));
     responseText = result.lastText ?? "";
     iterations = result.iterations;
     success = !result.aborted;
+    resultSession = {
+      kind: "devagent-headless-v1",
+      payload: {
+        version: 1,
+        messages: result.messages,
+        sessionState: sessionState.toJSON(),
+      },
+    };
+    if (result.status === "budget_exceeded") {
+      outcome = "no_progress";
+      outcomeReason = "iteration_limit";
+      success = false;
+    } else if (result.status === "empty_response") {
+      outcome = "no_progress";
+      outcomeReason = "no_code";
+      success = false;
+    } else if (result.status === "aborted") {
+      outcome = "no_progress";
+      outcomeReason = "no_code";
+      success = false;
+    }
   } catch (err) {
     responseText = extractErrorMessage(err);
     success = false;
+    outcome = "no_progress";
   }
 
-  return { success, responseText, iterations };
+  return { success, responseText, iterations, session: resultSession, outcome, outcomeReason };
 }

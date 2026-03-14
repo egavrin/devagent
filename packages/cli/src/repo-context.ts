@@ -9,9 +9,8 @@
  * 5. Stage/path-selected skills
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { Glob } from "bun";
 
 export interface RepoContext {
   workflowMd: string | null;
@@ -65,8 +64,7 @@ export function buildContextPrompt(
   // Filter path instructions to those matching changed files
   if (ctx.pathInstructions.length > 0 && changedFiles && changedFiles.length > 0) {
     const matching = ctx.pathInstructions.filter((pi) => {
-      const glob = new Glob(pi.glob);
-      return changedFiles.some((f) => glob.match(f));
+      return changedFiles.some((f) => matchesGlob(normalizePath(f), normalizePath(pi.glob)));
     });
 
     if (matching.length > 0) {
@@ -100,9 +98,7 @@ function loadPathInstructions(repoRoot: string): PathInstruction[] {
   if (!existsSync(instructionsDir)) return [];
 
   const results: PathInstruction[] = [];
-  const glob = new Glob("**/*.instructions.md");
-
-  for (const match of glob.scanSync({ cwd: instructionsDir })) {
+  for (const match of collectInstructionFiles(instructionsDir)) {
     const filePath = join(instructionsDir, match);
     const content = readIfExists(filePath);
     if (!content) continue;
@@ -119,6 +115,71 @@ function loadPathInstructions(repoRoot: string): PathInstruction[] {
   }
 
   return results;
+}
+
+function collectInstructionFiles(rootDir: string, currentDir = rootDir): string[] {
+  const matches: string[] = [];
+
+  for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+    const fullPath = join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      matches.push(...collectInstructionFiles(rootDir, fullPath));
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".instructions.md")) {
+      matches.push(normalizePath(relative(rootDir, fullPath)));
+    }
+  }
+
+  return matches;
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+function matchesGlob(path: string, pattern: string): boolean {
+  const normalizedPattern = normalizePath(pattern);
+  const regex = new RegExp(`^${globToRegexSource(normalizedPattern)}$`);
+  return regex.test(path);
+}
+
+function globToRegexSource(pattern: string): string {
+  let source = "";
+
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index]!;
+    const next = pattern[index + 1];
+
+    if (char === "*") {
+      if (next === "*") {
+        const afterNext = pattern[index + 2];
+        if (afterNext === "/") {
+          source += "(?:.*/)?";
+          index += 2;
+        } else {
+          source += ".*";
+          index += 1;
+        }
+      } else {
+        source += "[^/]*";
+      }
+      continue;
+    }
+
+    if (char === "?") {
+      source += "[^/]";
+      continue;
+    }
+
+    source += escapeRegex(char);
+  }
+
+  return source;
+}
+
+function escapeRegex(char: string): string {
+  return /[|\\{}()[\]^$+?.]/.test(char) ? `\\${char}` : char;
 }
 
 function extractApplyTo(content: string): string | null {
