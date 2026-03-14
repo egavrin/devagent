@@ -1,11 +1,11 @@
 ---
 name: verification-checklist
-description: Pre-commit/PR verification gate — typecheck, test, build, commit format, scope review.
+description: Pre-commit/PR verification gate for DevAgent changes.
 ---
 
 # Verification Checklist
 
-Run this checklist before considering any change complete. Every step must pass.
+Run this checklist before considering a substantial change complete.
 
 ## The Checklist
 
@@ -15,7 +15,7 @@ Run this checklist before considering any change complete. Every step must pass.
 bun run typecheck
 ```
 
-**Required: zero errors.** Type errors in one package can cascade to dependents. Fix all errors before proceeding.
+Required: zero errors across the workspace.
 
 ### 2. Test Suite
 
@@ -23,12 +23,16 @@ bun run typecheck
 bun run test
 ```
 
-**Required: all tests pass.** If a test fails, it's either a regression from your change or a pre-existing issue. Either way, fix it before proceeding.
+Required: all tests pass.
 
-For faster feedback during development, run only the affected package:
+For faster local iteration, run the affected package directly:
 
 ```bash
-bun run test -- --filter <package-name>
+cd packages/runtime && bun run test
+cd packages/executor && bun run test
+cd packages/cli && bun run test
+cd packages/providers && bun run test
+cd packages/arkts && bun run test
 ```
 
 ### 3. Build
@@ -37,54 +41,53 @@ bun run test -- --filter <package-name>
 bun run build
 ```
 
-**Required: clean build.** The build is dependency-ordered (`core` → `tools`/`providers` → `engine` → `cli`). A build failure means either a type error leaked through or an import path is wrong.
+Required: clean workspace build.
 
-### 4. Commit Format
+### 4. OSS Surface Check
+
+If you changed public docs, contributor workflow, or package metadata, run:
 
 ```bash
-git log --oneline -5
+bun run check:oss
 ```
 
-Verify recent commits follow the format: `type(scope): description`
-
-Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
-Scopes: `core`, `engine`, `tools`, `providers`, `cli`, `deps`
+Required: pass without forbidden public-surface references.
 
 ### 5. Change Scope
 
 ```bash
 git diff --stat
+git status --short
 ```
 
-Review: are all changes intentional? Watch for:
-- Unrelated file modifications (accidental saves, formatting changes)
-- Missing files (forgot to stage a new file)
-- Excessive scope (change should be focused on one concern)
+Review whether the diff is focused and free of accidental generated files or unrelated edits.
 
-### 6. Security Scan
+### 6. Contract-Sensitive Review
 
-Check the diff for:
-- `.env` files or secrets in staged changes
-- API keys or tokens in code
-- Large binary files
-- `console.log` or debug statements left behind
+When applicable, inspect the nearest high-risk area:
+
+- `packages/executor/src/index.test.ts` for `devagent execute` contract changes
+- `packages/runtime/src/**/*.test.ts` for shared runtime or tool behavior
+- `packages/providers/src/*.test.ts` for provider-specific API behavior
+- `packages/cli/src/*.test.ts` for CLI surface and prompt changes
+
+### 7. Security Scan
+
+Check for secrets, unsafe command construction, and leftover debug output:
 
 ```bash
-git diff --cached --name-only | grep -E '\.(env|key|pem|cert)$'
+git diff --cached
 ```
 
-## Quick One-Liner
+Look specifically for:
 
-For a fast pass/fail check:
-
-```bash
-bun run typecheck && bun run test && bun run build && echo "All clear"
-```
+- credentials, tokens, or API keys
+- shell command concatenation with user-controlled input
+- accidental artifact or log output committed to the repo
 
 ## When to Run
 
-- Before preparing a commit
-- Before creating a pull request
-- After resolving merge conflicts
-- After rebasing onto a new base branch
-- After any change that touches multiple packages
+- before wrapping up substantial work
+- before opening or updating a PR
+- after rebasing or resolving conflicts
+- after touching multiple packages
