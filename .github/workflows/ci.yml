@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: egavrin/devagent-sdk
-          ref: main
+          ref: 0e2cc5bf8e6a3780dd49a9362c5c4fac3629709c
           path: devagent-sdk
 
       - uses: oven-sh/setup-bun@v2
