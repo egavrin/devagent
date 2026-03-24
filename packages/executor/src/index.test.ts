@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION, type TaskExecutionEvent, type TaskExecutionRequest } from "@devagent-sdk/types";
 import {
   artifactInfoForTask,
@@ -17,6 +17,137 @@ import {
   resolveRequestedSkills,
   validateExecutionCapabilities,
 } from "./index.js";
+
+function createStrictStageResponse(taskType: "breakdown" | "issue-generation"): string {
+  if (taskType === "breakdown") {
+    return JSON.stringify({
+      structured: {
+        summary: "Ordered delivery breakdown",
+        executionOrder: ["B1", "B2"],
+        tasks: [
+          {
+            id: "B1",
+            title: "Normalize input handling",
+            checklistLabel: "B1. Normalize input handling in src/cli.ts",
+            objective: "Reject blank names before rendering output.",
+            rationale: "Acceptance criteria require blank names to fail fast.",
+            grounding: {
+              designRefs: ["DesignDoc#InputValidation"],
+              repoPaths: ["src/cli.ts", "src/cli.test.ts"],
+              codeSymbols: ["parseName"],
+            },
+            dependencies: [],
+            acceptanceCriteria: ["Blank names are rejected."],
+            expectedChanges: ["Update parser.", "Add regression test."],
+            validation: ["bun test"],
+            riskNotes: [],
+            sizeBudget: {
+              maxEstimatedChangedLines: 120,
+              estimateReason: "Parser and test-only slice.",
+            },
+          },
+          {
+            id: "B2",
+            title: "Add JSON output",
+            checklistLabel: "B2. Add JSON output in src/render.ts",
+            objective: "Expose a machine-readable greeting format.",
+            rationale: "Acceptance criteria require JSON mode.",
+            grounding: {
+              designRefs: ["DesignDoc#OutputContract"],
+              repoPaths: ["src/render.ts", "README.md"],
+              codeSymbols: ["renderGreeting"],
+            },
+            dependencies: ["B1"],
+            acceptanceCriteria: ["JSON output includes message and template."],
+            expectedChanges: ["Add renderer branch.", "Document JSON mode."],
+            validation: ["bun test", "bun run build"],
+            riskNotes: ["Keep text mode stable."],
+            sizeBudget: {
+              maxEstimatedChangedLines: 180,
+              estimateReason: "Renderer, tests, and docs remain small.",
+            },
+          },
+        ],
+      },
+      rendered: [
+        "- [ ] B1. Normalize input handling in src/cli.ts",
+        "- [ ] B2. Add JSON output in src/render.ts",
+      ].join("\n"),
+    });
+  }
+
+  return JSON.stringify({
+    structured: {
+      summary: "Executable issue queue",
+      issues: [
+        {
+          id: "I1",
+          title: "Normalize names before rendering",
+          problemStatement: "Blank names currently pass through the CLI.",
+          rationale: "This completes breakdown task B1 first.",
+          scope: ["Trim whitespace", "Reject blank names"],
+          acceptanceCriteria: ["Blank names throw a validation error."],
+          dependencies: [],
+          linkedDesignSections: ["DesignDoc#InputValidation"],
+          linkedBreakdownTaskIds: ["B1"],
+          grounding: {
+            repoPaths: ["src/cli.ts", "src/cli.test.ts"],
+            codeSymbols: ["parseName"],
+          },
+          requiredTests: ["Add blank-input coverage."],
+          outOfScope: ["JSON rendering"],
+          implementationNotes: ["Do not touch renderer in this issue."],
+        },
+        {
+          id: "I2",
+          title: "Add JSON greeting output",
+          problemStatement: "The CLI only emits text output today.",
+          rationale: "This follows breakdown task B2 after validation is in place.",
+          scope: ["Add JSON render path", "Document JSON usage"],
+          acceptanceCriteria: ["JSON output includes message and template."],
+          dependencies: ["I1"],
+          linkedDesignSections: ["DesignDoc#OutputContract"],
+          linkedBreakdownTaskIds: ["B2"],
+          grounding: {
+            repoPaths: ["src/render.ts", "README.md"],
+            codeSymbols: ["renderGreeting"],
+          },
+          requiredTests: ["Add JSON mode coverage."],
+          outOfScope: ["New templates"],
+          implementationNotes: ["Preserve current text output shape."],
+        },
+      ],
+    },
+    rendered: [
+      "# Issue Queue",
+      "",
+      "- I1: Normalize names before rendering",
+      "- I2: Add JSON greeting output",
+    ].join("\n"),
+  });
+}
+
+const envKeysToReset = [
+  "DEVAGENT_EXECUTOR_FAKE_RESPONSE",
+  "DEVAGENT_EXECUTOR_FAKE_RESPONSE_PLAN",
+  "DEVAGENT_EXECUTOR_FAKE_RESPONSE_TASK_INTAKE",
+  "DEVAGENT_EXECUTOR_FAKE_RESPONSE_ISSUE_GENERATION",
+] as const;
+
+const originalEnv = new Map<string, string | undefined>(
+  envKeysToReset.map((key) => [key, process.env[key]]),
+);
+
+afterEach(() => {
+  for (const key of envKeysToReset) {
+    const value = originalEnv.get(key);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+});
 
 function createRequest(taskType: TaskExecutionRequest["taskType"]): TaskExecutionRequest {
   const workspaceId = "workspace-1";
@@ -141,7 +272,7 @@ describe("capability validation", () => {
 describe("skills", () => {
   it("resolves requested skills through the registry", async () => {
     const repoRoot = await createRepoRoot();
-    const skillDir = join(repoRoot, ".devagent", "skills", "testing");
+    const skillDir = join(repoRoot, ".agents", "skills", "testing");
     await mkdir(skillDir, { recursive: true });
     await writeFile(
       join(skillDir, "SKILL.md"),
@@ -221,6 +352,74 @@ describe("skills", () => {
 
     expect(query).toContain("Workspace is planning-only for plan. No file changes are allowed.");
     expect(query).toContain("Do not run project verification commands unless the request explicitly requires them.");
+  });
+
+  it("marks task-intake as analysis-only and forbids verification commands by default", () => {
+    const request = createRequest("task-intake");
+    const query = buildTaskQuery(request);
+
+    expect(query).toContain("Workspace is analysis-only for task intake. No file changes are allowed.");
+    expect(query).toContain("Do not run project verification commands unless the request explicitly requires them.");
+  });
+
+  it("marks design as non-mutating and forbids verification commands by default", () => {
+    const request = createRequest("design");
+    const query = buildTaskQuery(request);
+
+    expect(query).toContain("Workspace is design-only for this stage. No file changes are allowed.");
+    expect(query).toContain("Do not run project verification commands unless the request explicitly requires them.");
+    expect(query).toContain("Do not use update_plan for this stage.");
+  });
+
+  it("forces breakdown into a strict grounded checklist contract", () => {
+    const query = buildTaskQuery(createRequest("breakdown"));
+
+    expect(query).toContain("Do not use update_plan for this stage.");
+    expect(query).toContain("ordered checklist of small executable tasks");
+    expect(query).toContain("fewer than 500 changed lines");
+    expect(query).toContain("concrete repo paths or symbols");
+    expect(query).toContain("\"summary\": \"short summary\"");
+    expect(query).toContain("\"executionOrder\": [\"B1\", \"B2\"]");
+    expect(query).toContain("\"checklistLabel\": \"B1. concrete checklist item\"");
+    expect(query).toContain("Do not rename keys, omit required fields, or add extra fields.");
+    expect(query).toContain("\"structured\": <BreakdownDoc>");
+    expect(query).toContain("Return only the JSON object");
+  });
+
+  it("forces issue generation to derive from approved breakdown tasks", () => {
+    const query = buildTaskQuery(createRequest("issue-generation"));
+
+    expect(query).toContain("Do not use update_plan for this stage.");
+    expect(query).toContain("Generate executable issue specs directly from the approved breakdown tasks.");
+    expect(query).toContain("Do not infer issues from document headings.");
+    expect(query).toContain("link to one or more approved breakdown task ids");
+    expect(query).toContain("\"issues\": [");
+    expect(query).toContain("\"linkedBreakdownTaskIds\": [\"B1\"]");
+    expect(query).toContain("\"implementationNotes\": [\"implementation note\"]");
+    expect(query).toContain("Do not rename keys, omit required fields, or add extra fields.");
+    expect(query).toContain("\"structured\": <IssueSpecDoc>");
+  });
+
+  it("includes issue unit and context bundle metadata when provided", () => {
+    const request = createRequest("plan");
+    request.issueUnit = {
+      id: "issue-unit-1",
+      title: "Add JSON mode",
+      sequence: 1,
+      dependencyIds: [],
+      acceptanceCriteria: ["Supports --json output"],
+      linkedArtifactVersionIds: ["artifact-version-1"],
+    };
+    request.contextBundle = {
+      id: "bundle-1",
+      artifactVersionIds: ["artifact-version-1", "artifact-version-2"],
+      summary: "Approved design and breakdown context",
+    };
+
+    const query = buildTaskQuery(request);
+    expect(query).toContain("Issue unit: [1] Add JSON mode");
+    expect(query).toContain("Context bundle: bundle-1");
+    expect(query).toContain("artifact-version-1");
   });
 
   it("emits a warning log and continues when a requested skill is missing", async () => {
@@ -360,7 +559,28 @@ describe("task execution", () => {
     }
   });
 
-  for (const taskType of ["triage", "plan", "implement", "verify", "review", "repair"] as const) {
+  it("reads stage-specific fake responses for hyphenated task types", () => {
+    process.env["DEVAGENT_EXECUTOR_FAKE_RESPONSE_TASK_INTAKE"] = "Task intake response";
+    process.env["DEVAGENT_EXECUTOR_FAKE_RESPONSE_ISSUE_GENERATION"] = "Issue generation response";
+
+    expect(readFakeTaskResponse("task-intake")).toBe("Task intake response");
+    expect(readFakeTaskResponse("issue-generation")).toBe("Issue generation response");
+  });
+
+  for (const taskType of [
+    "task-intake",
+    "design",
+    "breakdown",
+    "issue-generation",
+    "triage",
+    "plan",
+    "test-plan",
+    "implement",
+    "verify",
+    "review",
+    "repair",
+    "completion",
+  ] as const) {
     it(`emits artifacts and events for ${taskType}`, async () => {
       const repoRoot = await createRepoRoot();
       const artifactDir = join(repoRoot, "artifacts");
@@ -382,11 +602,16 @@ describe("task execution", () => {
         request,
         artifactDir,
         repoRoot,
-        runQuery: async ({ query }) => ({
-          success: true,
-          responseText: `Handled ${taskType}\n\n${query}`,
-          iterations: 1,
-        }),
+        runQuery: async ({ query }) => {
+          const responseText = taskType === "breakdown" || taskType === "issue-generation"
+            ? createStrictStageResponse(taskType)
+            : `Handled ${taskType}\n\n${query}`;
+          return {
+            success: true,
+            responseText,
+            iterations: 1,
+          };
+        },
         emit: (event) => {
           events.push(event);
         },
@@ -394,16 +619,22 @@ describe("task execution", () => {
 
       expect(result.status).toBe("success");
       expect(result.outcome).toBe("completed");
-      expect(result.artifacts).toHaveLength(1);
+      const expectedArtifactCount = taskType === "breakdown" || taskType === "issue-generation" ? 2 : 1;
+      expect(result.artifacts).toHaveLength(expectedArtifactCount);
       expect(result.artifacts[0]?.kind).toBe(artifactInfoForTask(taskType).kind);
       expect(events.map((event) => event.type)).toContain("started");
       expect(events.map((event) => event.type)).toContain("artifact");
       expect(events.at(-1)?.type).toBe("completed");
 
-      const artifactText = await readFile(result.artifacts[0]!.path, "utf-8");
+      const artifactText = await readFile(result.artifacts.at(-1)!.path, "utf-8");
       if (taskType === "verify") {
         expect(artifactText).toContain("Overall result: pass");
         expect(events.some((event) => event.type === "log")).toBe(true);
+      } else if (taskType === "breakdown" || taskType === "issue-generation") {
+        expect(result.artifacts[0]?.variant).toBe("structured");
+        expect(result.artifacts[1]?.variant).toBe("rendered");
+        expect(result.artifacts[0]?.mimeType).toBe("application/json");
+        expect(result.artifacts[1]?.mimeType).toBe("text/markdown");
       } else {
         expect(artifactText).toContain(`Handled ${taskType}`);
       }
@@ -510,6 +741,125 @@ describe("task execution", () => {
     expect(result.status).toBe("failed");
     expect(result.outcome).toBe("no_progress");
     expect(result.outcomeReason).toBe("iteration_limit");
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("does not attempt strict artifact parsing when the workflow run already failed", async () => {
+    const repoRoot = await createRepoRoot();
+    const artifactDir = join(repoRoot, "artifacts");
+    const request = createRequest("issue-generation");
+    const events: TaskExecutionEvent[] = [];
+
+    const result = await executeTask({
+      request,
+      artifactDir,
+      repoRoot,
+      runQuery: async () => ({
+        success: false,
+        responseText: "Progress: inspected files, no final artifact yet.",
+        iterations: 3,
+        outcome: "no_progress",
+        outcomeReason: "no_code",
+      }),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.outcome).toBe("no_progress");
+    expect(result.outcomeReason).toBe("no_code");
+    expect(result.artifacts).toEqual([]);
+    expect(result.error?.message).toMatch(/no final answer/i);
+    expect(result.error?.message).not.toMatch(/strict JSON/i);
+    expect(events.some((event) => event.type === "artifact")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "completed", status: "failed" });
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("returns a failed result instead of throwing on invalid strict-stage JSON", async () => {
+    const repoRoot = await createRepoRoot();
+    const artifactDir = join(repoRoot, "artifacts");
+    const request = createRequest("breakdown");
+    const events: TaskExecutionEvent[] = [];
+
+    const result = await executeTask({
+      request,
+      artifactDir,
+      repoRoot,
+      runQuery: async () => ({
+        success: true,
+        responseText: "{not-json",
+        iterations: 1,
+      }),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.outcome).toBe("no_progress");
+    expect(result.artifacts).toEqual([]);
+    expect(result.error?.message).toMatch(/strict JSON with structured and rendered fields/i);
+    expect(events.at(-1)).toMatchObject({ type: "completed", status: "failed" });
+
+    const persisted = JSON.parse(await readFile(join(artifactDir, "result.json"), "utf-8")) as {
+      status: string;
+      outcome?: string;
+      artifacts: unknown[];
+    };
+    expect(persisted.status).toBe("failed");
+    expect(persisted.outcome).toBe("no_progress");
+    expect(persisted.artifacts).toEqual([]);
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("returns a failed result when strict-stage structured payload fails schema validation", async () => {
+    const repoRoot = await createRepoRoot();
+    const artifactDir = join(repoRoot, "artifacts");
+    const request = createRequest("issue-generation");
+    const events: TaskExecutionEvent[] = [];
+
+    const result = await executeTask({
+      request,
+      artifactDir,
+      repoRoot,
+      runQuery: async () => ({
+        success: true,
+        responseText: JSON.stringify({
+          structured: {
+            summary: "Invalid issue spec",
+            issues: [
+              {
+                id: "I1",
+                title: "Missing required fields",
+              },
+            ],
+          },
+          rendered: "- I1: Missing required fields",
+        }),
+        iterations: 1,
+      }),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.outcome).toBe("no_progress");
+    expect(result.artifacts).toEqual([]);
+    expect(result.error?.message).toBeTruthy();
+    expect(events.at(-1)).toMatchObject({ type: "completed", status: "failed" });
+
+    const persisted = JSON.parse(await readFile(join(artifactDir, "result.json"), "utf-8")) as {
+      status: string;
+      artifacts: unknown[];
+    };
+    expect(persisted.status).toBe("failed");
+    expect(persisted.artifacts).toEqual([]);
 
     await rm(repoRoot, { recursive: true, force: true });
   });

@@ -5,7 +5,6 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
-import { homedir } from "node:os";
 import type { SkillMetadata, SkillSource, Skill } from "./types.js";
 import { isValidSkillName } from "./types.js";
 
@@ -22,6 +21,17 @@ export interface DiscoverOptions {
 interface ParsedFrontmatter {
   readonly fields: Record<string, string>;
   readonly body: string;
+}
+
+interface ParsedSkillSupportRoots {
+  readonly supportRootPath: string;
+  readonly sourceRepoPath?: string;
+  readonly sourceSkillDirPath?: string;
+}
+
+function defaultGlobalSkillPaths(): ReadonlyArray<string> {
+  const home = process.env["HOME"];
+  return home ? [join(home, ".agents", "skills")] : [];
 }
 
 function parseFrontmatter(content: string): ParsedFrontmatter {
@@ -51,14 +61,53 @@ function parseFrontmatter(content: string): ParsedFrontmatter {
   return { fields, body };
 }
 
+function parseSkillSupportRoots(skillDirPath: string): ParsedSkillSupportRoots {
+  const metadataPath = join(skillDirPath, ".arkts-agent-kit-source.json");
+  if (!existsSync(metadataPath)) {
+    return { supportRootPath: skillDirPath };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(metadataPath, "utf-8"));
+  } catch {
+    return { supportRootPath: skillDirPath };
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    return { supportRootPath: skillDirPath };
+  }
+
+  const sourceRepoPath = normalizeOptionalString(
+    (parsed as Record<string, unknown>)["source_repo"],
+  );
+  const sourceSkillDirPath = normalizeOptionalString(
+    (parsed as Record<string, unknown>)["source_dir"],
+  );
+
+  return {
+    supportRootPath: sourceRepoPath ?? skillDirPath,
+    sourceRepoPath,
+    sourceSkillDirPath,
+  };
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 // ─── SkillLoader Class ──────────────────────────────────────
 
 export class SkillLoader {
   /**
    * Discover skills from standard paths. Returns metadata only (no body loading).
    * Paths scanned in priority order (later overrides earlier):
-   *   1. Global: ~/.config/devagent/skills/, ~/.agents/skills/, ~/.claude/skills/
-   *   2. Project: .agents/skills/, .github/skills/, .claude/skills/, .devagent/skills/
+   *   1. Global: ~/.agents/skills/
+   *   2. Project: .agents/skills/
    */
   discover(options: DiscoverOptions): SkillMetadata[] {
     const { repoRoot } = options;
@@ -68,11 +117,7 @@ export class SkillLoader {
     const globalPaths: Array<{ path: string; source: SkillSource }> =
       options.globalPaths
         ? options.globalPaths.map((p) => ({ path: p, source: "global" as const }))
-        : [
-            { path: join(homedir(), ".config", "devagent", "skills"), source: "global" },
-            { path: join(homedir(), ".agents", "skills"), source: "global" },
-            { path: join(homedir(), ".claude", "skills"), source: "global" },
-          ];
+        : defaultGlobalSkillPaths().map((path) => ({ path, source: "global" as const }));
 
     for (const { path, source } of globalPaths) {
       this.scanSkillsDirectory(path, source, found);
@@ -81,9 +126,6 @@ export class SkillLoader {
     // Project paths (higher priority — overrides global)
     const projectPaths: Array<{ path: string; source: SkillSource }> = [
       { path: join(repoRoot, ".agents", "skills"), source: "project" },
-      { path: join(repoRoot, ".github", "skills"), source: "project" },
-      { path: join(repoRoot, ".claude", "skills"), source: "claude-compat" },
-      { path: join(repoRoot, ".devagent", "skills"), source: "project" },
     ];
 
     for (const { path, source } of projectPaths) {
@@ -99,13 +141,20 @@ export class SkillLoader {
   loadSkillContent(metadata: SkillMetadata): Skill {
     const content = readFileSync(metadata.skillFilePath, "utf-8");
     const { body } = parseFrontmatter(content);
+    const roots = [metadata.dirPath];
+    if (
+      metadata.supportRootPath &&
+      metadata.supportRootPath !== metadata.dirPath
+    ) {
+      roots.push(metadata.supportRootPath);
+    }
 
     return {
       ...metadata,
       instructions: body,
-      hasScripts: existsSync(join(metadata.dirPath, "scripts")),
-      hasReferences: existsSync(join(metadata.dirPath, "references")),
-      hasAssets: existsSync(join(metadata.dirPath, "assets")),
+      hasScripts: roots.some((root) => existsSync(join(root, "scripts"))),
+      hasReferences: roots.some((root) => existsSync(join(root, "references"))),
+      hasAssets: roots.some((root) => existsSync(join(root, "assets"))),
     };
   }
 
@@ -171,12 +220,17 @@ export class SkillLoader {
         continue;
       }
 
+      const supportRoots = parseSkillSupportRoots(entryPath);
+
       const metadata: SkillMetadata = {
         name,
         description,
         source,
         dirPath: entryPath,
         skillFilePath,
+        supportRootPath: supportRoots.supportRootPath,
+        sourceRepoPath: supportRoots.sourceRepoPath,
+        sourceSkillDirPath: supportRoots.sourceSkillDirPath,
         license: fields["license"],
         compatibility: fields["compatibility"]
           ? fields["compatibility"].split(",").map((s) => s.trim())

@@ -3,21 +3,24 @@
  */
 
 import type { ToolSpec } from "../../core/index.js";
-import { readFileTool } from "./read-file.js";
+import { createReadFileTool, readFileTool } from "./read-file.js";
 import { writeFileTool } from "./write-file.js";
 import { replaceInFileTool } from "./replace-in-file.js";
-import { findFilesTool } from "./find-files.js";
-import { searchFilesTool } from "./search-files.js";
+import { createFindFilesTool, findFilesTool } from "./find-files.js";
+import { createSearchFilesTool, searchFilesTool } from "./search-files.js";
 import { runCommandTool } from "./run-command.js";
 import { gitStatusTool, gitDiffTool, gitCommitTool } from "./git.js";
 import { FileTime } from "./file-time.js";
 
 export { FileTime };
 export {
+  createReadFileTool,
   readFileTool,
   writeFileTool,
   replaceInFileTool,
+  createFindFilesTool,
   findFilesTool,
+  createSearchFilesTool,
   searchFilesTool,
   runCommandTool,
   gitStatusTool,

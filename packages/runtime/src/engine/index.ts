@@ -9,6 +9,8 @@ export type {
   TaskLoopOptions,
   TaskLoopResult,
   MidpointCallback,
+  FinalTextValidationResult,
+  FinalTextValidator,
 } from "./task-loop.js";
 
 export { StagnationDetector } from "./stagnation-detector.js";

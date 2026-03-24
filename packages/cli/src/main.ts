@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url";
 import {
   EventBus,
   ApprovalGate,
-  SkillLoader,
   SkillRegistry,
   SkillResolver,
   ContextManager,
@@ -29,7 +28,10 @@ import {
 import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, VerbosityConfig } from "@devagent/runtime";
 import { ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
-import { createDefaultToolRegistry, createRoutingLSPTools, ToolRegistry } from "@devagent/runtime";
+import {
+  createRoutingLSPTools,
+  ToolRegistry,
+} from "@devagent/runtime";
 import {
   TaskLoop,
   truncateToolOutput,
@@ -74,6 +76,7 @@ import {
 } from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { OutputState } from "./output-state.js";
+import { createSkillInfrastructure } from "./skill-setup.js";
 
 // ─── Argument Parsing ────────────────────────────────────────
 
@@ -500,7 +503,6 @@ async function setupTools(
   projectRoot: string,
   provider: LLMProvider,
 ): Promise<ToolsSetupResult> {
-  const toolRegistry = createDefaultToolRegistry();
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
   const verbosityConfig = buildVerbosityConfig(cliArgs.verbosity, cliArgs.verboseCategories);
@@ -515,6 +517,12 @@ async function setupTools(
   // later (after session record is created) via sessionState.bind().
   let sessionState = new SessionState(config.sessionState);
 
+  // ─── Skills (Agent Skills standard) ────────────────────────
+  const { skills, skillResolver, skillAccess, toolRegistry } = createSkillInfrastructure(
+    projectRoot,
+    sessionState,
+  );
+
   // Register state tools (getter indirection so resume can swap the instance)
   toolRegistry.register(createPlanTool(
     bus,
@@ -526,19 +534,12 @@ async function setupTools(
   let findingToolCallCount = 0;
   bus.on("tool:after", () => { findingToolCallCount++; });
   toolRegistry.register(createFindingTool(() => sessionState, () => findingToolCallCount));
-
-  // ─── Skills (Agent Skills standard) ────────────────────────
-  const skillLoader = new SkillLoader();
-  const skillMetadata = skillLoader.discover({ repoRoot: projectRoot });
-  const skills = new SkillRegistry();
-  skills.register(skillMetadata);
-  const skillResolver = new SkillResolver();
   if (skills.size > 0 && cliArgs.verbosity !== "quiet") {
     process.stderr.write(dim(`[skills] Discovered ${skills.size} skill(s)`) + "\n");
   }
 
   // Register skill tool (LLM can invoke skills during conversation)
-  toolRegistry.register(createSkillTool(skills, skillResolver));
+  toolRegistry.register(createSkillTool(skills, skillResolver, { skillAccess }));
 
   // ─── Batched Readonly Tool Scripts ──────────────────────────
   // Register after all readonly tools so the script engine can access them.

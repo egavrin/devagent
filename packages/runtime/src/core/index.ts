@@ -92,6 +92,8 @@ export {
   SkillRegistry,
   SkillLoader,
   SkillResolver,
+  SkillAccessManager,
+  INVOKED_SKILL_KNOWLEDGE_PREFIX,
   isValidSkillName,
 } from "./skills/index.js";
 export type {
@@ -103,6 +105,7 @@ export type {
   DiscoverOptions,
   ResolveContext,
   SkillResolverOptions,
+  SkillAccessPersistence,
 } from "./skills/index.js";
 
 // Context management

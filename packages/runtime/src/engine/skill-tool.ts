@@ -4,12 +4,17 @@
  */
 
 import type { ToolSpec } from "../core/index.js";
-import type { SkillRegistry, SkillResolver } from "../core/index.js";
+import type { SkillAccessManager, SkillRegistry, SkillResolver } from "../core/index.js";
 import { extractErrorMessage } from "../core/index.js";
+
+export interface SkillToolOptions {
+  readonly skillAccess?: SkillAccessManager;
+}
 
 export function createSkillTool(
   registry: SkillRegistry,
   resolver: SkillResolver,
+  options?: SkillToolOptions,
 ): ToolSpec {
   return {
     name: "invoke_skill",
@@ -72,14 +77,23 @@ export function createSkillTool(
           sessionId: context.sessionId,
           allowShellPreprocess: skill.source === "project",
         });
+        options?.skillAccess?.unlock(skill.name);
 
         const header = `# Skill: ${skill.name}\n\n`;
+        const hasSupportFiles = skill.hasScripts || skill.hasReferences || skill.hasAssets;
+        const hasBackedSupportRoot = Boolean(
+          skill.supportRootPath && skill.supportRootPath !== skill.dirPath,
+        );
         const meta = [
           `**Source:** ${skill.source}`,
           `**Directory:** ${skill.dirPath}`,
           skill.hasScripts ? "**Scripts:** available in scripts/" : null,
           skill.hasReferences ? "**References:** available in references/" : null,
           skill.hasAssets ? "**Assets:** available in assets/" : null,
+          hasBackedSupportRoot ? "**Support files:** additional support content is available through the backing skill tree" : null,
+          (hasSupportFiles || hasBackedSupportRoot) && options?.skillAccess
+            ? `**Skill files:** use \`read_file\`, \`find_files\`, or \`search_files\` with \`skill://${skill.name}/...\``
+            : null,
         ]
           .filter(Boolean)
           .join("\n");

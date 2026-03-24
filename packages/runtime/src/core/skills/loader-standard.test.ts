@@ -20,7 +20,7 @@ function writeSkillMd(
   );
 }
 
-describe("SkillLoader — .github/skills/ discovery", () => {
+describe("SkillLoader — .agents/skills/ discovery", () => {
   let loader: SkillLoader;
 
   beforeEach(() => {
@@ -32,9 +32,9 @@ describe("SkillLoader — .github/skills/ discovery", () => {
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
-  it("discovers skills from .github/skills/", () => {
-    const ghSkillsDir = join(TEST_DIR, ".github", "skills");
-    writeSkillMd(ghSkillsDir, "my-skill", "A test skill");
+  it("discovers skills from .agents/skills/", () => {
+    const agentsSkillsDir = join(TEST_DIR, ".agents", "skills");
+    writeSkillMd(agentsSkillsDir, "my-skill", "A test skill");
 
     const skills = loader.discover({ repoRoot: TEST_DIR, globalPaths: [] });
 
@@ -45,8 +45,8 @@ describe("SkillLoader — .github/skills/ discovery", () => {
   });
 
   it("parses frontmatter name and description correctly", () => {
-    const ghSkillsDir = join(TEST_DIR, ".github", "skills");
-    writeSkillMd(ghSkillsDir, "code-review", "Automated code review helper");
+    const agentsSkillsDir = join(TEST_DIR, ".agents", "skills");
+    writeSkillMd(agentsSkillsDir, "code-review", "Automated code review helper");
 
     const skills = loader.discover({ repoRoot: TEST_DIR, globalPaths: [] });
 
@@ -54,32 +54,28 @@ describe("SkillLoader — .github/skills/ discovery", () => {
     expect(skills[0].name).toBe("code-review");
     expect(skills[0].description).toBe("Automated code review helper");
     expect(skills[0].skillFilePath).toBe(
-      join(ghSkillsDir, "code-review", "SKILL.md"),
+      join(agentsSkillsDir, "code-review", "SKILL.md"),
     );
   });
 
-  it(".devagent/skills/ overrides .github/skills/ for same skill name", () => {
-    const ghSkillsDir = join(TEST_DIR, ".github", "skills");
-    const devagentSkillsDir = join(TEST_DIR, ".devagent", "skills");
-    writeSkillMd(ghSkillsDir, "shared", "From github");
-    writeSkillMd(devagentSkillsDir, "shared", "From devagent");
+  it(".agents/skills/ overrides global paths for the same skill name", () => {
+    const globalSkillsDir = join(TEST_DIR, "global-skills");
+    const agentsSkillsDir = join(TEST_DIR, ".agents", "skills");
+    writeSkillMd(globalSkillsDir, "shared", "From global");
+    writeSkillMd(agentsSkillsDir, "shared", "From agents");
 
-    const skills = loader.discover({ repoRoot: TEST_DIR, globalPaths: [] });
+    const skills = loader.discover({ repoRoot: TEST_DIR, globalPaths: [globalSkillsDir] });
 
     expect(skills).toHaveLength(1);
-    expect(skills[0].description).toBe("From devagent");
+    expect(skills[0].description).toBe("From agents");
   });
 
-  it("discovers skills from multiple project paths simultaneously", () => {
+  it("ignores unsupported .github/skills/ directories", () => {
     const ghSkillsDir = join(TEST_DIR, ".github", "skills");
-    const agentsSkillsDir = join(TEST_DIR, ".agents", "skills");
     writeSkillMd(ghSkillsDir, "gh-skill", "From github dir");
-    writeSkillMd(agentsSkillsDir, "agents-skill", "From agents dir");
 
     const skills = loader.discover({ repoRoot: TEST_DIR, globalPaths: [] });
 
-    expect(skills).toHaveLength(2);
-    const names = skills.map((s) => s.name).sort();
-    expect(names).toEqual(["agents-skill", "gh-skill"]);
+    expect(skills).toHaveLength(0);
   });
 });

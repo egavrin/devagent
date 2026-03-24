@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { findProjectRoot } from "../config.js";
 import { SkillLoader, SkillRegistry, SkillResolver } from "./index.js";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -26,9 +27,7 @@ function createFullSkill(
 
 describe("Skills Integration", () => {
   beforeEach(() => {
-    mkdirSync(join(TEST_DIR, ".devagent", "skills"), { recursive: true });
     mkdirSync(join(TEST_DIR, ".agents", "skills"), { recursive: true });
-    mkdirSync(join(TEST_DIR, ".claude", "skills"), { recursive: true });
   });
 
   afterEach(() => {
@@ -37,7 +36,7 @@ describe("Skills Integration", () => {
 
   it("full pipeline: discover → register → load → resolve", async () => {
     createFullSkill(
-      join(TEST_DIR, ".devagent", "skills"),
+      join(TEST_DIR, ".agents", "skills"),
       "review",
       "Code review guidance",
       "Review using: $ARGUMENTS\nDir: ${SKILL_DIR}\nSession: ${SESSION_ID}",
@@ -80,32 +79,33 @@ describe("Skills Integration", () => {
     expect(resolved.resolvedInstructions).toContain("Session: sess-42");
   });
 
-  it("priority: .devagent overrides .agents for same-name skill", async () => {
+  it("priority: .agents overrides global for same-name skill", async () => {
+    const globalDir = join(TEST_DIR, "global-skills");
+    createFullSkill(
+      globalDir,
+      "deploy",
+      "Deploy (global version)",
+      "Lower priority",
+    );
     createFullSkill(
       join(TEST_DIR, ".agents", "skills"),
       "deploy",
       "Deploy (agents version)",
-      "Lower priority",
-    );
-    createFullSkill(
-      join(TEST_DIR, ".devagent", "skills"),
-      "deploy",
-      "Deploy (devagent version)",
       "Higher priority",
     );
 
     const loader = new SkillLoader();
-    const metadata = loader.discover({ repoRoot: TEST_DIR, globalPaths: [] });
+    const metadata = loader.discover({ repoRoot: TEST_DIR, globalPaths: [globalDir] });
     expect(metadata).toHaveLength(1);
 
     const registry = new SkillRegistry();
     registry.register(metadata);
     const skill = await registry.load("deploy");
     expect(skill.instructions).toBe("Higher priority");
-    expect(skill.description).toBe("Deploy (devagent version)");
+    expect(skill.description).toBe("Deploy (agents version)");
   });
 
-  it("claude-compat: discovers from .claude/skills/", async () => {
+  it("ignores unsupported .claude/skills project-local directories", async () => {
     createFullSkill(
       join(TEST_DIR, ".claude", "skills"),
       "claude-native",
@@ -115,7 +115,38 @@ describe("Skills Integration", () => {
 
     const loader = new SkillLoader();
     const metadata = loader.discover({ repoRoot: TEST_DIR, globalPaths: [] });
-    expect(metadata).toHaveLength(1);
-    expect(metadata[0]!.source).toBe("claude-compat");
+    expect(metadata).toHaveLength(0);
+  });
+
+  it("uses the workspace root returned by findProjectRoot for ArkTS-style workspaces", () => {
+    const parentDir = join(TEST_DIR, "parent-root");
+    const workspaceDir = join(parentDir, "arkts-helloworld");
+    const nestedDir = join(workspaceDir, "src");
+    const globalDir = join(TEST_DIR, "global-skills");
+
+    mkdirSync(join(parentDir, ".git"), { recursive: true });
+    mkdirSync(join(workspaceDir, ".agents", "skills"), { recursive: true });
+    mkdirSync(nestedDir, { recursive: true });
+    createFullSkill(
+      join(workspaceDir, ".agents", "skills"),
+      "implement-arkts",
+      "Workspace ArkTS skill",
+      "Workspace instructions",
+    );
+    createFullSkill(
+      globalDir,
+      "codex-global",
+      "Global Codex skill",
+      "Global instructions",
+    );
+
+    const repoRoot = findProjectRoot(nestedDir);
+    expect(repoRoot).toBe(workspaceDir);
+
+    const loader = new SkillLoader();
+    const metadata = loader.discover({ repoRoot: repoRoot!, globalPaths: [globalDir] });
+    const names = metadata.map((skill) => skill.name).sort();
+
+    expect(names).toEqual(["codex-global", "implement-arkts"]);
   });
 });

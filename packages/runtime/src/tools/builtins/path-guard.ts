@@ -54,16 +54,20 @@ export function resolveRepoRoot(repoRoot: string): string {
   }
 }
 
-/**
- * Resolve a user-provided path and ensure it stays inside repoRoot.
- */
-export function resolvePathInRepo(
-  repoRoot: string,
+export function normalizeRelativePath(path: string): string {
+  if (!path || path === ".") {
+    return ".";
+  }
+  return path.replaceAll("\\", "/");
+}
+
+export function resolvePathInRoot(
+  rootPath: string,
   inputPath: string,
   toolName: string,
   paramName = "path",
 ): string {
-  const rootReal = resolveRepoRoot(repoRoot);
+  const rootReal = resolveRepoRoot(rootPath);
 
   const candidatePath = resolve(rootReal, inputPath);
   const resolvedPath = resolveWithSymlinkAwareness(
@@ -82,4 +86,22 @@ export function resolvePathInRepo(
     toolName,
     `Invalid ${paramName}: ${inputPath}. Path must stay within repo root.`,
   );
+}
+
+/**
+ * Resolve a user-provided path and ensure it stays inside repoRoot.
+ */
+export function resolvePathInRepo(
+  repoRoot: string,
+  inputPath: string,
+  toolName: string,
+  paramName = "path",
+): string {
+  if (inputPath.startsWith("skill://")) {
+    throw new ToolError(
+      toolName,
+      `Invalid ${paramName}: ${inputPath}. Skill paths are read-only and must not be used with repo-bound tools.`,
+    );
+  }
+  return resolvePathInRoot(repoRoot, inputPath, toolName, paramName);
 }

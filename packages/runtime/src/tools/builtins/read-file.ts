@@ -7,64 +7,70 @@ import { readFileSync, existsSync } from "node:fs";
 import type { ToolSpec } from "../../core/index.js";
 import { ToolError } from "../../core/index.js";
 import { FileTime } from "./file-time.js";
-import { resolvePathInRepo } from "./path-guard.js";
+import { resolveReadonlyPath, type ReadonlyToolOptions } from "./readonly-paths.js";
 
-export const readFileTool: ToolSpec = {
-  name: "read_file",
-  description:
-    "Read the contents of a file. Optionally specify start_line and end_line to read a range. For large files (>200 lines), use start_line/end_line to read targeted sections. Always read before editing with replace_in_file.",
-  category: "readonly",
-  paramSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "File path (relative to repo root)" },
-      start_line: { type: "number", description: "Start line (1-indexed, inclusive)" },
-      end_line: { type: "number", description: "End line (1-indexed, inclusive)" },
+export function createReadFileTool(options?: ReadonlyToolOptions): ToolSpec {
+  return {
+    name: "read_file",
+    description:
+      "Read the contents of a file. Optionally specify start_line and end_line to read a range. For large files (>200 lines), use start_line/end_line to read targeted sections. Paths may be repo-relative or use skill://<skill-name>/... for support files from an invoked skill. Always read before editing with replace_in_file.",
+    category: "readonly",
+    paramSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path (repo-relative or skill://<skill-name>/...)" },
+        start_line: { type: "number", description: "Start line (1-indexed, inclusive)" },
+        end_line: { type: "number", description: "End line (1-indexed, inclusive)" },
+      },
+      required: ["path"],
     },
-    required: ["path"],
-  },
-  errorGuidance: {
-    common: "Use find_files to verify the file path exists before reading.",
-    patterns: [
-      { match: "not found", hint: "File does not exist at this path. Use find_files to discover the correct location." },
-    ],
-  },
-  resultSchema: {
-    type: "object",
-    properties: {
-      content: { type: "string" },
-      total_lines: { type: "number" },
+    errorGuidance: {
+      common: "Use find_files to verify the file path exists before reading.",
+      patterns: [
+        { match: "not found", hint: "File does not exist at this path. Use find_files to discover the correct location." },
+        { match: "invoke_skill", hint: "Unlock the skill first by calling invoke_skill with the exact skill name, then retry the read." },
+      ],
     },
-  },
-  handler: async (params, context) => {
-    const filePath = resolvePathInRepo(
-      context.repoRoot,
-      params["path"] as string,
-      "read_file",
-    );
+    resultSchema: {
+      type: "object",
+      properties: {
+        content: { type: "string" },
+        total_lines: { type: "number" },
+      },
+    },
+    handler: async (params, context) => {
+      const filePath = resolveReadonlyPath(
+        context.repoRoot,
+        params["path"] as string,
+        "read_file",
+        options,
+      ).resolvedPath;
 
-    if (!existsSync(filePath)) {
-      throw new ToolError("read_file", `File not found: ${params["path"] as string}`);
-    }
+      if (!existsSync(filePath)) {
+        throw new ToolError("read_file", `File not found: ${params["path"] as string}`);
+      }
 
-    const content = readFileSync(filePath, "utf-8");
-    FileTime.recordRead(filePath);
-    const lines = content.split("\n");
-    const totalLines = lines.length;
+      const content = readFileSync(filePath, "utf-8");
+      FileTime.recordRead(filePath);
+      const lines = content.split("\n");
+      const totalLines = lines.length;
 
-    const startLine = (params["start_line"] as number | undefined) ?? 1;
-    const endLine = (params["end_line"] as number | undefined) ?? totalLines;
+      const startLine = (params["start_line"] as number | undefined) ?? 1;
+      const endLine = (params["end_line"] as number | undefined) ?? totalLines;
 
-    const selectedLines = lines.slice(startLine - 1, endLine);
-    const numberedContent = selectedLines
-      .map((line, i) => `${startLine + i}\t${line}`)
-      .join("\n");
+      const selectedLines = lines.slice(startLine - 1, endLine);
+      const numberedContent = selectedLines
+        .map((line, i) => `${startLine + i}\t${line}`)
+        .join("\n");
 
-    return {
-      success: true,
-      output: numberedContent,
-      error: null,
-      artifacts: [],
-    };
-  },
-};
+      return {
+        success: true,
+        output: numberedContent,
+        error: null,
+        artifacts: [],
+      };
+    },
+  };
+}
+
+export const readFileTool: ToolSpec = createReadFileTool();

@@ -11,8 +11,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
+import { SkillAccessManager, SkillRegistry } from "../../core/index.js";
 import type { ToolContext } from "../../core/index.js";
-import { readFileTool } from "./read-file.js";
+import { createReadFileTool, readFileTool } from "./read-file.js";
 import { writeFileTool } from "./write-file.js";
 import { replaceInFileTool } from "./replace-in-file.js";
 import {
@@ -24,8 +25,8 @@ import {
   WhitespaceNormalizedReplacer,
   IndentationFlexibleReplacer,
 } from "./replace-in-file.js";
-import { findFilesTool } from "./find-files.js";
-import { searchFilesTool } from "./search-files.js";
+import { createFindFilesTool, findFilesTool } from "./find-files.js";
+import { createSearchFilesTool, searchFilesTool } from "./search-files.js";
 import { runCommandTool } from "./run-command.js";
 import { spawnAndCapture } from "./spawn-capture.js";
 import { gitDiffTool, gitCommitTool } from "./git.js";
@@ -34,9 +35,11 @@ import { FileTime } from "./file-time.js";
 
 let tmpDir: string;
 let ctx: ToolContext;
+let cleanupDirs: string[];
 
 beforeEach(() => {
   FileTime.reset();
+  cleanupDirs = [];
   tmpDir = mkdtempSync(join(tmpdir(), "devagent-tools-test-"));
   ctx = {
     repoRoot: tmpDir,
@@ -52,8 +55,100 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const dir of cleanupDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
   rmSync(tmpDir, { recursive: true, force: true });
 });
+
+function setupUnlockedSkill(name: string = "modernize-arkts"): {
+  readonly access: SkillAccessManager;
+  readonly uri: (relativePath: string) => string;
+} {
+  const skillDir = mkdtempSync(join(tmpdir(), "devagent-skill-tree-"));
+  cleanupDirs.push(skillDir);
+  mkdirSync(join(skillDir, "docs"), { recursive: true });
+  writeFileSync(join(skillDir, "docs", "guide-usage.md"), "# Guide\nUse the tool.\n");
+  writeFileSync(
+    join(skillDir, "SKILL.md"),
+    `---\nname: ${name}\ndescription: ${name}\n---\nInstructions`,
+    "utf-8",
+  );
+
+  const registry = new SkillRegistry();
+  registry.register([{
+    name,
+    description: `${name} description`,
+    source: "global",
+    dirPath: skillDir,
+    skillFilePath: join(skillDir, "SKILL.md"),
+  }]);
+  const access = new SkillAccessManager(registry);
+  access.unlock(name);
+  return {
+    access,
+    uri: (relativePath: string) => `skill://${name}/${relativePath}`,
+  };
+}
+
+function setupBackedUnlockedSkill(name: string = "modernize-arkts"): {
+  readonly access: SkillAccessManager;
+  readonly uri: (relativePath: string) => string;
+  readonly wrapperDir: string;
+  readonly supportRoot: string;
+} {
+  const wrapperDir = mkdtempSync(join(tmpdir(), "devagent-skill-wrapper-"));
+  const supportRoot = mkdtempSync(join(tmpdir(), "devagent-skill-support-"));
+  cleanupDirs.push(wrapperDir, supportRoot);
+
+  mkdirSync(join(wrapperDir, "agents"), { recursive: true });
+  writeFileSync(
+    join(wrapperDir, "SKILL.md"),
+    `---\nname: ${name}\ndescription: ${name}\n---\nInstructions`,
+    "utf-8",
+  );
+  writeFileSync(join(wrapperDir, "agents", "openai.yaml"), "model: gpt-5.4\n");
+  writeFileSync(
+    join(wrapperDir, ".arkts-agent-kit-source.json"),
+    JSON.stringify({
+      source_repo: supportRoot,
+      source_dir: join(supportRoot, "arkts-skills", name),
+    }),
+    "utf-8",
+  );
+
+  mkdirSync(join(supportRoot, "docs", "cards", "fixes"), { recursive: true });
+  mkdirSync(join(supportRoot, "knowledge", "derived"), { recursive: true });
+  writeFileSync(join(supportRoot, "docs", "guide-usage.md"), "# Guide\nUse the tool.\n");
+  writeFileSync(
+    join(supportRoot, "docs", "cards", "fixes", "fix-primitive-as-conversions.md"),
+    "# Rule Card\n",
+  );
+  writeFileSync(
+    join(supportRoot, "knowledge", "derived", "skill-context.json"),
+    '{"rule":"fixes/fix-primitive-as-conversions"}\n',
+  );
+
+  const registry = new SkillRegistry();
+  registry.register([{
+    name,
+    description: `${name} description`,
+    source: "global",
+    dirPath: wrapperDir,
+    supportRootPath: supportRoot,
+    sourceRepoPath: supportRoot,
+    sourceSkillDirPath: join(supportRoot, "arkts-skills", name),
+    skillFilePath: join(wrapperDir, "SKILL.md"),
+  }]);
+  const access = new SkillAccessManager(registry);
+  access.unlock(name);
+  return {
+    access,
+    uri: (relativePath: string) => `skill://${name}/${relativePath}`,
+    wrapperDir,
+    supportRoot,
+  };
+}
 
 describe("builtinTools", () => {
   it("has 9 built-in tools", () => {
@@ -124,6 +219,88 @@ describe("read_file", () => {
       rmSync(outsidePath, { force: true });
     }
   });
+
+  it("reads files from an unlocked skill tree", async () => {
+    const skill = setupUnlockedSkill();
+    const tool = createReadFileTool({ skillAccess: skill.access });
+
+    const result = await tool.handler({ path: skill.uri("docs/guide-usage.md") }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Guide");
+  });
+
+  it("requires invoke_skill before reading from a skill tree", async () => {
+    const skillDir = mkdtempSync(join(tmpdir(), "devagent-skill-tree-locked-"));
+    cleanupDirs.push(skillDir);
+    mkdirSync(join(skillDir, "docs"), { recursive: true });
+    writeFileSync(join(skillDir, "docs", "guide-usage.md"), "locked\n");
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: locked-skill\ndescription: locked\n---\nBody\n");
+    const registry = new SkillRegistry();
+    registry.register([{
+      name: "locked-skill",
+      description: "locked",
+      source: "global",
+      dirPath: skillDir,
+      skillFilePath: join(skillDir, "SKILL.md"),
+    }]);
+    const tool = createReadFileTool({ skillAccess: new SkillAccessManager(registry) });
+
+    await expect(
+      tool.handler({ path: "skill://locked-skill/docs/guide-usage.md" }, ctx),
+    ).rejects.toThrow(/invoke_skill/i);
+  });
+
+  it("rejects traversal out of a skill root", async () => {
+    const skill = setupUnlockedSkill();
+    const tool = createReadFileTool({ skillAccess: skill.access });
+
+    await expect(
+      tool.handler({ path: skill.uri("../outside.txt") }, ctx),
+    ).rejects.toThrow(/repo root|outside/i);
+  });
+
+  it("reads wrapper-local files for a backed skill", async () => {
+    const skill = setupBackedUnlockedSkill();
+    const tool = createReadFileTool({ skillAccess: skill.access });
+
+    const skillFile = await tool.handler({ path: skill.uri("SKILL.md") }, ctx);
+    const agentFile = await tool.handler({ path: skill.uri("agents/openai.yaml") }, ctx);
+
+    expect(skillFile.success).toBe(true);
+    expect(skillFile.output).toContain("name: modernize-arkts");
+    expect(agentFile.success).toBe(true);
+    expect(agentFile.output).toContain("model: gpt-5.4");
+  });
+
+  it("falls back to the backing support root for a backed skill", async () => {
+    const skill = setupBackedUnlockedSkill();
+    const tool = createReadFileTool({ skillAccess: skill.access });
+
+    const guide = await tool.handler({ path: skill.uri("docs/guide-usage.md") }, ctx);
+    const contextFile = await tool.handler(
+      { path: skill.uri("knowledge/derived/skill-context.json") },
+      ctx,
+    );
+
+    expect(guide.success).toBe(true);
+    expect(guide.output).toContain("Guide");
+    expect(contextFile.success).toBe(true);
+    expect(contextFile.output).toContain("fixes/fix-primitive-as-conversions");
+  });
+
+  it("rejects symlinks in a backing support root that escape the allowed tree", async () => {
+    const skill = setupBackedUnlockedSkill();
+    const tool = createReadFileTool({ skillAccess: skill.access });
+    const outsideFile = join(tmpdir(), `devagent-skill-support-outside-${Date.now()}.txt`);
+    writeFileSync(outsideFile, "outside secret\n");
+    cleanupDirs.push(outsideFile);
+    symlinkSync(outsideFile, join(skill.supportRoot, "docs", "outside-link.md"));
+
+    await expect(
+      tool.handler({ path: skill.uri("docs/outside-link.md") }, ctx),
+    ).rejects.toThrow(/repo root|outside/i);
+  });
 });
 
 describe("write_file", () => {
@@ -186,6 +363,12 @@ describe("write_file", () => {
       rmSync(outsidePath, { force: true });
     }
   });
+
+  it("rejects skill:// paths", async () => {
+    await expect(
+      writeFileTool.handler({ path: "skill://modernize-arkts/docs/new.md", content: "nope\n" }, ctx),
+    ).rejects.toThrow(/read-only/i);
+  });
 });
 
 describe("replace_in_file", () => {
@@ -222,6 +405,19 @@ describe("replace_in_file", () => {
         ctx,
       ),
     ).rejects.toThrow("must read file");
+  });
+
+  it("rejects skill:// paths", async () => {
+    await expect(
+      replaceInFileTool.handler(
+        {
+          path: "skill://modernize-arkts/docs/guide-usage.md",
+          search: "Guide",
+          replace: "Manual",
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/read-only/i);
   });
 
   it("defaults to single-replace mode and rejects ambiguous matches", async () => {
@@ -476,6 +672,38 @@ describe("find_files", () => {
       rmSync(outsideDir, { recursive: true, force: true });
     }
   });
+
+  it("finds files inside an unlocked skill tree", async () => {
+    const skill = setupUnlockedSkill();
+    const tool = createFindFilesTool({ skillAccess: skill.access });
+
+    const result = await tool.handler({ pattern: "**/*.md", path: skill.uri("docs") }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("docs/guide-usage.md");
+  });
+
+  it("finds files inside the backing support root of a backed skill", async () => {
+    const skill = setupBackedUnlockedSkill();
+    const tool = createFindFilesTool({ skillAccess: skill.access });
+
+    const result = await tool.handler({ pattern: "**/*.md", path: skill.uri("docs") }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("docs/guide-usage.md");
+    expect(result.output).toContain("docs/cards/fixes/fix-primitive-as-conversions.md");
+  });
+
+  it("uses the backing support root for root-level backed skill browsing", async () => {
+    const skill = setupBackedUnlockedSkill();
+    const tool = createFindFilesTool({ skillAccess: skill.access });
+
+    const result = await tool.handler({ pattern: "**/*.md", path: skill.uri(".") }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("docs/guide-usage.md");
+    expect(result.output).not.toContain("SKILL.md");
+  });
 });
 
 describe("search_files", () => {
@@ -547,6 +775,45 @@ describe("search_files", () => {
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
+  });
+
+  it("searches inside an unlocked skill tree", async () => {
+    const skill = setupUnlockedSkill();
+    const tool = createSearchFilesTool({ skillAccess: skill.access });
+
+    const result = await tool.handler(
+      { pattern: "Use the tool", path: skill.uri("docs") },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("docs/guide-usage.md:2");
+  });
+
+  it("searches inside the backing support root of a backed skill", async () => {
+    const skill = setupBackedUnlockedSkill();
+    const tool = createSearchFilesTool({ skillAccess: skill.access });
+
+    const result = await tool.handler(
+      { pattern: "fixes/fix-primitive-as-conversions", path: skill.uri("knowledge") },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("knowledge/derived/skill-context.json:1");
+  });
+
+  it("uses the backing support root for root-level backed skill searches", async () => {
+    const skill = setupBackedUnlockedSkill();
+    const tool = createSearchFilesTool({ skillAccess: skill.access });
+
+    const result = await tool.handler(
+      { pattern: "fixes/fix-primitive-as-conversions", path: skill.uri(".") },
+      ctx,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("knowledge/derived/skill-context.json:1");
   });
 });
 
@@ -928,4 +1195,3 @@ describe("FileTime", () => {
     expect(() => FileTime.assert(filePath)).toThrow("modified since");
   });
 });
-

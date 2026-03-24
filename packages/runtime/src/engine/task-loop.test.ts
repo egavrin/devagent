@@ -1079,6 +1079,132 @@ describe("TaskLoop", () => {
     expect(result.lastText).toBe("Final answer");
   });
 
+  it("continues after a text-only progress update when the final-text validator rejects it", async () => {
+    const provider = createMockProvider([
+      [
+        {
+          type: "tool_call",
+          content: '{"text": "test"}',
+          toolCallId: "call_0",
+          toolName: "echo",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Progress: I've inspected the files." },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: '{"structured":{"summary":"ok","issues":[]},"rendered":"# ok"}' },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+      finalTextValidator: (candidate) => ({
+        valid: candidate.trim().startsWith("{"),
+        retryMessage: "Return the final JSON artifact now.",
+      }),
+    });
+
+    const result = await loop.run("Do something");
+
+    expect(result.status).toBe("success");
+    expect(result.iterations).toBe(3);
+    expect(result.lastText).toBe('{"structured":{"summary":"ok","issues":[]},"rendered":"# ok"}');
+    expect(result.messages.filter((m) => m.role === MessageRole.ASSISTANT).map((m) => m.content)).toContain(
+      "Progress: I've inspected the files.",
+    );
+    expect(result.messages.filter((m) => m.role === MessageRole.SYSTEM).map((m) => m.content)).toContain(
+      "Return the final JSON artifact now.",
+    );
+  });
+
+  it("accepts a text-only progress update when no final-text validator is configured", async () => {
+    const provider = createMockProvider([
+      [
+        {
+          type: "tool_call",
+          content: '{"text": "test"}',
+          toolCallId: "call_0",
+          toolName: "echo",
+        },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Progress: I've inspected the files." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Do something");
+
+    expect(result.status).toBe("success");
+    expect(result.iterations).toBe(2);
+    expect(result.lastText).toBe("Progress: I've inspected the files.");
+  });
+
+  it("does not retain text from assistant turns that also contain tool calls as lastText", async () => {
+    const provider = createMockProvider([
+      [
+        { type: "text", content: "Invoked testing and execute-contract." },
+        {
+          type: "tool_call",
+          content: '{"text": "test"}',
+          toolCallId: "call_0",
+          toolName: "echo",
+        },
+        { type: "done", content: "" },
+      ],
+      [{ type: "done", content: "" }],
+      [{ type: "done", content: "" }],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Do something");
+
+    expect(result.status).toBe("empty_response");
+    expect(result.lastText).toBeNull();
+  });
+
   it("emits PROVIDER_RETRY error events during retries", async () => {
     let callCount = 0;
     const provider: LLMProvider = {

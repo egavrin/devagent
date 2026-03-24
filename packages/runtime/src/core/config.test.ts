@@ -319,6 +319,39 @@ describe("findProjectRoot", () => {
     expect(typeof result === "string" || result === null).toBe(true);
   });
 
+  it("prefers a workspace with .agents/skills over a parent git root", () => {
+    const parentDir = join(tmpdir(), `devagent-root-agents-${Date.now()}`);
+    const workspaceDir = join(parentDir, "arkts-helloworld");
+    const nestedDir = join(workspaceDir, "src");
+    mkdirSync(join(parentDir, ".git"), { recursive: true });
+    mkdirSync(join(workspaceDir, ".agents", "skills", "implement-arkts"), { recursive: true });
+    mkdirSync(nestedDir, { recursive: true });
+
+    try {
+      expect(findProjectRoot(workspaceDir)).toBe(workspaceDir);
+      expect(findProjectRoot(nestedDir)).toBe(workspaceDir);
+    } finally {
+      rmSync(parentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat .devagent alone as a workspace root anchor", () => {
+    const parentDir = join(tmpdir(), `devagent-root-devagent-${Date.now()}`);
+    const workspaceDir = join(parentDir, "arkts-helloworld");
+    const nestedDir = join(workspaceDir, "src");
+    mkdirSync(join(parentDir, ".git"), { recursive: true });
+    mkdirSync(join(workspaceDir, ".devagent"), { recursive: true });
+    writeFileSync(join(workspaceDir, ".devagent", "ai_agent_instructions.md"), "# test\n");
+    mkdirSync(nestedDir, { recursive: true });
+
+    try {
+      expect(findProjectRoot(workspaceDir)).toBe(parentDir);
+      expect(findProjectRoot(nestedDir)).toBe(parentDir);
+    } finally {
+      rmSync(parentDir, { recursive: true, force: true });
+    }
+  });
+
   it("parses session_state settings including trackFindings, maxFindings, maxEnvFacts from TOML", () => {
     const dir = join(tmpdir(), `devagent-test-ss-${Date.now()}`);
     mkdirSync(dir, { recursive: true });

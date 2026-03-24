@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSkillTool } from "./skill-tool.js";
-import { SkillRegistry, SkillResolver } from "../core/index.js";
+import { SkillAccessManager, SkillRegistry, SkillResolver } from "../core/index.js";
 import type { SkillMetadata, ToolContext, DevAgentConfig } from "../core/index.js";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -91,5 +91,39 @@ describe("createSkillTool", () => {
     const result = await tool.handler({ name: "meta-skill" }, toolContext);
     expect(result.success).toBe(true);
     expect(result.output).toContain("meta-skill");
+  });
+
+  it("unlocks support trees and advertises skill:// access", async () => {
+    const metadata = setupSkill("support-skill", "Has support files", "Instructions here");
+    mkdirSync(join(metadata.dirPath, "scripts"), { recursive: true });
+    registry.register([metadata]);
+    const skillAccess = new SkillAccessManager(registry);
+    const tool = createSkillTool(registry, resolver, { skillAccess });
+
+    const result = await tool.handler({ name: "support-skill" }, toolContext);
+
+    expect(result.success).toBe(true);
+    expect(skillAccess.isUnlocked("support-skill")).toBe(true);
+    expect(result.output).toContain("skill://support-skill/");
+  });
+
+  it("advertises skill:// access for a backed skill with support-root content only", async () => {
+    const metadata = setupSkill("backed-skill", "Backed skill", "Instructions here");
+    const supportRoot = join(TEST_DIR, "backed-skill-support");
+    mkdirSync(join(supportRoot, "docs"), { recursive: true });
+    writeFileSync(join(supportRoot, "docs", "guide.md"), "# Guide\n", "utf-8");
+    registry.register([{
+      ...metadata,
+      source: "global",
+      supportRootPath: supportRoot,
+      sourceRepoPath: supportRoot,
+    }]);
+    const skillAccess = new SkillAccessManager(registry);
+    const tool = createSkillTool(registry, resolver, { skillAccess });
+
+    const result = await tool.handler({ name: "backed-skill" }, toolContext);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("skill://backed-skill/");
   });
 });

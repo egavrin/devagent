@@ -10,9 +10,6 @@ import { appendFileSync } from "node:fs";
 import {
   EventBus,
   ApprovalGate,
-  SkillLoader,
-  SkillRegistry,
-  SkillResolver,
   ContextManager,
   loadConfig,
   resolveProviderCredentials,
@@ -25,7 +22,7 @@ import {
 } from "@devagent/runtime";
 import type { DevAgentConfig, ApprovalPolicy } from "@devagent/runtime";
 import { createDefaultRegistry } from "@devagent/providers";
-import { createDefaultToolRegistry, ToolRegistry } from "@devagent/runtime";
+import { ToolRegistry } from "@devagent/runtime";
 import {
   TaskLoop,
   createPlanTool,
@@ -39,6 +36,7 @@ import {
   SessionState,
   type Message,
   type SessionStateJSON,
+  type FinalTextValidator,
 } from "@devagent/runtime";
 import type { ContinuationSession } from "@devagent-sdk/types";
 import { assembleSystemPrompt } from "./prompts/index.js";
@@ -46,9 +44,11 @@ import { detectProjectTestCommand } from "./test-command-detect.js";
 import { loadRepoContext, buildContextPrompt } from "./repo-context.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { createShellTestRunner } from "./double-check-wiring.js";
+import { createSkillInfrastructure } from "./skill-setup.js";
 
 export interface WorkflowQueryOptions {
   query: string;
+  taskType?: string;
   repoPath: string;
   provider?: string;
   model?: string;
@@ -79,6 +79,78 @@ type HeadlessSessionPayload = {
   messages: Message[];
   sessionState?: SessionStateJSON;
 };
+
+const PLAN_FREE_WORKFLOW_TASK_TYPES = new Set([
+  "task-intake",
+  "design",
+  "breakdown",
+  "issue-generation",
+  "triage",
+  "plan",
+  "test-plan",
+  "completion",
+]);
+
+const STRICT_STRUCTURED_WORKFLOW_TASK_TYPES = new Set([
+  "breakdown",
+  "issue-generation",
+]);
+
+export function shouldEnableWorkflowPlanTool(taskType: string | undefined): boolean {
+  return !taskType || !PLAN_FREE_WORKFLOW_TASK_TYPES.has(taskType);
+}
+
+export function createWorkflowFinalTextValidator(
+  taskType: string | undefined,
+): FinalTextValidator | undefined {
+  if (!taskType || !STRICT_STRUCTURED_WORKFLOW_TASK_TYPES.has(taskType)) {
+    return undefined;
+  }
+
+  return (candidate) => {
+    const trimmed = candidate.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return {
+        valid: false,
+        retryMessage: buildStrictWorkflowRetryMessage(taskType),
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {
+          valid: false,
+          retryMessage: buildStrictWorkflowRetryMessage(taskType),
+        };
+      }
+
+      const envelope = parsed as Record<string, unknown>;
+      if (!("structured" in envelope) || typeof envelope["rendered"] !== "string") {
+        return {
+          valid: false,
+          retryMessage: buildStrictWorkflowRetryMessage(taskType),
+        };
+      }
+
+      return { valid: true };
+    } catch {
+      return {
+        valid: false,
+        retryMessage: buildStrictWorkflowRetryMessage(taskType),
+      };
+    }
+  };
+}
+
+function buildStrictWorkflowRetryMessage(taskType: string): string {
+  return [
+    `Your previous reply was a progress update or other non-final response for the ${taskType} stage.`,
+    "This stage must end with a single JSON object now.",
+    'Return exactly one top-level object containing "structured" and "rendered".',
+    "Do not include commentary, code fences, progress sections, or any text before or after the JSON object.",
+  ].join(" ");
+}
 
 function loadContinuationPayload(session: ContinuationSession | undefined): HeadlessSessionPayload | null {
   if (!session || session.kind !== "devagent-headless-v1") {
@@ -165,7 +237,6 @@ export async function setupAndRunWorkflowQuery(
   const provider = providerRegistry.get(config.provider, providerConfig);
 
   // 3. Set up tools (lightweight shared runtime bootstrap)
-  const toolRegistry = createDefaultToolRegistry();
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
 
@@ -174,22 +245,24 @@ export async function setupAndRunWorkflowQuery(
     ? SessionState.fromJSON(previousSession.sessionState, config.sessionState)
     : new SessionState(config.sessionState);
 
-  // Plan tool (minimal — no quality judgment in headless mode)
-  toolRegistry.register(createPlanTool(
-    bus,
-    () => sessionState,
-    () => 0,
-    async () => null,
-  ));
-  toolRegistry.register(createFindingTool(() => sessionState, () => 0));
-
   // Skills
-  const skillLoader = new SkillLoader();
-  const skillMetadata = skillLoader.discover({ repoRoot: projectRoot });
-  const skills = new SkillRegistry();
-  skills.register(skillMetadata);
-  const skillResolver = new SkillResolver();
-  toolRegistry.register(createSkillTool(skills, skillResolver));
+  const { skills, skillResolver, skillAccess, toolRegistry } = createSkillInfrastructure(
+    projectRoot,
+    sessionState,
+  );
+
+  // Prompt-only workflow stages should return an artifact directly instead of
+  // getting trapped in iterative update_plan loops.
+  if (shouldEnableWorkflowPlanTool(options.taskType)) {
+    toolRegistry.register(createPlanTool(
+      bus,
+      () => sessionState,
+      () => 0,
+      async () => null,
+    ));
+  }
+  toolRegistry.register(createFindingTool(() => sessionState, () => 0));
+  toolRegistry.register(createSkillTool(skills, skillResolver, { skillAccess }));
 
   // Tool scripts + delegate
   toolRegistry.register(createToolScriptTool({ registry: toolRegistry, bus }));
@@ -272,6 +345,7 @@ export async function setupAndRunWorkflowQuery(
     doubleCheck,
     sessionState,
     initialMessages: options.continuation?.mode === "resume" ? previousSession?.messages : undefined,
+    finalTextValidator: createWorkflowFinalTextValidator(options.taskType),
   });
 
   let responseText = "";

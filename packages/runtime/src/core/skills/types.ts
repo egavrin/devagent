@@ -37,6 +37,9 @@ export interface SkillMetadata extends SkillFrontmatter {
   readonly source: SkillSource;
   readonly dirPath: string;
   readonly skillFilePath: string;
+  readonly supportRootPath?: string;
+  readonly sourceRepoPath?: string;
+  readonly sourceSkillDirPath?: string;
 }
 
 /** Full skill loaded on demand (reads SKILL.md body). */

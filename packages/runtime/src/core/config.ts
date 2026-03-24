@@ -510,8 +510,9 @@ function stripUndefined<T extends Record<string, unknown>>(
  * Resolve the project root by walking upward once, checking ALL markers at
  * each directory level. Priority order (highest first):
  *   1. .devagent.toml / devagent.toml  — immediate return
- *   2. package.json (start dir only)   — remembered as fallback
- *   3. .git                            — first match remembered as fallback
+ *   2. .agents/skills                 — immediate return
+ *   3. package.json (start dir only)  — remembered as fallback
+ *   4. .git                           — first match remembered as fallback
  */
 export function findProjectRoot(startDir?: string): string | null {
   const start = resolve(startDir ?? process.cwd());
@@ -527,6 +528,11 @@ export function findProjectRoot(startDir?: string): string | null {
       existsSync(join(dir, ".devagent.toml")) ||
       existsSync(join(dir, "devagent.toml"))
     ) {
+      return dir;
+    }
+
+    // Standalone agent workspaces should not float up to a parent git root.
+    if (existsSync(join(dir, ".agents", "skills"))) {
       return dir;
     }
 

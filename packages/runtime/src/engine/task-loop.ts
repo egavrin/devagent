@@ -63,6 +63,15 @@ export type MidpointCallback = (
   iteration: number,
 ) => Promise<{ continueMessages: ReadonlyArray<Message> } | null>;
 
+export interface FinalTextValidationResult {
+  readonly valid: boolean;
+  readonly retryMessage?: string;
+}
+
+export type FinalTextValidator = (
+  candidate: string,
+) => FinalTextValidationResult;
+
 export interface TaskLoopOptions {
   readonly provider: LLMProvider;
   readonly tools: ToolRegistry;
@@ -79,6 +88,8 @@ export interface TaskLoopOptions {
   readonly midpointCallback?: MidpointCallback;
   /** Session state sidecar — structured facts that survive compaction. */
   readonly sessionState?: SessionState;
+  /** Optional validation hook for text-only terminal responses. */
+  readonly finalTextValidator?: FinalTextValidator;
 }
 
 export interface TaskLoopResult {
@@ -191,6 +202,7 @@ export class TaskLoop {
   private readonly midpointCallback: MidpointCallback | null;
   private readonly midpointInterval: number;
   private readonly sessionState: SessionState | null;
+  private readonly finalTextValidator: FinalTextValidator | null;
   private mode: TaskMode;
   private messages: Message[] = [];
   private iterations = 0;
@@ -232,6 +244,7 @@ export class TaskLoop {
     this.midpointInterval =
       options.config.context.midpointBriefingInterval ?? DEFAULT_MIDPOINT_INTERVAL;
     this.sessionState = options.sessionState ?? null;
+    this.finalTextValidator = options.finalTextValidator ?? null;
     this.cachedPricing = lookupModelPricing(this.config.model);
     this.stagnationDetector = new StagnationDetector({
       bus: this.bus,
@@ -346,11 +359,6 @@ export class TaskLoop {
           });
           await sleep(RETRY_DELAYS[attempt]!);
         }
-      }
-
-      // Track last non-empty text from the LLM (even if tool calls follow)
-      if (textContent.trim()) {
-        lastNonEmptyText = textContent;
       }
 
       if (toolCalls.length > 0) {
@@ -495,6 +503,23 @@ export class TaskLoop {
           });
           continue;
         }
+
+        const finalTextValidation = this.finalTextValidator?.(textContent) ?? { valid: true };
+        if (!finalTextValidation.valid) {
+          this.pushMessage({
+            role: MessageRole.ASSISTANT,
+            content: textContent,
+          });
+          this.bus.emit("message:assistant", { content: textContent, partial: false });
+          this.pushMessage({
+            role: MessageRole.SYSTEM,
+            content: finalTextValidation.retryMessage
+              ?? "Your previous reply was not a valid final response for this stage. Return the final artifact now without commentary.",
+          });
+          continue;
+        }
+
+        lastNonEmptyText = textContent;
 
         // Accept as final answer
         this.pushMessage({

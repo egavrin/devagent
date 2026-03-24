@@ -24,3 +24,9 @@ export { SkillRegistry } from "./registry.js";
 
 export { SkillResolver } from "./resolver.js";
 export type { ResolveContext, SkillResolverOptions } from "./resolver.js";
+
+export {
+  SkillAccessManager,
+  INVOKED_SKILL_KNOWLEDGE_PREFIX,
+} from "./access.js";
+export type { SkillAccessPersistence } from "./access.js";
