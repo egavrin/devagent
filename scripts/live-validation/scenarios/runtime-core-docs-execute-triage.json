@@ -1,0 +1,61 @@
+{
+  "id": "runtime-core-docs-execute-triage",
+  "description": "Execute triage scenario for malformed ABC validation using the smaller runtime_core docs mirror.",
+  "suites": ["smoke", "full"],
+  "targetRepo": "arkcompiler_runtime_core_docs",
+  "surface": "execute",
+  "taskShape": "readonly",
+  "isolationMode": "worktree",
+  "requiresChatgptAuth": true,
+  "invocation": {
+    "type": "execute",
+    "taskType": "triage",
+    "workItemTitle": "Triage malformed ABC validation issue in runtime_core docs mirror",
+    "summary": "Analyze the impact area for stricter malformed ABC input validation using the smaller runtime_core docs mirror repository.",
+    "issueBody": "Ground the triage report in docs/bc_verification, assembler, and verifier-related tests. No code changes are allowed.",
+    "extraInstructions": [
+      "Before local searching, decompose the investigation into at least two narrow `explore` delegates emitted in the same turn.",
+      "Use one `explore` delegate for docs/spec evidence such as docs/bc_verification or assembler-facing docs, and one `explore` delegate for runtime/tests evidence such as verifier-related tests.",
+      "Do not send one umbrella `explore` delegate for the whole investigation.",
+      "Do not do all repository exploration yourself; this scenario explicitly requires delegated exploration.",
+      "Call out assembler responsibilities explicitly.",
+      "Reference docs/bc_verification and verifier-related tests in the report."
+    ],
+    "maxIterations": 12
+  },
+  "expectedArtifacts": ["triage-report.md"],
+  "assertions": [
+    {
+      "type": "contains",
+      "source": "artifact",
+      "path": "triage-report.md",
+      "value": "assembler"
+    },
+    {
+      "type": "contains",
+      "source": "artifact",
+      "path": "triage-report.md",
+      "value": "bc_verification"
+    },
+    {
+      "type": "matches",
+      "source": "repoStatus",
+      "pattern": "^\\s*$"
+    }
+  ],
+  "verificationCommands": [],
+  "cleanupPolicy": "destroy",
+  "requiredToolCalls": [
+    {
+      "tool": "delegate",
+      "minCalls": 2
+    }
+  ],
+  "requiredToolBatches": [
+    {
+      "tool": "delegate",
+      "minBatches": 1,
+      "minBatchSize": 2
+    }
+  ]
+}

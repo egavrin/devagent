@@ -100,6 +100,18 @@ devagent-hub -> devagent-runner -> devagent execute --request ... --artifact-dir
 
 Live validation is currently exercised with `provider: chatgpt` and `model: gpt-5.4`.
 
+Opt-in local validation commands:
+
+```bash
+bun run validate:live:smoke
+bun run validate:live:full
+bun run validate:live:scenario -- runtime-core-execute-triage
+```
+
+These runs expect sibling checkouts of `arkcompiler_ets_frontend` and
+`arkcompiler_runtime_core`, ChatGPT auth configured via `devagent auth login`,
+and a built ArkTS linter at `../arkcompiler_ets_frontend/ets2panda/linter/dist/tslinter.js`.
+
 ## Limitations
 
 - the repo is public, but the workspace packages are not published to a registry yet

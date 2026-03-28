@@ -1,0 +1,53 @@
+{
+  "id": "ets-frontend-cli-arkts",
+  "description": "CLI ArkTS repair scenario using the real ets2panda linter wiring.",
+  "suites": ["smoke", "full"],
+  "targetRepo": "arkcompiler_ets_frontend",
+  "surface": "cli",
+  "taskShape": "implement",
+  "isolationMode": "worktree",
+  "requiresChatgptAuth": true,
+  "requiresArktsLinter": true,
+  "baselineAfterSetup": true,
+  "variables": {
+    "targetFile": "devagent_live_validation/CounterFix.ets"
+  },
+  "preSetup": [
+    {
+      "kind": "write-file",
+      "path": ".devagent.toml",
+      "templateFile": "ets-frontend-arkts-config.toml"
+    },
+    {
+      "kind": "write-file",
+      "path": "${targetFile}",
+      "templateFile": "ets-frontend-arkts-broken.ets"
+    }
+  ],
+  "invocation": {
+    "type": "cli",
+    "query": "Fix the ArkTS validation errors in ${targetFile}. Keep the change minimal, do not touch unrelated files, and stop once validation passes. For targeted validation, run `node dist/tslinter.js --ide-interactive --arkts-2 ${repoRoot}/${targetFile}` from `ets2panda/linter`. Do not rediscover the linter entrypoint or inspect unrelated linter internals.",
+    "approvalMode": "full-auto",
+    "maxIterations": 18
+  },
+  "expectedArtifacts": [],
+  "assertions": [
+    {
+      "type": "contains",
+      "source": "stderr",
+      "value": "[arkts] ArkTS linter enabled"
+    },
+    {
+      "type": "contains",
+      "source": "repoDiff",
+      "value": "${targetFile}"
+    }
+  ],
+  "verificationCommands": [
+    {
+      "cwd": "linter",
+      "command": "node dist/tslinter.js --ide-interactive --arkts-2 ${repoRoot}/${targetFile}"
+    }
+  ],
+  "cleanupPolicy": "destroy"
+}

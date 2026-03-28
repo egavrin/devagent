@@ -27,6 +27,7 @@
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",
+    "test:live-validation": "bun test scripts/live-validation/live-validation.test.ts",
     "lint": "turbo run lint",
     "lint:arkts": "turbo run lint:arkts",
     "typecheck": "turbo run typecheck",
@@ -34,7 +35,10 @@
     "dev": "turbo run dev",
     "install-cli": "cd packages/cli && bun link",
     "install-lsp": "bash scripts/install-lsp-servers.sh",
-    "check:oss": "node ./scripts/check-oss.mjs"
+    "check:oss": "node ./scripts/check-oss.mjs",
+    "validate:live:smoke": "bun run scripts/live-validation.ts --suite smoke",
+    "validate:live:full": "bun run scripts/live-validation.ts --suite full",
+    "validate:live:scenario": "bun run scripts/live-validation.ts --scenario"
   },
   "devDependencies": {
     "@types/bun": "^1.3.10",

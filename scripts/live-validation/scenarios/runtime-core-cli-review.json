@@ -1,0 +1,39 @@
+{
+  "id": "runtime-core-cli-review",
+  "description": "CLI review scenario against a staged shell-script diff with a deliberate security defect.",
+  "suites": ["smoke", "full"],
+  "targetRepo": "arkcompiler_runtime_core",
+  "surface": "cli",
+  "taskShape": "review",
+  "isolationMode": "worktree",
+  "requiresChatgptAuth": true,
+  "preSetup": [
+    {
+      "kind": "write-file",
+      "path": "scripts/devagent_live_validation_review.sh",
+      "templateFile": "runtime-core-review.sh",
+      "executable": true
+    },
+    {
+      "kind": "run-command",
+      "cwd": "repo",
+      "command": "git add scripts/devagent_live_validation_review.sh"
+    }
+  ],
+  "invocation": {
+    "type": "cli",
+    "query": "Review the staged diff. Focus on correctness and security. Report concrete defects only.",
+    "approvalMode": "full-auto",
+    "maxIterations": 14
+  },
+  "expectedArtifacts": [],
+  "assertions": [
+    {
+      "type": "matches",
+      "source": "stdout",
+      "pattern": "command[- ]injection|shell[- ]injection|unsafe eval|unsanitized|arbitrary command execution|\\beval\\b"
+    }
+  ],
+  "verificationCommands": [],
+  "cleanupPolicy": "destroy"
+}

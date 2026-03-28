@@ -36,6 +36,7 @@ bun run test
 - `src/main.ts` owns the supported CLI surface. Keep it aligned with the repo root `README.md` and avoid reintroducing removed surfaces such as interactive chat or public plan mode.
 - Prompt text lives in `src/prompts/*.md` and is copied into `dist/prompts/` during build. If prompt behavior changes, update the prompt assets and the nearby tests together.
 - CLI behavior should delegate into workspace packages instead of reimplementing runtime or executor logic locally.
+- The opt-in live validation harness lives under `scripts/live-validation.ts` and invokes the real CLI entrypoint from outside the package. When CLI behavior changes, keep that harness and the root README guidance aligned with the supported surface.
 
 ## Generated Files, Conventions, and Pitfalls
 

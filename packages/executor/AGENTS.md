@@ -31,6 +31,7 @@ bun run test
 - `src/index.test.ts` is the primary contract guard for request validation, capability checks, skill resolution, task-query shaping, artifact extraction, and verification-command behavior. Extend it whenever `execute` behavior changes.
 - Requested skills are resolved from repo-local skill directories and injected into the task query. Missing skills currently warn and continue; if you change that behavior, update both tests and docs deliberately.
 - Verify-command rewriting is sensitive to Bun-vs-Node execution details. Treat changes in this area as contract work, not incidental refactoring.
+- The opt-in live validation harness under `scripts/live-validation.ts` exercises `devagent execute` through the real CLI process. If executor artifact/event behavior changes, keep that harness, `README.md`, and `src/index.test.ts` aligned.
 
 ## Generated Files, Conventions, and Pitfalls
 
