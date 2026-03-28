@@ -2,27 +2,29 @@
  * Tests for CLI output formatting — categorical verbosity, gauges, summaries.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import {
   isCategoryEnabled,
   buildVerbosityConfig,
   formatContextGauge,
   formatEnrichedError,
   inferErrorSuggestion,
-  formatTurnHeader,
   formatTurnSummary,
   formatSessionSummary,
   formatCompactionResult,
   formatReasoning,
   Spinner,
-  SPINNER_VERBS,
-  toolVerb,
   formatToolStart,
   formatToolEnd,
   formatToolGroupStart,
   formatToolGroupEnd,
-  StatusBar,
+  formatSubagentBatchLaunch,
+  formatSubagentStart,
+  formatSubagentError,
+  summarizeSubagentUpdate,
+  SubagentPanelRenderer,
 } from "./format.js";
+import { AgentType } from "@devagent/runtime";
 import type { VerbosityConfig } from "@devagent/runtime";
 
 // ─── Improvement 5: Categorical Verbosity ─────────────────────
@@ -216,42 +218,6 @@ describe("formatEnrichedError", () => {
   });
 });
 
-// ─── Improvement 8: Turn Separators ───────────────────────────
-
-describe("formatTurnHeader", () => {
-  it("includes turn number", () => {
-    const result = formatTurnHeader(3);
-    expect(result).toContain("Turn 3");
-  });
-
-  it("includes token info when provided", () => {
-    const result = formatTurnHeader(2, { estimated: 52000, max: 128000 });
-    expect(result).toContain("tokens: 52k/128k");
-  });
-
-  it("includes cost info when provided", () => {
-    const result = formatTurnHeader(1, undefined, { totalCost: 0.12 });
-    expect(result).toContain("cost: $0.12");
-  });
-
-  it("works with all info", () => {
-    const result = formatTurnHeader(5, { estimated: 90000, max: 128000 }, { totalCost: 0.0567 });
-    expect(result).toContain("Turn 5");
-    expect(result).toContain("tokens: 90k/128k");
-    expect(result).toContain("cost: $0.0567");
-  });
-
-  it("omits token info when tokens are 0", () => {
-    const result = formatTurnHeader(1, { estimated: 0, max: 128000 });
-    expect(result).not.toContain("tokens:");
-  });
-
-  it("omits cost info when cost is 0", () => {
-    const result = formatTurnHeader(1, undefined, { totalCost: 0 });
-    expect(result).not.toContain("cost:");
-  });
-});
-
 // ─── Improvement 3: Per-Turn Summary ──────────────────────────
 
 describe("formatTurnSummary", () => {
@@ -260,7 +226,6 @@ describe("formatTurnSummary", () => {
       iterationCount: 3,
       toolCallCount: 8,
       inputTokens: 45000,
-      outputTokens: 5000,
       costDelta: 0.042,
       elapsedMs: 12300,
     });
@@ -276,7 +241,6 @@ describe("formatTurnSummary", () => {
       iterationCount: 1,
       toolCallCount: 0,
       inputTokens: 0,
-      outputTokens: 0,
       costDelta: 0,
       elapsedMs: 500,
     });
@@ -317,7 +281,6 @@ describe("formatCompactionResult", () => {
       estimatedTokens: 35000,
       removedCount: 0,
       prunedCount: 5,
-      tokensSaved: 8000,
     });
     expect(result).toContain("pruned 5 outputs");
   });
@@ -458,6 +421,76 @@ describe("formatSessionSummary", () => {
     expect(result).not.toContain("file_15.ts");
     expect(result).toContain("+5 more");
   });
+
+  it("includes delegated work summary when subagents ran", () => {
+    const result = formatSessionSummary({
+      sessionId: "sess_subagents",
+      totalIterations: 5,
+      totalToolCalls: 12,
+      toolUsage: new Map(),
+      filesChanged: [],
+      totalCost: 0.12,
+      totalInputTokens: 10000,
+      totalOutputTokens: 3000,
+      elapsedMs: 30000,
+      completionReason: "completed",
+      delegatedWork: {
+        childCount: 3,
+        children: [],
+        byType: { explore: 3 },
+        lanes: ["spec/docs", "frontend", "runtime"],
+        totalDelegatedDurationMs: 147000,
+        parallelBatchCount: 1,
+        maxParallelChildren: 2,
+      },
+    });
+
+    expect(result).toContain("Subagents:");
+    expect(result).toContain("explore=3");
+    expect(result).toContain("spec/docs, frontend, runtime");
+    expect(result).toContain("2m 27s total");
+    expect(result).toContain("1 batch(es), max 2 child(ren)");
+  });
+});
+
+describe("subagent formatting", () => {
+  it("formats subagent lifecycle lines", () => {
+    expect(formatSubagentBatchLaunch("explore", 2)).toContain("Launching 2 explore subagents in parallel");
+    expect(formatSubagentStart({
+      agentId: "root-sub-1",
+      parentAgentId: "root",
+      depth: 1,
+      agentType: AgentType.EXPLORE,
+      laneLabel: "frontend",
+      objective: "Inspect frontend lane",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      status: "running",
+    })).toContain("root-sub-1");
+    expect(formatSubagentError({
+      agentId: "root-sub-1",
+      parentAgentId: "root",
+      depth: 1,
+      agentType: AgentType.EXPLORE,
+      laneLabel: "frontend",
+      objective: "Inspect frontend lane",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      status: "error",
+      durationMs: 1200,
+      error: "Provider exploded",
+    })).toContain("Provider exploded");
+  });
+
+  it("formats child tool counters distinctly", () => {
+    const result = formatToolStart("search_files", { pattern: "FixedArray" }, 2, 0, undefined, "root-sub-1");
+    expect(result).toContain("[root-sub-1:2]");
+  });
+
+  it("uses the same child counter formatting for grouped tool output", () => {
+    const result = formatToolGroupStart("read_file", 3, ["a.ts", "b.ts"], 4, 0, undefined, "root-sub-1");
+    expect(result).toContain("[root-sub-1:4]");
+  });
 });
 
 // ─── Reasoning Display ───────────────────────────────────────
@@ -501,63 +534,6 @@ describe("formatReasoning", () => {
     const stripped = result!.replace(/\x1b\[[0-9;]*m/g, "");
     expect(stripped).toContain("I need to check the file.");
     expect(stripped).not.toContain("Then I will");
-  });
-});
-
-// ─── Rotating Spinner Verbs ──────────────────────────────────
-
-describe("SPINNER_VERBS", () => {
-  it("contains at least 10 verbs", () => {
-    expect(SPINNER_VERBS.length).toBeGreaterThanOrEqual(10);
-  });
-
-  it("does not contain duplicates", () => {
-    const unique = new Set(SPINNER_VERBS);
-    expect(unique.size).toBe(SPINNER_VERBS.length);
-  });
-
-  it("contains 'Thinking' as the first verb", () => {
-    expect(SPINNER_VERBS[0]).toBe("Thinking");
-  });
-});
-
-// ─── Human-Readable Tool Verbs ───────────────────────────────
-
-describe("toolVerb", () => {
-  it("returns present and past tense for read_file", () => {
-    const verb = toolVerb("read_file");
-    expect(verb.present).toBe("Reading");
-    expect(verb.past).toBe("Read");
-  });
-
-  it("returns present and past tense for write_file", () => {
-    const verb = toolVerb("write_file");
-    expect(verb.present).toBe("Writing");
-    expect(verb.past).toBe("Wrote");
-  });
-
-  it("returns present and past tense for replace_in_file", () => {
-    const verb = toolVerb("replace_in_file");
-    expect(verb.present).toBe("Editing");
-    expect(verb.past).toBe("Edited");
-  });
-
-  it("returns present and past tense for search_files", () => {
-    const verb = toolVerb("search_files");
-    expect(verb.present).toBe("Searching");
-    expect(verb.past).toBe("Searched");
-  });
-
-  it("returns present and past tense for run_command", () => {
-    const verb = toolVerb("run_command");
-    expect(verb.present).toBe("Running");
-    expect(verb.past).toBe("Ran");
-  });
-
-  it("returns fallback for unknown tools", () => {
-    const verb = toolVerb("some_custom_tool");
-    expect(verb.present).toBe("Calling some_custom_tool");
-    expect(verb.past).toBe("Called some_custom_tool");
   });
 });
 
@@ -646,67 +622,131 @@ describe("formatToolGroupEnd", () => {
   });
 });
 
-// ─── Status Bar ─────────────────────────────────────────────
+describe("SubagentPanelRenderer", () => {
+  const originalIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+  let writeSpy: ReturnType<typeof vi.spyOn<typeof process.stderr, "write">>;
 
-describe("StatusBar", () => {
-  it("constructs with enabled=false without errors", () => {
-    const bar = new StatusBar(false);
-    expect(bar.active).toBe(false);
+  beforeEach(() => {
+    vi.useFakeTimers();
+    Object.defineProperty(process.stderr, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    writeSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
 
-  it("formatLine returns formatted status content", () => {
-    const bar = new StatusBar(false);
-    const line = bar.formatLine({
-      iteration: 3,
-      maxIter: 30,
-      tokens: 45000,
-      maxTokens: 128000,
-      cost: 0.0234,
-      branch: "main",
-    });
-    expect(line).toContain("iter 3/30");
-    expect(line).toContain("45k/128k");
-    expect(line).toContain("$0.0234");
-    expect(line).toContain("main");
-  });
-
-  it("formatLine omits zero-value fields", () => {
-    const bar = new StatusBar(false);
-    const line = bar.formatLine({
-      iteration: 1,
-      maxIter: 0,
-      tokens: 0,
-      maxTokens: 0,
-      cost: 0,
-    });
-    expect(line).toContain("iter 1");
-    expect(line).not.toContain("k/");
-    expect(line).not.toContain("$");
-  });
-
-  it("formatLine color-codes tokens by usage ratio", () => {
-    const bar = new StatusBar(false);
-
-    // > 80% = red
-    const highUsage = bar.formatLine({
-      iteration: 1, maxIter: 30,
-      tokens: 110000, maxTokens: 128000, cost: 0,
-    });
-    if (process.env["NO_COLOR"]) {
-      expect(highUsage).not.toContain("\x1b[31m");
+  afterEach(() => {
+    writeSpy.mockRestore();
+    if (originalIsTTY) {
+      Object.defineProperty(process.stderr, "isTTY", originalIsTTY);
     } else {
-      expect(highUsage).toContain("\x1b[31m");
+      delete (process.stderr as { isTTY?: boolean }).isTTY;
     }
+    vi.useRealTimers();
+  });
 
-    // 60-80% = yellow
-    const midUsage = bar.formatLine({
-      iteration: 1, maxIter: 30,
-      tokens: 90000, maxTokens: 128000, cost: 0,
-    });
-    if (process.env["NO_COLOR"]) {
-      expect(midUsage).not.toContain("\x1b[33m");
-    } else {
-      expect(midUsage).toContain("\x1b[33m");
-    }
+  function makePanel(overrides: Partial<Parameters<SubagentPanelRenderer["formatPanels"]>[0][number]> = {}) {
+    return {
+      agentId: "root-sub-1",
+      agentType: "explore",
+      laneLabel: "docs/spec",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      status: "running" as const,
+      currentIteration: 3,
+      startedAtMs: 1_000,
+      currentActivity: "Reading docs",
+      recentActivity: ["Reading docs", "Searching FixedArray"],
+      ...overrides,
+    };
+  }
+
+  it("formats stable multi-line child panels", () => {
+    const renderer = new SubagentPanelRenderer(false);
+    const lines = renderer.formatPanels([
+      makePanel(),
+      makePanel({
+        agentId: "root-sub-2",
+        laneLabel: "runtime",
+        status: "completed",
+        currentIteration: 5,
+        durationMs: 4_500,
+        currentActivity: "Completed after 5 iterations",
+        recentActivity: ["Completed after 5 iterations"],
+        quality: {
+          score: 0.74,
+          completeness: "partial",
+        },
+      }),
+    ], 6_000);
+
+    expect(lines.length).toBe(6);
+    expect(lines[0]).toContain("Subagent root-sub-1");
+    expect(lines[1]).toContain("iter 3");
+    expect(lines[2]).toContain("Recent: Reading docs");
+    expect(lines[3]).toContain("Subagent root-sub-2");
+    expect(lines[4]).toContain("score 0.74");
+  });
+
+  it("debounces repeated panel updates into a single redraw", () => {
+    const renderer = new SubagentPanelRenderer(true);
+    renderer.setPanels([makePanel({ currentIteration: 1 })]);
+    renderer.setPanels([makePanel({ currentIteration: 2 })]);
+
+    expect(writeSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(100);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(String(writeSpy.mock.calls[0]?.[0])).toContain("iter 2");
+  });
+
+  it("does not redraw on resume until the next setPanels call", () => {
+    const renderer = new SubagentPanelRenderer(true);
+    renderer.setPanels([makePanel()]);
+    vi.advanceTimersByTime(100);
+
+    writeSpy.mockClear();
+
+    renderer.suspend();
+    writeSpy.mockClear();
+
+    renderer.resume();
+    expect(writeSpy).not.toHaveBeenCalled();
+
+    renderer.setPanels([makePanel({ currentIteration: 4 })]);
+    expect(writeSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(100);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(String(writeSpy.mock.calls[0]?.[0])).toContain("iter 4");
+  });
+});
+
+describe("summarizeSubagentUpdate", () => {
+  it("prefers explicit summary text", () => {
+    expect(summarizeSubagentUpdate({
+      agentId: "root-sub-1",
+      parentAgentId: "root",
+      depth: 1,
+      agentType: AgentType.EXPLORE,
+      status: "running",
+      milestone: "tool:before",
+      toolName: "search_files",
+      summary: "Searching tests and lowering code",
+    })).toBe("Searching tests and lowering code");
+  });
+
+  it("falls back to milestone-specific summaries", () => {
+    expect(summarizeSubagentUpdate({
+      agentId: "root-sub-1",
+      parentAgentId: "root",
+      depth: 1,
+      agentType: AgentType.EXPLORE,
+      status: "running",
+      milestone: "iteration:start",
+      iteration: 2,
+    })).toContain("iteration 2");
   });
 });

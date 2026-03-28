@@ -14,9 +14,9 @@ import {
   loadConfig,
   resolveProviderCredentials,
   loadModelRegistry,
-  lookupModelCapabilities,
   lookupModelEntry,
   DEFAULT_BUDGET,
+  AgentType,
   ApprovalMode,
   extractErrorMessage,
 } from "@devagent/runtime";
@@ -44,6 +44,7 @@ import { detectProjectTestCommand } from "./test-command-detect.js";
 import { loadRepoContext, buildContextPrompt } from "./repo-context.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { createShellTestRunner } from "./double-check-wiring.js";
+import { buildProviderConfig } from "./provider-config.js";
 import { createSkillInfrastructure } from "./skill-setup.js";
 
 export interface WorkflowQueryOptions {
@@ -223,18 +224,10 @@ export async function setupAndRunWorkflowQuery(
 
   // 2. Create provider
   const providerRegistry = createDefaultRegistry();
-  const baseProviderConfig = config.providers[config.provider] ?? {
-    model: config.model,
-    apiKey: process.env["DEVAGENT_API_KEY"],
-  };
-  const registryCaps = lookupModelCapabilities(config.model);
-  const providerConfig = {
-    ...baseProviderConfig,
-    ...(options.reasoning ? { reasoningEffort: options.reasoning as "low" | "medium" | "high" | "xhigh" } : {}),
-    ...(!baseProviderConfig.capabilities && registryCaps ? { capabilities: registryCaps } : {}),
-  };
-
-  const provider = providerRegistry.get(config.provider, providerConfig);
+  const provider = providerRegistry.get(
+    config.provider,
+    buildProviderConfig(config, options.reasoning as "low" | "medium" | "high" | "xhigh" | undefined),
+  );
 
   // 3. Set up tools (lightweight shared runtime bootstrap)
   const bus = new EventBus();
@@ -277,6 +270,23 @@ export async function setupAndRunWorkflowQuery(
     agentRegistry,
     parentAgentId: "workflow",
     getParentSessionState: () => sessionState,
+    depth: 0,
+    parentAgentType: AgentType.GENERAL,
+    ambient: {
+      skills,
+      approvalMode: options.approvalMode,
+      providerLabel: `${config.provider} / ${config.model}`,
+      providerFactory: (agentConfig, agentType) => {
+        return providerRegistry.get(
+          agentConfig.provider,
+          buildProviderConfig(
+            agentConfig,
+            options.reasoning as "low" | "medium" | "high" | "xhigh" | undefined,
+            agentType,
+          ),
+        );
+      },
+    },
   }));
 
   // DoubleCheck (auto-enable in full-auto)
@@ -318,9 +328,12 @@ export async function setupAndRunWorkflowQuery(
     mode: "act",
     skills,
     repoRoot: projectRoot,
+    availableTools: toolRegistry.getAll(),
     approvalMode: options.approvalMode,
     provider: options.provider,
     model: options.model,
+    agentModelOverrides: config.agentModelOverrides,
+    agentReasoningOverrides: config.agentReasoningOverrides,
   });
 
   const requestedSkillsPrompt = options.requestedSkills?.length

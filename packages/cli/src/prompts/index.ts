@@ -7,8 +7,18 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SkillRegistry } from "@devagent/runtime";
-import type { TaskMode, TurnBriefing } from "@devagent/runtime";
+import type {
+  AgentType,
+  ReasoningEffort,
+  TaskMode,
+  ToolSpec,
+  TurnBriefing,
+} from "@devagent/runtime";
 import { formatBriefing } from "@devagent/runtime";
+import {
+  buildRootPromptFragments,
+  deriveRootPromptCapabilities,
+} from "./fragments.js";
 import { loadProjectContext } from "./project-context.js";
 
 const PROMPTS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -47,29 +57,43 @@ export interface AssemblePromptOptions {
   readonly mode: TaskMode;
   readonly repoRoot: string;
   readonly skills: SkillRegistry;
+  readonly availableTools?: ReadonlyArray<Pick<ToolSpec, "name" | "category">>;
   readonly approvalMode?: string;
   readonly provider?: string;
   readonly model?: string;
+  readonly agentModelOverrides?: Partial<Record<AgentType, string>>;
+  readonly agentReasoningOverrides?: Partial<Record<AgentType, ReasoningEffort>>;
   readonly includeReview?: boolean;
   /** Structured briefing from a prior turn (enables turn isolation). */
   readonly briefing?: TurnBriefing;
 }
 
 /**
- * Assemble the full system prompt from modular markdown sections.
- * Order: base + tools + mode + environment + project context + skills.
+ * Assemble the full system prompt from static markdown sections plus
+ * capability-aware/task-shape fragments.
  */
 export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
   const sections: string[] = [];
+  const capabilities = deriveRootPromptCapabilities(opts.availableTools);
 
   // Core identity and behavior
   sections.push(getBase());
 
-  // Tool usage strategy
+  // Generic tool usage strategy
   sections.push(getTools());
 
   // Mode-specific constraints
   sections.push(getModeAct());
+
+  // Capability-aware task-shape and tool-specific guidance
+  sections.push(
+    ...buildRootPromptFragments({
+      mode: opts.mode,
+      capabilities,
+      agentModelOverrides: opts.agentModelOverrides,
+      agentReasoningOverrides: opts.agentReasoningOverrides,
+    }),
+  );
 
   // Review guidelines (loaded conditionally)
   if (opts.includeReview) {

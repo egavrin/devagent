@@ -1,3 +1,27 @@
+import {
+  aggregateDelegatedWork,
+} from "@devagent/runtime";
+import type { AgentType, DelegatedWorkSummary, LoggedSubagentRun, ReasoningEffort } from "@devagent/runtime";
+
+export interface SubagentDisplayState {
+  readonly agentId: string;
+  readonly agentType: AgentType;
+  readonly laneLabel?: string | null;
+  readonly model: string;
+  readonly reasoningEffort?: ReasoningEffort;
+  readonly status: "running" | "completed" | "error";
+  readonly currentIteration: number;
+  readonly startedAtMs: number;
+  readonly durationMs?: number;
+  readonly currentActivity: string;
+  readonly recentActivity: ReadonlyArray<string>;
+  readonly quality?: {
+    readonly score: number;
+    readonly completeness: string;
+    readonly note?: string;
+  };
+}
+
 /**
  * OutputState — encapsulates all mutable output-tracking state that was
  * previously scattered across module-level `let` declarations in main.ts.
@@ -25,7 +49,6 @@ export class OutputState {
   /** Per-turn accumulators. */
   turnToolCallCount = 0;
   turnInputTokens = 0;
-  turnOutputTokens = 0;
   turnCostDelta = 0;
 
   /**
@@ -33,9 +56,6 @@ export class OutputState {
    * Discarded if tool calls follow; flushed to stdout on final response.
    */
   textBuffer = "";
-
-  /** Whether we're currently buffering text. */
-  isBufferingText = false;
 
   /** Pending tool group for collapsing consecutive same-tool calls. */
   pendingToolGroup: {
@@ -48,6 +68,13 @@ export class OutputState {
     iteration: number;
     maxIter: number;
   } | null = null;
+
+  /** Live child panel state keyed by subagent id. */
+  readonly subagentDisplay = new Map<string, SubagentDisplayState>();
+  /** Parallel delegate batches already announced in the UI. */
+  readonly announcedSubagentBatches = new Set<string>();
+  /** Completed/started subagent runs for session summary and metadata. */
+  readonly sessionSubagents = new Map<string, LoggedSubagentRun>();
 
   // ─── Session-level state ────────────────────────────────────
 
@@ -68,11 +95,11 @@ export class OutputState {
     this.maxContextTokens = 0;
     this.turnToolCallCount = 0;
     this.turnInputTokens = 0;
-    this.turnOutputTokens = 0;
     this.turnCostDelta = 0;
     this.textBuffer = "";
-    this.isBufferingText = false;
     this.pendingToolGroup = null;
+    this.subagentDisplay.clear();
+    this.announcedSubagentBatches.clear();
   }
 
   /** Reset session-level counters (e.g. on a fresh CLI invocation). */
@@ -84,5 +111,10 @@ export class OutputState {
     this.sessionTotalOutputTokens = 0;
     this.sessionTotalCost = 0;
     this.sessionToolUsage.clear();
+    this.sessionSubagents.clear();
+  }
+
+  buildDelegatedWorkSummary(): DelegatedWorkSummary {
+    return aggregateDelegatedWork([...this.sessionSubagents.values()]);
   }
 }

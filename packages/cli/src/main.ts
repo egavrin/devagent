@@ -19,14 +19,14 @@ import {
   resolveProviderCredentials,
   findProjectRoot,
   loadModelRegistry,
-  lookupModelCapabilities,
   lookupModelEntry,
   DEFAULT_BUDGET,
   DEFAULT_CONTEXT,
   EventLogger,
+  loggedSubagentRunFromEvent,
 } from "@devagent/runtime";
 import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, VerbosityConfig } from "@devagent/runtime";
-import { ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
+import { AgentType, ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
 import {
   createRoutingLSPTools,
@@ -59,16 +59,19 @@ import {
   formatToolEnd,
   formatToolGroupStart,
   formatToolGroupEnd,
+  formatSubagentBatchLaunch,
+  formatSubagentStart,
+  formatSubagentError,
+  summarizeSubagentUpdate,
+  SubagentPanelRenderer,
   summarizeToolParams,
   formatPlan,
   formatError,
   isCategoryEnabled,
-  debugLog,
   buildVerbosityConfig,
   formatContextGauge,
   formatEnrichedError,
   inferErrorSuggestion,
-  formatTurnHeader,
   formatTurnSummary,
   formatSessionSummary,
   formatCompactionResult,
@@ -76,6 +79,8 @@ import {
 } from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { OutputState } from "./output-state.js";
+import type { SubagentDisplayState } from "./output-state.js";
+import { buildProviderConfig } from "./provider-config.js";
 import { createSkillInfrastructure } from "./skill-setup.js";
 
 // ─── Argument Parsing ────────────────────────────────────────
@@ -437,6 +442,7 @@ async function setupConfig(cliArgs: CliArgs): Promise<ConfigSetupResult> {
 /** Result of provider setup: the LLM provider instance. */
 interface ProviderSetupResult {
   readonly provider: LLMProvider;
+  readonly providerRegistry: ReturnType<typeof createDefaultRegistry>;
 }
 
 /**
@@ -445,20 +451,7 @@ interface ProviderSetupResult {
  */
 function setupProvider(config: DevAgentConfig, cliArgs: CliArgs): ProviderSetupResult {
   const providerRegistry = createDefaultRegistry();
-  const baseProviderConfig = config.providers[config.provider] ?? {
-    model: config.model,
-    apiKey: process.env["DEVAGENT_API_KEY"],
-  };
-
-  // Auto-resolve capabilities from model registry if not explicitly configured
-  const registryCaps = lookupModelCapabilities(config.model);
-  const providerConfig = {
-    ...baseProviderConfig,
-    ...(cliArgs.reasoning ? { reasoningEffort: cliArgs.reasoning } : {}),
-    ...(!baseProviderConfig.capabilities && registryCaps
-      ? { capabilities: registryCaps }
-      : {}),
-  };
+  const providerConfig = buildProviderConfig(config, cliArgs.reasoning ?? undefined);
 
   // Providers that don't require an API key (local endpoints or OAuth-based)
   const noKeyProviders = new Set(["ollama", "chatgpt", "github-copilot"]);
@@ -474,7 +467,7 @@ function setupProvider(config: DevAgentConfig, cliArgs: CliArgs): ProviderSetupR
 
   const provider = providerRegistry.get(config.provider, providerConfig);
 
-  return { provider };
+  return { provider, providerRegistry };
 }
 
 /** Result of tools setup: all registries, bus, gate, and supporting objects. */
@@ -502,6 +495,7 @@ async function setupTools(
   cliArgs: CliArgs,
   projectRoot: string,
   provider: LLMProvider,
+  providerRegistry: ReturnType<typeof createDefaultRegistry>,
 ): Promise<ToolsSetupResult> {
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
@@ -557,6 +551,19 @@ async function setupTools(
     agentRegistry,
     parentAgentId: "root",
     getParentSessionState: () => sessionState,
+    depth: 0,
+    parentAgentType: AgentType.GENERAL,
+    ambient: {
+      skills,
+      approvalMode: config.approval.mode,
+      providerLabel: `${config.provider} / ${config.model}`,
+      providerFactory: (agentConfig, agentType) => {
+        return providerRegistry.get(
+          agentConfig.provider,
+          buildProviderConfig(agentConfig, cliArgs.reasoning ?? undefined, agentType),
+        );
+      },
+    },
   }));
 
   // ─── Double-Check ──────────────────────────────────────────
@@ -902,12 +909,14 @@ async function setupSessionPersistence(
 
   // Persist messages incrementally via bus events
   bus.on("message:user", (event) => {
+    if (event.agentId) return;
     sessionStore.addMessage(session.id, {
       role: MessageRole.USER,
       content: event.content,
     });
   });
   bus.on("message:assistant", (event) => {
+    if (event.agentId) return;
     if (!event.partial) {
       sessionStore.addMessage(session.id, {
         role: MessageRole.ASSISTANT,
@@ -917,6 +926,7 @@ async function setupSessionPersistence(
     }
   });
   bus.on("message:tool", (event) => {
+    if (event.agentId) return;
     sessionStore.addMessage(session.id, {
       role: MessageRole.TOOL,
       content: event.content,
@@ -1003,7 +1013,7 @@ export async function main(): Promise<void> {
   const { config, projectRoot } = await setupConfig(cliArgs);
 
   // ─── 2. Provider ───────────────────────────────────────────
-  const { provider } = setupProvider(config, cliArgs);
+  const { provider, providerRegistry } = setupProvider(config, cliArgs);
 
   // ─── Review Command (needs provider but not full tool setup) ──
   if (cliArgs.review) {
@@ -1070,7 +1080,7 @@ export async function main(): Promise<void> {
   }
 
   // ─── 3. Tools, bus, gate, skills, delegate, double-check ──
-  const tools = await setupTools(config, cliArgs, projectRoot, provider);
+  const tools = await setupTools(config, cliArgs, projectRoot, provider, providerRegistry);
 
   // ─── 4. LSP ────────────────────────────────────────────────
   const lsp = await setupLSP(
@@ -1133,6 +1143,10 @@ export async function main(): Promise<void> {
     }
 
     // Session summary
+    const delegatedWork = outputState.buildDelegatedWorkSummary();
+    persistence.sessionStore.updateSessionMetadata(persistence.session.id, {
+      delegatedWork,
+    });
     if (cliArgs.verbosity !== "quiet" && isCategoryEnabled("session", tools.verbosityConfig)) {
       const planSteps = tools.sessionState.getPlan();
       process.stderr.write(formatSessionSummary({
@@ -1149,6 +1163,7 @@ export async function main(): Promise<void> {
         totalOutputTokens: outputState.sessionTotalOutputTokens,
         elapsedMs: Date.now() - sessionStartTime,
         completionReason: "completed",
+        delegatedWork,
       }) + "\n");
     }
 
@@ -1188,6 +1203,54 @@ function setupEventHandlers(
   const maxIter = config.budget.maxIterations;
   const vc = verbosityConfig ?? buildVerbosityConfig(verbosity, undefined);
   const toolParamsCache = new Map<string, Record<string, unknown>>();
+  const subagentRenderer = new SubagentPanelRenderer(
+    verbosity !== "quiet" || isCategoryEnabled("tools", vc),
+  );
+
+  function hasRunningSubagents(): boolean {
+    for (const panel of os.subagentDisplay.values()) {
+      if (panel.status === "running") return true;
+    }
+    return false;
+  }
+
+  function withSubagentPanelsHidden(action: () => void): void {
+    if (!subagentRenderer.active) {
+      action();
+      return;
+    }
+    subagentRenderer.suspend();
+    action();
+    if (hasRunningSubagents()) {
+      subagentRenderer.resume();
+      subagentRenderer.setPanels([...os.subagentDisplay.values()]);
+      return;
+    }
+    subagentRenderer.setPanels([]);
+  }
+
+  function writeUi(text: string): void {
+    withSubagentPanelsHidden(() => {
+      process.stderr.write(text);
+    });
+  }
+
+  function writeUiLine(line: string): void {
+    writeUi(line + "\n");
+  }
+
+  function pushSubagentActivity(state: SubagentDisplayState, activity: string): SubagentDisplayState {
+    const nextActivity = activity.trim();
+    if (nextActivity.length === 0) return state;
+    const prior = nextActivity === state.currentActivity
+      ? state.recentActivity
+      : [nextActivity, ...state.recentActivity.filter((entry) => entry !== nextActivity)].slice(0, 2);
+    return {
+      ...state,
+      currentActivity: nextActivity,
+      recentActivity: prior,
+    };
+  }
 
   function flushToolGroup(): void {
     const group = os.pendingToolGroup;
@@ -1197,18 +1260,16 @@ function setupEventHandlers(
     }
     os.pendingToolGroup = null;
 
-    // Write group start + end lines
-    spinner.log(
-      formatToolGroupStart(group.name, group.count, group.params, group.iteration, group.maxIter),
-    );
-    spinner.log(
-      formatToolGroupEnd(group.name, group.count, group.lastSuccess, group.totalDurationMs, group.lastError),
-    );
+    withSubagentPanelsHidden(() => {
+      spinner.log(formatToolGroupStart(group.name, group.count, group.params, group.iteration, group.maxIter));
+      spinner.log(formatToolGroupEnd(group.name, group.count, group.lastSuccess, group.totalDurationMs, group.lastError));
+    });
   }
 
   // ─── Iteration tracking ─────────────────────────────────────
 
   bus.on("iteration:start", (event) => {
+    if (event.agentId) return;
     os.currentIteration = event.iteration;
     os.currentTokens = event.estimatedTokens;
     os.maxContextTokens = event.maxContextTokens;
@@ -1230,11 +1291,23 @@ function setupEventHandlers(
       }
     }
     os.textBuffer = "";
-    os.isBufferingText = false;
 
     os.hadToolCalls = true;
     os.turnToolCallCount++;
-    toolParamsCache.set(event.callId, event.params);
+    toolParamsCache.set(`${event.agentId ?? "root"}:${event.callId}`, event.params);
+
+    if (event.agentId) {
+      const existing = os.sessionSubagents.get(event.agentId);
+      if (existing) {
+        os.sessionSubagents.set(event.agentId, {
+          ...existing,
+          toolCalls: existing.toolCalls + 1,
+        });
+      }
+      return;
+    }
+
+    if (event.name === "delegate") return;
 
     if (verbosity === "quiet" && !isCategoryEnabled("tools", vc)) return;
 
@@ -1242,18 +1315,18 @@ function setupEventHandlers(
       ? formatContextGauge(os.currentTokens, os.maxContextTokens)
       : undefined;
 
-    const summary = summarizeToolParams(event.name, event.params);
-
     // Verbose mode: no grouping, show every call individually
     if (isCategoryEnabled("tools", vc)) {
       flushToolGroup();
       const line = formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge);
-      process.stderr.write(line + "\n");
-      process.stderr.write(dim(`  params: ${JSON.stringify(event.params, null, 2)}`) + "\n");
+      writeUiLine(line);
+      writeUiLine(dim(`  params: ${JSON.stringify(event.params, null, 2)}`));
       return;
     }
 
     if (verbosity === "quiet") return;
+
+    const summary = summarizeToolParams(event.name, event.params);
 
     // Grouping: check if same tool as pending group
     if (os.pendingToolGroup && os.pendingToolGroup.name === event.name) {
@@ -1275,8 +1348,8 @@ function setupEventHandlers(
       maxIter,
     };
     // Show the first call immediately (it might end up being a single call)
-    process.stderr.write(
-      formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge) + "\n",
+    writeUiLine(
+      formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge),
     );
   });
 
@@ -1286,8 +1359,20 @@ function setupEventHandlers(
     // Stop spinner before writing
     spinner.stop();
 
-    const cachedParams = toolParamsCache.get(event.callId);
-    toolParamsCache.delete(event.callId);
+    const cacheKey = `${event.agentId ?? "root"}:${event.callId}`;
+    const cachedParams = toolParamsCache.get(cacheKey);
+    toolParamsCache.delete(cacheKey);
+
+    if (event.agentId) {
+      return;
+    }
+
+    if (event.name === "delegate" && event.result.metadata?.["agentMeta"]) {
+      if (verbosity !== "quiet" && !hasRunningSubagents()) {
+        spinner.start();
+      }
+      return;
+    }
 
     if (verbosity === "quiet" && !isCategoryEnabled("tools", vc) && event.result.success) return;
 
@@ -1301,37 +1386,35 @@ function setupEventHandlers(
 
       if (os.pendingToolGroup.count === 1) {
         // Single call so far — show individual end line
-        const line = formatToolEnd(
+        writeUiLine(formatToolEnd(
           event.name,
           event.result.success,
           event.durationMs,
           event.result.error ?? undefined,
           cachedParams,
-        );
-        process.stderr.write(line + "\n");
+        ));
       }
       // If count > 1, end line will be shown when group flushes
     } else {
       // Not in a group (or verbose mode) — show individual end line
-      const line = formatToolEnd(
+      writeUiLine(formatToolEnd(
         event.name,
         event.result.success,
         event.durationMs,
         event.result.error ?? undefined,
         cachedParams,
-      );
-      process.stderr.write(line + "\n");
+      ));
     }
 
     if (isCategoryEnabled("tools", vc) && event.result.output) {
       const output = event.result.output.length > 500
         ? event.result.output.substring(0, 500) + "…"
         : event.result.output;
-      process.stderr.write(dim(`  output: ${output}`) + "\n");
+      writeUiLine(dim(`  output: ${output}`));
     }
 
     // Restart spinner after tool completes
-    if (verbosity !== "quiet") {
+    if (verbosity !== "quiet" && !hasRunningSubagents()) {
       spinner.start();
     }
   });
@@ -1352,8 +1435,126 @@ function setupEventHandlers(
     if (verbosity === "quiet" && !isCategoryEnabled("plan", vc)) return;
 
     spinner.stop();
-    process.stderr.write("\n" + dim("── Plan ──") + "\n");
-    process.stderr.write(formatPlan(event.steps) + "\n\n");
+    writeUi("\n" + dim("── Plan ──") + "\n");
+    writeUi(formatPlan(event.steps) + "\n\n");
+  });
+
+  // ─── Subagent lifecycle ───────────────────────────────────
+
+  bus.on("subagent:start", (event) => {
+    spinner.stop();
+    flushToolGroup();
+    os.sessionSubagents.set(
+      event.agentId,
+      loggedSubagentRunFromEvent(event, os.sessionSubagents.get(event.agentId)),
+    );
+    os.subagentDisplay.set(event.agentId, {
+      agentId: event.agentId,
+      agentType: event.agentType,
+      laneLabel: event.laneLabel,
+      model: event.model,
+      reasoningEffort: event.reasoningEffort,
+      status: "running",
+      currentIteration: 0,
+      startedAtMs: Date.now(),
+      currentActivity: "Waiting for first action",
+      recentActivity: [],
+    });
+
+    if (verbosity === "quiet" && !isCategoryEnabled("tools", vc)) return;
+    if (event.batchId && (event.batchSize ?? 0) > 1 && !os.announcedSubagentBatches.has(event.batchId)) {
+      os.announcedSubagentBatches.add(event.batchId);
+      writeUiLine(formatSubagentBatchLaunch(event.agentType, event.batchSize ?? 0));
+    }
+    writeUiLine(formatSubagentStart(event));
+    if (subagentRenderer.active) {
+      subagentRenderer.setPanels([...os.subagentDisplay.values()]);
+    }
+  });
+
+  bus.on("subagent:update", (event) => {
+    const existing = os.subagentDisplay.get(event.agentId);
+    if (!existing) return;
+    const summary = summarizeSubagentUpdate(event);
+    const nextIteration = event.iteration ?? existing.currentIteration;
+    const nextState = pushSubagentActivity({
+      ...existing,
+      currentIteration: nextIteration,
+    }, summary);
+    os.subagentDisplay.set(event.agentId, nextState);
+
+    if (verbosity === "quiet" && !isCategoryEnabled("tools", vc)) return;
+    if (subagentRenderer.active) {
+      subagentRenderer.setPanels([...os.subagentDisplay.values()]);
+      return;
+    }
+    if (event.milestone === "iteration:start") {
+      writeUiLine(`  ${dim(`[${event.agentId}:${event.iteration ?? 0}]`)} ${summary}`);
+    }
+  });
+
+  bus.on("subagent:end", (event) => {
+    spinner.stop();
+    os.sessionSubagents.set(
+      event.agentId,
+      loggedSubagentRunFromEvent(event, os.sessionSubagents.get(event.agentId)),
+    );
+    const display = os.subagentDisplay.get(event.agentId);
+    if (display) {
+      os.subagentDisplay.set(event.agentId, pushSubagentActivity({
+        ...display,
+        status: "completed",
+        durationMs: event.durationMs,
+        currentIteration: event.iterations,
+        quality: event.quality
+          ? {
+              score: event.quality.score,
+              completeness: event.quality.completeness,
+            }
+          : undefined,
+      }, `Completed after ${event.iterations} iterations`));
+    }
+
+    if (verbosity === "quiet" && !isCategoryEnabled("tools", vc)) return;
+    if (subagentRenderer.active) {
+      subagentRenderer.setPanels([...os.subagentDisplay.values()]);
+    }
+    if (verbosity !== "quiet" && !hasRunningSubagents()) {
+      spinner.start();
+    }
+  });
+
+  bus.on("subagent:error", (event) => {
+    spinner.stop();
+    os.sessionSubagents.set(
+      event.agentId,
+      loggedSubagentRunFromEvent(event, os.sessionSubagents.get(event.agentId)),
+    );
+    const display = os.subagentDisplay.get(event.agentId);
+    if (display) {
+      os.subagentDisplay.set(event.agentId, pushSubagentActivity({
+        ...display,
+        status: "error",
+        durationMs: event.durationMs,
+      }, `Failed: ${event.error}`));
+    }
+
+    if (verbosity === "quiet" && !isCategoryEnabled("tools", vc)) return;
+    if (subagentRenderer.active) {
+      subagentRenderer.setPanels([...os.subagentDisplay.values()]);
+    } else {
+      writeUiLine(formatSubagentError(event));
+    }
+    if (verbosity !== "quiet") {
+      spinner.start();
+    }
+  });
+
+  bus.on("message:tool", (event) => {
+    if (event.agentId) return;
+    if (event.toolName !== "delegate" || event.summaryOnly !== true) return;
+    if (verbosity === "quiet" && !isCategoryEnabled("tools", vc)) return;
+    writeUiLine(`  ${green("✓")} ${dim(event.content)}`);
   });
 
   // ─── Message events (spinner management) ───────────────────
@@ -1366,10 +1567,12 @@ function setupEventHandlers(
   });
 
   bus.on("message:assistant", (event) => {
+    if (event.agentId) {
+      return;
+    }
     if (event.partial) {
       spinner.stop();
       os.textBuffer += event.content;
-      os.isBufferingText = true;
     } else {
       flushToolGroup();
     }
@@ -1380,8 +1583,8 @@ function setupEventHandlers(
   bus.on("context:compacting", (event) => {
     spinner.stop();
     if (verbosity !== "quiet" || isCategoryEnabled("context", vc)) {
-      process.stderr.write(
-        dim(`[context] Compacting… (~${event.estimatedTokens} tokens, limit ${event.maxTokens})`) + "\n",
+      writeUiLine(
+        dim(`[context] Compacting… (~${event.estimatedTokens} tokens, limit ${event.maxTokens})`),
       );
       spinner.start("Compacting context…");
     }
@@ -1390,14 +1593,13 @@ function setupEventHandlers(
   bus.on("context:compacted", (event) => {
     spinner.stop();
     if (verbosity !== "quiet" || isCategoryEnabled("context", vc)) {
-      process.stderr.write(
+      writeUiLine(
         formatCompactionResult({
           tokensBefore: event.tokensBefore,
           estimatedTokens: event.estimatedTokens,
           removedCount: event.removedCount,
           prunedCount: event.prunedCount,
-          tokensSaved: event.tokensSaved,
-        }) + "\n",
+        }),
       );
     }
   });
@@ -1406,7 +1608,6 @@ function setupEventHandlers(
 
   bus.on("cost:update", (event) => {
     os.turnInputTokens += event.inputTokens;
-    os.turnOutputTokens += event.outputTokens;
     os.turnCostDelta += event.totalCost;
     os.sessionTotalInputTokens += event.inputTokens;
     os.sessionTotalOutputTokens += event.outputTokens;
@@ -1438,13 +1639,13 @@ function setupEventHandlers(
     spinner.stop();
     if (recentToolResults.length > 0) {
       const suggestion = inferErrorSuggestion(event.message, recentToolResults);
-      process.stderr.write(formatEnrichedError({
+      writeUiLine(formatEnrichedError({
         message: event.message,
         recentTools: [...recentToolResults],
         suggestion,
-      }) + "\n");
+      }));
     } else {
-      process.stderr.write(formatError(event.message) + "\n");
+      writeUiLine(formatError(event.message));
     }
   });
 
@@ -1580,6 +1781,7 @@ function createMidpointCallback(opts: {
   mode: TaskMode;
   repoRoot: string;
   skills: SkillRegistry;
+  toolRegistry: import("@devagent/runtime").ToolRegistry;
   config: DevAgentConfig;
   getTurnNumber: () => number;
 }): MidpointCallback {
@@ -1592,9 +1794,12 @@ function createMidpointCallback(opts: {
       mode: opts.mode,
       repoRoot: opts.repoRoot,
       skills: opts.skills,
+      availableTools: opts.toolRegistry.getAll(),
       approvalMode: opts.config.approval.mode,
       provider: opts.config.provider,
       model: opts.config.model,
+      agentModelOverrides: opts.config.agentModelOverrides,
+      agentReasoningOverrides: opts.config.agentReasoningOverrides,
       briefing: midBriefing,
     });
     const lastUserContent = findLastUserContent(messages);
@@ -1664,9 +1869,12 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     mode,
     repoRoot,
     skills,
+    availableTools: toolRegistry.getAll(),
     approvalMode: config.approval.mode,
     provider: config.provider,
     model: config.model,
+    agentModelOverrides: config.agentModelOverrides,
+    agentReasoningOverrides: config.agentReasoningOverrides,
     briefing,
   });
 
@@ -1678,6 +1886,7 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     mode,
     repoRoot,
     skills,
+    toolRegistry,
     config,
     getTurnNumber: () => 0,
   });
@@ -1726,7 +1935,6 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
       iterationCount: result.iterations,
       toolCallCount: outputState.turnToolCallCount,
       inputTokens: outputState.turnInputTokens,
-      outputTokens: outputState.turnOutputTokens,
       costDelta: outputState.turnCostDelta,
       elapsedMs: elapsed,
     }) + "\n");

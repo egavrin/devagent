@@ -1,6 +1,6 @@
 ## Mode: ACT
 
-You can use the full toolset (readonly + mutating + commands).
+You can act directly with the tools available in this session.
 
 ## Default Behavior
 

@@ -4,7 +4,15 @@
  * All output goes to stderr (stdout reserved for LLM content).
  */
 
-import type { VerbosityConfig } from "@devagent/runtime";
+import type {
+  VerbosityConfig,
+  SubagentStartEvent,
+  SubagentUpdateEvent,
+  SubagentEndEvent,
+  SubagentErrorEvent,
+  DelegatedWorkSummary,
+} from "@devagent/runtime";
+import { formatDuration } from "@devagent/runtime";
 
 // ─── Color Helpers ──────────────────────────────────────────
 
@@ -20,7 +28,7 @@ export function green(s: string): string { return wrap("32", s); }
 export function yellow(s: string): string { return wrap("33", s); }
 export function cyan(s: string): string { return wrap("36", s); }
 export function bold(s: string): string { return wrap("1", s); }
-export function dimBold(s: string): string { return useColor ? `\x1b[90;1m${s}\x1b[0m` : s; }
+function dimBold(s: string): string { return useColor ? `\x1b[90;1m${s}\x1b[0m` : s; }
 
 // ─── Categorical Verbosity ──────────────────────────────────
 
@@ -29,11 +37,6 @@ export function isCategoryEnabled(cat: string, config: VerbosityConfig): boolean
     return config.categories.has(cat);
   }
   return config.base === "verbose";
-}
-
-export function debugLog(cat: string, msg: string, config: VerbosityConfig): void {
-  if (!isCategoryEnabled(cat, config)) return;
-  process.stderr.write(dim(`[${cat}] ${msg}`) + "\n");
 }
 
 export function buildVerbosityConfig(
@@ -64,7 +67,7 @@ export function buildVerbosityConfig(
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-export const SPINNER_VERBS = [
+const SPINNER_VERBS = [
   "Thinking", "Analyzing", "Considering", "Reasoning", "Processing",
   "Evaluating", "Examining", "Working", "Reflecting", "Assessing",
   "Deliberating", "Exploring", "Weighing", "Pondering", "Reviewing",
@@ -201,7 +204,7 @@ export function summarizeToolParams(name: string, params: Record<string, unknown
   }
 }
 
-export interface ToolVerbPair {
+interface ToolVerbPair {
   readonly present: string;
   readonly past: string;
 }
@@ -219,8 +222,13 @@ const TOOL_VERBS: Record<string, ToolVerbPair> = {
   update_plan:     { present: "Updating plan",    past: "Updated plan" },
 };
 
-export function toolVerb(name: string): ToolVerbPair {
+function toolVerb(name: string): ToolVerbPair {
   return TOOL_VERBS[name] ?? { present: `Calling ${name}`, past: `Called ${name}` };
+}
+
+function buildCounter(counterLabel: string | undefined, iteration: number, maxIter: number): string {
+  if (counterLabel) return dim(`[${counterLabel}:${iteration}]`);
+  return maxIter > 0 ? dim(`[${iteration}/${maxIter}]`) : dim(`[${iteration}]`);
 }
 
 export function formatToolStart(
@@ -229,8 +237,9 @@ export function formatToolStart(
   iteration: number,
   maxIter: number,
   gauge?: string,
+  counterLabel?: string,
 ): string {
-  const counter = maxIter > 0 ? dim(`[${iteration}/${maxIter}]`) : dim(`[${iteration}]`);
+  const counter = buildCounter(counterLabel, iteration, maxIter);
   const summary = summarizeToolParams(name, params);
   const verb = toolVerb(name);
   const detail = summary ? ` ${dim(summary)}` : "";
@@ -272,8 +281,9 @@ export function formatToolGroupStart(
   iteration: number,
   maxIter: number,
   gauge?: string,
+  counterLabel?: string,
 ): string {
-  const counter = maxIter > 0 ? dim(`[${iteration}/${maxIter}]`) : dim(`[${iteration}]`);
+  const counter = buildCounter(counterLabel, iteration, maxIter);
   const verb = toolVerb(name);
   const noun = groupNoun(name, count);
   const displayed = paramSummaries.slice(0, 3);
@@ -324,19 +334,12 @@ export function formatPlan(
   return lines.join("\n");
 }
 
-// ─── Summary ────────────────────────────────────────────────
-
-export function formatSummary(iterations: number, elapsedMs: number): string {
-  return `${green("✓")} ${bold("Done")} ${dim(`(${iterations} iterations, ${formatDuration(elapsedMs)})`)}`;
-}
-
 // ─── Per-Turn Summary ───────────────────────────────────────
 
-export interface TurnStats {
+interface TurnStats {
   readonly toolCallCount: number;
   readonly iterationCount: number;
   readonly inputTokens: number;
-  readonly outputTokens: number;
   readonly costDelta: number;
   readonly elapsedMs: number;
 }
@@ -364,7 +367,7 @@ export function formatError(message: string): string {
 
 // ─── Session Summary ────────────────────────────────────────
 
-export interface SessionSummaryData {
+interface SessionSummaryData {
   readonly sessionId: string;
   readonly totalIterations: number;
   readonly totalToolCalls: number;
@@ -376,6 +379,7 @@ export interface SessionSummaryData {
   readonly totalOutputTokens: number;
   readonly elapsedMs: number;
   readonly completionReason: string;
+  readonly delegatedWork?: DelegatedWorkSummary;
 }
 
 export function formatSessionSummary(data: SessionSummaryData): string {
@@ -428,19 +432,66 @@ export function formatSessionSummary(data: SessionSummaryData): string {
     lines.push(`  Tokens:       ${kIn}k in / ${kOut}k out`);
   }
 
+  if (data.delegatedWork && data.delegatedWork.childCount > 0) {
+    lines.push(`  Subagents:    ${data.delegatedWork.childCount}`);
+    const byTypeEntries = Object.entries(data.delegatedWork.byType);
+    if (byTypeEntries.length > 0) {
+      lines.push(`  By type:      ${byTypeEntries.map(([type, count]) => `${type}=${count}`).join(", ")}`);
+    }
+    if (data.delegatedWork.lanes.length > 0) {
+      lines.push(`  Lanes:        ${data.delegatedWork.lanes.join(", ")}`);
+    }
+    lines.push(`  Delegated:    ${formatDuration(data.delegatedWork.totalDelegatedDurationMs)} total`);
+    lines.push(`  Parallel:     ${data.delegatedWork.parallelBatchCount} batch(es), max ${data.delegatedWork.maxParallelChildren} child(ren)`);
+  }
+
   lines.push(dim("─".repeat(50)));
   return lines.join("\n");
 }
 
+export function formatSubagentBatchLaunch(
+  agentType: string,
+  batchSize: number,
+): string {
+  return `${dim("  ↳")} ${bold(`Launching ${batchSize} ${agentType} subagents in parallel`)}`;
+}
+
+export function formatSubagentStart(event: SubagentStartEvent): string {
+  const lane = event.laneLabel ? ` ${dim(event.laneLabel)}` : "";
+  const modelBits = [event.model, event.reasoningEffort].filter(Boolean).join(", ");
+  const model = modelBits ? ` ${dim(`(${modelBits})`)}` : "";
+  return `${dim("  ↳")} ${bold(`Subagent ${event.agentId}`)} ${dim(event.agentType)}${lane}${model}`;
+}
+
+export function formatSubagentError(event: SubagentErrorEvent): string {
+  return `  ${red("✗")} ${dim(`Subagent ${event.agentId} failed`)} ${dim(`(${formatDuration(event.durationMs)})`)}${red(`: ${truncate(event.error, 80)}`)}`;
+}
+
+export function summarizeSubagentUpdate(event: SubagentUpdateEvent): string {
+  if (event.summary && event.summary.trim().length > 0) {
+    return event.summary;
+  }
+  if (event.milestone === "iteration:start") {
+    return event.iteration ? `Starting iteration ${event.iteration}` : "Starting iteration";
+  }
+  if (event.milestone === "tool:before") {
+    return event.toolName ? `Running ${event.toolName}` : "Running tool";
+  }
+  if (event.toolName) {
+    return event.toolSuccess === false ? `Failed ${event.toolName}` : `Completed ${event.toolName}`;
+  }
+  return "Updated progress";
+}
+
 // ─── Error Enrichment ───────────────────────────────────────
 
-export interface RecentToolResult {
+interface RecentToolResult {
   readonly name: string;
   readonly success: boolean;
   readonly durationMs: number;
 }
 
-export interface EnrichedErrorContext {
+interface EnrichedErrorContext {
   readonly message: string;
   readonly recentTools: ReadonlyArray<RecentToolResult>;
   readonly suggestion: string | null;
@@ -495,35 +546,13 @@ export function formatEnrichedError(ctx: EnrichedErrorContext): string {
   return lines.join("\n");
 }
 
-// ─── Turn Separators ────────────────────────────────────────
-
-export function formatTurnHeader(
-  turnNumber: number,
-  tokenInfo?: { estimated: number; max: number },
-  costInfo?: { totalCost: number },
-): string {
-  const parts: string[] = [`Turn ${turnNumber}`];
-  if (tokenInfo && tokenInfo.max > 0 && tokenInfo.estimated > 0) {
-    const kEst = Math.round(tokenInfo.estimated / 1000);
-    const kMax = Math.round(tokenInfo.max / 1000);
-    parts.push(`tokens: ${kEst}k/${kMax}k`);
-  }
-  if (costInfo && costInfo.totalCost > 0) {
-    parts.push(`cost: $${costInfo.totalCost.toFixed(4)}`);
-  }
-  const inner = parts.join(" | ");
-  const padLen = Math.max(0, 50 - inner.length - 6);
-  return dim(`── ${inner} ${"─".repeat(padLen)}`);
-}
-
 // ─── Compaction Result ──────────────────────────────────────
 
-export interface CompactionResultData {
+interface CompactionResultData {
   readonly tokensBefore: number;
   readonly estimatedTokens: number;
   readonly removedCount: number;
   readonly prunedCount?: number;
-  readonly tokensSaved?: number;
 }
 
 export function formatCompactionResult(data: CompactionResultData): string {
@@ -590,126 +619,145 @@ export function formatReasoning(text: string): string | null {
   return `  ${dim("ℹ")} ${dim(display)}`;
 }
 
-// ─── Status Bar ─────────────────────────────────────────────
-
-export interface StatusBarData {
-  readonly iteration?: number;
-  readonly maxIter?: number;
-  readonly tokens?: number;
-  readonly maxTokens?: number;
-  readonly cost?: number;
-  readonly branch?: string;
+interface SubagentPanelData {
+  readonly agentId: string;
+  readonly agentType: string;
+  readonly laneLabel?: string | null;
+  readonly model: string;
+  readonly reasoningEffort?: string;
+  readonly status: "running" | "completed" | "error";
+  readonly currentIteration: number;
+  readonly startedAtMs: number;
+  readonly durationMs?: number;
+  readonly currentActivity: string;
+  readonly recentActivity: ReadonlyArray<string>;
+  readonly quality?: {
+    readonly score: number;
+    readonly completeness: string;
+  };
 }
 
-export class StatusBar {
-  private enabled: boolean;
-  private data: StatusBarData = {};
-  private rows = 0;
-  private cols = 0;
-  private initialized = false;
+export class SubagentPanelRenderer {
+  private static readonly REDRAW_DEBOUNCE_MS = 100;
+  private readonly enabled: boolean;
+  private panels: ReadonlyArray<SubagentPanelData> = [];
+  private renderedLineCount = 0;
+  private hidden = false;
+  private redrawTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(enabled: boolean) {
     this.enabled = enabled && !!process.stderr.isTTY;
-    if (this.enabled) {
-      this.updateDimensions();
-    }
   }
 
   get active(): boolean {
     return this.enabled;
   }
 
-  private updateDimensions(): void {
-    this.rows = process.stderr.rows ?? 24;
-    this.cols = process.stderr.columns ?? 80;
+  setPanels(panels: ReadonlyArray<SubagentPanelData>): void {
+    this.panels = panels;
+    if (!this.enabled || this.hidden) return;
+    if (panels.length === 0) {
+      this.clearPendingRedraw();
+      this.redraw();
+      return;
+    }
+    this.scheduleRedraw();
   }
 
-  /** Initialize scroll region, reserving bottom line. */
-  init(): void {
+  suspend(): void {
+    if (!this.enabled || this.hidden) return;
+    this.clearPendingRedraw();
+    this.clearRendered();
+    this.hidden = true;
+  }
+
+  resume(): void {
     if (!this.enabled) return;
-    this.updateDimensions();
-    // Set scroll region to rows 1..(rows-1), leaving last row for status bar
-    process.stderr.write(`\x1b[1;${this.rows - 1}r`);
-    // Move cursor to top of scroll region
-    process.stderr.write(`\x1b[${this.rows - 1};1H`);
-    this.initialized = true;
-    this.render();
-
-    // Listen for terminal resize
-    process.stderr.on("resize", () => {
-      this.updateDimensions();
-      // Reset scroll region to new size
-      process.stderr.write(`\x1b[1;${this.rows - 1}r`);
-      this.render();
-    });
+    this.hidden = false;
   }
 
-  update(data: Partial<StatusBarData>): void {
-    this.data = { ...this.data, ...data };
-    if (this.initialized) this.render();
-  }
-
-  formatLine(data: StatusBarData): string {
-    const parts: string[] = [];
-
-    // Iteration
-    if (data.iteration !== undefined) {
-      if (data.maxIter && data.maxIter > 0) {
-        parts.push(`iter ${data.iteration}/${data.maxIter}`);
-      } else {
-        parts.push(`iter ${data.iteration}`);
-      }
-    }
-
-    // Tokens (color-coded)
-    if (data.tokens && data.maxTokens && data.tokens > 0 && data.maxTokens > 0) {
-      const kTokens = Math.round(data.tokens / 1000);
-      const kMax = Math.round(data.maxTokens / 1000);
-      const ratio = data.tokens / data.maxTokens;
-      const tokenStr = `${kTokens}k/${kMax}k`;
-      if (ratio > 0.8) {
-        parts.push(red(tokenStr));
-      } else if (ratio > 0.6) {
-        parts.push(yellow(tokenStr));
-      } else {
-        parts.push(tokenStr);
-      }
-    }
-
-    // Cost
-    if (data.cost && data.cost > 0) {
-      parts.push(`$${data.cost.toFixed(4)}`);
-    }
-
-    // Branch
-    if (data.branch) {
-      parts.push(data.branch);
-    }
-
-    return dim("[") + parts.join(dim(" | ")) + dim("]");
-  }
-
-  render(): void {
-    if (!this.enabled || !this.initialized) return;
-    this.updateDimensions();
-    const line = this.formatLine(this.data);
-
-    // Save cursor, move to last row, clear line, write status, restore cursor
-    process.stderr.write(
-      `\x1b7\x1b[${this.rows};1H\x1b[2K${line}\x1b8`,
-    );
-  }
-
-  /** Restore full scroll region and clear status bar line. */
   cleanup(): void {
-    if (!this.enabled || !this.initialized) return;
-    // Reset scroll region to full terminal
-    process.stderr.write(`\x1b[1;${this.rows}r`);
-    // Clear the last line
-    process.stderr.write(`\x1b[${this.rows};1H\x1b[2K`);
-    // Move cursor back
-    process.stderr.write(`\x1b[${this.rows - 1};1H`);
-    this.initialized = false;
+    if (!this.enabled) return;
+    this.clearPendingRedraw();
+    this.clearRendered();
+    this.hidden = false;
+    this.panels = [];
+  }
+
+  formatPanels(panels: ReadonlyArray<SubagentPanelData>, now = Date.now()): string[] {
+    const lines: string[] = [];
+    for (const panel of panels) {
+      const lane = panel.laneLabel ? ` ${dim(panel.laneLabel)}` : "";
+      const modelBits = [panel.model, panel.reasoningEffort].filter(Boolean).join(", ");
+      const model = modelBits ? ` ${dim(`(${modelBits})`)}` : "";
+      lines.push(`${dim("  ↳")} ${bold(`Subagent ${panel.agentId}`)} ${dim(panel.agentType)}${lane}${model}`);
+
+      const elapsedMs = panel.status === "running"
+        ? Math.max(0, now - panel.startedAtMs)
+        : (panel.durationMs ?? Math.max(0, now - panel.startedAtMs));
+      const statusParts: string[] = [];
+      if (panel.status === "running") {
+        statusParts.push(yellow("running"));
+      } else if (panel.status === "completed") {
+        statusParts.push(green("completed"));
+      } else {
+        statusParts.push(red("failed"));
+      }
+      if (panel.currentIteration > 0) {
+        statusParts.push(dim(`iter ${panel.currentIteration}`));
+      }
+      statusParts.push(dim(formatDuration(elapsedMs)));
+      if (panel.quality) {
+        statusParts.push(dim(`score ${panel.quality.score.toFixed(2)}`));
+        statusParts.push(dim(panel.quality.completeness));
+      }
+      lines.push(`    ${statusParts.join("  ")}`);
+
+      const recent = panel.recentActivity.length > 0
+        ? `Recent: ${panel.recentActivity.slice(0, 2).join(" • ")}`
+        : panel.currentActivity;
+      lines.push(`    ${truncate(recent, 120)}`);
+    }
+    return lines;
+  }
+
+  private redraw(): void {
+    this.clearPendingRedraw();
+    if (this.hidden) return;
+    this.clearRendered();
+    const lines = this.formatPanels(this.panels);
+    if (lines.length === 0) return;
+    process.stderr.write(lines.join("\n") + "\n");
+    this.renderedLineCount = lines.length;
+  }
+
+  private scheduleRedraw(): void {
+    if (this.redrawTimer) return;
+    this.redrawTimer = setTimeout(() => {
+      this.redrawTimer = null;
+      this.redraw();
+    }, SubagentPanelRenderer.REDRAW_DEBOUNCE_MS);
+  }
+
+  private clearPendingRedraw(): void {
+    if (!this.redrawTimer) return;
+    clearTimeout(this.redrawTimer);
+    this.redrawTimer = null;
+  }
+
+  private clearRendered(): void {
+    if (!this.enabled || this.renderedLineCount === 0) return;
+    process.stderr.write(`\x1b[${this.renderedLineCount}F`);
+    for (let i = 0; i < this.renderedLineCount; i++) {
+      process.stderr.write("\x1b[2K");
+      if (i < this.renderedLineCount - 1) {
+        process.stderr.write("\x1b[1E");
+      }
+    }
+    if (this.renderedLineCount > 1) {
+      process.stderr.write(`\x1b[${this.renderedLineCount - 1}F`);
+    }
+    this.renderedLineCount = 0;
   }
 }
 
@@ -718,12 +766,4 @@ export class StatusBar {
 export function truncate(s: string, maxLen: number): string {
   if (s.length <= maxLen) return s;
   return s.substring(0, maxLen - 1) + "…";
-}
-
-export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  const mins = Math.floor(ms / 60000);
-  const secs = Math.round((ms % 60000) / 1000);
-  return `${mins}m ${secs}s`;
 }
