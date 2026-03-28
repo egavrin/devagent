@@ -20,7 +20,10 @@ import type {
   ArkTSConfig,
   ProviderConfig,
   ModelCapabilities,
+  AgentToolPermissionOverride,
+  ReasoningEffort,
 } from "./types.js";
+import { AgentType } from "./types.js";
 
 // ─── Defaults ────────────────────────────────────────────────
 
@@ -62,6 +65,40 @@ const DEFAULT_CONFIG: DevAgentConfig = {
   budget: DEFAULT_BUDGET,
   context: DEFAULT_CONTEXT,
   arkts: DEFAULT_ARKTS,
+};
+
+const VALID_AGENT_TYPES = new Set<string>([
+  "general",
+  "reviewer",
+  "architect",
+  "explore",
+]);
+
+const VALID_TOOL_CATEGORIES = new Set<string>([
+  "readonly",
+  "mutating",
+  "workflow",
+  "external",
+  "state",
+]);
+
+const VALID_REASONING_EFFORTS = new Set<ReasoningEffort>([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+
+const OPENAI_FAMILY_SUBAGENT_MODEL_DEFAULTS: Partial<Record<AgentType, string>> = {
+  [AgentType.EXPLORE]: "gpt-5.4-mini",
+  [AgentType.REVIEWER]: "gpt-5.4",
+  [AgentType.ARCHITECT]: "gpt-5.4",
+};
+
+const OPENAI_FAMILY_SUBAGENT_REASONING_DEFAULTS: Partial<Record<AgentType, ReasoningEffort>> = {
+  [AgentType.EXPLORE]: "low",
+  [AgentType.REVIEWER]: "high",
+  [AgentType.ARCHITECT]: "high",
 };
 
 // ─── Config Loading ──────────────────────────────────────────
@@ -185,6 +222,95 @@ function parseContext(
   };
 }
 
+function parseAgentValueMap<T>(
+  raw: unknown,
+  validate: (value: unknown) => T | undefined,
+): Partial<Record<AgentType, T>> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Partial<Record<AgentType, T>> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!VALID_AGENT_TYPES.has(key)) {
+      continue;
+    }
+    const validated = validate(value);
+    if (validated !== undefined) {
+      out[key as AgentType] = validated;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseAgentStringMap(
+  raw: unknown,
+): Partial<Record<AgentType, string>> | undefined {
+  return parseAgentValueMap(raw, (value) => {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      return undefined;
+    }
+    return value;
+  });
+}
+
+function parseAgentNumberMap(
+  raw: unknown,
+): Partial<Record<AgentType, number>> | undefined {
+  return parseAgentValueMap(raw, (value) =>
+    typeof value === "number" ? value : undefined
+  );
+}
+
+function parseAgentReasoningMap(
+  raw: unknown,
+): Partial<Record<AgentType, ReasoningEffort>> | undefined {
+  return parseAgentValueMap(raw, (value) => {
+    if (typeof value !== "string" || !VALID_REASONING_EFFORTS.has(value as ReasoningEffort)) {
+      return undefined;
+    }
+    return value as ReasoningEffort;
+  });
+}
+
+function parseAllowedChildAgents(
+  raw: unknown,
+): Partial<Record<AgentType, ReadonlyArray<AgentType>>> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Partial<Record<AgentType, ReadonlyArray<AgentType>>> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!VALID_AGENT_TYPES.has(key) || !Array.isArray(value)) continue;
+    const valid = value.filter(
+      (entry): entry is AgentType =>
+        typeof entry === "string" && VALID_AGENT_TYPES.has(entry),
+    );
+    if (valid.length > 0) {
+      out[key as AgentType] = valid;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseAgentPermissionOverrides(
+  raw: unknown,
+): Partial<Record<AgentType, AgentToolPermissionOverride>> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Partial<Record<AgentType, AgentToolPermissionOverride>> = {};
+  for (const [agentType, permissions] of Object.entries(raw as Record<string, unknown>)) {
+    if (!VALID_AGENT_TYPES.has(agentType) || !permissions || typeof permissions !== "object") {
+      continue;
+    }
+    const parsed: Partial<Record<string, "allow" | "deny">> = {};
+    for (const [category, action] of Object.entries(permissions as Record<string, unknown>)) {
+      if (!VALID_TOOL_CATEGORIES.has(category)) continue;
+      if (action === "allow" || action === "deny") {
+        parsed[category] = action;
+      }
+    }
+    if (Object.keys(parsed).length > 0) {
+      out[agentType as AgentType] = parsed as AgentToolPermissionOverride;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function validateBudgetConfig(budget: BudgetConfig): void {
   if (!Number.isInteger(budget.maxIterations) || budget.maxIterations < 0) {
     throw new ConfigError(
@@ -246,6 +372,52 @@ function validateContextConfig(context: ContextConfig): void {
       );
     }
   }
+}
+
+function validateSubagentConfig(config: DevAgentConfig): void {
+  for (const [agentType, cap] of Object.entries(config.agentIterationCaps ?? {})) {
+    if (!VALID_AGENT_TYPES.has(agentType) || !Number.isInteger(cap) || cap < 1) {
+      throw new ConfigError(
+        `Invalid agentIterationCaps.${agentType}: expected integer >= 1, got ${String(cap)}`,
+      );
+    }
+  }
+
+  if (
+    config.subagentTimeoutMs !== undefined &&
+    (!Number.isInteger(config.subagentTimeoutMs) || config.subagentTimeoutMs < 0)
+  ) {
+    throw new ConfigError(
+      `Invalid subagentTimeoutMs: expected integer >= 0, got ${String(config.subagentTimeoutMs)}`,
+    );
+  }
+}
+
+function mergeAgentMaps<T>(
+  ...maps: ReadonlyArray<Partial<Record<AgentType, T>> | undefined>
+): Partial<Record<AgentType, T>> | undefined {
+  const merged: Partial<Record<AgentType, T>> = {};
+  for (const map of maps) {
+    if (!map) continue;
+    Object.assign(merged, map);
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function getDefaultSubagentProfiles(
+  provider: string,
+): {
+  readonly agentModelOverrides?: Partial<Record<AgentType, string>>;
+  readonly agentReasoningOverrides?: Partial<Record<AgentType, ReasoningEffort>>;
+} {
+  if (provider !== "openai" && provider !== "chatgpt") {
+    return {};
+  }
+
+  return {
+    agentModelOverrides: OPENAI_FAMILY_SUBAGENT_MODEL_DEFAULTS,
+    agentReasoningOverrides: OPENAI_FAMILY_SUBAGENT_REASONING_DEFAULTS,
+  };
 }
 
 /**
@@ -350,6 +522,36 @@ export function loadConfig(
     overrides?.provider ??
     (fileConfig["provider"] as string) ??
     DEFAULT_CONFIG.provider;
+
+  const rawSubagents = (fileConfig["subagents"] ?? {}) as Record<string, unknown>;
+  const explicitAgentModelOverrides = parseAgentStringMap(
+    rawSubagents["agent_model_overrides"] ?? rawSubagents["agentModelOverrides"],
+  );
+  const explicitAgentReasoningOverrides = parseAgentReasoningMap(
+    rawSubagents["agent_reasoning_overrides"] ?? rawSubagents["agentReasoningOverrides"],
+  );
+  const agentIterationCaps = parseAgentNumberMap(
+    rawSubagents["agent_iteration_caps"] ?? rawSubagents["agentIterationCaps"],
+  );
+  const agentPermissionOverrides = parseAgentPermissionOverrides(
+    rawSubagents["agent_permission_overrides"] ?? rawSubagents["agentPermissionOverrides"],
+  );
+  const allowedChildAgents = parseAllowedChildAgents(
+    rawSubagents["allowed_child_agents"] ?? rawSubagents["allowedChildAgents"],
+  );
+  const subagentTimeoutMs = (rawSubagents["subagent_timeout_ms"] ??
+    rawSubagents["subagentTimeoutMs"]) as number | undefined;
+  const defaultSubagentProfiles = getDefaultSubagentProfiles(provider);
+  const agentModelOverrides = mergeAgentMaps(
+    defaultSubagentProfiles.agentModelOverrides,
+    explicitAgentModelOverrides,
+    overrides?.agentModelOverrides,
+  );
+  const agentReasoningOverrides = mergeAgentMaps(
+    defaultSubagentProfiles.agentReasoningOverrides,
+    explicitAgentReasoningOverrides,
+    overrides?.agentReasoningOverrides,
+  );
 
   const storedCred = credentialStore.get(provider);
   const storedApiKey = storedCred?.type === "api" ? storedCred.key : undefined;
@@ -461,7 +663,7 @@ export function loadConfig(
       }
     : undefined;
 
-  return {
+  const config: DevAgentConfig = {
     provider,
     model:
       envModel ??
@@ -477,7 +679,16 @@ export function loadConfig(
     ...(doubleCheck ? { doubleCheck } : {}),
     ...(lsp ? { lsp } : {}),
     ...(sessionState ? { sessionState } : {}),
+    ...(agentModelOverrides ? { agentModelOverrides } : {}),
+    ...(agentReasoningOverrides ? { agentReasoningOverrides } : {}),
+    ...(agentIterationCaps ? { agentIterationCaps } : {}),
+    ...(agentPermissionOverrides ? { agentPermissionOverrides } : {}),
+    ...(allowedChildAgents ? { allowedChildAgents } : {}),
+    ...(subagentTimeoutMs !== undefined ? { subagentTimeoutMs } : {}),
   };
+
+  validateSubagentConfig(config);
+  return config;
 }
 
 /**

@@ -12,6 +12,16 @@ export enum AgentType {
   EXPLORE = "explore",
 }
 
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
+export interface AgentToolPermissionOverride {
+  readonly readonly?: "allow" | "deny";
+  readonly mutating?: "allow" | "deny";
+  readonly workflow?: "allow" | "deny";
+  readonly external?: "allow" | "deny";
+  readonly state?: "allow" | "deny";
+}
+
 // ─── Tool Types ───────────────────────────────────────────────
 
 /** Recovery guidance appended to tool error messages on failure. */
@@ -47,6 +57,9 @@ export interface ToolContext {
   readonly repoRoot: string;
   readonly config: DevAgentConfig;
   readonly sessionId: string;
+  readonly callId?: string;
+  readonly batchId?: string;
+  readonly batchSize?: number;
 }
 
 export interface ToolResult {
@@ -54,6 +67,7 @@ export interface ToolResult {
   readonly output: string;
   readonly error: string | null;
   readonly artifacts: ReadonlyArray<string>;
+  readonly metadata?: Record<string, unknown>;
 }
 
 export interface ToolCallRecord {
@@ -150,7 +164,7 @@ export interface ProviderConfig {
   readonly maxTokens?: number;
   readonly temperature?: number;
   /** Reasoning effort: none, low, medium, high, xhigh (model-dependent). */
-  readonly reasoningEffort?: "low" | "medium" | "high" | "xhigh";
+  readonly reasoningEffort?: ReasoningEffort;
   readonly capabilities?: ModelCapabilities;
   /** ChatGPT Codex-specific options (store, include, instructions). */
   readonly codexOptions?: {
@@ -198,6 +212,12 @@ export interface DevAgentConfig {
   readonly doubleCheck?: DoubleCheckConfig;
   readonly lsp?: LSPConfig;
   readonly sessionState?: SessionStateConfigCore;
+  readonly agentModelOverrides?: Partial<Record<AgentType, string>>;
+  readonly agentReasoningOverrides?: Partial<Record<AgentType, ReasoningEffort>>;
+  readonly agentIterationCaps?: Partial<Record<AgentType, number>>;
+  readonly agentPermissionOverrides?: Partial<Record<AgentType, AgentToolPermissionOverride>>;
+  readonly allowedChildAgents?: Partial<Record<AgentType, ReadonlyArray<AgentType>>>;
+  readonly subagentTimeoutMs?: number;
 }
 
 /** Config for session state persistence and tracking (core-level definition). */

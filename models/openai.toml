@@ -20,6 +20,17 @@ input_price_per_million = 2.50
 output_price_per_million = 15
 # reasoning_effort: none, low, medium, high, xhigh
 
+["gpt-5.4-mini"]
+context_window = 400000
+response_headroom = 128000
+tokenizer = "o200k_base"
+supports_tools = true
+supports_parallel_tools = true
+supports_temperature = false
+input_price_per_million = 0.75
+output_price_per_million = 4.50
+# reasoning_effort: low, medium, high, xhigh
+
 ["gpt-5.4-pro"]
 context_window = 1050000
 response_headroom = 128000

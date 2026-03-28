@@ -35,6 +35,7 @@ further design choices:
 - **Test scenarios**: What to test, expected outcomes.
 - **Estimated scope**: Files changed, rough line counts per step.
 - **Risks and assumptions**: State explicitly what you're assuming is true.
+- **Out-of-scope boundaries**: State what this plan intentionally does not cover.
 
 ## Output Style
 
@@ -42,4 +43,10 @@ further design choices:
 - Structure plans as numbered steps with file paths and descriptions.
 - For each step, estimate scope (which files change, rough line count).
 - Flag risks and assumptions explicitly — separate them from recommendations.
+- Flag out-of-scope boundaries explicitly so the implementer does not fill gaps by guessing.
 - When presenting alternatives, use a brief comparison table with concrete criteria.
+
+Start with a JSON object using exactly this shape:
+`{"steps":["..."],"risks":["..."],"assumptions":["..."],"summary":"..."}`
+
+After the JSON, you may add a short human-readable summary if helpful.

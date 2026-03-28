@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { createOpenAIProvider, resolveCapabilities, stripNullArgs } from "./openai.js";
+import { convertTools } from "./shared.js";
 import type { ProviderConfig, ModelCapabilities } from "@devagent/runtime";
+import {
+  AgentRegistry,
+  ApprovalGate,
+  ApprovalMode,
+  createDelegateTool,
+  EventBus,
+  ToolRegistry,
+} from "@devagent/runtime";
 
 describe("createOpenAIProvider", () => {
   it("creates a provider without API key (for local endpoints)", () => {
@@ -116,5 +125,69 @@ describe("stripNullArgs", () => {
   it("returns empty object when all values are null", () => {
     const cleaned = stripNullArgs({ a: null, b: null });
     expect(cleaned).toEqual({});
+  });
+
+  it("preserves nested strict schemas required by OpenAI tools", () => {
+    const tool = createDelegateTool({
+      provider: createOpenAIProvider({ model: "gpt-4o", apiKey: "test-key" }),
+      tools: new ToolRegistry(),
+      bus: new EventBus(),
+      approvalGate: new ApprovalGate({
+        mode: ApprovalMode.FULL_AUTO,
+        auditLog: false,
+        toolOverrides: {},
+        pathRules: [],
+      }, new EventBus()),
+      config: {
+        provider: "openai",
+        model: "gpt-4o",
+        providers: {},
+        approval: {
+          mode: ApprovalMode.FULL_AUTO,
+          auditLog: false,
+          toolOverrides: {},
+          pathRules: [],
+        },
+        budget: {
+          maxIterations: 10,
+          maxContextTokens: 100_000,
+          responseHeadroom: 2_000,
+          costWarningThreshold: 1,
+          enableCostTracking: true,
+        },
+        context: {
+          pruningStrategy: "hybrid",
+          triggerRatio: 0.9,
+          keepRecentMessages: 40,
+          turnIsolation: true,
+          midpointBriefingInterval: 15,
+          briefingStrategy: "auto",
+        },
+        arkts: {
+          enabled: false,
+          strictMode: false,
+          targetVersion: "5.0",
+        },
+      },
+      repoRoot: "/tmp",
+      agentRegistry: new AgentRegistry(),
+      parentAgentId: "root",
+    });
+
+    const converted = convertTools([tool], { strict: true });
+    const schema = (converted["delegate"] as { parameters: { jsonSchema: Record<string, unknown> } }).parameters.jsonSchema;
+    const requestSchema = (schema.properties as Record<string, Record<string, unknown>>)["request"];
+
+    expect(requestSchema.type).toBe("object");
+    expect(requestSchema.additionalProperties).toBe(false);
+    expect(requestSchema.required).toEqual([
+      "objective",
+      "laneLabel",
+      "scope",
+      "constraints",
+      "exclusions",
+      "successCriteria",
+      "parentContext",
+    ]);
   });
 });

@@ -31,6 +31,8 @@ describe("AgentRegistry", () => {
       "workflow",
       "external",
     ]);
+    expect(def.systemPromptTemplate).toContain("You own an isolated implementation subtask");
+    expect(def.systemPromptTemplate).not.toContain("Use `delegate`");
   });
 
   it("reviewer agent uses plan mode with readonly tools only", () => {
@@ -58,6 +60,10 @@ describe("AgentRegistry", () => {
     expect(def.name).toBe("Explore");
     expect(def.defaultMode).toBe("act");
     expect(def.allowedToolCategories).toEqual(["readonly"]);
+    expect(def.systemPromptTemplate).toContain("Scope validation first");
+    expect(def.systemPromptTemplate).toContain("Do not begin with `**`");
+    expect(def.systemPromptTemplate).toContain("return a concise partial result");
+    expect(def.systemPromptTemplate).toContain("one evidence lane");
   });
 
   it("throws for unknown agent type", () => {

@@ -16,6 +16,8 @@ export type {
   LLMProvider,
   ProviderConfig,
   ModelCapabilities,
+  AgentToolPermissionOverride,
+  ReasoningEffort,
   ApprovalPolicy,
   PathRule,
   DevAgentConfig,
@@ -47,6 +49,10 @@ export type {
   EventMap,
   ToolBeforeEvent,
   ToolAfterEvent,
+  SubagentStartEvent,
+  SubagentUpdateEvent,
+  SubagentEndEvent,
+  SubagentErrorEvent,
   AssistantMessageEvent,
   ToolMessageEvent,
   UserMessageEvent,
@@ -167,7 +173,18 @@ export { openUrl } from "./open-url.js";
 
 // Event logger
 export { EventLogger } from "./event-logger.js";
-export type { LogEntry } from "./event-logger.js";
+export type {
+  LogEntry,
+} from "./event-logger.js";
+export {
+  formatDuration,
+  loggedSubagentRunFromEvent,
+  aggregateDelegatedWork,
+} from "./subagent-summary.js";
+export type {
+  LoggedSubagentRun,
+  DelegatedWorkSummary,
+} from "./subagent-summary.js";
 
 // Language extensions
 export { LANGUAGE_EXTENSIONS } from "./languages.js";

@@ -18,7 +18,8 @@ export class ProviderRegistry {
 
   get(name: string, config: ProviderConfig): LLMProvider {
     // Return cached instance if available
-    const cached = this.instances.get(name);
+    const cacheKey = `${name}:${JSON.stringify(config)}`;
+    const cached = this.instances.get(cacheKey);
     if (cached) return cached;
 
     const factory = this.factories.get(name);
@@ -30,7 +31,7 @@ export class ProviderRegistry {
     }
 
     const instance = factory(config);
-    this.instances.set(name, instance);
+    this.instances.set(cacheKey, instance);
     return instance;
   }
 

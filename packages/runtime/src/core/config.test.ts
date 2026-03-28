@@ -248,6 +248,62 @@ base_url = "https://example.test/v1"
     expect(config.model).toBe("meta-llama/llama-3");
   });
 
+  it("applies OpenAI-family default subagent model and reasoning profiles", () => {
+    const dir = join(tmpdir(), `devagent-test-subagent-defaults-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, ".devagent.toml"),
+      `
+provider = "openai"
+model = "gpt-5.4"
+`,
+    );
+
+    try {
+      const config = loadConfig(dir);
+      expect(config.agentModelOverrides?.explore).toBe("gpt-5.4-mini");
+      expect(config.agentModelOverrides?.reviewer).toBe("gpt-5.4");
+      expect(config.agentModelOverrides?.architect).toBe("gpt-5.4");
+      expect(config.agentReasoningOverrides?.explore).toBe("low");
+      expect(config.agentReasoningOverrides?.reviewer).toBe("high");
+      expect(config.agentReasoningOverrides?.architect).toBe("high");
+      expect(config.agentModelOverrides?.general).toBeUndefined();
+      expect(config.agentReasoningOverrides?.general).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it("allows explicit subagent overrides to replace defaults while keeping unspecified defaults", () => {
+    const dir = join(tmpdir(), `devagent-test-subagent-overrides-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, ".devagent.toml"),
+      `
+provider = "openai"
+model = "gpt-5.4"
+
+[subagents.agent_model_overrides]
+explore = "gpt-5.4"
+
+[subagents.agent_reasoning_overrides]
+reviewer = "medium"
+architect = "invalid"
+`,
+    );
+
+    try {
+      const config = loadConfig(dir);
+      expect(config.agentModelOverrides?.explore).toBe("gpt-5.4");
+      expect(config.agentModelOverrides?.reviewer).toBe("gpt-5.4");
+      expect(config.agentReasoningOverrides?.explore).toBe("low");
+      expect(config.agentReasoningOverrides?.reviewer).toBe("medium");
+      expect(config.agentReasoningOverrides?.architect).toBe("high");
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
   it("fails fast on invalid TOML", () => {
     const dir = join(tmpdir(), `devagent-test-${Date.now()}`);
     mkdirSync(dir, { recursive: true });
