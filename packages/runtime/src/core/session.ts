@@ -200,6 +200,27 @@ export class SessionStore {
     return result.changes > 0;
   }
 
+  updateSessionMetadata(
+    id: string,
+    patch: Record<string, unknown>,
+  ): Session | null {
+    const existing = this.getSession(id);
+    if (!existing) return null;
+    const nextMetadata = {
+      ...existing.metadata,
+      ...patch,
+    };
+    const now = Date.now();
+    this.db
+      .prepare("UPDATE sessions SET metadata = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(nextMetadata), now, id);
+    return {
+      ...existing,
+      updatedAt: now,
+      metadata: nextMetadata,
+    };
+  }
+
   // ─── Messages ────────────────────────────────────────────────
 
   addMessage(sessionId: string, message: Message): void {

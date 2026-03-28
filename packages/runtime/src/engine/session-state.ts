@@ -468,6 +468,41 @@ export class SessionState {
     return this.knowledge;
   }
 
+  hasContent(): boolean {
+    return (
+      (this.plan?.length ?? 0) > 0 ||
+      this.modifiedFiles.length > 0 ||
+      this.envFacts.size > 0 ||
+      this.toolSummaries.length > 0 ||
+      this.readonlyCoverage.size > 0 ||
+      this.findings.length > 0 ||
+      this.knowledge.length > 0
+    );
+  }
+
+  mergeDelegatedState(data: SessionStateJSON): void {
+    const child = SessionState.fromJSON(data, this.config);
+    this.batch(() => {
+      for (const file of child.getModifiedFiles()) {
+        this.recordModifiedFile(file);
+      }
+      for (const [tool, targets] of child.getReadonlyCoverage()) {
+        for (const target of targets) {
+          this.recordReadonlyCoverage(tool, target);
+        }
+      }
+      for (const finding of child.getFindings()) {
+        this.addFinding(finding.title, finding.detail, finding.iteration);
+      }
+      for (const entry of child.getKnowledge()) {
+        this.addKnowledge(entry.key, entry.content, entry.iteration);
+      }
+      for (const fact of data.envFacts ?? []) {
+        this.addEnvFact(fact.key, fact.value);
+      }
+    });
+  }
+
   // ─── JSON Serialization ────────────────────────────────────
 
   /**

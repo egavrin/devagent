@@ -9,6 +9,7 @@ import type {
   DevAgentConfig,
 } from "../core/index.js";
 import {
+  AgentType,
   BUN_SQLITE_AVAILABLE,
   EventBus,
   ApprovalGate,
@@ -145,6 +146,41 @@ describe("TaskLoop", () => {
     expect(assistantMessages[assistantMessages.length - 1]!.content).toBe(
       "Hello, world!",
     );
+  });
+
+  it("injects seeded session state before the first provider call", async () => {
+    const sessionState = new SessionState({ persist: false });
+    sessionState.recordReadonlyCoverage("read_file", "src/already-read.ts");
+
+    const seenMessageContents: string[] = [];
+    const provider: LLMProvider = {
+      id: "capture",
+      async *chat(messages): AsyncIterable<StreamChunk> {
+        seenMessageContents.push(...messages.map((m) => m.content ?? ""));
+        yield { type: "text", content: "Done" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "You are a test assistant.",
+      repoRoot: "/tmp",
+      sessionState,
+      injectSessionStateOnFirstTurn: true,
+    });
+
+    await loop.run("Inspect the repo");
+
+    expect(seenMessageContents.some((content) => content.includes("[SESSION STATE"))).toBe(true);
+    expect(seenMessageContents.some((content) => content.includes("src/already-read.ts"))).toBe(true);
   });
 
   it("executes tool calls and feeds results back", async () => {
@@ -1924,6 +1960,77 @@ describe("TaskLoop", () => {
     expect(maxStartDiff).toBeLessThan(50); // All started within 50ms of each other
   });
 
+  it("executes multiple explore delegate calls in parallel when emitted in one turn", async () => {
+    const executionLog: Array<{ callId: string; event: "start" | "end"; time: number }> = [];
+    const batchIds = new Set<string>();
+    const batchSizes = new Set<number>();
+    const baseTime = Date.now();
+
+    const provider = createMockProvider([
+      [
+        { type: "tool_call", content: '{"agent_type":"explore","request":{"objective":"docs lane"}}', toolCallId: "d1", toolName: "delegate" },
+        { type: "tool_call", content: '{"agent_type":"explore","request":{"objective":"runtime lane"}}', toolCallId: "d2", toolName: "delegate" },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Delegates complete." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "delegate",
+      description: "Mock delegate",
+      category: "workflow",
+      paramSchema: { type: "object" },
+      resultSchema: { type: "object" },
+      handler: async (params, context) => {
+        const callId = String((params["request"] as Record<string, unknown>)["objective"] ?? "unknown");
+        if (context.batchId) batchIds.add(context.batchId);
+        if (context.batchSize) batchSizes.add(context.batchSize);
+        executionLog.push({ callId, event: "start", time: Date.now() - baseTime });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        executionLog.push({ callId, event: "end", time: Date.now() - baseTime });
+        return {
+          success: true,
+          output: `${callId} complete`,
+          error: null,
+          artifacts: [],
+        };
+      },
+    });
+
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Investigations should be decomposed into evidence lanes.",
+      repoRoot: "/tmp",
+    });
+
+    const start = Date.now();
+    const result = await loop.run("Investigate contradictions across docs and runtime");
+    const elapsed = Date.now() - start;
+
+    expect(result.status).toBe("success");
+    const toolMessages = result.messages.filter((m) => m.role === MessageRole.TOOL);
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages[0]!.content).toBe("docs lane complete");
+    expect(toolMessages[1]!.content).toBe("runtime lane complete");
+    expect(elapsed).toBeLessThan(300);
+
+    const starts = executionLog.filter((entry) => entry.event === "start");
+    expect(starts).toHaveLength(2);
+    const maxStartDiff = Math.max(...starts.map((entry) => entry.time)) - Math.min(...starts.map((entry) => entry.time));
+    expect(maxStartDiff).toBeLessThan(50);
+    expect(batchIds.size).toBe(1);
+    expect(batchSizes).toEqual(new Set([2]));
+  });
+
   it("executes mutating tool calls sequentially even when mixed with readonly", async () => {
     const executionOrder: string[] = [];
 
@@ -3310,6 +3417,153 @@ describe("TaskLoop", () => {
       expect(toolEvents[0]!.role).toBe("tool");
       expect(toolEvents[0]!.toolCallId).toBe("call_0");
       expect(toolEvents[0]!.content).toContain("hello");
+    });
+
+    it("emits summary-only delegate tool messages while keeping full delegate output in loop history", async () => {
+      const provider = createMockProvider([
+        [
+          {
+            type: "tool_call",
+            content: '{"agent_type":"explore","request":{"objective":"Inspect docs lane","laneLabel":"docs/spec","scope":"docs","constraints":[],"exclusions":[],"successCriteria":[],"parentContext":"Need focused evidence"}}',
+            toolCallId: "call_0",
+            toolName: "delegate",
+          },
+          { type: "done", content: "" },
+        ],
+        [
+          { type: "text", content: "Done." },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "delegate",
+        description: "Mock delegate",
+        category: "workflow",
+        paramSchema: { type: "object", properties: {}, required: [] },
+        resultSchema: { type: "object", properties: {} },
+        async handler() {
+          return {
+            success: true,
+            output: "Subagent (explore) completed [6 iterations, 100+20 tokens]:\n\n{\"answer\":\"full child payload\"}",
+            error: null,
+            artifacts: [],
+            metadata: {
+              agentMeta: {
+                agentId: "root-sub-1",
+                parentId: "root",
+                depth: 1,
+                agentType: AgentType.EXPLORE,
+              },
+              delegateSummary: {
+                agentId: "root-sub-1",
+                agentType: "explore",
+                laneLabel: "docs/spec",
+                durationMs: 4500,
+                iterations: 6,
+                quality: {
+                  score: 0.81,
+                  completeness: "partial",
+                },
+              },
+            },
+          };
+        },
+      });
+      const gate = new ApprovalGate(config.approval, bus);
+
+      const toolEvents: Array<{
+        role: string;
+        content: string;
+        toolCallId: string;
+        toolName?: string;
+        summaryOnly?: boolean;
+      }> = [];
+      bus.on("message:tool", (event) => {
+        toolEvents.push(event);
+      });
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config,
+        systemPrompt: "Test",
+        repoRoot: "/repo",
+      });
+
+      const result = await loop.run("Delegate the docs lane");
+
+      expect(toolEvents).toHaveLength(1);
+      expect(toolEvents[0]!.toolName).toBe("delegate");
+      expect(toolEvents[0]!.summaryOnly).toBe(true);
+      expect(toolEvents[0]!.content).toContain("root-sub-1");
+      expect(toolEvents[0]!.content).toContain("docs/spec");
+      expect(toolEvents[0]!.content).not.toContain("full child payload");
+
+      const toolMessages = result.messages.filter((message) => message.role === MessageRole.TOOL);
+      expect(toolMessages).toHaveLength(1);
+      expect(toolMessages[0]!.content).toContain("full child payload");
+    });
+
+    it("includes agent ownership on child message events", async () => {
+      const provider = createMockProvider([
+        [
+          {
+            type: "tool_call",
+            content: '{"text": "hello"}',
+            toolCallId: "call_0",
+            toolName: "echo",
+          },
+          { type: "done", content: "" },
+        ],
+        [
+          { type: "text", content: "Done." },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const registry = new ToolRegistry();
+      registry.register(makeEchoTool());
+      const gate = new ApprovalGate(config.approval, bus);
+
+      const userEvents: Array<{ agentId?: string; parentAgentId?: string | null }> = [];
+      const assistantEvents: Array<{ agentId?: string; parentAgentId?: string | null }> = [];
+      const toolEvents: Array<{ agentId?: string; parentAgentId?: string | null }> = [];
+      bus.on("message:user", (event) => {
+        userEvents.push(event);
+      });
+      bus.on("message:assistant", (event) => {
+        assistantEvents.push(event);
+      });
+      bus.on("message:tool", (event) => {
+        toolEvents.push(event);
+      });
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config,
+        systemPrompt: "Test",
+        repoRoot: "/repo",
+        agentContext: {
+          agentId: "root-sub-1",
+          parentAgentId: "root",
+          depth: 1,
+          agentType: AgentType.EXPLORE,
+        },
+      });
+
+      await loop.run("Say hello");
+
+      expect(userEvents.some((event) => event.agentId === "root-sub-1")).toBe(true);
+      expect(assistantEvents.some((event) => event.agentId === "root-sub-1")).toBe(true);
+      expect(toolEvents.some((event) => event.agentId === "root-sub-1")).toBe(true);
+      expect(toolEvents.every((event) => event.parentAgentId === "root")).toBe(true);
     });
   });
 

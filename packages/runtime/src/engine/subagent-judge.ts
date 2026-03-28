@@ -7,7 +7,8 @@
  */
 
 import type { LLMProvider } from "../core/index.js";
-import { MessageRole } from "../core/index.js";
+import { AgentType, MessageRole } from "../core/index.js";
+import { parseAgentType } from "./agent-type.js";
 import { collectStreamText, parseJudgeResponse } from "./llm-judge.js";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -20,7 +21,7 @@ export interface SubagentJudgeResult {
 
 // ─── System prompt ───────────────────────────────────────────
 
-export const SUBAGENT_JUDGE_SYSTEM_PROMPT = `You assess whether a subagent completed its assigned task.
+const BASE_SUBAGENT_JUDGE_SYSTEM_PROMPT = `You assess whether a subagent completed its assigned task.
 
 Evaluate the output against the task description:
 - Does the output answer/address the task?
@@ -33,12 +34,19 @@ IS a quality issue: Empty or generic output. Output doesn't address the task. Ag
 Respond ONLY with valid JSON (no markdown fences, no commentary):
 {"quality_score": 0.0-1.0, "completeness": "complete|partial|off_topic|empty", "note": "brief assessment"}`;
 
+const TYPE_SPECIFIC_GUIDANCE: Record<AgentType, string> = {
+  [AgentType.EXPLORE]: "Explore agents must provide a direct answer plus concrete evidence such as file paths or line references.",
+  [AgentType.REVIEWER]: "Reviewer agents must provide concrete findings or explicitly state that no issues were found.",
+  [AgentType.ARCHITECT]: "Architect agents must provide actionable implementation steps, risks, or assumptions rather than vague advice.",
+  [AgentType.GENERAL]: "General agents must provide a clear completion summary, touched files or checks run, and any unresolved work.",
+};
+
 // ─── Judge function ──────────────────────────────────────────
 
 export async function judgeSubagentOutput(
   provider: LLMProvider,
   task: string,
-  agentType: string,
+  agentType: AgentType | string,
   output: string,
   iterationsUsed: number,
   maxIterations: number,
@@ -60,7 +68,10 @@ export async function judgeSubagentOutput(
     ];
 
     const messages = [
-      { role: MessageRole.SYSTEM as const, content: SUBAGENT_JUDGE_SYSTEM_PROMPT },
+      {
+        role: MessageRole.SYSTEM as const,
+        content: `${BASE_SUBAGENT_JUDGE_SYSTEM_PROMPT}\n\n${TYPE_SPECIFIC_GUIDANCE[parseAgentType(agentType) ?? AgentType.GENERAL]}`,
+      },
       { role: MessageRole.USER as const, content: parts.join("\n\n") },
     ];
 

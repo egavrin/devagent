@@ -3,7 +3,15 @@
  * ArkTS-compatible: no dynamic property access, explicit types.
  */
 
-import type { ToolResult, StreamChunk, Message, ToolCallRequest } from "./types.js";
+import type {
+  ToolResult,
+  StreamChunk,
+  Message,
+  ToolCallRequest,
+  AgentType,
+  CostRecord,
+  ReasoningEffort,
+} from "./types.js";
 import { extractErrorMessage } from "./errors.js";
 
 // ─── Event Definitions ───────────────────────────────────────
@@ -11,6 +19,10 @@ import { extractErrorMessage } from "./errors.js";
 export interface EventMap {
   "tool:before": ToolBeforeEvent;
   "tool:after": ToolAfterEvent;
+  "subagent:start": SubagentStartEvent;
+  "subagent:update": SubagentUpdateEvent;
+  "subagent:end": SubagentEndEvent;
+  "subagent:error": SubagentErrorEvent;
   "message:assistant": AssistantMessageEvent;
   "message:tool": ToolMessageEvent;
   "message:user": UserMessageEvent;
@@ -36,6 +48,10 @@ export interface IterationStartEvent {
   readonly estimatedTokens: number;
   /** Max context tokens budget (0 if unlimited). */
   readonly maxContextTokens: number;
+  readonly agentId?: string;
+  readonly parentAgentId?: string | null;
+  readonly depth?: number;
+  readonly agentType?: AgentType;
 }
 
 export interface PlanRegressionEvent {
@@ -48,6 +64,10 @@ export interface ToolBeforeEvent {
   readonly name: string;
   readonly params: Record<string, unknown>;
   readonly callId: string;
+  readonly agentId?: string;
+  readonly parentAgentId?: string | null;
+  readonly depth?: number;
+  readonly agentType?: AgentType;
 }
 
 export interface ToolAfterEvent {
@@ -55,6 +75,81 @@ export interface ToolAfterEvent {
   readonly result: ToolResult;
   readonly callId: string;
   readonly durationMs: number;
+  readonly agentId?: string;
+  readonly parentAgentId?: string | null;
+  readonly depth?: number;
+  readonly agentType?: AgentType;
+}
+
+export interface SubagentStartEvent {
+  readonly agentId: string;
+  readonly parentAgentId: string | null;
+  readonly depth: number;
+  readonly agentType: AgentType;
+  readonly laneLabel?: string | null;
+  readonly objective: string;
+  readonly model: string;
+  readonly reasoningEffort?: ReasoningEffort;
+  readonly status: "running";
+  readonly batchId?: string;
+  readonly batchSize?: number;
+}
+
+export interface SubagentUpdateEvent {
+  readonly agentId: string;
+  readonly parentAgentId: string | null;
+  readonly depth: number;
+  readonly agentType: AgentType;
+  readonly laneLabel?: string | null;
+  readonly status: "running";
+  readonly batchId?: string;
+  readonly batchSize?: number;
+  readonly milestone: "iteration:start" | "tool:before" | "tool:after";
+  readonly iteration?: number;
+  readonly toolName?: string;
+  readonly toolCallId?: string;
+  readonly toolSuccess?: boolean;
+  readonly durationMs?: number;
+  readonly summary?: string;
+}
+
+export interface SubagentEndEvent {
+  readonly agentId: string;
+  readonly parentAgentId: string | null;
+  readonly depth: number;
+  readonly agentType: AgentType;
+  readonly laneLabel?: string | null;
+  readonly objective: string;
+  readonly model: string;
+  readonly reasoningEffort?: ReasoningEffort;
+  readonly status: "completed";
+  readonly durationMs: number;
+  readonly iterations: number;
+  readonly cost: CostRecord;
+  readonly parsedOutputKeys: ReadonlyArray<string>;
+  readonly quality?: {
+    readonly score: number;
+    readonly completeness: string;
+    readonly note?: string;
+  };
+  readonly batchId?: string;
+  readonly batchSize?: number;
+}
+
+export interface SubagentErrorEvent {
+  readonly agentId: string;
+  readonly parentAgentId: string | null;
+  readonly depth: number;
+  readonly agentType: AgentType;
+  readonly laneLabel?: string | null;
+  readonly objective: string;
+  readonly model: string;
+  readonly reasoningEffort?: ReasoningEffort;
+  readonly status: "error";
+  readonly durationMs: number;
+  readonly error: string;
+  readonly batchId?: string;
+  readonly batchSize?: number;
 }
 
 export interface AssistantMessageEvent {
@@ -62,16 +157,30 @@ export interface AssistantMessageEvent {
   readonly partial: boolean;
   readonly chunk?: StreamChunk;
   readonly toolCalls?: ReadonlyArray<ToolCallRequest>;
+  readonly agentId?: string;
+  readonly parentAgentId?: string | null;
+  readonly depth?: number;
+  readonly agentType?: AgentType;
 }
 
 export interface ToolMessageEvent {
   readonly role: "tool";
   readonly content: string;
   readonly toolCallId: string;
+  readonly toolName?: string;
+  readonly summaryOnly?: boolean;
+  readonly agentId?: string;
+  readonly parentAgentId?: string | null;
+  readonly depth?: number;
+  readonly agentType?: AgentType;
 }
 
 export interface UserMessageEvent {
   readonly content: string;
+  readonly agentId?: string;
+  readonly parentAgentId?: string | null;
+  readonly depth?: number;
+  readonly agentType?: AgentType;
 }
 
 export interface ApprovalRequestEvent {
@@ -101,6 +210,10 @@ export interface CostUpdateEvent {
   readonly outputTokens: number;
   readonly totalCost: number;
   readonly model: string;
+  readonly agentId?: string;
+  readonly parentAgentId?: string | null;
+  readonly depth?: number;
+  readonly agentType?: AgentType;
 }
 
 export interface PlanUpdatedEvent {

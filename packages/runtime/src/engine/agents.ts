@@ -5,18 +5,22 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import type {
   LLMProvider,
   DevAgentConfig,
   CostRecord,
+  ToolSpec,
+  SkillRegistry,
 } from "../core/index.js";
 import { AgentType, EventBus, ApprovalGate } from "../core/index.js";
 import { ToolRegistry } from "../tools/index.js";
 import { TaskLoop } from "./task-loop.js";
 import type { TaskMode, TaskLoopResult } from "./task-loop.js";
 import { SessionState } from "./session-state.js";
+import type { SessionStateJSON } from "./session-state.js";
+import { assembleAgentSystemPrompt } from "./agent-prompt.js";
+import type { TurnBriefing } from "./briefing.js";
+import { parseStructuredAgentOutput } from "./subagent-contract.js";
 
 // ─── Agent Definition ────────────────────────────────────────
 
@@ -27,6 +31,20 @@ export interface AgentDefinition {
   readonly systemPromptTemplate: string;
   readonly defaultMode: TaskMode;
   readonly allowedToolCategories: ReadonlyArray<string>;
+}
+
+export type AgentProviderFactory = (
+  config: DevAgentConfig,
+  agentType: AgentType,
+) => LLMProvider;
+
+export interface AgentAmbientContext {
+  readonly skills?: SkillRegistry;
+  readonly approvalMode?: string;
+  readonly providerLabel?: string;
+  readonly briefing?: TurnBriefing;
+  readonly projectInstructions?: string | null;
+  readonly providerFactory?: AgentProviderFactory;
 }
 
 export interface AgentRunOptions {
@@ -40,53 +58,41 @@ export interface AgentRunOptions {
   readonly agentId: string;
   /** Parent's session state — seeded into the subagent so it knows what was already read. */
   readonly parentSessionState?: SessionState;
+  readonly depth: number;
+  readonly ambient?: AgentAmbientContext;
+  readonly createDelegateTool?: (ctx: {
+    provider: LLMProvider;
+    tools: ToolRegistry;
+    bus: EventBus;
+    approvalGate: ApprovalGate;
+    config: DevAgentConfig;
+    repoRoot: string;
+    agentRegistry: AgentRegistry;
+    parentAgentId: string;
+    getParentSessionState?: () => SessionState | undefined;
+    depth: number;
+    parentAgentType: AgentType;
+    ambient?: AgentAmbientContext;
+  }) => ToolSpec;
+  readonly laneLabel?: string | null;
+  readonly batchId?: string;
+  readonly batchSize?: number;
 }
 
 export interface AgentRunResult {
   readonly agentId: string;
   readonly agentType: AgentType;
+  readonly agentMeta: {
+    readonly agentId: string;
+    readonly parentId: string | null;
+    readonly depth: number;
+    readonly agentType: AgentType;
+  };
   readonly result: TaskLoopResult;
   readonly cost: CostRecord;
-}
-
-// ─── System Prompts (loaded from markdown files) ─────────────
-
-const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "prompts");
-
-function loadAgentPrompt(filename: string): string {
-  return readFileSync(join(PROMPTS_DIR, filename), "utf-8");
-}
-
-// Cache loaded prompts (never change during process lifetime)
-let cachedCommonPrompt: string | null = null;
-let cachedGeneralPrompt: string | null = null;
-let cachedReviewerPrompt: string | null = null;
-let cachedArchitectPrompt: string | null = null;
-let cachedExplorePrompt: string | null = null;
-
-function getCommonPrompt(): string {
-  cachedCommonPrompt ??= loadAgentPrompt("agent-common.md");
-  return cachedCommonPrompt;
-}
-
-function getGeneralPrompt(): string {
-  cachedGeneralPrompt ??= loadAgentPrompt("agent-general.md");
-  return cachedGeneralPrompt;
-}
-
-function getReviewerPrompt(): string {
-  cachedReviewerPrompt ??= loadAgentPrompt("agent-reviewer.md");
-  return cachedReviewerPrompt;
-}
-
-function getArchitectPrompt(): string {
-  cachedArchitectPrompt ??= loadAgentPrompt("agent-architect.md");
-  return cachedArchitectPrompt;
-}
-
-function getExplorePrompt(): string {
-  cachedExplorePrompt ??= loadAgentPrompt("agent-explore.md");
-  return cachedExplorePrompt;
+  readonly finalMessage: string;
+  readonly childSessionState: SessionStateJSON;
+  readonly parsedOutput: Record<string, unknown> | null;
 }
 
 // ─── Agent Registry ──────────────────────────────────────────
@@ -97,7 +103,7 @@ function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
       type: AgentType.GENERAL,
       name: "General",
       description: "Default agent. Answers questions, writes code, runs commands.",
-      systemPromptTemplate: getGeneralPrompt(),
+      systemPromptTemplate: loadRolePrompt("agent-general.md"),
       defaultMode: "act",
       allowedToolCategories: ["readonly", "mutating", "workflow", "external"],
     },
@@ -105,7 +111,7 @@ function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
       type: AgentType.REVIEWER,
       name: "Reviewer",
       description: "Code review with structured output. Read-only tools only.",
-      systemPromptTemplate: getReviewerPrompt(),
+      systemPromptTemplate: loadRolePrompt("agent-reviewer.md"),
       defaultMode: "plan",
       allowedToolCategories: ["readonly"],
     },
@@ -113,7 +119,7 @@ function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
       type: AgentType.ARCHITECT,
       name: "Architect",
       description: "Design documents and task breakdown. Read-only tools only.",
-      systemPromptTemplate: getArchitectPrompt(),
+      systemPromptTemplate: loadRolePrompt("agent-architect.md"),
       defaultMode: "plan",
       allowedToolCategories: ["readonly"],
     },
@@ -121,7 +127,7 @@ function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
       type: AgentType.EXPLORE,
       name: "Explore",
       description: "Codebase search and discovery. Read-only tools only. Fast iteration cap.",
-      systemPromptTemplate: getExplorePrompt(),
+      systemPromptTemplate: loadRolePrompt("agent-explore.md"),
       defaultMode: "act",
       allowedToolCategories: ["readonly"],
     },
@@ -172,13 +178,10 @@ export async function runAgent(
 ): Promise<AgentRunResult> {
   const definition = registry.get(agentType);
 
-  // Build system prompt: common guidance + agent-specific template
-  const systemPrompt = (getCommonPrompt() + "\n\n" + definition.systemPromptTemplate)
-    .replace(/\{\{repoRoot\}\}/g, options.repoRoot);
-
-  // Filter tools based on agent's allowed categories
   const filteredTools = filterToolsByCategories(
     options.tools,
+    agentType,
+    options.config,
     definition.allowedToolCategories,
   );
 
@@ -191,9 +194,52 @@ export async function runAgent(
     seedSessionState(sessionState, options.parentSessionState);
   }
 
+  const childTools = new ToolRegistry();
+  for (const tool of filteredTools.getAll()) {
+    if (tool.name === "delegate") continue;
+    childTools.register(tool);
+  }
+
+  if (
+    options.createDelegateTool &&
+    options.depth < 1 &&
+    allowsChildDelegation(agentType, options.config)
+  ) {
+    childTools.register(options.createDelegateTool({
+      provider: options.provider,
+      tools: childTools,
+      bus: options.bus,
+      approvalGate: options.approvalGate,
+      config: options.config,
+      repoRoot: options.repoRoot,
+      agentRegistry: registry,
+      parentAgentId: options.agentId,
+      getParentSessionState: () => sessionState,
+      depth: options.depth,
+      parentAgentType: agentType,
+      ambient: options.ambient,
+    }));
+  }
+
+  const systemPrompt = assembleAgentSystemPrompt({
+    agentType,
+    repoRoot: options.repoRoot,
+    rolePrompt: definition.systemPromptTemplate,
+    availableTools: childTools.getAll(),
+    approvalMode: options.ambient?.approvalMode,
+    providerLabel: options.ambient?.providerLabel,
+    skills: options.ambient?.skills,
+    briefing: options.ambient?.briefing,
+    projectInstructions: options.ambient?.projectInstructions,
+  });
+
+  const provider = options.ambient?.providerFactory
+    ? options.ambient.providerFactory(options.config, agentType)
+    : options.provider;
+
   const loop = new TaskLoop({
-    provider: options.provider,
-    tools: filteredTools,
+    provider,
+    tools: childTools,
     bus: options.bus,
     approvalGate: options.approvalGate,
     config: options.config,
@@ -201,15 +247,36 @@ export async function runAgent(
     repoRoot: options.repoRoot,
     mode: definition.defaultMode,
     sessionState,
+    injectSessionStateOnFirstTurn: true,
+    agentContext: {
+      agentId: options.agentId,
+      parentAgentId: options.parentId,
+      depth: options.depth,
+      agentType,
+      laneLabel: options.laneLabel,
+      batchId: options.batchId,
+      batchSize: options.batchSize,
+    },
   });
 
-  const result = await loop.run(query);
+  const result = await runWithTimeout(loop, query, options.config.subagentTimeoutMs);
+  const finalMessage = extractFinalAssistantMessage(result);
+  const parsedOutput = parseStructuredAgentOutput(agentType, finalMessage);
 
   return {
     agentId: options.agentId,
     agentType,
+    agentMeta: {
+      agentId: options.agentId,
+      parentId: options.parentId,
+      depth: options.depth,
+      agentType,
+    },
     result,
     cost: result.cost,
+    finalMessage,
+    childSessionState: sessionState.toJSON(),
+    parsedOutput,
   };
 }
 
@@ -220,15 +287,18 @@ export async function runAgent(
  */
 function filterToolsByCategories(
   registry: ToolRegistry,
+  agentType: AgentType,
+  config: DevAgentConfig,
   allowedCategories: ReadonlyArray<string>,
 ): ToolRegistry {
   const filtered = new ToolRegistry();
+  const overrides = config.agentPermissionOverrides?.[agentType];
 
   const allTools = registry.getAll();
   for (const tool of allTools) {
-    if (allowedCategories.includes(tool.category)) {
-      filtered.register(tool);
-    }
+    if (!allowedCategories.includes(tool.category)) continue;
+    if (overrides && overrides[tool.category] === "deny") continue;
+    filtered.register(tool);
   }
 
   return filtered;
@@ -237,7 +307,8 @@ function filterToolsByCategories(
 /**
  * Seed a subagent's SessionState with the parent's readonly coverage
  * and tool summaries so the subagent knows what files were already examined.
- * Does NOT copy findings (those belong to the parent's analysis).
+ * Also copies findings, knowledge, and env facts so the child can continue
+ * the parent's analysis without losing structured context.
  */
 function seedSessionState(child: SessionState, parent: SessionState): void {
   // Copy tool summaries — tells the subagent what was already read
@@ -253,5 +324,58 @@ function seedSessionState(child: SessionState, parent: SessionState): void {
   // Copy modified files — scope awareness
   for (const file of parent.getModifiedFiles()) {
     child.recordModifiedFile(file);
+  }
+  for (const finding of parent.getFindings()) {
+    child.addFinding(finding.title, finding.detail, finding.iteration);
+  }
+  for (const knowledge of parent.getKnowledge()) {
+    child.addKnowledge(knowledge.key, knowledge.content, knowledge.iteration);
+  }
+  for (const fact of parent.toJSON().envFacts ?? []) {
+    child.addEnvFact(fact.key, fact.value);
+  }
+}
+
+function loadRolePrompt(filename: string): string {
+  return readFileSync(new URL(`./prompts/${filename}`, import.meta.url), "utf-8");
+}
+
+function allowsChildDelegation(
+  agentType: AgentType,
+  config: DevAgentConfig,
+): boolean {
+  const allowed = config.allowedChildAgents?.[agentType];
+  return allowed === undefined || allowed.length > 0;
+}
+
+function extractFinalAssistantMessage(result: TaskLoopResult): string {
+  const assistantMessages = result.messages.filter(
+    (message) => message.content && message.role === "assistant",
+  );
+  return assistantMessages[assistantMessages.length - 1]?.content ?? "(no output)";
+}
+
+async function runWithTimeout(
+  loop: TaskLoop,
+  query: string,
+  timeoutMs: number | undefined,
+): Promise<TaskLoopResult> {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return loop.run(query);
+  }
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      loop.run(query),
+      new Promise<TaskLoopResult>((_, reject) => {
+        timer = setTimeout(() => {
+          loop.abort();
+          reject(new Error(`Timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

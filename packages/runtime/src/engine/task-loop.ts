@@ -19,6 +19,7 @@ import type {
   DevAgentConfig,
 } from "../core/index.js";
 import {
+  AgentType,
   MessageRole,
   EventBus,
   ApprovalGate,
@@ -28,6 +29,7 @@ import {
   estimateTokens,
   lookupModelPricing,
   extractErrorMessage,
+  formatDuration,
 } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
 import type { DoubleCheck } from "./double-check.js";
@@ -88,8 +90,12 @@ export interface TaskLoopOptions {
   readonly midpointCallback?: MidpointCallback;
   /** Session state sidecar — structured facts that survive compaction. */
   readonly sessionState?: SessionState;
+  /** Inject pre-seeded session state before the first provider call. */
+  readonly injectSessionStateOnFirstTurn?: boolean;
   /** Optional validation hook for text-only terminal responses. */
   readonly finalTextValidator?: FinalTextValidator;
+  /** Child-agent identity for nested execution and logging. */
+  readonly agentContext?: AgentExecutionContext;
 }
 
 export interface TaskLoopResult {
@@ -116,6 +122,21 @@ interface NormalizedToolCall {
 interface ToolCallBatch {
   readonly parallel: boolean;
   readonly calls: ReadonlyArray<PendingToolCall>;
+}
+
+interface ToolExecutionBatchContext {
+  readonly batchId?: string;
+  readonly batchSize?: number;
+}
+
+export interface AgentExecutionContext {
+  readonly agentId: string;
+  readonly parentAgentId: string | null;
+  readonly depth: number;
+  readonly agentType: AgentType;
+  readonly laneLabel?: string | null;
+  readonly batchId?: string;
+  readonly batchSize?: number;
 }
 
 // ─── Tool Output Truncation ─────────────────────────────────
@@ -203,6 +224,7 @@ export class TaskLoop {
   private readonly midpointInterval: number;
   private readonly sessionState: SessionState | null;
   private readonly finalTextValidator: FinalTextValidator | null;
+  private readonly agentContext: AgentExecutionContext | null;
   private mode: TaskMode;
   private messages: Message[] = [];
   private iterations = 0;
@@ -216,6 +238,7 @@ export class TaskLoop {
   private aborted = false;
   private readonly stagnationDetector: StagnationDetector;
   private unresolvedDoubleCheckFailure = false;
+  private parallelBatchCounter = 0;
   private lastReportedInputTokens = 0;
   private readonly cachedPricing;
   /** Running estimate of total message tokens — avoids expensive full-array scans. */
@@ -228,6 +251,8 @@ export class TaskLoop {
   private approachingLimitWarned = false;
   /** Number of auto-pinned git_diff results in this session. */
   private pinnedDiffCount = 0;
+  /** Whether pre-seeded session state should be injected before the first provider call. */
+  private readonly injectSessionStateOnFirstTurn: boolean;
 
   constructor(options: TaskLoopOptions) {
     this.provider = options.provider;
@@ -244,7 +269,9 @@ export class TaskLoop {
     this.midpointInterval =
       options.config.context.midpointBriefingInterval ?? DEFAULT_MIDPOINT_INTERVAL;
     this.sessionState = options.sessionState ?? null;
+    this.injectSessionStateOnFirstTurn = options.injectSessionStateOnFirstTurn ?? false;
     this.finalTextValidator = options.finalTextValidator ?? null;
+    this.agentContext = options.agentContext ?? null;
     this.cachedPricing = lookupModelPricing(this.config.model);
     this.stagnationDetector = new StagnationDetector({
       bus: this.bus,
@@ -265,6 +292,44 @@ export class TaskLoop {
     this.estimatedTokens = estimateMessageTokens(this.messages);
   }
 
+  private getAgentEventFields(): {
+    readonly agentId?: string;
+    readonly parentAgentId?: string | null;
+    readonly depth?: number;
+    readonly agentType?: AgentType;
+  } {
+    if (!this.agentContext) return {};
+    return {
+      agentId: this.agentContext.agentId,
+      parentAgentId: this.agentContext.parentAgentId,
+      depth: this.agentContext.depth,
+      agentType: this.agentContext.agentType,
+    };
+  }
+
+  private emitSubagentUpdate(event: {
+    readonly milestone: "iteration:start" | "tool:before" | "tool:after";
+    readonly iteration?: number;
+    readonly toolName?: string;
+    readonly toolCallId?: string;
+    readonly toolSuccess?: boolean;
+    readonly durationMs?: number;
+    readonly summary?: string;
+  }): void {
+    if (!this.agentContext || this.agentContext.parentAgentId === null) return;
+    this.bus.emit("subagent:update", {
+      agentId: this.agentContext.agentId,
+      parentAgentId: this.agentContext.parentAgentId,
+      depth: this.agentContext.depth,
+      agentType: this.agentContext.agentType,
+      laneLabel: this.agentContext.laneLabel,
+      status: "running",
+      batchId: this.agentContext.batchId,
+      batchSize: this.agentContext.batchSize,
+      ...event,
+    });
+  }
+
   /**
    * Run the task loop with a user query.
    * Returns when the LLM produces a final text response (no more tool calls)
@@ -278,7 +343,14 @@ export class TaskLoop {
       role: MessageRole.USER,
       content: userQuery,
     });
-    this.bus.emit("message:user", { content: userQuery });
+    this.bus.emit("message:user", {
+      content: userQuery,
+      ...this.getAgentEventFields(),
+    });
+
+    if (this.injectSessionStateOnFirstTurn && this.sessionState?.hasContent()) {
+      this.injectSessionState();
+    }
 
     let hadToolCalls = false;
     let summaryRequested = false;
@@ -314,6 +386,12 @@ export class TaskLoop {
         maxIterations: this.config.budget.maxIterations,
         estimatedTokens: iterationTokenEstimate,
         maxContextTokens: this.getEffectiveContextBudget(),
+        ...this.getAgentEventFields(),
+      });
+      this.emitSubagentUpdate({
+        milestone: "iteration:start",
+        iteration: this.iterations,
+        summary: `Starting iteration ${this.iterations}`,
       });
 
       // Get available tools based on mode (no tools during grace iteration)
@@ -379,6 +457,7 @@ export class TaskLoop {
           content: textContent,
           partial: false,
           toolCalls: mappedToolCalls,
+          ...this.getAgentEventFields(),
         });
 
         // Coalesce replace-all tool calls (e.g., multiple update_plan in one batch)
@@ -395,6 +474,8 @@ export class TaskLoop {
             role: "tool" as const,
             content: skipContent,
             toolCallId: tc.callId,
+            toolName: tc.name,
+            ...this.getAgentEventFields(),
           });
         }
 
@@ -406,11 +487,12 @@ export class TaskLoop {
 
         for (const batch of batches) {
           if (this.aborted) break;
+          const batchContext = this.createBatchContext(batch);
 
           if (batch.parallel) {
             // Run all calls in the batch concurrently
             const promises = batch.calls.map((tc) =>
-              this.executeToolCall(tc, availableToolNames, availableTools).then((result) => ({
+              this.executeToolCall(tc, availableToolNames, availableTools, batchContext).then((result) => ({
                 callId: tc.callId,
                 result,
               })),
@@ -421,14 +503,16 @@ export class TaskLoop {
             for (const { callId, result } of settled) {
               const tc = batch.calls.find((c) => c.callId === callId)!;
               await this.maybeClassifyError(result, tc.name, tc.arguments);
+              this.maybeMergeDelegatedState(tc.name, result);
               this.appendToolResult(callId, result, tc.name, tc.arguments);
             }
           } else {
             // Sequential execution (mutating tools, or single call)
             for (const tc of batch.calls) {
               if (this.aborted) break;
-              const result = await this.executeToolCall(tc, availableToolNames, availableTools);
+              const result = await this.executeToolCall(tc, availableToolNames, availableTools, batchContext);
               await this.maybeClassifyError(result, tc.name, tc.arguments);
+              this.maybeMergeDelegatedState(tc.name, result);
               this.appendToolResult(tc.callId, result, tc.name, tc.arguments);
             }
           }
@@ -479,7 +563,11 @@ export class TaskLoop {
             role: MessageRole.ASSISTANT,
             content: textContent,
           });
-          this.bus.emit("message:assistant", { content: textContent, partial: false });
+          this.bus.emit("message:assistant", {
+            content: textContent,
+            partial: false,
+            ...this.getAgentEventFields(),
+          });
           this.pushMessage({
             role: MessageRole.SYSTEM,
             content: "Double-check still failing from prior edits. You must fix validation errors before finalizing.",
@@ -496,7 +584,11 @@ export class TaskLoop {
             role: MessageRole.ASSISTANT,
             content: textContent,
           });
-          this.bus.emit("message:assistant", { content: textContent, partial: false });
+          this.bus.emit("message:assistant", {
+            content: textContent,
+            partial: false,
+            ...this.getAgentEventFields(),
+          });
           this.pushMessage({
             role: MessageRole.SYSTEM,
             content: "Your plan has incomplete steps. Continue working — use tools to make progress on the next pending step.",
@@ -510,7 +602,11 @@ export class TaskLoop {
             role: MessageRole.ASSISTANT,
             content: textContent,
           });
-          this.bus.emit("message:assistant", { content: textContent, partial: false });
+          this.bus.emit("message:assistant", {
+            content: textContent,
+            partial: false,
+            ...this.getAgentEventFields(),
+          });
           this.pushMessage({
             role: MessageRole.SYSTEM,
             content: finalTextValidation.retryMessage
@@ -526,7 +622,11 @@ export class TaskLoop {
           role: MessageRole.ASSISTANT,
           content: textContent,
         });
-        this.bus.emit("message:assistant", { content: textContent, partial: false });
+        this.bus.emit("message:assistant", {
+          content: textContent,
+          partial: false,
+          ...this.getAgentEventFields(),
+        });
         status = "success";
         break;
       }
@@ -1122,6 +1222,8 @@ export class TaskLoop {
             role: "tool" as const,
             content: `[blocked: ${filePath} read limit exceeded]`,
             toolCallId: callId,
+            toolName,
+            ...this.getAgentEventFields(),
           });
           return;
         }
@@ -1144,11 +1246,78 @@ export class TaskLoop {
       toolCallId: callId,
       ...(shouldPin ? { pinned: true } : {}),
     });
+    const toolMessage = this.buildToolMessageContent(toolName, callId, toolContent, result);
     this.bus.emit("message:tool", {
       role: "tool" as const,
-      content: toolContent,
+      content: toolMessage.content,
       toolCallId: callId,
+      toolName,
+      summaryOnly: toolMessage.summaryOnly,
+      ...this.getAgentEventFields(),
     });
+  }
+
+  private buildToolMessageContent(
+    toolName: string | undefined,
+    callId: string,
+    toolContent: string,
+    result: ToolResult,
+  ): {
+    readonly content: string;
+    readonly summaryOnly: boolean;
+  } {
+    if (toolName !== "delegate") {
+      return {
+        content: toolContent,
+        summaryOnly: false,
+      };
+    }
+
+    const summary = result.metadata?.["delegateSummary"];
+    if (summary && typeof summary === "object") {
+      const record = summary as Record<string, unknown>;
+      const parts: string[] = [];
+      const agentId = typeof record["agentId"] === "string" ? record["agentId"] : "subagent";
+      const agentType = typeof record["agentType"] === "string" ? record["agentType"] : "delegate";
+      parts.push(`Subagent ${agentId} ${agentType}`);
+      if (typeof record["laneLabel"] === "string" && record["laneLabel"].length > 0) {
+        parts.push(record["laneLabel"]);
+      }
+      const details: string[] = [];
+      if (typeof record["durationMs"] === "number") {
+        details.push(formatDuration(record["durationMs"]));
+      }
+      if (typeof record["iterations"] === "number") {
+        details.push(`${record["iterations"]} iterations`);
+      }
+      const quality = record["quality"];
+      if (quality && typeof quality === "object") {
+        const qualityRecord = quality as Record<string, unknown>;
+        if (typeof qualityRecord["score"] === "number") {
+          details.push(`score ${Number(qualityRecord["score"]).toFixed(2)}`);
+        }
+        if (typeof qualityRecord["completeness"] === "string") {
+          details.push(qualityRecord["completeness"]);
+        }
+      }
+      const detailSuffix = details.length > 0 ? ` (${details.join(", ")})` : "";
+      return {
+        content: `${parts.join(" ")} completed${detailSuffix}`,
+        summaryOnly: true,
+      };
+    }
+
+    return {
+      content: `Delegate ${callId} completed`,
+      summaryOnly: true,
+    };
+  }
+
+  private maybeMergeDelegatedState(toolName: string, result: ToolResult): void {
+    if (toolName !== "delegate" || !this.sessionState || !result.metadata) return;
+    const childState = result.metadata["childSessionState"];
+    if (!childState || typeof childState !== "object") return;
+    this.sessionState.mergeDelegatedState(childState as import("./session-state.js").SessionStateJSON);
   }
 
   private isContextOverflowError(message: string): boolean {
@@ -1433,7 +1602,7 @@ export class TaskLoop {
       }
 
       const tool = this.tools.get(tc.name);
-      if (tool.category === "readonly") {
+      if (tool.category === "readonly" || this.isParallelReadonlyDelegateCall(tc, tool)) {
         currentReadonly.push(tc);
       } else {
         // Mutating/workflow/external — flush readonly, add as sequential
@@ -1444,6 +1613,28 @@ export class TaskLoop {
 
     flushReadonly();
     return batches;
+  }
+
+  private createBatchContext(batch: ToolCallBatch): ToolExecutionBatchContext {
+    const isParallelDelegateBatch = batch.parallel &&
+      batch.calls.length > 1 &&
+      batch.calls.every((call) => call.name === "delegate");
+    if (!isParallelDelegateBatch) return {};
+
+    this.parallelBatchCounter++;
+    return {
+      batchId: `delegate-batch-${this.iterations}-${this.parallelBatchCounter}`,
+      batchSize: batch.calls.length,
+    };
+  }
+
+  private isParallelReadonlyDelegateCall(
+    toolCall: PendingToolCall,
+    tool: ToolSpec,
+  ): boolean {
+    if (tool.name !== "delegate" || tool.category !== "workflow") return false;
+    const agentType = toolCall.arguments["agent_type"];
+    return agentType === AgentType.EXPLORE || agentType === AgentType.REVIEWER;
   }
 
   private async streamLLMResponse(
@@ -1463,6 +1654,7 @@ export class TaskLoop {
             content: chunk.content,
             partial: true,
             chunk,
+            ...this.getAgentEventFields(),
           });
           break;
 
@@ -1501,6 +1693,7 @@ export class TaskLoop {
               outputTokens: chunk.usage.completionTokens,
               totalCost: iterationCost,
               model: this.config.model,
+              ...this.getAgentEventFields(),
             });
           }
           break;
@@ -1514,6 +1707,7 @@ export class TaskLoop {
     toolCall: PendingToolCall,
     availableToolNames: ReadonlySet<string>,
     availableTools: ReadonlyArray<ToolSpec>,
+    batchContext: ToolExecutionBatchContext = {},
   ): Promise<ToolResult> {
     const callId = toolCall.callId;
 
@@ -1538,6 +1732,17 @@ export class TaskLoop {
         result: normalizedCall.bypassResult,
         callId,
         durationMs: 0,
+        ...this.getAgentEventFields(),
+      });
+      this.emitSubagentUpdate({
+        milestone: "tool:after",
+        toolName: toolCall.name,
+        toolCallId: callId,
+        toolSuccess: normalizedCall.bypassResult.success,
+        durationMs: 0,
+        summary: normalizedCall.bypassResult.success
+          ? `Completed ${toolCall.name}`
+          : `Failed ${toolCall.name}`,
       });
       return normalizedCall.bypassResult;
     }
@@ -1549,6 +1754,13 @@ export class TaskLoop {
       name: effectiveCall.name,
       params: effectiveCall.arguments,
       callId,
+      ...this.getAgentEventFields(),
+    });
+    this.emitSubagentUpdate({
+      milestone: "tool:before",
+      toolName: effectiveCall.name,
+      toolCallId: callId,
+      summary: `Running ${effectiveCall.name}`,
     });
 
     // Check approval
@@ -1571,6 +1783,15 @@ export class TaskLoop {
         result,
         callId,
         durationMs: 0,
+        ...this.getAgentEventFields(),
+      });
+      this.emitSubagentUpdate({
+        milestone: "tool:after",
+        toolName: effectiveCall.name,
+        toolCallId: callId,
+        toolSuccess: false,
+        durationMs: 0,
+        summary: `Denied ${effectiveCall.name}`,
       });
       return result;
     }
@@ -1600,6 +1821,9 @@ export class TaskLoop {
         repoRoot: this.repoRoot,
         config: this.config,
         sessionId: "", // Filled by engine wrapper
+        callId,
+        batchId: batchContext.batchId,
+        batchSize: batchContext.batchSize,
       });
     } catch (err) {
       const message = extractErrorMessage(err);
@@ -1625,6 +1849,17 @@ export class TaskLoop {
       result,
       callId,
       durationMs,
+      ...this.getAgentEventFields(),
+    });
+    this.emitSubagentUpdate({
+      milestone: "tool:after",
+      toolName: effectiveCall.name,
+      toolCallId: callId,
+      toolSuccess: result.success,
+      durationMs,
+      summary: result.success
+        ? `Completed ${effectiveCall.name}`
+        : `Failed ${effectiveCall.name}`,
     });
 
     // Double-check for successful mutating tools

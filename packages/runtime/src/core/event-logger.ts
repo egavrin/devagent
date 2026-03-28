@@ -6,7 +6,19 @@
 import { mkdirSync, appendFileSync, readFileSync, readdirSync, statSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { EventBus, EventMap } from "./events.js";
+import type {
+  EventBus,
+  EventMap,
+  SubagentStartEvent,
+  SubagentEndEvent,
+  SubagentErrorEvent,
+} from "./events.js";
+import {
+  aggregateDelegatedWork,
+  formatDuration,
+  loggedSubagentRunFromEvent,
+} from "./subagent-summary.js";
+import type { LoggedSubagentRun, DelegatedWorkSummary } from "./subagent-summary.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -47,6 +59,10 @@ export class EventLogger {
     const eventTypes: Array<keyof EventMap> = [
       "tool:before",
       "tool:after",
+      "subagent:start",
+      "subagent:update",
+      "subagent:end",
+      "subagent:error",
       "message:assistant",
       "message:tool",
       "message:user",
@@ -65,15 +81,67 @@ export class EventLogger {
 
     for (const eventType of eventTypes) {
       const unsub = bus.on(eventType, (data: unknown) => {
+        if (eventType === "message:assistant" && (data as EventMap["message:assistant"]).partial) return;
         this.write({
           ts: Date.now(),
           event: eventType,
           sessionId: this.sessionId,
-          data,
+          data: this.sanitizeEventData(eventType, data),
         });
       });
       this.unsubscribers.push(unsub);
     }
+  }
+
+  private sanitizeEventData(eventType: keyof EventMap, data: unknown): unknown {
+    if (eventType !== "tool:after") return data;
+    const event = data as EventMap["tool:after"];
+    if (event.name !== "delegate") return data;
+
+    const summary = event.result.metadata?.["delegateSummary"];
+    if (!summary || typeof summary !== "object") return data;
+
+    const delegateSummary = summary as Record<string, unknown>;
+    const quality = delegateSummary["quality"];
+    const detailParts: string[] = [];
+    if (typeof delegateSummary["durationMs"] === "number") {
+      detailParts.push(formatDuration(delegateSummary["durationMs"]));
+    }
+    if (typeof delegateSummary["iterations"] === "number") {
+      detailParts.push(`${delegateSummary["iterations"]} iterations`);
+    }
+    if (quality && typeof quality === "object") {
+      const qualityRecord = quality as Record<string, unknown>;
+      if (typeof qualityRecord["score"] === "number") {
+        detailParts.push(`score ${Number(qualityRecord["score"]).toFixed(2)}`);
+      }
+      if (typeof qualityRecord["completeness"] === "string") {
+        detailParts.push(qualityRecord["completeness"]);
+      }
+    }
+
+    const labelParts: string[] = [];
+    if (typeof delegateSummary["agentId"] === "string") labelParts.push(delegateSummary["agentId"]);
+    if (typeof delegateSummary["agentType"] === "string") labelParts.push(delegateSummary["agentType"]);
+    if (typeof delegateSummary["laneLabel"] === "string" && delegateSummary["laneLabel"].length > 0) {
+      labelParts.push(delegateSummary["laneLabel"]);
+    }
+    const summaryText = `${labelParts.join(" ")} completed${
+      detailParts.length > 0 ? ` (${detailParts.join(", ")})` : ""
+    }`;
+
+    return {
+      ...event,
+      result: {
+        ...event.result,
+        output: summaryText,
+        metadata: {
+          agentMeta: event.result.metadata?.["agentMeta"],
+          delegateSummary: event.result.metadata?.["delegateSummary"],
+          quality: event.result.metadata?.["quality"],
+        },
+      },
+    } satisfies EventMap["tool:after"];
   }
 
   /**
@@ -164,5 +232,42 @@ export class EventLogger {
       total += statSync(join(dir, f)).size;
     }
     return total;
+  }
+
+  static summarizeSubagents(entries: ReadonlyArray<LogEntry>): DelegatedWorkSummary {
+    const runs = new Map<string, LoggedSubagentRun>();
+
+    for (const entry of entries) {
+      if (entry.event === "subagent:start") {
+        const data = entry.data as SubagentStartEvent;
+        runs.set(data.agentId, loggedSubagentRunFromEvent(data, runs.get(data.agentId)));
+        continue;
+      }
+
+      if (entry.event === "tool:before") {
+        const data = entry.data as EventMap["tool:before"];
+        if (!data.agentId) continue;
+        const run = runs.get(data.agentId);
+        if (!run) continue;
+        runs.set(data.agentId, {
+          ...run,
+          toolCalls: run.toolCalls + 1,
+        });
+        continue;
+      }
+
+      if (entry.event === "subagent:end") {
+        const data = entry.data as SubagentEndEvent;
+        runs.set(data.agentId, loggedSubagentRunFromEvent(data, runs.get(data.agentId)));
+        continue;
+      }
+
+      if (entry.event === "subagent:error") {
+        const data = entry.data as SubagentErrorEvent;
+        runs.set(data.agentId, loggedSubagentRunFromEvent(data, runs.get(data.agentId)));
+      }
+    }
+
+    return aggregateDelegatedWork([...runs.values()]);
   }
 }

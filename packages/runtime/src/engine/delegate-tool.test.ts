@@ -133,7 +133,15 @@ describe("delegate tool", () => {
   it("delegates to an Explore agent", async () => {
     const provider = createMockProvider([
       [
-        { type: "text", content: "Found auth module at src/auth.ts:15" },
+        {
+          type: "text",
+          content: JSON.stringify({
+            answer: "Found auth module at src/auth.ts:15",
+            evidence: ["src/auth.ts:15 - createAuthService()"],
+            relatedFiles: ["src/auth.ts"],
+            unresolved: [],
+          }),
+        },
         { type: "done", content: "" },
       ],
     ]);
@@ -160,6 +168,90 @@ describe("delegate tool", () => {
 
     expect(result.success).toBe(true);
     expect(result.output).toContain("Subagent (explore) completed");
+    expect(result.metadata).toMatchObject({
+      agentMeta: {
+        agentType: "explore",
+        parentId: "parent-1",
+        depth: 1,
+      },
+      parsedOutput: {
+        answer: "Found auth module at src/auth.ts:15",
+      },
+    });
+  });
+
+  it("emits subagent lifecycle events with lane and quality metadata", async () => {
+    const provider = createMockProvider([
+      [
+        {
+          type: "text",
+          content: JSON.stringify({
+            answer: "Found docs lane evidence",
+            evidence: ["docs/fixed-array.md:12"],
+            relatedFiles: ["docs/fixed-array.md"],
+            unresolved: [],
+          }),
+        },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const events: Array<{ event: string; data: unknown }> = [];
+    bus.on("subagent:start", (data) => events.push({ event: "start", data }));
+    bus.on("subagent:update", (data) => events.push({ event: "update", data }));
+    bus.on("subagent:end", (data) => events.push({ event: "end", data }));
+
+    const tools = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const agentRegistry = new AgentRegistry();
+
+    const delegateTool = createDelegateTool({
+      provider,
+      tools,
+      bus,
+      approvalGate: gate,
+      config,
+      repoRoot: "/tmp",
+      agentRegistry,
+      parentAgentId: "parent-1",
+    });
+
+    const result = await delegateTool.handler(
+      {
+        agent_type: "explore",
+        request: {
+          objective: "Inspect docs lane",
+          laneLabel: "spec/docs",
+          scope: "docs",
+          constraints: [],
+          exclusions: ["runtime"],
+          successCriteria: [],
+          parentContext: "Delegated for focused evidence gathering",
+        },
+      },
+      { repoRoot: "/tmp", config, sessionId: "", batchId: "batch-1", batchSize: 2 },
+    );
+
+    expect(result.success).toBe(true);
+    expect(events.length).toBeGreaterThanOrEqual(3);
+    expect(events[0]!.data).toMatchObject({
+      agentId: "parent-1-sub-1",
+      agentType: "explore",
+      laneLabel: "spec/docs",
+      status: "running",
+      batchId: "batch-1",
+      batchSize: 2,
+    });
+    expect(events.some((entry) => entry.event === "update")).toBe(true);
+    expect(events[events.length - 1]!.data).toMatchObject({
+      agentId: "parent-1-sub-1",
+      agentType: "explore",
+      laneLabel: "spec/docs",
+      status: "completed",
+      parsedOutputKeys: ["answer", "evidence", "relatedFiles", "unresolved"],
+      batchId: "batch-1",
+      batchSize: 2,
+    });
   });
 
   it("rejects invalid agent type", async () => {
@@ -221,6 +313,47 @@ describe("delegate tool", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Subagent (general) failed");
+  });
+
+  it("emits subagent:error when the child fails", async () => {
+    const provider: LLMProvider = {
+      id: "error",
+      async *chat(): AsyncIterable<StreamChunk> {
+        throw new Error("Provider exploded");
+      },
+      abort() {},
+    };
+
+    const errors: unknown[] = [];
+    bus.on("subagent:error", (event) => errors.push(event));
+
+    const tools = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const agentRegistry = new AgentRegistry();
+
+    const delegateTool = createDelegateTool({
+      provider,
+      tools,
+      bus,
+      approvalGate: gate,
+      config,
+      repoRoot: "/tmp",
+      agentRegistry,
+      parentAgentId: "parent-1",
+    });
+
+    const result = await delegateTool.handler(
+      { agent_type: "general", task: "This will fail" },
+      { repoRoot: "/tmp", config, sessionId: "" },
+    );
+
+    expect(result.success).toBe(false);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      agentId: "parent-1-sub-1",
+      agentType: "general",
+      status: "error",
+    });
   });
 
   it("generates unique subagent IDs", async () => {
@@ -528,6 +661,18 @@ describe("delegate tool", () => {
     expect(delegateTool.category).toBe("workflow");
     expect(delegateTool.description).toContain("explore");
     expect(delegateTool.paramSchema.required).toContain("agent_type");
-    expect(delegateTool.paramSchema.required).toContain("task");
+    expect(delegateTool.paramSchema.properties).toHaveProperty("task");
+    expect(delegateTool.paramSchema.properties).toHaveProperty("request");
+    const requestSchema = delegateTool.paramSchema.properties?.["request"] as Record<string, unknown>;
+    expect(requestSchema.additionalProperties).toBe(false);
+    expect(requestSchema.required).toEqual([
+      "objective",
+      "laneLabel",
+      "scope",
+      "constraints",
+      "exclusions",
+      "successCriteria",
+      "parentContext",
+    ]);
   });
 });

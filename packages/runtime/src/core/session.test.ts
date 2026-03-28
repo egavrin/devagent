@@ -63,6 +63,26 @@ describe.skipIf(!BUN_SQLITE_AVAILABLE)("SessionStore", () => {
       expect(loaded!.messages[0]!.content).toBe("Hello");
       expect(loaded!.messages[0]!.role).toBe(MessageRole.USER);
     });
+
+    it("updates session metadata without replacing existing fields", () => {
+      const session = store.createSession({ query: "test", provider: "chatgpt" });
+      const updated = store.updateSessionMetadata(session.id, {
+        delegatedWork: {
+          childCount: 2,
+          lanes: ["docs", "runtime"],
+        },
+      });
+
+      expect(updated).not.toBeNull();
+      expect(updated!.metadata).toMatchObject({
+        query: "test",
+        provider: "chatgpt",
+        delegatedWork: {
+          childCount: 2,
+          lanes: ["docs", "runtime"],
+        },
+      });
+    });
   });
 
   describe("listSessions", () => {
