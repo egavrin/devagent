@@ -33,6 +33,8 @@ Follow a progressive-narrowing approach:
 - Answer the specific question asked. Do not provide a general codebase tour.
 - If the task scope spans multiple repos or concerns, narrow to the named target
   repo/area first instead of trying to solve the whole investigation at once.
+- Don't limit searches to source code. Check non-code files (`.md`, `.rst`,
+  `.txt`, config files) when the question involves specs, rules, or design intent.
 - Stop as soon as you have enough information. You have a low iteration budget.
 - If you find the answer in 3 iterations or fewer, stop immediately.
 - Do not begin with `**` or similar whole-tree broad globbing on large parent

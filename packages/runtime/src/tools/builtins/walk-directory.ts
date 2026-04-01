@@ -30,6 +30,8 @@ export interface WalkEntry {
 export interface WalkOptions {
   /** Stop yielding after this many results. */
   maxResults?: number;
+  /** Maximum directory recursion depth (0 = only files in `dir` itself). */
+  maxDepth?: number;
 }
 
 /**
@@ -49,10 +51,12 @@ export function* walkDirectory(
   opts?: WalkOptions,
 ): Generator<WalkEntry> {
   const maxResults = opts?.maxResults ?? Infinity;
+  const maxDepth = opts?.maxDepth ?? Infinity;
   let yielded = 0;
 
-  function* walk(current: string): Generator<WalkEntry> {
+  function* walk(current: string, depth: number): Generator<WalkEntry> {
     if (yielded >= maxResults) return;
+    if (depth > maxDepth) return;
 
     let entries: string[];
     try {
@@ -75,7 +79,7 @@ export function* walkDirectory(
       }
 
       if (stat.isDirectory()) {
-        yield* walk(fullPath);
+        yield* walk(fullPath, depth + 1);
       } else {
         const relativePath = relative(repoRoot, fullPath);
         yielded++;
@@ -84,5 +88,5 @@ export function* walkDirectory(
     }
   }
 
-  yield* walk(dir);
+  yield* walk(dir, 0);
 }

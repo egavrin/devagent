@@ -51,3 +51,19 @@ supports_temperature = false
 default_max_tokens = 128000
 input_price_per_million = 1.75
 output_price_per_million = 14
+
+["gpt-5.4"]
+context_window = 192000
+use_responses_api = true
+supports_temperature = false
+default_max_tokens = 128000
+input_price_per_million = 2.00
+output_price_per_million = 16
+
+["gpt-5.4-mini"]
+context_window = 192000
+use_responses_api = true
+supports_temperature = false
+default_max_tokens = 128000
+input_price_per_million = 0.40
+output_price_per_million = 3.20

@@ -44,6 +44,12 @@ import { judgeCompactionQuality, buildPreCompactionSummary } from "./compaction-
 import { extractPreCompactionKnowledge } from "./knowledge-extractor.js";
 import { parseToolScriptStepsArg } from "./tool-script.js";
 import type { ToolScriptStep } from "./tool-script.js";
+import { StreamingToolExecutor } from "./streaming-tool-executor.js";
+import type { StreamingToolCall } from "./streaming-tool-executor.js";
+import { retryWithStrategy } from "./retry-strategy.js";
+import { ToolUseSummaryGenerator, TOOL_USE_SUMMARY_MARKER } from "./tool-use-summary.js";
+import { trySessionMemoryCompact } from "./session-memory-compact.js";
+import { clearPromptCache } from "./agent-prompt.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -119,11 +125,6 @@ interface NormalizedToolCall {
   readonly scriptSteps: ToolScriptStep[] | null;
 }
 
-interface ToolCallBatch {
-  readonly parallel: boolean;
-  readonly calls: ReadonlyArray<PendingToolCall>;
-}
-
 interface ToolExecutionBatchContext {
   readonly batchId?: string;
   readonly batchSize?: number;
@@ -195,6 +196,17 @@ const MAX_INLINE_SUMMARY_CHARS = 600;
 /** Max auto-pinned git_diff results per session. */
 const MAX_PINNED_DIFFS = 20;
 
+// ─── Microcompact Constants ────────────────────────────────
+/** Default aggregate chars of tool results before microcompact clears oldest. */
+const DEFAULT_TOOL_RESULT_BUDGET = 200_000;
+/** Tools whose output can be safely cleared by microcompact. */
+const COMPACTABLE_TOOLS = new Set([
+  "read_file", "run_command", "search_files", "find_files",
+  "walk_directory", "git_diff", "git_status", "symbols", "diagnostics",
+]);
+/** Max consecutive reactive compaction failures before circuit breaker. */
+const REACTIVE_COMPACT_MAX_FAILURES = 3;
+
 // ─── Prune Priority ─────────────────────────────────────────
 /** Tool pruning priority: lower = pruned first. Tools not listed default to 1. */
 const PRUNE_PRIORITY = new Map<string, number>([
@@ -253,6 +265,17 @@ export class TaskLoop {
   private pinnedDiffCount = 0;
   /** Whether pre-seeded session state should be injected before the first provider call. */
   private readonly injectSessionStateOnFirstTurn: boolean;
+  /** Microcompact: tracks aggregate chars of tool results for proactive clearing. */
+  private toolResultTotalChars = 0;
+  private toolResultEntries: Array<{ index: number; chars: number; tool: string; iteration: number }> = [];
+  /** Reactive compaction circuit breaker: consecutive failures. */
+  private reactiveCompactFailures = 0;
+  /** Periodic tool-use summary generator. */
+  private readonly toolUseSummaryGenerator: ToolUseSummaryGenerator;
+  /** Number of compaction cycles completed (for session memory extraction). */
+  private compactionCycles = 0;
+  /** Invoked skill content that survives compaction for re-injection. */
+  private invokedSkillContent = new Map<string, string>();
 
   constructor(options: TaskLoopOptions) {
     this.provider = options.provider;
@@ -276,6 +299,9 @@ export class TaskLoop {
     this.stagnationDetector = new StagnationDetector({
       bus: this.bus,
       sessionState: this.sessionState,
+    });
+    this.toolUseSummaryGenerator = new ToolUseSummaryGenerator({
+      interval: options.config.context.midpointBriefingInterval ?? 10,
     });
 
     // Initialize messages: from previous session or fresh system prompt
@@ -400,49 +426,70 @@ export class TaskLoop {
       // Preflight compaction: ensure context fits before calling the provider.
       await this.maybeCompactContext();
 
-      // Stream LLM response with retry on transient provider errors
+      // Stream LLM response with error-type-aware retry strategy
       let textContent = "";
       let toolCalls: PendingToolCall[] = [];
+      let thinkingContent = "";
       let overflowCompactionUsed = false;
-      for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
+
+      const retryResult = await retryWithStrategy(
+        () => this.streamLLMResponse(availableTools),
+        {
+          overflowCompactionUsed,
+          onRetry: (error, attempt, delayMs) => {
+            this.bus.emit("error", {
+              message: `Provider error (attempt ${attempt}, ${error.name}): ${error.message}. Retrying in ${delayMs}ms…`,
+              code: "PROVIDER_RETRY",
+              fatal: false,
+            });
+          },
+        },
+      );
+
+      if (retryResult.success) {
+        textContent = retryResult.value!.textContent;
+        toolCalls = retryResult.value!.toolCalls;
+        thinkingContent = retryResult.value!.thinking;
+      } else if (retryResult.shouldCompact && this.contextManager) {
+        // Context overflow — force compaction and retry once
+        overflowCompactionUsed = true;
+        await this.reactiveCompact();
+        this.bus.emit("error", {
+          message: "Provider rejected prompt for context size. Forced reactive compaction and retrying.",
+          code: "CONTEXT_OVERFLOW_RETRY",
+          fatal: false,
+        });
+        // Single retry after compaction
         try {
           const result = await this.streamLLMResponse(availableTools);
           textContent = result.textContent;
           toolCalls = result.toolCalls;
-          break;
-        } catch (err) {
-          if (!(err instanceof ProviderError)) throw err;
-
-          // If provider reports a context overflow, force one compaction pass and retry immediately.
-          if (
-            !overflowCompactionUsed &&
-            this.contextManager &&
-            this.isContextOverflowError(err.message)
-          ) {
-            overflowCompactionUsed = true;
-            await this.maybeCompactContext({ force: true });
-            this.bus.emit("error", {
-              message: "Provider rejected prompt for context size. Forced compaction and retrying immediately.",
-              code: "CONTEXT_OVERFLOW_RETRY",
-              fatal: false,
-            });
-            continue;
-          }
-
-          if (attempt >= RETRY_DELAYS.length) throw err; // Exhausted retries
+          thinkingContent = result.thinking;
+        } catch (retryErr) {
+          throw retryErr instanceof ProviderError ? retryErr : retryResult.error!;
+        }
+      } else if (retryResult.shouldFallback) {
+        // Model fallback: switch to fallback model if configured
+        const fallbackModel = this.config.providers[this.config.provider]?.fallbackModel;
+        if (fallbackModel) {
           this.bus.emit("error", {
-            message: `Provider error (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}): ${(err as Error).message}. Retrying in ${RETRY_DELAYS[attempt]!}ms…`,
-            code: "PROVIDER_RETRY",
+            message: `Primary model exhausted retries. Falling back to ${fallbackModel}.`,
+            code: "MODEL_FALLBACK",
             fatal: false,
           });
-          await sleep(RETRY_DELAYS[attempt]!);
+          // Note: actual model switching requires provider reconfiguration
+          // which is handled at a higher level. For now, surface the fallback hint.
         }
+        throw retryResult.error!;
+      } else {
+        throw retryResult.error!;
       }
 
       if (toolCalls.length > 0) {
         hadToolCalls = true;
 
-        // Add single assistant message with both text and tool calls
+        // Add single assistant message with both text and tool calls.
+        // Preserve thinking content from reasoning models across tool use boundaries.
         const mappedToolCalls = toolCalls.map((tc) => ({
           name: tc.name,
           arguments: tc.arguments,
@@ -452,6 +499,7 @@ export class TaskLoop {
           role: MessageRole.ASSISTANT,
           content: textContent,
           toolCalls: mappedToolCalls,
+          ...(thinkingContent ? { thinking: thinkingContent } : {}),
         });
         this.bus.emit("message:assistant", {
           content: textContent,
@@ -479,43 +527,39 @@ export class TaskLoop {
           });
         }
 
-        // Execute tool calls — parallel for independent readonly, sequential for mutating.
-        // Partition into batches: consecutive readonly calls form a parallel batch,
-        // a mutating/workflow call is its own sequential batch.
+        // Execute tool calls using StreamingToolExecutor for concurrent execution.
+        // The executor starts readonly tools immediately on submit, then runs
+        // queued unsafe tools sequentially when results() is drained.
         const availableToolNames = new Set(availableTools.map((t) => t.name));
-        const batches = this.partitionToolCalls(toExecute, availableToolNames);
+        const maxConcurrency = this.config.budget.maxToolConcurrency ?? 10;
+        const executor = new StreamingToolExecutor(
+          (name) => {
+            if (!availableToolNames.has(name)) return null;
+            // Treat parallel-safe delegates as readonly for concurrency
+            const tool = this.tools.get(name);
+            const matchingCall = toExecute.find((tc) => tc.name === name);
+            if (matchingCall && this.isParallelReadonlyDelegateCall(matchingCall, tool)) {
+              return "readonly";
+            }
+            return tool.category;
+          },
+          maxConcurrency,
+        );
 
-        for (const batch of batches) {
+        // Submit all post-coalesce tools to the executor
+        for (const tc of toExecute) {
+          const batchContext = this.createBatchContextForCall(tc, toExecute);
+          executor.submit(tc, (call) =>
+            this.executeToolCall(call, availableToolNames, availableTools, batchContext),
+          );
+        }
+
+        // Drain results in submission order
+        for await (const { call, result } of executor.results()) {
           if (this.aborted) break;
-          const batchContext = this.createBatchContext(batch);
-
-          if (batch.parallel) {
-            // Run all calls in the batch concurrently
-            const promises = batch.calls.map((tc) =>
-              this.executeToolCall(tc, availableToolNames, availableTools, batchContext).then((result) => ({
-                callId: tc.callId,
-                result,
-              })),
-            );
-            const settled = await Promise.all(promises);
-
-            // Append results in original order (API requires matching order)
-            for (const { callId, result } of settled) {
-              const tc = batch.calls.find((c) => c.callId === callId)!;
-              await this.maybeClassifyError(result, tc.name, tc.arguments);
-              this.maybeMergeDelegatedState(tc.name, result);
-              this.appendToolResult(callId, result, tc.name, tc.arguments);
-            }
-          } else {
-            // Sequential execution (mutating tools, or single call)
-            for (const tc of batch.calls) {
-              if (this.aborted) break;
-              const result = await this.executeToolCall(tc, availableToolNames, availableTools, batchContext);
-              await this.maybeClassifyError(result, tc.name, tc.arguments);
-              this.maybeMergeDelegatedState(tc.name, result);
-              this.appendToolResult(tc.callId, result, tc.name, tc.arguments);
-            }
-          }
+          await this.maybeClassifyError(result, call.name, call.arguments);
+          this.maybeMergeDelegatedState(call.name, result);
+          this.appendToolResult(call.callId, result, call.name, call.arguments);
         }
 
         // LLM-as-judge stagnation check: periodic review of conversation history.
@@ -550,6 +594,17 @@ export class TaskLoop {
         // Proactive midpoint briefing: re-synthesize context every N iterations
         // to prevent accumulated history from degrading accuracy (paper finding)
         await this.maybeMidpointBriefing();
+
+        // Periodic tool-use summary: inject activity snapshot every N iterations
+        const toolUseSummary = this.toolUseSummaryGenerator.maybeSummarize(
+          this.iterations, this.messages, this.sessionState,
+        );
+        if (toolUseSummary) {
+          this.pushMessage(toolUseSummary);
+        }
+
+        // Microcompact: proactively clear oldest tool results when budget exceeded
+        this.microcompact();
 
         // Continue loop — feed tool results back to LLM
         continue;
@@ -703,6 +758,10 @@ export class TaskLoop {
     this.unresolvedDoubleCheckFailure = false;
     this.successfulReadonlyCallKeys.clear();
     this.stagnationDetector.resetRunState();
+    this.toolUseSummaryGenerator.reset();
+    this.reactiveCompactFailures = 0;
+    this.delegateBatchId = null;
+    this.delegateBatchIteration = null;
   }
 
   /**
@@ -808,6 +867,27 @@ export class TaskLoop {
       }
     }
 
+    // Phase 1.5: Session memory compaction — try building compacted messages
+    // from SessionState instead of calling the LLM. Cheaper and faster.
+    if (this.sessionState?.hasContent()) {
+      const smResult = trySessionMemoryCompact(
+        this.messages, this.sessionState, maxTokens,
+      );
+      if (smResult.success) {
+        this.messages = smResult.messages;
+        this.injectSessionState();
+        this.reinjectSkillContent();
+        this.resetPostCompactionState(true);
+        this.estimatedTokens = estimateMessageTokens(this.messages);
+        this.bus.emit("context:compacted", {
+          removedCount: 0,
+          estimatedTokens: this.estimatedTokens,
+          tokensBefore: estimatedTokens,
+        });
+        return; // Session memory compaction was sufficient
+      }
+    }
+
     // Phase 2: Full compaction (hybrid summarization)
     // Capture pre-compaction summary for quality assessment
     const preCompactionSummary = buildPreCompactionSummary(
@@ -848,6 +928,7 @@ export class TaskLoop {
       if (result.truncated) {
         this.messages = [...result.messages];
         this.injectSessionState();
+        this.reinjectSkillContent();
         this.resetPostCompactionState(true);
         // Full recalculation: compaction replaces the entire message array.
         this.estimatedTokens = estimateMessageTokens(this.messages);
@@ -859,6 +940,16 @@ export class TaskLoop {
           estimatedTokens: postCompactTokens,
           tokensBefore: estimatedTokens,
         });
+
+        // Warn if compaction removed more than 50% of context
+        const reductionRatio = estimatedTokens > 0 ? (estimatedTokens - postCompactTokens) / estimatedTokens : 0;
+        if (reductionRatio > 0.5) {
+          this.bus.emit("error", {
+            message: `Aggressive compaction: ${Math.round(reductionRatio * 100)}% reduction (${estimatedTokens} → ${postCompactTokens} tokens). Critical context may be lost.`,
+            code: "COMPACTION_AGGRESSIVE",
+            fatal: false,
+          });
+        }
 
         // Post-compaction quality assessment
         try {
@@ -905,6 +996,101 @@ export class TaskLoop {
         code: "COMPACTION_FAILED",
         fatal: true,
       });
+      throw err;
+    }
+  }
+
+  /**
+   * Microcompact: proactively clear oldest compactable tool results
+   * when aggregate tool result chars exceed the configured budget.
+   * Runs after every tool batch to prevent unbounded context growth.
+   */
+  private microcompact(): void {
+    const budget = this.config.context.toolResultBudget ?? DEFAULT_TOOL_RESULT_BUDGET;
+    if (this.toolResultTotalChars <= budget) return;
+
+    // Sort entries by iteration (oldest first) and filter to compactable tools
+    const candidates = this.toolResultEntries
+      .filter((e) => COMPACTABLE_TOOLS.has(e.tool))
+      .sort((a, b) => a.iteration - b.iteration);
+
+    let cleared = 0;
+    for (const entry of candidates) {
+      if (this.toolResultTotalChars <= budget) break;
+
+      const msg = this.messages[entry.index];
+      if (!msg || msg.role !== MessageRole.TOOL) continue;
+      if (msg.content?.startsWith(PRUNED_MARKER_PREFIX) || msg.content?.startsWith(SUPERSEDED_MARKER_PREFIX)) continue;
+
+      const replacement = `[Old tool result content cleared — ${entry.tool}, ${entry.chars} chars]`;
+      const oldTokens = estimateMessageTokens([msg]);
+      this.messages[entry.index] = { ...msg, content: replacement };
+      const newTokens = estimateMessageTokens([this.messages[entry.index]!]);
+      this.estimatedTokens -= (oldTokens - newTokens);
+      this.toolResultTotalChars -= entry.chars;
+      cleared++;
+    }
+
+    // Remove cleared entries from tracking
+    if (cleared > 0) {
+      this.toolResultEntries = this.toolResultEntries.filter(
+        (e) => {
+          const msg = this.messages[e.index];
+          return msg && msg.role === MessageRole.TOOL && !msg.content?.startsWith("[Old tool result content cleared");
+        },
+      );
+    }
+  }
+
+  /**
+   * Reactive compaction: multi-stage compaction triggered by API rejection.
+   * Runs microcompact → Phase-1 pruning → full hybrid compaction.
+   * Circuit breaker: stops after MAX consecutive failures.
+   */
+  private async reactiveCompact(): Promise<void> {
+    if (this.reactiveCompactFailures >= REACTIVE_COMPACT_MAX_FAILURES) {
+      this.bus.emit("error", {
+        message: `Reactive compaction circuit breaker tripped after ${REACTIVE_COMPACT_MAX_FAILURES} consecutive failures.`,
+        code: "REACTIVE_COMPACT_CIRCUIT_BREAKER",
+        fatal: true,
+      });
+      throw new Error("Reactive compaction circuit breaker: too many consecutive compaction failures");
+    }
+
+    try {
+      // Stage 1: microcompact
+      this.microcompact();
+
+      // Stage 2: force full compaction
+      await this.maybeCompactContext({ force: true });
+
+      this.reactiveCompactFailures = 0;
+      this.compactionCycles++;
+
+      // Session memory extraction: every 2nd compaction cycle, extract durable knowledge
+      if (this.compactionCycles % 2 === 0 && this.sessionState) {
+        try {
+          const firstUserMsg = this.messages.find(
+            (m) => m.role === MessageRole.USER && m.content,
+          );
+          const preCompactionSummary = buildPreCompactionSummary(
+            this.sessionState, this.messages, this.iterations,
+          );
+          const knowledgeResult = await extractPreCompactionKnowledge(
+            this.provider, preCompactionSummary, this.sessionState,
+            this.messages, firstUserMsg?.content ?? null,
+          );
+          if (knowledgeResult) {
+            for (const entry of knowledgeResult.entries) {
+              this.sessionState.addKnowledge(entry.key, entry.content, this.iterations);
+            }
+          }
+        } catch {
+          // Non-fatal: session memory extraction is best-effort
+        }
+      }
+    } catch (err) {
+      this.reactiveCompactFailures++;
       throw err;
     }
   }
@@ -1043,6 +1229,11 @@ export class TaskLoop {
     this.lastReportedInputTokens = 0;
     this.toolResultIndices.clear();
     this.approachingLimitWarned = false;
+    // Reset microcompact tracking — message indices are stale after compaction
+    this.toolResultTotalChars = 0;
+    this.toolResultEntries = [];
+    // Clear memoized prompt cache — compaction may change available context
+    clearPromptCache();
     if (full) {
       // Preserve successfulReadonlyCallKeys through compaction — the in-memory
       // dedup set is still accurate because compaction does not change the workspace.
@@ -1090,6 +1281,29 @@ export class TaskLoop {
     const insertIdx = this.messages[0]?.role === MessageRole.SYSTEM ? 1 : 0;
     this.messages.splice(insertIdx, 0, newMsg);
     this.estimatedTokens += estimateMessageTokens([newMsg]);
+  }
+
+  /**
+   * Re-inject invoked skill content after compaction.
+   * Skills are tracked in invokedSkillContent (survives compaction)
+   * and re-injected as a system message so the LLM doesn't lose
+   * skill instructions mid-session.
+   */
+  private reinjectSkillContent(): void {
+    if (this.invokedSkillContent.size === 0) return;
+
+    const sections = [...this.invokedSkillContent.entries()]
+      .map(([name, content]) => `## Skill: ${name}\n${content}`)
+      .join("\n\n");
+    // Budget: ~10K tokens max for re-injected skills
+    const truncated = sections.length > 40_000
+      ? sections.slice(0, 40_000) + "\n\n[... skill content truncated ...]"
+      : sections;
+
+    this.pushMessage({
+      role: MessageRole.SYSTEM,
+      content: `[PRESERVED SKILL CONTENT — re-injected after compaction]\n\n${truncated}`,
+    });
   }
 
   private getEffectiveContextBudget(): number {
@@ -1240,12 +1454,31 @@ export class TaskLoop {
     const shouldPin = toolName === "git_diff" && result.success && this.pinnedDiffCount < MAX_PINNED_DIFFS;
     if (shouldPin) this.pinnedDiffCount++;
 
+    const toolMsgIndex = this.messages.length;
     this.pushMessage({
       role: MessageRole.TOOL,
       content: toolContent,
       toolCallId: callId,
       ...(shouldPin ? { pinned: true } : {}),
     });
+
+    // Capture invoked skill content for post-compaction re-injection
+    if (toolName === "invoke_skill" && result.success && result.output) {
+      const skillName = (toolArgs?.["name"] as string | undefined) ?? "unknown";
+      this.invokedSkillContent.set(skillName, result.output.slice(0, 20_000));
+    }
+
+    // Track tool result chars for microcompact budget
+    if (toolName && toolContent.length > 0) {
+      this.toolResultTotalChars += toolContent.length;
+      this.toolResultEntries.push({
+        index: toolMsgIndex,
+        chars: toolContent.length,
+        tool: toolName,
+        iteration: this.iterations,
+      });
+    }
+
     const toolMessage = this.buildToolMessageContent(toolName, callId, toolContent, result);
     this.bus.emit("message:tool", {
       role: "tool" as const,
@@ -1320,18 +1553,6 @@ export class TaskLoop {
     this.sessionState.mergeDelegatedState(childState as import("./session-state.js").SessionStateJSON);
   }
 
-  private isContextOverflowError(message: string): boolean {
-    const normalized = message.toLowerCase();
-    return (
-      normalized.includes("context length") ||
-      normalized.includes("maximum context") ||
-      normalized.includes("max context") ||
-      normalized.includes("token limit") ||
-      normalized.includes("too many tokens") ||
-      normalized.includes("prompt is too long")
-    );
-  }
-
   /**
    * Proactive midpoint briefing: at regular intervals, re-synthesize
    * context to prevent accumulated history from degrading LLM accuracy.
@@ -1363,7 +1584,10 @@ export class TaskLoop {
     if (this.mode === "plan") {
       return this.tools.getPlanModeTools();
     }
-    return this.tools.getAll();
+    // Use getLoaded() to exclude deferred tools from API calls.
+    // Deferred tools are listed in the system prompt as stubs
+    // and resolved on demand via tool_search.
+    return this.tools.getLoaded();
   }
 
   private normalizeToolCall(
@@ -1579,54 +1803,37 @@ export class TaskLoop {
    *
    * A single readonly call is still "parallel" (batch of 1) — no overhead.
    */
-  private partitionToolCalls(
-    toolCalls: ReadonlyArray<PendingToolCall>,
-    availableToolNames: ReadonlySet<string>,
-  ): ToolCallBatch[] {
-    const batches: ToolCallBatch[] = [];
-    let currentReadonly: PendingToolCall[] = [];
+  /**
+   * Create a batch context for a single call within the streaming executor.
+   * For delegate calls that are part of a parallel group, assigns a shared batch ID.
+   */
+  private createBatchContextForCall(
+    call: PendingToolCall,
+    allCalls: ReadonlyArray<PendingToolCall>,
+  ): ToolExecutionBatchContext {
+    if (call.name !== "delegate") return {};
 
-    const flushReadonly = (): void => {
-      if (currentReadonly.length > 0) {
-        batches.push({ parallel: true, calls: currentReadonly });
-        currentReadonly = [];
-      }
-    };
+    // Count parallel-safe delegates in this batch
+    const tool = this.tools.get(call.name);
+    const parallelDelegates = allCalls.filter(
+      (tc) => tc.name === "delegate" && this.isParallelReadonlyDelegateCall(tc, tool),
+    );
+    if (parallelDelegates.length < 2) return {};
 
-    for (const tc of toolCalls) {
-      if (!availableToolNames.has(tc.name)) {
-        // Unknown tool — flush readonly batch, add as sequential
-        flushReadonly();
-        batches.push({ parallel: false, calls: [tc] });
-        continue;
-      }
-
-      const tool = this.tools.get(tc.name);
-      if (tool.category === "readonly" || this.isParallelReadonlyDelegateCall(tc, tool)) {
-        currentReadonly.push(tc);
-      } else {
-        // Mutating/workflow/external — flush readonly, add as sequential
-        flushReadonly();
-        batches.push({ parallel: false, calls: [tc] });
-      }
+    // Use a stable batch ID for all delegates in this iteration
+    if (this.delegateBatchIteration !== this.iterations) {
+      this.parallelBatchCounter++;
+      this.delegateBatchId = `delegate-batch-${this.iterations}-${this.parallelBatchCounter}`;
+      this.delegateBatchIteration = this.iterations;
     }
-
-    flushReadonly();
-    return batches;
-  }
-
-  private createBatchContext(batch: ToolCallBatch): ToolExecutionBatchContext {
-    const isParallelDelegateBatch = batch.parallel &&
-      batch.calls.length > 1 &&
-      batch.calls.every((call) => call.name === "delegate");
-    if (!isParallelDelegateBatch) return {};
-
-    this.parallelBatchCounter++;
     return {
-      batchId: `delegate-batch-${this.iterations}-${this.parallelBatchCounter}`,
-      batchSize: batch.calls.length,
+      batchId: this.delegateBatchId ?? undefined,
+      batchSize: parallelDelegates.length,
     };
   }
+
+  private delegateBatchId: string | null = null;
+  private delegateBatchIteration: number | null = null;
 
   private isParallelReadonlyDelegateCall(
     toolCall: PendingToolCall,
@@ -1634,13 +1841,18 @@ export class TaskLoop {
   ): boolean {
     if (tool.name !== "delegate" || tool.category !== "workflow") return false;
     const agentType = toolCall.arguments["agent_type"];
-    return agentType === AgentType.EXPLORE || agentType === AgentType.REVIEWER;
+    // Explore and reviewer agents are always parallel-safe (readonly)
+    if (agentType === AgentType.EXPLORE || agentType === AgentType.REVIEWER) return true;
+    // General/architect agents are parallel-safe when explicitly flagged
+    const parallelSafe = toolCall.arguments["parallel_safe"];
+    return parallelSafe === true;
   }
 
   private async streamLLMResponse(
     tools: ReadonlyArray<ToolSpec>,
-  ): Promise<{ textContent: string; toolCalls: PendingToolCall[] }> {
+  ): Promise<{ textContent: string; toolCalls: PendingToolCall[]; thinking: string }> {
     let textContent = "";
+    let thinkingContent = "";
     const toolCalls: PendingToolCall[] = [];
     const pendingToolArgs = new Map<string, { name: string; chunks: string[] }>();
 
@@ -1656,6 +1868,10 @@ export class TaskLoop {
             chunk,
             ...this.getAgentEventFields(),
           });
+          break;
+
+        case "thinking":
+          thinkingContent += chunk.content;
           break;
 
         case "tool_call": {
@@ -1700,7 +1916,7 @@ export class TaskLoop {
       }
     }
 
-    return { textContent, toolCalls };
+    return { textContent, toolCalls, thinking: thinkingContent };
   }
 
   private async executeToolCall(
@@ -2032,16 +2248,9 @@ export class TaskLoop {
 const DEFAULT_MIDPOINT_INTERVAL = 15;
 
 // ─── Retry Constants ─────────────────────────────────────────
-
-/** Delay (ms) before each retry attempt. Length = max retries. */
-const RETRY_DELAYS = [300, 900, 1800] as const;
-
-/** Total attempts = 1 initial + retries. */
-const MAX_RETRY_ATTEMPTS = RETRY_DELAYS.length + 1;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// Retry logic has been moved to retry-strategy.ts.
+// The retryWithStrategy function handles per-error-type retry
+// with exponential backoff, jitter, and model fallback hints.
 
 // ─── Helpers ────────────────────────────────────────────────
 

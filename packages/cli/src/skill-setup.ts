@@ -5,6 +5,9 @@ import {
   SkillAccessManager,
   INVOKED_SKILL_KNOWLEDGE_PREFIX,
   type SessionState,
+  createToolSearchTool,
+  probeShellTools,
+  formatProbeResults,
 } from "@devagent/runtime";
 import {
   createDefaultToolRegistry,
@@ -20,6 +23,13 @@ export interface SkillInfrastructure {
   readonly skillAccess: SkillAccessManager;
   readonly toolRegistry: ToolRegistry;
 }
+
+/** Tools deferred by default — loaded on demand via tool_search. */
+const DEFAULT_DEFERRED_TOOLS = new Set([
+  "git_status",
+  "git_diff",
+  "git_commit",
+]);
 
 export function createSkillInfrastructure(
   projectRoot: string,
@@ -48,7 +58,22 @@ export function createSkillInfrastructure(
       createFindFilesTool({ skillAccess }),
       createSearchFilesTool({ skillAccess }),
     ],
+    deferredToolNames: DEFAULT_DEFERRED_TOOLS,
   });
+
+  // Register tool_search so the LLM can discover deferred tools on demand
+  toolRegistry.register(createToolSearchTool(toolRegistry));
+
+  // Probe shell tool availability and store as env fact
+  try {
+    const probeResults = probeShellTools();
+    const summary = formatProbeResults(probeResults);
+    if (summary) {
+      sessionState.addEnvFact("shell-tools", summary);
+    }
+  } catch {
+    // Non-fatal: shell probing failure shouldn't block startup
+  }
 
   return {
     skills,

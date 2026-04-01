@@ -32,6 +32,7 @@ export type { DelegateToolContext } from "./delegate-tool.js";
 
 export { createPlanTool } from "./plan-tool.js";
 export type { PlanStep, Plan } from "./plan-tool.js";
+export { getPlanFilePath, writePlanFile, readPlanFile } from "./plan-persistence.js";
 
 // Compaction quality judge
 export { judgeCompactionQuality } from "./compaction-judge.js";
@@ -91,6 +92,21 @@ export type {
 } from "./tool-script.js";
 export { createToolScriptTool } from "./tool-script-tool.js";
 export type { ToolScriptToolContext } from "./tool-script-tool.js";
+
+// Tool search (deferred tool discovery)
+export { createToolSearchTool } from "./tool-search-tool.js";
+
+// Shell probe (CLI tool availability detection)
+export { probeShellTools, formatProbeResults } from "./shell-probe.js";
+export type { ShellProbeResult } from "./shell-probe.js";
+
+// Session memory compaction
+export { trySessionMemoryCompact } from "./session-memory-compact.js";
+export type { SessionMemoryCompactResult } from "./session-memory-compact.js";
+
+// Prompt assembly utilities
+export { clearPromptCache, assembleAgentSystemPrompt, loadAgentProjectInstructions, formatDeferredToolsSection } from "./agent-prompt.js";
+export type { AssembleAgentSystemPromptOptions } from "./agent-prompt.js";
 
 // Review pipeline (rule-based patch review)
 export { runReviewPipeline, VIOLATION_SCHEMA } from "./review/index.js";

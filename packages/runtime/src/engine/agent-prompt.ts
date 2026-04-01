@@ -2,14 +2,23 @@ import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentType, SkillRegistry, ToolSpec } from "../core/index.js";
-import { AgentType as AgentTypeEnum } from "../core/index.js";
+import { AgentType as AgentTypeEnum, LRUCache } from "../core/index.js";
 import { formatBriefing } from "./briefing.js";
 import type { TurnBriefing } from "./briefing.js";
+import type { DeferredToolStub } from "../tools/index.js";
 
 const PROMPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const TOTAL_MAX_CHARS = 32 * 1024;
 let cachedCommonPrompt: string | null = null;
 let commonPromptReadCount = 0;
+
+/** Memoization cache for assembled prompts. Keyed by hash of inputs. */
+const promptCache = new LRUCache<string, string>(10);
+
+/** Clear the prompt assembly cache. Call after compaction or tool resolution. */
+export function clearPromptCache(): void {
+  promptCache.clear();
+}
 
 interface InstructionFileSpec {
   readonly filename: string;
@@ -49,6 +58,8 @@ export interface AssembleAgentSystemPromptOptions {
   readonly repoRoot: string;
   readonly rolePrompt: string;
   readonly availableTools?: ReadonlyArray<Pick<ToolSpec, "name" | "category">>;
+  /** Deferred tools to list as available-on-demand in the prompt. */
+  readonly deferredTools?: ReadonlyArray<DeferredToolStub>;
   readonly approvalMode?: string;
   readonly providerLabel?: string;
   readonly skills?: SkillRegistry;
@@ -276,9 +287,26 @@ export function __getCommonPromptReadCountForTesting(): number {
   return commonPromptReadCount;
 }
 
+/** Format the deferred tools prompt section. Shared by CLI and engine prompt assemblers. */
+export function formatDeferredToolsSection(
+  tools: ReadonlyArray<{ name: string; description: string }>,
+): string {
+  const toolLines = tools.map((t) => `- ${t.name}: ${t.description}`);
+  return (
+    "## Additional Tools (available via tool_search)\n\n" +
+    "The following tools are available but not loaded. Use `tool_search` with a keyword to activate them:\n" +
+    toolLines.join("\n")
+  );
+}
+
 export function assembleAgentSystemPrompt(
   options: AssembleAgentSystemPromptOptions,
 ): string {
+  // Check memoization cache — skip date in key since it changes daily, not per-call
+  const cacheKey = buildPromptCacheKey(options);
+  const cached = promptCache.get(cacheKey);
+  if (cached) return cached;
+
   const sections: string[] = [];
   const capabilities = deriveAgentPromptCapabilities(options.availableTools);
   const commonPrompt = loadCommonPrompt().replace(/\{\{repoRoot\}\}/g, options.repoRoot);
@@ -312,11 +340,56 @@ export function assembleAgentSystemPrompt(
     );
   }
 
+  if (options.deferredTools && options.deferredTools.length > 0) {
+    sections.push(formatDeferredToolsSection(options.deferredTools));
+  }
+
   if (options.briefing) {
     sections.push(
       `## Session Context\n\nYou are continuing a conversation. Here is a summary of prior work:\n\n${formatBriefing(options.briefing)}`,
     );
   }
 
-  return sections.join("\n\n");
+  const result = sections.join("\n\n");
+  promptCache.set(cacheKey, result);
+  return result;
+}
+
+/** Build a cache key from prompt assembly inputs. */
+function buildPromptCacheKey(options: AssembleAgentSystemPromptOptions): string {
+  const toolNames = options.availableTools
+    ? options.availableTools.map((t) => t.name).sort().join(",")
+    : "";
+  const deferredNames = options.deferredTools
+    ? options.deferredTools.map((t) => t.name).sort().join(",")
+    : "";
+  const skillNames = options.skills
+    ? options.skills.list().map((s) => s.name).sort().join(",")
+    : "";
+  // Hash project instructions content for stability
+  const instrHash = options.projectInstructions
+    ? simpleHash(options.projectInstructions)
+    : "none";
+  return [
+    options.agentType ?? "default",
+    options.repoRoot,
+    toolNames,
+    deferredNames,
+    options.approvalMode ?? "",
+    options.providerLabel ?? "",
+    options.briefing?.turnNumber ?? 0,
+    skillNames,
+    instrHash,
+  ].join("|");
+}
+
+/** Fast non-crypto hash for cache key generation. */
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0; // Convert to 32-bit integer
+  }
+  return hash.toString(36);
 }

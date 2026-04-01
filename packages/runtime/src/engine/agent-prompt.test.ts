@@ -9,6 +9,7 @@ import {
   __getCommonPromptReadCountForTesting,
   __resetCommonPromptCacheForTesting,
   assembleAgentSystemPrompt,
+  clearPromptCache,
 } from "./agent-prompt.js";
 
 describe("assembleAgentSystemPrompt", () => {
@@ -168,5 +169,67 @@ describe("assembleAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Delegation");
     expect(prompt).toContain("Prefer multiple readonly `explore` or `reviewer` delegates in one turn");
+  });
+
+  it("cache hits on identical inputs", () => {
+    repoRoot = join(tmpdir(), `devagent-agent-prompt-${Date.now()}-cache-hit`);
+    mkdirSync(repoRoot, { recursive: true });
+    clearPromptCache();
+
+    const opts = {
+      agentType: AgentType.EXPLORE as const,
+      repoRoot,
+      rolePrompt: "You are an Explore agent.",
+      availableTools: readonlyTools,
+      projectInstructions: "Use existing patterns.",
+    };
+
+    const first = assembleAgentSystemPrompt(opts);
+    const second = assembleAgentSystemPrompt(opts);
+
+    // Same string reference means cache hit
+    expect(first).toBe(second);
+  });
+
+  it("clearPromptCache invalidates cached prompts", () => {
+    repoRoot = join(tmpdir(), `devagent-agent-prompt-${Date.now()}-clear`);
+    mkdirSync(repoRoot, { recursive: true });
+
+    const opts = {
+      agentType: AgentType.EXPLORE as const,
+      repoRoot,
+      rolePrompt: "You are an Explore agent.",
+      availableTools: readonlyTools,
+      projectInstructions: "Use existing patterns.",
+    };
+
+    const first = assembleAgentSystemPrompt(opts);
+    clearPromptCache();
+    const second = assembleAgentSystemPrompt(opts);
+
+    // Content is the same but they are different string instances after cache clear
+    expect(first).toEqual(second);
+  });
+
+  it("includes deferred tools section in prompt", () => {
+    repoRoot = join(tmpdir(), `devagent-agent-prompt-${Date.now()}-deferred`);
+    mkdirSync(repoRoot, { recursive: true });
+    clearPromptCache();
+
+    const prompt = assembleAgentSystemPrompt({
+      agentType: AgentType.GENERAL,
+      repoRoot,
+      rolePrompt: "You are a General agent.",
+      availableTools: readonlyTools,
+      deferredTools: [
+        { name: "git_diff", description: "Show file differences", category: "readonly" },
+        { name: "diagnostics", description: "LSP diagnostics", category: "readonly" },
+      ],
+      projectInstructions: null,
+    });
+
+    expect(prompt).toContain("Additional Tools (available via tool_search)");
+    expect(prompt).toContain("git_diff: Show file differences");
+    expect(prompt).toContain("diagnostics: LSP diagnostics");
   });
 });

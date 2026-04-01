@@ -14,7 +14,7 @@ import type {
   ToolSpec,
   TurnBriefing,
 } from "@devagent/runtime";
-import { formatBriefing } from "@devagent/runtime";
+import { formatBriefing, formatDeferredToolsSection } from "@devagent/runtime";
 import {
   buildRootPromptFragments,
   deriveRootPromptCapabilities,
@@ -58,6 +58,8 @@ export interface AssemblePromptOptions {
   readonly repoRoot: string;
   readonly skills: SkillRegistry;
   readonly availableTools?: ReadonlyArray<Pick<ToolSpec, "name" | "category">>;
+  /** Deferred tool stubs for prompt injection (available via tool_search). */
+  readonly deferredTools?: ReadonlyArray<{ name: string; description: string }>;
   readonly approvalMode?: string;
   readonly provider?: string;
   readonly model?: string;
@@ -135,6 +137,10 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
       `Use the \`invoke_skill\` tool to load a skill's full instructions when the ` +
       `user's task matches a skill description. Always invoke a relevant skill before starting work.`,
     );
+  }
+
+  if (opts.deferredTools && opts.deferredTools.length > 0) {
+    sections.push(formatDeferredToolsSection(opts.deferredTools));
   }
 
   // Session context briefing (turn isolation — replaces raw history)

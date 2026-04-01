@@ -65,6 +65,9 @@ export type {
   ContextCompactingEvent,
   ContextCompactedEvent,
   IterationStartEvent,
+  TaskCreatedEvent,
+  TaskProgressEvent,
+  TaskCompletedEvent,
   ErrorEvent,
 } from "./events.js";
 
@@ -212,6 +215,9 @@ export type {
 export { RepositoryInstructionLoader } from "./instruction-loader.js";
 export type { RepoInstruction } from "./instruction-loader.js";
 
+// LRU Cache
+export { LRUCache, memoizeWithLRU, memoizeAsyncWithLRU } from "./lru-cache.js";
+
 // Errors
 export {
   DevAgentError,
@@ -221,6 +227,8 @@ export {
   RateLimitError,
   ProviderTimeoutError,
   ProviderConnectionError,
+  OverloadedError,
+  MaxOutputTokensError,
   ToolError,
   ToolNotFoundError,
   ToolValidationError,

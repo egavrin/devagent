@@ -36,6 +36,9 @@ export interface EventMap {
   "context:compacted": ContextCompactedEvent;
   "iteration:start": IterationStartEvent;
   "plan:regression": PlanRegressionEvent;
+  "task:created": TaskCreatedEvent;
+  "task:progress": TaskProgressEvent;
+  "task:completed": TaskCompletedEvent;
   "error": ErrorEvent;
 }
 
@@ -239,6 +242,35 @@ export interface ContextCompactedEvent {
   readonly estimatedTokens: number;
   /** Pre-compaction token count (from maybeCompactContext estimate). */
   readonly tokensBefore: number;
+}
+
+export interface TaskCreatedEvent {
+  readonly taskId: string;
+  readonly parentAgentId: string;
+  readonly agentType: AgentType;
+  readonly objective: string;
+  readonly batchId?: string;
+  readonly batchSize?: number;
+}
+
+export interface TaskProgressEvent {
+  readonly taskId: string;
+  readonly parentAgentId: string;
+  readonly agentType: AgentType;
+  readonly iteration: number;
+  readonly toolName?: string;
+  readonly batchId?: string;
+}
+
+export interface TaskCompletedEvent {
+  readonly taskId: string;
+  readonly parentAgentId: string;
+  readonly agentType: AgentType;
+  readonly success: boolean;
+  readonly durationMs: number;
+  readonly iterations: number;
+  readonly batchId?: string;
+  readonly summary?: string;
 }
 
 export interface ErrorEvent {

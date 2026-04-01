@@ -11,8 +11,9 @@ import type {
   CostRecord,
   ToolSpec,
   SkillRegistry,
+  Message,
 } from "../core/index.js";
-import { AgentType, EventBus, ApprovalGate } from "../core/index.js";
+import { AgentType, MessageRole, EventBus, ApprovalGate } from "../core/index.js";
 import { ToolRegistry } from "../tools/index.js";
 import { TaskLoop } from "./task-loop.js";
 import type { TaskMode, TaskLoopResult } from "./task-loop.js";
@@ -277,6 +278,106 @@ export async function runAgent(
     finalMessage,
     childSessionState: sessionState.toJSON(),
     parsedOutput,
+  };
+}
+
+// ─── Fork Agent ─────────────────────────────────────────────
+
+/** Marker to detect and prevent recursive forking. */
+const FORK_BOILERPLATE_TAG = "[FORKED_AGENT]";
+
+export interface ForkAgentOptions extends AgentRunOptions {
+  /** Parent's current messages — the forked child inherits these for prompt cache sharing. */
+  readonly parentMessages: ReadonlyArray<Message>;
+  /** Parent's system prompt — reused as-is for cache prefix alignment. */
+  readonly parentSystemPrompt: string;
+}
+
+/**
+ * Spawn a forked agent that inherits the parent's full conversation context.
+ * The child uses the same system prompt prefix as the parent, enabling
+ * Anthropic prompt cache sharing (identical cache key prefix).
+ *
+ * Forked children cannot fork again (depth guard via FORK_BOILERPLATE_TAG).
+ */
+export async function runForkedAgent(
+  query: string,
+  options: ForkAgentOptions,
+  registry: AgentRegistry,
+): Promise<AgentRunResult> {
+  // Depth guard: prevent recursive forking
+  const hasBoilerplate = options.parentMessages.some(
+    (m) => m.content?.includes(FORK_BOILERPLATE_TAG) ?? false,
+  );
+  if (hasBoilerplate) {
+    throw new Error("Forked agents cannot fork again (recursive fork detected)");
+  }
+
+  // Build initial messages: parent's history + fork directive
+  const initialMessages: Message[] = [...options.parentMessages];
+  initialMessages.push({
+    role: MessageRole.SYSTEM as const,
+    content: `${FORK_BOILERPLATE_TAG} You are a forked worker agent. Your directive:\n\n${query}\n\nFocus on this specific task. Do not attempt to fork additional agents.`,
+  });
+
+  // Clone parent's session state
+  const sessionState = new SessionState({ persist: false });
+  if (options.parentSessionState) {
+    seedSessionState(sessionState, options.parentSessionState);
+  }
+
+  // Fork uses the parent's full tool set (all categories)
+  const childTools = new ToolRegistry();
+  for (const tool of options.tools.getAll()) {
+    // Exclude delegate to prevent recursive delegation from forks
+    if (tool.name === "delegate") continue;
+    childTools.register(tool);
+  }
+
+  const provider = options.ambient?.providerFactory
+    ? options.ambient.providerFactory(options.config, AgentType.GENERAL)
+    : options.provider;
+
+  const loop = new TaskLoop({
+    provider,
+    tools: childTools,
+    bus: options.bus,
+    approvalGate: options.approvalGate,
+    config: options.config,
+    systemPrompt: options.parentSystemPrompt,
+    repoRoot: options.repoRoot,
+    mode: "act",
+    initialMessages,
+    sessionState,
+    injectSessionStateOnFirstTurn: false,
+    agentContext: {
+      agentId: options.agentId,
+      parentAgentId: options.parentId,
+      depth: options.depth,
+      agentType: AgentType.GENERAL,
+      laneLabel: options.laneLabel,
+      batchId: options.batchId,
+      batchSize: options.batchSize,
+    },
+  });
+
+  const result = await runWithTimeout(loop, query, options.config.subagentTimeoutMs);
+  const finalMessage = extractFinalAssistantMessage(result);
+
+  return {
+    agentId: options.agentId,
+    agentType: AgentType.GENERAL,
+    agentMeta: {
+      agentId: options.agentId,
+      parentId: options.parentId,
+      depth: options.depth,
+      agentType: AgentType.GENERAL,
+    },
+    result,
+    cost: result.cost,
+    finalMessage,
+    childSessionState: sessionState.toJSON(),
+    parsedOutput: null,
   };
 }
 

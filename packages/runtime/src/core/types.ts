@@ -91,6 +91,8 @@ export interface Message {
   readonly content: string | null;
   readonly toolCallId?: string;
   readonly toolCalls?: ReadonlyArray<ToolCallRequest>;
+  /** Extended thinking content from reasoning models. Preserved across tool use boundaries. */
+  readonly thinking?: string;
   /** When true, this message survives context compaction (e.g., critical git diffs). */
   readonly pinned?: boolean;
 }
@@ -176,6 +178,8 @@ export interface ProviderConfig {
   readonly customHeaders?: Record<string, string>;
   /** Fields to strip from request bodies (Copilot rejects store, metadata, etc.). */
   readonly stripFields?: ReadonlyArray<string>;
+  /** Fallback model to use when the primary model exhausts retries. */
+  readonly fallbackModel?: string;
 }
 
 // ─── Approval Types ──────────────────────────────────────────
@@ -271,6 +275,8 @@ export interface BudgetConfig {
   readonly responseHeadroom: number;
   readonly costWarningThreshold: number;
   readonly enableCostTracking: boolean;
+  /** Max concurrent tool executions for streaming executor (default 10). */
+  readonly maxToolConcurrency?: number;
 }
 
 export interface ContextConfig {
@@ -285,6 +291,8 @@ export interface ContextConfig {
   readonly briefingStrategy?: "heuristic" | "llm" | "auto";
   /** Tokens of recent tool output protected from Phase-1 pruning. Default: 60000. */
   readonly pruneProtectTokens?: number;
+  /** Max aggregate chars of tool results before microcompact clears oldest (default 200000). */
+  readonly toolResultBudget?: number;
 }
 
 export interface ArkTSConfig {

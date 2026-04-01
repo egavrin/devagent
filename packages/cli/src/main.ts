@@ -329,7 +329,7 @@ Options:
   -f, --file <path>    Read query from file
   --provider <name>     LLM provider (anthropic, openai, deepseek, openrouter, ollama, chatgpt, github-copilot)
   --model <id>          Model ID
-  --max-iterations <n>  Max tool-call iterations (default: 30)
+  --max-iterations <n>  Max tool-call iterations (default: 30, 0=unlimited)
   --reasoning <level>   Reasoning effort: low, medium, high
   --resume <id>         Resume a previous session by ID
   --continue            Resume the most recent session
@@ -1794,7 +1794,8 @@ function createMidpointCallback(opts: {
       mode: opts.mode,
       repoRoot: opts.repoRoot,
       skills: opts.skills,
-      availableTools: opts.toolRegistry.getAll(),
+      availableTools: opts.toolRegistry.getLoaded(),
+      deferredTools: opts.toolRegistry.getDeferred(),
       approvalMode: opts.config.approval.mode,
       provider: opts.config.provider,
       model: opts.config.model,
@@ -1869,7 +1870,8 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     mode,
     repoRoot,
     skills,
-    availableTools: toolRegistry.getAll(),
+    availableTools: toolRegistry.getLoaded(),
+    deferredTools: toolRegistry.getDeferred(),
     approvalMode: config.approval.mode,
     provider: config.provider,
     model: config.model,

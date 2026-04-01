@@ -10,7 +10,7 @@
 
 import { tool as aiTool, jsonSchema, type CoreMessage, type TextStreamPart, type ToolSet } from "ai";
 import type { Message, ModelCapabilities, StreamChunk, ToolSpec } from "@devagent/runtime";
-import { MessageRole, ProviderError, extractErrorMessage } from "@devagent/runtime";
+import { MessageRole, ProviderError, RateLimitError, ProviderConnectionError, OverloadedError, extractErrorMessage } from "@devagent/runtime";
 
 // ─── Stream Processing ───────────────────────────────────────
 
@@ -64,6 +64,13 @@ export async function* processProviderStream(
           break;
         }
 
+        case "reasoning":
+          yield {
+            type: "thinking",
+            content: typeof part.textDelta === "string" ? part.textDelta : "",
+          };
+          break;
+
         case "error":
           throw new ProviderError(`${providerName} stream error: ${String(part.error)}`);
 
@@ -87,9 +94,81 @@ export async function* processProviderStream(
       return;
     }
     if (err instanceof ProviderError) throw err;
-    const msg = extractErrorMessage(err);
-    throw new ProviderError(`${providerName} API error: ${msg}`);
+    throw classifyProviderError(err, providerName);
   }
+}
+
+/**
+ * Classify provider errors by HTTP status code.
+ * Extracts status from Vercel AI SDK error shapes and wraps in typed errors.
+ */
+export function classifyProviderError(err: unknown, providerName: string): ProviderError {
+  if (err instanceof ProviderError) return err;
+
+  const msg = extractErrorMessage(err);
+  const status = extractHttpStatus(err);
+
+  if (status === 429) {
+    const retryAfter = extractRetryAfter(err);
+    return new RateLimitError(`${providerName} rate limited: ${msg}`, retryAfter);
+  }
+  if (status === 529) {
+    return new OverloadedError(`${providerName} overloaded (529): ${msg}`);
+  }
+  if (isConnectionError(msg)) {
+    return new ProviderConnectionError(`${providerName} connection error: ${msg}`);
+  }
+
+  return new ProviderError(`${providerName} API error: ${msg}`);
+}
+
+function extractHttpStatus(err: unknown): number | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as Record<string, unknown>;
+  if (typeof e["statusCode"] === "number") return e["statusCode"];
+  if (typeof e["status"] === "number") return e["status"];
+  if (e["cause"] && typeof e["cause"] === "object") {
+    return extractHttpStatus(e["cause"]);
+  }
+  if (e["data"] && typeof e["data"] === "object") {
+    return extractHttpStatus(e["data"]);
+  }
+  const msgStr = typeof e["message"] === "string" ? e["message"] : "";
+  const match = msgStr.match(/\b(429|529|502|503|504)\b/);
+  return match ? parseInt(match[1]!, 10) : null;
+}
+
+function extractRetryAfter(err: unknown): number | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as Record<string, unknown>;
+  const headers = e["headers"] as Record<string, string> | undefined;
+  if (headers) {
+    const retryAfter = headers["retry-after"] ?? headers["Retry-After"];
+    if (retryAfter) {
+      const seconds = parseFloat(retryAfter);
+      if (!isNaN(seconds)) return seconds * 1000;
+    }
+  }
+  const responseHeaders = e["responseHeaders"] as Record<string, string> | undefined;
+  if (responseHeaders) {
+    const retryAfter = responseHeaders["retry-after"] ?? responseHeaders["Retry-After"];
+    if (retryAfter) {
+      const seconds = parseFloat(retryAfter);
+      if (!isNaN(seconds)) return seconds * 1000;
+    }
+  }
+  return null;
+}
+
+const CONNECTION_ERROR_PATTERNS = [
+  "econnreset", "econnrefused", "epipe", "etimedout",
+  "socket hang up", "network error", "fetch failed",
+  "connection reset", "connection refused",
+];
+
+function isConnectionError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return CONNECTION_ERROR_PATTERNS.some((p) => lower.includes(p));
 }
 
 // ─── Message Conversion ──────────────────────────────────────
@@ -113,8 +192,13 @@ export function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[]
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           const parts: Array<
             | { type: "text"; text: string }
+            | { type: "reasoning"; text: string }
             | { type: "tool-call"; toolCallId: string; toolName: string; args: Record<string, unknown> }
           > = [];
+          // Preserve thinking/reasoning content across tool use boundaries
+          if (msg.thinking) {
+            parts.push({ type: "reasoning" as const, text: msg.thinking });
+          }
           if (msg.content) {
             parts.push({ type: "text" as const, text: msg.content });
           }
@@ -125,6 +209,14 @@ export function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[]
               toolName: tc.name,
               args: tc.arguments,
             });
+          }
+          result.push({ role: "assistant", content: parts });
+        } else if (msg.thinking) {
+          // Thinking-only or thinking + text (no tool calls)
+          const parts: Array<{ type: "text"; text: string } | { type: "reasoning"; text: string }> = [];
+          parts.push({ type: "reasoning" as const, text: msg.thinking });
+          if (msg.content) {
+            parts.push({ type: "text" as const, text: msg.content });
           }
           result.push({ role: "assistant", content: parts });
         } else {

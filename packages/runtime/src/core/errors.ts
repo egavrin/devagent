@@ -62,6 +62,23 @@ export class ProviderConnectionError extends ProviderError {
   }
 }
 
+export class OverloadedError extends ProviderError {
+  constructor(message: string) {
+    super(message, "OVERLOADED");
+    this.name = "OverloadedError";
+  }
+}
+
+export class MaxOutputTokensError extends ProviderError {
+  readonly partialContent: string;
+
+  constructor(message: string, partialContent: string = "") {
+    super(message, "MAX_OUTPUT_TOKENS");
+    this.name = "MaxOutputTokensError";
+    this.partialContent = partialContent;
+  }
+}
+
 // ─── Tool Errors ─────────────────────────────────────────────
 
 export class ToolError extends DevAgentError {

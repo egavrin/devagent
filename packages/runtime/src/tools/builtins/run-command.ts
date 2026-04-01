@@ -57,8 +57,9 @@ export const runCommandTool: ToolSpec = {
   errorGuidance: {
     common: "Read the earliest stderr line — it is usually the root cause. Fix the underlying code or config, then re-run.",
     patterns: [
-      { match: "timed out", hint: "Command timed out. Try a more targeted command (e.g., single test file instead of full suite)." },
+      { match: "timed out", hint: "Command timed out. If searching a large repo, narrow scope: use --include/--exclude flags, limit depth with -maxdepth, or search specific subdirectories instead of the root. Prefer builtin search_files/find_files tools over shell grep/find when possible." },
       { match: "not found", hint: "Command not found. Check the project's package.json scripts or use the project's package manager." },
+      { match: "Permission denied", hint: "Permission denied on some paths. The command may still have partial results. Try adding 2>/dev/null to suppress permission errors, or narrow the search scope." },
     ],
   },
   resultSchema: {
@@ -108,15 +109,30 @@ export const runCommandTool: ToolSpec = {
     const safeStderr = withTruncationMarker("stderr", result.stderr, MAX_OUTPUT_BYTES);
 
     if (result.timedOut) {
+      // Detect large-repo search patterns and provide targeted guidance
+      const scopingHint = detectSearchScopingHint(command);
       return {
         success: false,
         output: safeStdout,
-        error: `Command timed out after ${timeoutMs}ms\n${safeStderr}`,
+        error: `Command timed out after ${timeoutMs}ms\n${safeStderr}${scopingHint ? `\n[Hint] ${scopingHint}` : ""}`,
         artifacts: [],
       };
     }
 
     if (result.exitCode !== 0) {
+      // Partial success heuristic: if stdout has substantial content and stderr
+      // contains only warnings (permission denied, broken pipes), treat as success
+      // with warnings. Common with `find` on restricted directories.
+      const isPartialSuccess = safeStdout.length > 100 && isStderrWarningOnly(safeStderr);
+      if (isPartialSuccess) {
+        return {
+          success: true,
+          output: `${safeStdout}\n\n[Warning: exit code ${result.exitCode}. Some errors during execution:]\n${safeStderr}`,
+          error: null,
+          artifacts: [],
+        };
+      }
+
       return {
         success: false,
         output: `Exit code: ${result.exitCode}\nstdout: ${safeStdout}\nstderr: ${safeStderr}`,
@@ -133,3 +149,50 @@ export const runCommandTool: ToolSpec = {
     };
   },
 };
+
+// ─── Helpers ────────────────────────────────────────────────
+
+/**
+ * Detect if a timed-out command is a large-repo search and provide
+ * specific scoping guidance.
+ */
+function detectSearchScopingHint(command: string): string | null {
+  const isGrep = /\bgrep\s+-[rRl]*R/i.test(command) || /\bgrep\s.*-r\b/i.test(command);
+  const isFind = /\bfind\b/.test(command) && !command.includes("-maxdepth");
+  const isRg = /\brg\b/.test(command);
+
+  if (isGrep) {
+    return "grep -R on large repos is slow. Scope with --include='*.ext', search specific subdirectories, or use rg (ripgrep) which is much faster. Add 2>/dev/null to suppress permission errors.";
+  }
+  if (isFind) {
+    return "find without -maxdepth traverses the entire tree. Add -maxdepth 3 to limit depth, or narrow the starting directory.";
+  }
+  if (isRg) {
+    return "rg timed out. Use -g/--glob to filter file types, or search specific subdirectories instead of the repo root.";
+  }
+  return null;
+}
+
+/** Stderr patterns that indicate warnings, not fatal errors. */
+const STDERR_WARNING_PATTERNS = [
+  /permission denied/i,
+  /operation not permitted/i,
+  /no such file or directory/i,
+  /broken pipe/i,
+  /grep:.*binary file/i,
+  /find:.*\bpermission\b/i,
+  /warning:/i,
+];
+
+/**
+ * Check if stderr contains only warning-like messages (not fatal errors).
+ * Used to distinguish partial success (find with some permission errors)
+ * from true failures (command not found, syntax errors).
+ */
+function isStderrWarningOnly(stderr: string): boolean {
+  if (!stderr.trim()) return true;
+  const lines = stderr.split("\n").filter((l) => l.trim().length > 0);
+  return lines.every((line) =>
+    STDERR_WARNING_PATTERNS.some((pattern) => pattern.test(line)),
+  );
+}

@@ -84,3 +84,97 @@ describe("ToolRegistry", () => {
     expect(planTools.map((t) => t.name)).toEqual(["read", "plan"]);
   });
 });
+
+describe("ToolRegistry deferred tools", () => {
+  it("registerDeferred stores tool, getDeferred returns stubs, getLoaded excludes deferred", () => {
+    const reg = new ToolRegistry();
+    const tool = makeTool("test");
+    reg.registerDeferred(tool);
+
+    const stubs = reg.getDeferred();
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]!.name).toBe("test");
+    expect(stubs[0]!.description).toContain("test");
+
+    const loaded = reg.getLoaded();
+    expect(loaded.find((t) => t.name === "test")).toBeUndefined();
+  });
+
+  it("resolve moves deferred to loaded", () => {
+    const reg = new ToolRegistry();
+    reg.registerDeferred(makeTool("alpha"));
+
+    expect(reg.getDeferred()).toHaveLength(1);
+    expect(reg.getLoaded()).toHaveLength(0);
+
+    const resolved = reg.resolve("alpha");
+    expect(resolved).not.toBeNull();
+    expect(resolved!.name).toBe("alpha");
+
+    expect(reg.getDeferred()).toHaveLength(0);
+    expect(reg.getLoaded()).toHaveLength(1);
+    expect(reg.getLoaded()[0]!.name).toBe("alpha");
+  });
+
+  it("search matches by keyword and auto-resolves", () => {
+    const reg = new ToolRegistry();
+    reg.registerDeferred(makeTool("git_diff"));
+    reg.registerDeferred(makeTool("git_log"));
+    reg.registerDeferred(makeTool("diagnostics"));
+
+    const results = reg.search("git");
+    expect(results.length).toBeGreaterThanOrEqual(2);
+    expect(results.every((s) => s.name.includes("git"))).toBe(true);
+
+    // Auto-resolved: now in loaded
+    const loaded = reg.getLoaded();
+    expect(loaded.find((t) => t.name === "git_diff")).toBeDefined();
+    expect(loaded.find((t) => t.name === "git_log")).toBeDefined();
+
+    // diagnostics was not matched, stays deferred
+    expect(reg.getDeferred().find((s) => s.name === "diagnostics")).toBeDefined();
+  });
+
+  it("get auto-resolves deferred", () => {
+    const reg = new ToolRegistry();
+    reg.registerDeferred(makeTool("symbols"));
+
+    const tool = reg.get("symbols");
+    expect(tool.name).toBe("symbols");
+
+    // Now loaded
+    expect(reg.getLoaded().find((t) => t.name === "symbols")).toBeDefined();
+    expect(reg.getDeferred()).toHaveLength(0);
+  });
+
+  it("has returns true for both loaded and deferred", () => {
+    const reg = new ToolRegistry();
+    reg.register(makeTool("loaded_tool"));
+    reg.registerDeferred(makeTool("deferred_tool"));
+
+    expect(reg.has("loaded_tool")).toBe(true);
+    expect(reg.has("deferred_tool")).toBe(true);
+    expect(reg.has("nonexistent")).toBe(false);
+  });
+
+  it("getAll includes both loaded and deferred", () => {
+    const reg = new ToolRegistry();
+    reg.register(makeTool("a"));
+    reg.registerDeferred(makeTool("b"));
+
+    const all = reg.getAll();
+    expect(all).toHaveLength(2);
+    expect(all.map((t) => t.name).sort()).toEqual(["a", "b"]);
+  });
+
+  it("duplicate throws for deferred-deferred and loaded-deferred conflicts", () => {
+    const reg = new ToolRegistry();
+    reg.register(makeTool("dup"));
+    expect(() => reg.registerDeferred(makeTool("dup"))).toThrow('Tool "dup" is already registered');
+
+    const reg2 = new ToolRegistry();
+    reg2.registerDeferred(makeTool("dup2"));
+    expect(() => reg2.registerDeferred(makeTool("dup2"))).toThrow('Tool "dup2" is already registered');
+    expect(() => reg2.register(makeTool("dup2"))).toThrow('Tool "dup2" is already registered');
+  });
+});

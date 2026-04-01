@@ -846,8 +846,15 @@ export function extractEnvFact(
     };
   }
 
-  // Pattern: tool-specific timeout
+  // Pattern: tool-specific timeout — detect search commands for targeted advice
   if (combined.includes("timed out") || combined.includes("SIGTERM")) {
+    const isSearch = /\bgrep\s+-[rRl]*R|\bfind\b|\brg\b/.test(combined);
+    if (isSearch) {
+      return {
+        key: "search-timeout",
+        message: "Recursive search command timed out on this repo. Use scoped searches: specific subdirectories, --include/--glob filters, -maxdepth for find, or builtin search_files/find_files tools.",
+      };
+    }
     return {
       key: "tool-timeout",
       message: "Command timed out. Use shorter-running commands or increase timeout.",

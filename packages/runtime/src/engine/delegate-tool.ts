@@ -6,10 +6,10 @@
  * dependencies: it needs access to runAgent which depends on TaskLoop.
  */
 
-import type { ToolSpec, LLMProvider, DevAgentConfig } from "../core/index.js";
+import type { ToolSpec, LLMProvider, DevAgentConfig, Message } from "../core/index.js";
 import { AgentType, EventBus, ApprovalGate, extractErrorMessage } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
-import { AgentRegistry, runAgent } from "./agents.js";
+import { AgentRegistry, runAgent, runForkedAgent } from "./agents.js";
 import type { AgentAmbientContext } from "./agents.js";
 import { parseAgentType } from "./agent-type.js";
 import type { SessionState } from "./session-state.js";
@@ -44,6 +44,10 @@ export interface DelegateToolContext {
   readonly parentAgentId: string;
   /** Parent's session state — resolved lazily so resume can swap the instance. */
   readonly getParentSessionState?: () => SessionState | undefined;
+  /** Parent's current messages — needed for fork mode (prompt cache sharing). */
+  readonly getParentMessages?: () => ReadonlyArray<Message>;
+  /** Parent's system prompt — needed for fork mode (cache prefix alignment). */
+  readonly parentSystemPrompt?: string;
   readonly depth?: number;
   readonly parentAgentType?: AgentType;
   readonly ambient?: AgentAmbientContext;
@@ -77,6 +81,16 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
         task: {
           type: "string",
           description: "The task description for the subagent",
+        },
+        parallel_safe: {
+          type: "boolean",
+          description:
+            "Set to true when this subagent's task is independent (no shared file mutations) and can run concurrently with other parallel_safe delegates.",
+        },
+        fork: {
+          type: "boolean",
+          description:
+            "Set to true to fork the subagent with the parent's full conversation context. Enables prompt cache sharing for efficiency. Cannot be nested (forked children cannot fork again).",
         },
         request: {
           type: "object",
@@ -140,6 +154,7 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
     },
     handler: async (params, toolContext) => {
       const agentTypeStr = params["agent_type"] as string;
+      const forkMode = params["fork"] === true;
       const request = normalizeDelegationRequest(params["request"], params["task"]);
 
       // Map string to AgentType enum
@@ -189,12 +204,13 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
       const batchId = toolContext.batchId;
       const batchSize = toolContext.batchSize;
       const startedAt = Date.now();
+      const childDepth = (ctx.depth ?? 0) + 1;
 
       try {
         ctx.bus.emit("subagent:start", {
           agentId,
           parentAgentId: ctx.parentAgentId,
-          depth: (ctx.depth ?? 0) + 1,
+          depth: childDepth,
           agentType,
           laneLabel: request.laneLabel ?? null,
           objective: request.objective,
@@ -205,6 +221,69 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
           batchSize,
         });
         const query = buildDelegationQuery(request, cappedMax);
+
+        // Fork mode: inherit parent's conversation context for prompt cache sharing
+        if (forkMode && ctx.getParentMessages && ctx.parentSystemPrompt) {
+          const forkResult = await runForkedAgent(
+            query,
+            {
+              provider: ctx.provider,
+              tools: ctx.tools,
+              bus: ctx.bus,
+              approvalGate: ctx.approvalGate,
+              config: subagentConfig,
+              repoRoot: ctx.repoRoot,
+              parentId: ctx.parentAgentId,
+              agentId,
+              parentSessionState: ctx.getParentSessionState?.(),
+              depth: childDepth,
+              ambient: ctx.ambient,
+              parentMessages: ctx.getParentMessages(),
+              parentSystemPrompt: ctx.parentSystemPrompt,
+              laneLabel: request.laneLabel ?? null,
+              batchId,
+              batchSize,
+            },
+            ctx.agentRegistry,
+          );
+          const durationMs = Date.now() - startedAt;
+          ctx.bus.emit("subagent:end", {
+            agentId,
+            parentAgentId: ctx.parentAgentId,
+            depth: childDepth,
+            agentType,
+            laneLabel: request.laneLabel ?? null,
+            objective: request.objective,
+            model: subagentConfig.model,
+            reasoningEffort: resolvedReasoningEffort,
+            status: "completed",
+            durationMs,
+            iterations: forkResult.result.iterations,
+            cost: forkResult.cost,
+            parsedOutputKeys: [],
+            batchId,
+            batchSize,
+          });
+          const costSummary = `[${forkResult.result.iterations} iterations, fork mode]`;
+          return {
+            success: true,
+            output: `Forked subagent completed ${costSummary}:\n\n${forkResult.finalMessage}`,
+            error: null,
+            artifacts: [],
+            metadata: {
+              agentMeta: forkResult.agentMeta,
+              childSessionState: forkResult.childSessionState,
+              delegateSummary: {
+                agentId,
+                agentType: agentTypeStr,
+                laneLabel: request.laneLabel ?? null,
+                durationMs,
+                iterations: forkResult.result.iterations,
+              },
+            },
+          };
+        }
+
         const result = await runAgentWithQualityRetry(
           agentType,
           query,
@@ -219,7 +298,7 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
             parentId: ctx.parentAgentId,
             agentId,
             parentSessionState: ctx.getParentSessionState?.(),
-            depth: (ctx.depth ?? 0) + 1,
+            depth: childDepth,
             ambient: {
               ...ctx.ambient,
               providerLabel: modelOverride
@@ -246,7 +325,7 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
         ctx.bus.emit("subagent:end", {
           agentId,
           parentAgentId: ctx.parentAgentId,
-          depth: (ctx.depth ?? 0) + 1,
+          depth: childDepth,
           agentType,
           laneLabel: request.laneLabel ?? null,
           objective: request.objective,
@@ -290,7 +369,7 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
         ctx.bus.emit("subagent:error", {
           agentId,
           parentAgentId: ctx.parentAgentId,
-          depth: (ctx.depth ?? 0) + 1,
+          depth: childDepth,
           agentType,
           laneLabel: request.laneLabel ?? null,
           objective: request.objective,
@@ -311,7 +390,7 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
             agentMeta: {
               agentId,
               parentId: ctx.parentAgentId,
-              depth: (ctx.depth ?? 0) + 1,
+              depth: childDepth,
               agentType,
             },
           },
@@ -373,7 +452,15 @@ async function runAgentWithQualityRetry(
   const firstRun = await runAgent(agentType, query, options, registry);
   const firstJudge = await maybeJudgeSubagent(judgeProvider, task, agentType, firstRun.finalMessage, firstRun.result.iterations, cappedMax);
   if (!firstJudge || firstJudge.quality_score >= judgeThreshold(agentType)) {
-    return { run: firstRun, judgeResult: firstJudge, qualityNote: "" };
+    // Secondary check: retry if completeness is "partial" even with high score,
+    // but only when score is below the partial-retry threshold (0.75).
+    // A score of 0.81 + "partial" is acceptable; 0.6 + "partial" warrants retry.
+    const shouldRetryPartial = firstJudge &&
+      firstJudge.completeness === "partial" &&
+      firstJudge.quality_score < 0.75;
+    if (!shouldRetryPartial) {
+      return { run: firstRun, judgeResult: firstJudge, qualityNote: "" };
+    }
   }
 
   const retryQuery = `${query}\n\nRetry note: the previous attempt was judged ${firstJudge.completeness}. Fix this issue explicitly: ${firstJudge.note}`;

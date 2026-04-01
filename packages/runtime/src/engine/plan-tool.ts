@@ -8,6 +8,7 @@ import type { ToolSpec } from "../core/index.js";
 import type { EventBus } from "../core/index.js";
 import { extractErrorMessage } from "../core/index.js";
 import type { SessionState } from "./session-state.js";
+import { writePlanFile } from "./plan-persistence.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -30,6 +31,7 @@ export function createPlanTool(
   getSessionState: () => SessionState | undefined,
   getIteration?: () => number,
   onPlanUpdated?: (steps: ReadonlyArray<PlanStep>, oldPlan: ReadonlyArray<PlanStep> | null) => Promise<string | null>,
+  options?: { readonly repoRoot?: string; readonly sessionId?: string },
 ): ToolSpec {
   return {
     name: "update_plan",
@@ -210,6 +212,11 @@ export function createPlanTool(
 
       // Sync to session state sidecar (survives compaction)
       getSessionState()?.setPlan(steps);
+
+      // Persist plan to human-readable markdown file (non-fatal)
+      if (options?.repoRoot && options?.sessionId) {
+        writePlanFile(options.sessionId, options.repoRoot, steps);
+      }
 
       // Invoke plan quality judge callback if structural change occurred
       let judgeFeedback: string | null = null;
