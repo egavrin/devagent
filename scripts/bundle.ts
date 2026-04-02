@@ -118,5 +118,5 @@ const stats = Bun.file(join(DIST, "devagent.js"));
 const sizeKB = Math.round((await stats.size) / 1024);
 console.log(`\n✓ Bundle ready: dist/devagent.js (${sizeKB} KB)`);
 console.log(`  Package: ${distPkg.name}@${version}`);
-console.log(`  Test: node dist/bootstrap.js --help`);
+console.log(`  Test: bun run test:bundle-smoke`);
 console.log(`  Publish: cd dist && npm publish --access public`);

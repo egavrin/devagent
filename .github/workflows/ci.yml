@@ -56,8 +56,39 @@ jobs:
         working-directory: devagent
         run: bun run bundle
 
-      - name: Smoke test bundle
+  bundle-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: devagent
+
+      - uses: actions/checkout@v4
+        with:
+          repository: egavrin/devagent-sdk
+          ref: 0e2cc5bf8e6a3780dd49a9362c5c4fac3629709c
+          path: devagent-sdk
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install SDK dependencies
+        working-directory: devagent-sdk
+        run: bun install
+
+      - name: Build SDK packages
+        working-directory: devagent-sdk
+        run: bun run build
+
+      - name: Install dependencies
         working-directory: devagent
-        run: |
-          bun dist/devagent.js --help
-          bun dist/devagent.js --version
+        run: bun install
+
+      - name: Verify publish bundle
+        working-directory: devagent
+        run: bun run verify:publish

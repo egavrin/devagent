@@ -51,15 +51,9 @@ jobs:
         working-directory: devagent
         run: bun run test
 
-      - name: Bundle
+      - name: Verify publish bundle
         working-directory: devagent
-        run: bun run bundle
-
-      - name: Smoke test
-        working-directory: devagent
-        run: |
-          bun dist/devagent.js --help
-          bun dist/devagent.js --version
+        run: bun run verify:publish
 
       - name: Publish
         working-directory: devagent/dist
