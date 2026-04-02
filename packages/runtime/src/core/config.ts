@@ -101,6 +101,12 @@ const OPENAI_FAMILY_SUBAGENT_REASONING_DEFAULTS: Partial<Record<AgentType, Reaso
   [AgentType.ARCHITECT]: "high",
 };
 
+const DEVAGENT_API_SUBAGENT_REASONING_DEFAULTS: Partial<Record<AgentType, ReasoningEffort>> = {
+  [AgentType.EXPLORE]: "low",
+  [AgentType.REVIEWER]: "high",
+  [AgentType.ARCHITECT]: "high",
+};
+
 // ─── Config Loading ──────────────────────────────────────────
 
 /**
@@ -411,6 +417,11 @@ function getDefaultSubagentProfiles(
   readonly agentReasoningOverrides?: Partial<Record<AgentType, ReasoningEffort>>;
 } {
   if (provider !== "openai" && provider !== "chatgpt") {
+    if (provider === "devagent-api") {
+      return {
+        agentReasoningOverrides: DEVAGENT_API_SUBAGENT_REASONING_DEFAULTS,
+      };
+    }
     return {};
   }
 

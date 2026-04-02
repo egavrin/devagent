@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAIProvider, resolveCapabilities, stripNullArgs } from "./openai.js";
 import { convertTools } from "./shared.js";
 import type { ProviderConfig, ModelCapabilities } from "@devagent/runtime";
@@ -8,10 +8,18 @@ import {
   ApprovalMode,
   createDelegateTool,
   EventBus,
+  MessageRole,
   ToolRegistry,
 } from "@devagent/runtime";
 
 describe("createOpenAIProvider", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
   it("creates a provider without API key (for local endpoints)", () => {
     const config: ProviderConfig = { model: "llama3" };
     const provider = createOpenAIProvider(config);
@@ -38,6 +46,43 @@ describe("createOpenAIProvider", () => {
     };
     const provider = createOpenAIProvider(config);
     expect(provider.id).toBe("openai");
+  });
+
+  it("injects x-request-id when configured and missing", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const provider = createOpenAIProvider({
+      model: "gpt-4o",
+      apiKey: "test-key",
+      requestIdHeaderName: "x-request-id",
+    });
+
+    await collectText(provider);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("x-request-id")).toBeTruthy();
+  });
+
+  it("preserves caller-supplied x-request-id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const provider = createOpenAIProvider({
+      model: "gpt-4o",
+      apiKey: "test-key",
+      requestIdHeaderName: "x-request-id",
+      customHeaders: {
+        "x-request-id": "preset-request-id",
+      },
+    });
+
+    await collectText(provider);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("x-request-id")).toBe("preset-request-id");
   });
 });
 
@@ -89,6 +134,41 @@ describe("resolveCapabilities", () => {
     expect(caps.defaultMaxTokens).toBe(131072);
   });
 });
+
+async function collectText(provider: ReturnType<typeof createOpenAIProvider>): Promise<string> {
+  let output = "";
+  for await (const chunk of provider.chat([
+    { role: MessageRole.USER, content: "ping" },
+  ])) {
+    if (chunk.type === "text") {
+      output += chunk.content;
+    }
+  }
+  return output;
+}
+
+function makeStreamingResponse(): Response {
+  const stream = new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      controller.enqueue(encoder.encode(
+        'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"pong"},"finish_reason":null}]}\n\n',
+      ));
+      controller.enqueue(encoder.encode(
+        'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      ));
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream",
+    },
+  });
+}
 
 describe("stripNullArgs", () => {
   it("removes null-valued keys (OpenAI strict schema sends null for unused optionals)", () => {

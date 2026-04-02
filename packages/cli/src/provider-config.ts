@@ -20,11 +20,20 @@ export function buildProviderConfig(
   const resolvedReasoningEffort = agentType
     ? config.agentReasoningOverrides?.[agentType] ?? reasoningEffort
     : reasoningEffort;
+  const shouldUseDevagentApiMainDefault =
+    config.provider === "devagent-api" &&
+    agentType === undefined &&
+    resolvedReasoningEffort === undefined &&
+    baseProviderConfig.reasoningEffort === undefined;
 
   return {
     ...baseProviderConfig,
     model: config.model,
-    ...(resolvedReasoningEffort ? { reasoningEffort: resolvedReasoningEffort } : {}),
+    ...(resolvedReasoningEffort
+      ? { reasoningEffort: resolvedReasoningEffort }
+      : shouldUseDevagentApiMainDefault
+        ? { reasoningEffort: "high" }
+        : {}),
     ...(!baseProviderConfig.capabilities && registryCaps
       ? { capabilities: registryCaps as ModelCapabilities }
       : {}),

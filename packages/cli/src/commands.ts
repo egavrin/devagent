@@ -133,6 +133,7 @@ export async function runDoctor(version: string): Promise<void> {
 const PROVIDERS = [
   { id: "anthropic", env: "ANTHROPIC_API_KEY", hint: "set ANTHROPIC_API_KEY or devagent auth login" },
   { id: "openai", env: "OPENAI_API_KEY", hint: "set OPENAI_API_KEY or devagent auth login" },
+  { id: "devagent-api", env: "DEVAGENT_API_KEY", hint: "set DEVAGENT_API_KEY or devagent auth login" },
   { id: "deepseek", env: "DEEPSEEK_API_KEY", hint: "set DEEPSEEK_API_KEY or devagent auth login" },
   { id: "openrouter", env: "OPENROUTER_API_KEY", hint: "set OPENROUTER_API_KEY or devagent auth login" },
   { id: "chatgpt", env: "CHATGPT_API_KEY", hint: "devagent auth login (ChatGPT Plus/Pro)" },
@@ -426,6 +427,7 @@ ${buildCmds[projectType] ?? buildCmds.generic}
 const SETUP_PROVIDERS = [
   { id: "anthropic", name: "Anthropic", envVar: "ANTHROPIC_API_KEY", defaultModel: "claude-sonnet-4-20250514", hint: "Get key at https://console.anthropic.com/settings/keys" },
   { id: "openai", name: "OpenAI", envVar: "OPENAI_API_KEY", defaultModel: "gpt-4.1", hint: "Get key at https://platform.openai.com/api-keys" },
+  { id: "devagent-api", name: "Devagent API", envVar: "DEVAGENT_API_KEY", defaultModel: "cortex", hint: "Use a gateway virtual key starting with ilg_" },
   { id: "deepseek", name: "DeepSeek", envVar: "DEEPSEEK_API_KEY", defaultModel: "deepseek-chat", hint: "Get key at https://platform.deepseek.com/api_keys" },
   { id: "openrouter", name: "OpenRouter", envVar: "OPENROUTER_API_KEY", defaultModel: "anthropic/claude-sonnet-4-20250514", hint: "Get key at https://openrouter.ai/keys" },
   { id: "ollama", name: "Ollama (local)", envVar: "", defaultModel: "qwen3:32b", hint: "No API key needed — ollama must be running locally" },
@@ -454,7 +456,7 @@ export async function runSetup(): Promise<void> {
   }
   console.log("");
 
-  const providerChoice = await ask("> Provider (1-7) [1]: ");
+  const providerChoice = await ask(`> Provider (1-${SETUP_PROVIDERS.length}) [1]: `);
   const providerIdx = (parseInt(providerChoice.trim(), 10) || 1) - 1;
   const provider = SETUP_PROVIDERS[Math.max(0, Math.min(providerIdx, SETUP_PROVIDERS.length - 1))]!;
   console.log(`\n  ✓ Provider: ${provider.name}\n`);
@@ -521,6 +523,10 @@ export async function runSetup(): Promise<void> {
     openai: {
       models: { general: model, explore: "gpt-5.4-mini", reviewer: "gpt-5.4", architect: "gpt-5.4" },
       reasoning: { general: "medium", explore: "low", reviewer: "high", architect: "high" },
+    },
+    "devagent-api": {
+      models: { general: model, explore: model, reviewer: model, architect: model },
+      reasoning: { general: "high", explore: "low", reviewer: "high", architect: "high" },
     },
     deepseek: {
       models: { general: model, explore: model, reviewer: model, architect: model },
@@ -747,7 +753,7 @@ function bashCompletions(): string {
       return 0
       ;;
     --provider)
-      COMPREPLY=( $(compgen -W "anthropic openai deepseek openrouter ollama chatgpt github-copilot" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "anthropic openai devagent-api deepseek openrouter ollama chatgpt github-copilot" -- "\${cur}") )
       return 0
       ;;
     --reasoning)
@@ -778,7 +784,7 @@ ${COMMANDS.map((c) => `    '${c}:${c} command'`).join("\n")}
   flags=(
     '--help[Show help]'
     '--version[Show version]'
-    '--provider[LLM provider]:provider:(anthropic openai deepseek openrouter ollama chatgpt github-copilot)'
+    '--provider[LLM provider]:provider:(anthropic openai devagent-api deepseek openrouter ollama chatgpt github-copilot)'
     '--model[Model ID]:model:'
     '--max-iterations[Max iterations]:number:'
     '--reasoning[Reasoning effort]:level:(low medium high)'
@@ -825,7 +831,7 @@ function fishCompletions(): string {
     "# Flags",
     "complete -c devagent -l help -s h -d 'Show help'",
     "complete -c devagent -l version -s V -d 'Show version'",
-    "complete -c devagent -l provider -x -a 'anthropic openai deepseek openrouter ollama chatgpt github-copilot' -d 'LLM provider'",
+    "complete -c devagent -l provider -x -a 'anthropic openai devagent-api deepseek openrouter ollama chatgpt github-copilot' -d 'LLM provider'",
     "complete -c devagent -l model -x -d 'Model ID'",
     "complete -c devagent -l max-iterations -x -d 'Max iterations'",
     "complete -c devagent -l reasoning -x -a 'low medium high' -d 'Reasoning effort'",

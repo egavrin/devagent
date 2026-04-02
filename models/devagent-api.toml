@@ -1,0 +1,57 @@
+# Devagent API gateway models
+# Source: https://internal-llm-gateway.157.245.27.88.nip.io/v1/model-catalog
+# Last verified: 2026-04-02
+provider = "devagent-api"
+base_url = "https://internal-llm-gateway.157.245.27.88.nip.io/v1"
+
+[cortex]
+context_window = 256000
+response_headroom = 49152
+default_max_tokens = 49152
+supports_tools = true
+supports_temperature = false
+input_price_per_million = 0
+output_price_per_million = 0
+
+["deepseek/deepseek-v3.2"]
+context_window = 128000
+response_headroom = 49152
+default_max_tokens = 49152
+supports_tools = true
+supports_temperature = false
+input_price_per_million = 2
+output_price_per_million = 3
+
+["minimax/minimax-m2.7"]
+context_window = 204800
+response_headroom = 49152
+default_max_tokens = 49152
+supports_tools = true
+supports_temperature = false
+input_price_per_million = 0.3
+output_price_per_million = 1.2
+
+["moonshotai/kimi-k2.5"]
+context_window = 256000
+supports_tools = true
+supports_temperature = false
+input_price_per_million = 4
+output_price_per_million = 21
+
+["xiaomi/mimo-v2-pro"]
+context_window = 1000000
+response_headroom = 49152
+default_max_tokens = 49152
+supports_tools = true
+supports_temperature = false
+input_price_per_million = 7
+output_price_per_million = 21
+
+["z-ai/glm-5-turbo"]
+context_window = 202752
+response_headroom = 49152
+default_max_tokens = 49152
+supports_tools = true
+supports_temperature = false
+input_price_per_million = 0.96
+output_price_per_million = 3.2

@@ -6,6 +6,7 @@
  * are driven by config.capabilities. No heuristics — configure explicitly.
  */
 
+import { randomUUID } from "node:crypto";
 import { createOpenAI } from "@ai-sdk/openai";
 import { streamText } from "ai";
 import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
@@ -45,9 +46,15 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
   // 2. Copilot: strip fields the endpoint rejects (store, metadata, prediction, etc.)
   const codexOpts = config.codexOptions;
   const fieldsToStrip = config.stripFields;
-  const needsCustomFetch = codexOpts || (fieldsToStrip && fieldsToStrip.length > 0);
+  const requestIdHeaderName = config.requestIdHeaderName;
+  const needsCustomFetch = codexOpts || (fieldsToStrip && fieldsToStrip.length > 0) || requestIdHeaderName;
   const customFetch = needsCustomFetch
     ? async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const nextHeaders = new Headers(init?.headers);
+        if (requestIdHeaderName && !nextHeaders.has(requestIdHeaderName)) {
+          nextHeaders.set(requestIdHeaderName, randomUUID());
+        }
+
         if (init?.body && typeof init.body === "string") {
           try {
             const body = JSON.parse(init.body) as Record<string, unknown>;
@@ -63,10 +70,12 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
                 delete body[field];
               }
             }
-            init = { ...init, body: JSON.stringify(body) };
+            init = { ...init, headers: nextHeaders, body: JSON.stringify(body) };
           } catch {
-            // Not JSON — pass through
+            init = { ...init, headers: nextHeaders };
           }
+        } else {
+          init = { ...init, headers: nextHeaders };
         }
         return globalThis.fetch(input, init);
       }
@@ -148,5 +157,4 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
     },
   };
 }
-
 

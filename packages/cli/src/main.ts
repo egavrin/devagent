@@ -432,7 +432,7 @@ Auth:
 
 Options:
   -f, --file <path>    Read query from file
-  --provider <name>     LLM provider (anthropic, openai, deepseek, openrouter, ollama, chatgpt, github-copilot)
+  --provider <name>     LLM provider (anthropic, openai, devagent-api, deepseek, openrouter, ollama, chatgpt, github-copilot)
   --model <id>          Model ID
   --max-iterations <n>  Max tool-call iterations (default: 30, 0=unlimited)
   --reasoning <level>   Reasoning effort: low, medium, high

@@ -304,6 +304,28 @@ architect = "invalid"
     }
   });
 
+  it("applies devagent-api default subagent reasoning without forcing model overrides", () => {
+    const dir = join(tmpdir(), `devagent-test-devagent-api-defaults-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, ".devagent.toml"),
+      `
+provider = "devagent-api"
+model = "cortex"
+`,
+    );
+
+    try {
+      const config = loadConfig(dir);
+      expect(config.agentReasoningOverrides?.explore).toBe("low");
+      expect(config.agentReasoningOverrides?.reviewer).toBe("high");
+      expect(config.agentReasoningOverrides?.architect).toBe("high");
+      expect(config.agentModelOverrides).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
   it("fails fast on invalid TOML", () => {
     const dir = join(tmpdir(), `devagent-test-${Date.now()}`);
     mkdirSync(dir, { recursive: true });

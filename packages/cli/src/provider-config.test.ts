@@ -72,4 +72,47 @@ describe("buildProviderConfig", () => {
     expect(reviewerConfig.reasoningEffort).toBe("high");
     expect(generalConfig.reasoningEffort).toBe("medium");
   });
+
+  it("defaults the main devagent-api agent to high reasoning", () => {
+    const config: DevAgentConfig = {
+      ...makeConfig(),
+      provider: "devagent-api",
+      model: "cortex",
+      providers: {
+        "devagent-api": {
+          model: "cortex",
+        },
+      },
+    };
+
+    const providerConfig = buildProviderConfig(config);
+
+    expect(providerConfig.reasoningEffort).toBe("high");
+  });
+
+  it("keeps subagent reasoning overrides ahead of the devagent-api main default", () => {
+    const config: DevAgentConfig = {
+      ...makeConfig(),
+      provider: "devagent-api",
+      model: "cortex",
+      providers: {
+        "devagent-api": {
+          model: "cortex",
+        },
+      },
+      agentReasoningOverrides: {
+        [AgentType.EXPLORE]: "low",
+        [AgentType.REVIEWER]: "high",
+        [AgentType.ARCHITECT]: "high",
+      },
+    };
+
+    const exploreConfig = buildProviderConfig(config, undefined, AgentType.EXPLORE);
+    const reviewerConfig = buildProviderConfig(config, undefined, AgentType.REVIEWER);
+    const architectConfig = buildProviderConfig(config, undefined, AgentType.ARCHITECT);
+
+    expect(exploreConfig.reasoningEffort).toBe("low");
+    expect(reviewerConfig.reasoningEffort).toBe("high");
+    expect(architectConfig.reasoningEffort).toBe("high");
+  });
 });

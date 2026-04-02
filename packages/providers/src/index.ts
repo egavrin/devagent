@@ -120,12 +120,30 @@ function createOpenRouterProvider(config: ProviderConfig): LLMProvider {
 }
 
 /**
+ * Devagent API provider — wraps the OpenAI provider for the deployed gateway.
+ * Uses the stable HTTPS gateway base URL and injects x-request-id for tracing.
+ */
+function createDevagentApiProvider(config: ProviderConfig): LLMProvider {
+  const provider = createOpenAIProvider({
+    ...config,
+    baseUrl: config.baseUrl ?? "https://internal-llm-gateway.157.245.27.88.nip.io/v1",
+    requestIdHeaderName: config.requestIdHeaderName ?? "x-request-id",
+  });
+
+  return {
+    ...provider,
+    id: "devagent-api",
+  };
+}
+
+/**
  * Create a registry with all built-in providers registered.
  */
 export function createDefaultRegistry(): ProviderRegistry {
   const registry = new ProviderRegistry();
   registry.register("anthropic", createAnthropicProvider);
   registry.register("openai", createOpenAIProvider);
+  registry.register("devagent-api", createDevagentApiProvider);
   registry.register("ollama", createOllamaProvider);
   registry.register("deepseek", createDeepSeekProvider);
   registry.register("openrouter", createOpenRouterProvider);

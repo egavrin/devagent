@@ -161,6 +161,8 @@ export interface ProviderConfig {
   readonly oauthToken?: string;
   /** OAuth account ID (e.g., ChatGPT org ID for subscription routing). */
   readonly oauthAccountId?: string;
+  /** Optional request ID header to auto-populate when the outbound request omits it. */
+  readonly requestIdHeaderName?: string;
   readonly baseUrl?: string;
   readonly model: string;
   readonly maxTokens?: number;

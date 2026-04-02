@@ -54,6 +54,13 @@ const KNOWN_PROVIDERS: readonly ProviderEntry[] = [
     authMethods: ["api-key"],
   },
   {
+    id: "devagent-api",
+    name: "Devagent API (gateway key)",
+    hint: "Use a gateway virtual key starting with ilg_",
+    envVar: "DEVAGENT_API_KEY",
+    authMethods: ["api-key"],
+  },
+  {
     id: "chatgpt",
     name: "ChatGPT (Pro/Plus account)",
     hint: "Login with your ChatGPT subscription",

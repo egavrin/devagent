@@ -31,7 +31,7 @@ devagent "review my last commit for issues"
 
 ## Features
 
-- **Multi-provider** — Anthropic, OpenAI, DeepSeek, OpenRouter, Ollama, ChatGPT, GitHub Copilot
+- **Multi-provider** — Anthropic, OpenAI, Devagent API, DeepSeek, OpenRouter, Ollama, ChatGPT, GitHub Copilot
 - **Tool use** — reads/writes files, runs commands, searches code, git operations
 - **Subagents** — spawns specialized agents (explore, review, architect) with configurable models
 - **Session persistence** — resume previous sessions with `--resume` or `--continue`
@@ -81,6 +81,12 @@ devagent review patch.diff --rule rules/security.md --json
 | `devagent sessions` | List recent sessions |
 | `devagent version` | Show version |
 
+Public machine contract:
+
+```bash
+devagent execute --request request.json --artifact-dir artifacts/
+```
+
 ## Configuration
 
 Global config: `~/.config/devagent/config.toml`
@@ -126,11 +132,11 @@ devagent completions fish > ~/.config/fish/completions/devagent.fish
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OPENAI_API_KEY` | OpenAI API key |
+| `DEVAGENT_API_KEY` | Devagent API gateway key, and generic API key fallback for the default provider |
 | `DEEPSEEK_API_KEY` | DeepSeek API key |
 | `OPENROUTER_API_KEY` | OpenRouter API key |
 | `DEVAGENT_PROVIDER` | Default provider |
 | `DEVAGENT_MODEL` | Default model |
-| `DEVAGENT_API_KEY` | API key for default provider |
 
 ## Requirements
 

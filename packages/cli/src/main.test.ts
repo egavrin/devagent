@@ -51,6 +51,10 @@ describe("renderHelpText", () => {
     expect(renderHelpText()).toContain("-f, --file <path>    Read query from file");
   });
 
+  it("includes devagent-api in the provider list", () => {
+    expect(renderHelpText()).toContain("devagent-api");
+  });
+
   it("does not advertise removed interactive or plan surfaces", () => {
     const help = renderHelpText();
     expect(help).not.toContain("devagent chat");
