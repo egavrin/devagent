@@ -41,6 +41,17 @@ function getVersion(): string {
   }
 }
 
+/** Returns true if `a` is a newer semver than `b`. */
+function semverNewer(a: string, b: string): boolean {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] ?? 0) > (pb[i] ?? 0)) return true;
+    if ((pa[i] ?? 0) < (pb[i] ?? 0)) return false;
+  }
+  return false;
+}
+
 /**
  * Non-blocking update check. Queries npm registry at most once per 24h.
  * Prints a hint to stderr if a newer version is available.
@@ -56,7 +67,7 @@ function checkForUpdates(): void {
     if (existsSync(cachePath)) {
       const cached = JSON.parse(nodeReadFileSync(cachePath, "utf-8"));
       if (Date.now() - cached.checkedAt < ONE_DAY) {
-        if (cached.latest && cached.latest !== getVersion()) {
+        if (cached.latest && semverNewer(cached.latest, getVersion())) {
           process.stderr.write(
             `\x1b[33mUpdate available: ${getVersion()} → ${cached.latest}\x1b[0m — ` +
             `npm i -g ${PACKAGE}\n`,
@@ -79,7 +90,7 @@ function checkForUpdates(): void {
         mkdirSync(cacheDir, { recursive: true });
         writeFileSync(cachePath, JSON.stringify({ latest, checkedAt: Date.now() }));
       } catch { /* ignore cache write errors */ }
-      if (latest !== getVersion()) {
+      if (semverNewer(latest, getVersion())) {
         process.stderr.write(
           `\x1b[33mUpdate available: ${getVersion()} → ${latest}\x1b[0m — ` +
           `npm i -g ${PACKAGE}\n`,
