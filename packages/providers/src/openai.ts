@@ -142,16 +142,21 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
           throw classifyProviderError(err, "OpenAI");
         }
 
-        yield* processProviderStream({
+        // Explicit iteration instead of yield* to ensure errors are caught on Node.js
+        const stream = processProviderStream({
           providerName: "OpenAI",
           fullStream: result.fullStream,
           abortController,
-          // Strip null-valued keys: our convertTools makes optional params
-          // nullable (type: ["T", "null"]) + required for strict mode.
-          // The model sends null for unused optionals — strip them so
-          // downstream tool handlers see undefined (not provided), not null.
           transformArgs: stripNullArgs,
         });
+        try {
+          for await (const chunk of stream) {
+            yield chunk;
+          }
+        } catch (err) {
+          if (err instanceof ProviderError) throw err;
+          throw classifyProviderError(err, "OpenAI");
+        }
       } finally {
         abortController = null;
       }

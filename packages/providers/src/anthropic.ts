@@ -52,11 +52,19 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
           throw classifyProviderError(err, "Anthropic");
         }
 
-        yield* processProviderStream({
+        const stream = processProviderStream({
           providerName: "Anthropic",
           fullStream: result.fullStream,
           abortController,
         });
+        try {
+          for await (const chunk of stream) {
+            yield chunk;
+          }
+        } catch (err) {
+          if (err instanceof ProviderError) throw err;
+          throw classifyProviderError(err, "Anthropic");
+        }
       } finally {
         abortController = null;
       }
