@@ -313,7 +313,7 @@ export function parseArgs(argv: string[]): CliArgs {
       process.exit(0);
     }
 
-    if (arg === "doctor" || arg === "config" || arg === "init" || arg === "setup" || arg === "update" || arg === "completions") {
+    if (arg === "doctor" || arg === "config" || arg === "init" || arg === "setup" || arg === "update" || arg === "completions" || arg === "install-lsp") {
       // Handled in main() before parseArgs completes
       result.query = `__cmd:${arg}:${args.slice(i + 1).join(" ")}`;
       return result;
@@ -420,6 +420,7 @@ Commands:
   devagent config get [key]       Show config value(s)
   devagent config set <key> <val> Set a config value
   devagent config path            Show config file location
+  devagent install-lsp             Install LSP servers for code intelligence
   devagent update                 Update to latest version
   devagent completions <shell>    Generate shell completions (bash/zsh/fish)
   devagent version                Show version and runtime info
@@ -1156,12 +1157,13 @@ export async function main(): Promise<void> {
     const parts = cliArgs.query.slice(6).split(":");
     const cmd = parts[0]!;
     const cmdArgs = parts[1]?.trim().split(/\s+/).filter(Boolean) ?? [];
-    const { runDoctor, runConfig, runInit, runSetup, runUpdate, runCompletions } = await import("./commands.js");
+    const { runDoctor, runConfig, runInit, runSetup, runUpdate, runCompletions, runInstallLsp } = await import("./commands.js");
     if (cmd === "doctor") { await runDoctor(getVersion()); }
     else if (cmd === "config") { runConfig(cmdArgs); }
     else if (cmd === "init") { runInit(); }
     else if (cmd === "setup") { await runSetup(); }
     else if (cmd === "update") { await runUpdate(); }
+    else if (cmd === "install-lsp") { runInstallLsp(); }
     else if (cmd === "completions") { runCompletions(cmdArgs[0] ?? ""); }
     return;
   }

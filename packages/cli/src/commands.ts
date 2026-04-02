@@ -112,7 +112,7 @@ export async function runDoctor(version: string): Promise<void> {
     console.log(`    ${status} ${lsp.label}${install}`);
   }
   if (lspCount === 0) {
-    console.log("    (none found — code intelligence will be limited)");
+    console.log("    (none found — run 'devagent install-lsp' to install)");
     allOk = false;
   }
   console.log("");
@@ -141,11 +141,11 @@ const PROVIDERS = [
 ];
 
 const LSP_SERVERS = [
-  { command: "typescript-language-server", label: "TypeScript/JavaScript", install: "npm i -g typescript-language-server typescript" },
-  { command: "pyright-langserver", label: "Python (Pyright)", install: "npm i -g pyright" },
-  { command: "clangd", label: "C/C++ (clangd)", install: "apt install clangd / brew install llvm" },
-  { command: "rust-analyzer", label: "Rust", install: "rustup component add rust-analyzer" },
-  { command: "bash-language-server", label: "Bash/Shell", install: "npm i -g bash-language-server" },
+  { command: "typescript-language-server", label: "TypeScript/JavaScript", install: "npm i -g typescript-language-server typescript", npmPackages: ["typescript-language-server", "typescript"] },
+  { command: "pyright-langserver", label: "Python (Pyright)", install: "npm i -g pyright", npmPackages: ["pyright"] },
+  { command: "clangd", label: "C/C++ (clangd)", install: "apt install clangd / brew install llvm", npmPackages: null },
+  { command: "rust-analyzer", label: "Rust", install: "rustup component add rust-analyzer", npmPackages: null },
+  { command: "bash-language-server", label: "Bash/Shell", install: "npm i -g bash-language-server", npmPackages: ["bash-language-server"] },
 ];
 
 function getProviderEnvKey(provider: string): string | null {
@@ -159,6 +159,69 @@ function commandExists(cmd: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+// ─── install-lsp ────────────────────────────────────────────
+
+export function runInstallLsp(): void {
+  const isBun = typeof globalThis.Bun !== "undefined";
+  const pm = isBun ? "bun" : "npm";
+
+  const toInstall: typeof LSP_SERVERS = [];
+  const skipped: typeof LSP_SERVERS = [];
+  const alreadyInstalled: typeof LSP_SERVERS = [];
+
+  for (const lsp of LSP_SERVERS) {
+    if (commandExists(lsp.command)) {
+      alreadyInstalled.push(lsp);
+    } else if (lsp.npmPackages) {
+      toInstall.push(lsp);
+    } else {
+      skipped.push(lsp);
+    }
+  }
+
+  if (alreadyInstalled.length > 0) {
+    console.log("Already installed:");
+    for (const lsp of alreadyInstalled) {
+      console.log(`  ✓ ${lsp.label}`);
+    }
+    console.log("");
+  }
+
+  if (toInstall.length === 0) {
+    console.log("All npm-installable LSP servers are already available.");
+    if (skipped.length > 0) {
+      console.log("\nSystem-level servers (install manually):");
+      for (const lsp of skipped) {
+        console.log(`  · ${lsp.label} — ${lsp.install}`);
+      }
+    }
+    return;
+  }
+
+  // Collect all packages
+  const packages = toInstall.flatMap((lsp) => lsp.npmPackages!);
+  const cmd = `${pm} install -g ${packages.join(" ")}`;
+
+  console.log(`Installing: ${toInstall.map((l) => l.label).join(", ")}`);
+  console.log(`$ ${cmd}\n`);
+
+  try {
+    execSync(cmd, { stdio: "inherit", timeout: 120000 });
+    console.log("\n✓ LSP servers installed");
+  } catch {
+    console.error("\n✗ Installation failed. Try running manually:");
+    console.error(`  ${cmd}`);
+    process.exit(1);
+  }
+
+  if (skipped.length > 0) {
+    console.log("\nSystem-level servers (install manually):");
+    for (const lsp of skipped) {
+      console.log(`  · ${lsp.label} — ${lsp.install}`);
+    }
   }
 }
 
