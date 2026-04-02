@@ -572,6 +572,217 @@ export async function runSetup(): Promise<void> {
   console.log(`  - Run 'devagent init' in a project to add project-level config`);
 }
 
+// ─── update ─────────────────────────────────────────────────
+
+export async function runUpdate(): Promise<void> {
+  const PACKAGE = "@egavrin/devagent";
+
+  console.log("Checking for updates...");
+
+  try {
+    const res = await fetch(`https://registry.npmjs.org/${PACKAGE}/latest`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = (await res.json()) as { version?: string };
+    const latest = data.version;
+
+    if (!latest) {
+      console.error("Could not determine latest version.");
+      process.exit(1);
+    }
+
+    const current = getCurrentVersion();
+    if (latest === current) {
+      console.log(`Already up to date (v${current}).`);
+      return;
+    }
+
+    console.log(`Updating: v${current} → v${latest}\n`);
+
+    // Detect package manager
+    const isBun = typeof globalThis.Bun !== "undefined";
+    const cmd = isBun
+      ? `bun install -g ${PACKAGE}@latest`
+      : `npm install -g ${PACKAGE}@latest`;
+
+    console.log(`$ ${cmd}\n`);
+    execSync(cmd, { stdio: "inherit" });
+    console.log(`\n✓ Updated to v${latest}`);
+  } catch (err) {
+    console.error(`Update failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+}
+
+function getCurrentVersion(): string {
+  try {
+    const dir = new URL(".", import.meta.url).pathname;
+    const pkgPath = join(dir, "package.json");
+    if (existsSync(pkgPath)) {
+      return JSON.parse(readFileSync(pkgPath, "utf-8")).version ?? "0.0.0";
+    }
+  } catch { /* ignore */ }
+  return "0.0.0";
+}
+
+// ─── completions ────────────────────────────────────────────
+
+const COMMANDS = [
+  "setup", "init", "doctor", "config", "update", "completions",
+  "version", "sessions", "review", "auth", "execute",
+];
+const FLAGS = [
+  "--help", "--version", "--provider", "--model", "--max-iterations",
+  "--reasoning", "--resume", "--continue", "--suggest", "--auto-edit",
+  "--full-auto", "--verbose", "--quiet", "--file",
+];
+
+export function runCompletions(shell: string): void {
+  switch (shell) {
+    case "bash":
+      console.log(bashCompletions());
+      console.log("\n# Add to ~/.bashrc:\n#   eval \"$(devagent completions bash)\"");
+      break;
+    case "zsh":
+      console.log(zshCompletions());
+      console.log("\n# Add to ~/.zshrc:\n#   eval \"$(devagent completions zsh)\"");
+      break;
+    case "fish":
+      console.log(fishCompletions());
+      console.log("\n# Save to ~/.config/fish/completions/devagent.fish:\n#   devagent completions fish > ~/.config/fish/completions/devagent.fish");
+      break;
+    default:
+      console.log("Usage: devagent completions <bash|zsh|fish>");
+      console.log("\nExamples:");
+      console.log("  eval \"$(devagent completions bash)\"   # Add to ~/.bashrc");
+      console.log("  eval \"$(devagent completions zsh)\"    # Add to ~/.zshrc");
+      console.log("  devagent completions fish > ~/.config/fish/completions/devagent.fish");
+      break;
+  }
+}
+
+function bashCompletions(): string {
+  return `_devagent_completions() {
+  local cur="\${COMP_WORDS[COMP_CWORD]}"
+  local prev="\${COMP_WORDS[COMP_CWORD-1]}"
+
+  case "\${prev}" in
+    devagent)
+      COMPREPLY=( $(compgen -W "${COMMANDS.join(" ")} ${FLAGS.join(" ")}" -- "\${cur}") )
+      return 0
+      ;;
+    config)
+      COMPREPLY=( $(compgen -W "get set path" -- "\${cur}") )
+      return 0
+      ;;
+    auth)
+      COMPREPLY=( $(compgen -W "login status logout" -- "\${cur}") )
+      return 0
+      ;;
+    completions)
+      COMPREPLY=( $(compgen -W "bash zsh fish" -- "\${cur}") )
+      return 0
+      ;;
+    --provider)
+      COMPREPLY=( $(compgen -W "anthropic openai deepseek openrouter ollama chatgpt github-copilot" -- "\${cur}") )
+      return 0
+      ;;
+    --reasoning)
+      COMPREPLY=( $(compgen -W "low medium high" -- "\${cur}") )
+      return 0
+      ;;
+  esac
+
+  if [[ "\${cur}" == -* ]]; then
+    COMPREPLY=( $(compgen -W "${FLAGS.join(" ")}" -- "\${cur}") )
+  else
+    COMPREPLY=( $(compgen -W "${COMMANDS.join(" ")}" -- "\${cur}") )
+  fi
+}
+complete -F _devagent_completions devagent`;
+}
+
+function zshCompletions(): string {
+  return `#compdef devagent
+
+_devagent() {
+  local -a commands flags
+
+  commands=(
+${COMMANDS.map((c) => `    '${c}:${c} command'`).join("\n")}
+  )
+
+  flags=(
+    '--help[Show help]'
+    '--version[Show version]'
+    '--provider[LLM provider]:provider:(anthropic openai deepseek openrouter ollama chatgpt github-copilot)'
+    '--model[Model ID]:model:'
+    '--max-iterations[Max iterations]:number:'
+    '--reasoning[Reasoning effort]:level:(low medium high)'
+    '--resume[Resume session]:session_id:'
+    '--continue[Resume most recent session]'
+    '--suggest[Suggest mode]'
+    '--auto-edit[Auto-edit mode]'
+    '--full-auto[Full-auto mode]'
+    '--verbose[Verbose output]'
+    '--quiet[Quiet output]'
+    '--file[Read query from file]:file:_files'
+  )
+
+  _arguments -s \\
+    '1:command:->command' \\
+    '*::arg:->args' \\
+    \${flags}
+
+  case \$state in
+    command)
+      _describe 'command' commands
+      ;;
+    args)
+      case \$words[1] in
+        config) _values 'subcommand' get set path ;;
+        auth) _values 'subcommand' login status logout ;;
+        completions) _values 'shell' bash zsh fish ;;
+      esac
+      ;;
+  esac
+}
+
+_devagent`;
+}
+
+function fishCompletions(): string {
+  const lines = [
+    "# devagent completions for fish",
+    "complete -c devagent -e",
+    "",
+    "# Commands",
+    ...COMMANDS.map((c) => `complete -c devagent -n '__fish_use_subcommand' -a '${c}' -d '${c}'`),
+    "",
+    "# Flags",
+    "complete -c devagent -l help -s h -d 'Show help'",
+    "complete -c devagent -l version -s V -d 'Show version'",
+    "complete -c devagent -l provider -x -a 'anthropic openai deepseek openrouter ollama chatgpt github-copilot' -d 'LLM provider'",
+    "complete -c devagent -l model -x -d 'Model ID'",
+    "complete -c devagent -l max-iterations -x -d 'Max iterations'",
+    "complete -c devagent -l reasoning -x -a 'low medium high' -d 'Reasoning effort'",
+    "complete -c devagent -l resume -x -d 'Resume session by ID'",
+    "complete -c devagent -l continue -d 'Resume most recent session'",
+    "complete -c devagent -l suggest -d 'Suggest mode'",
+    "complete -c devagent -l auto-edit -d 'Auto-edit mode'",
+    "complete -c devagent -l full-auto -d 'Full-auto mode'",
+    "complete -c devagent -l verbose -s v -d 'Verbose output'",
+    "complete -c devagent -l quiet -s q -d 'Quiet output'",
+    "complete -c devagent -l file -s f -r -d 'Read query from file'",
+    "",
+    "# Subcommands",
+    "complete -c devagent -n '__fish_seen_subcommand_from config' -a 'get set path'",
+    "complete -c devagent -n '__fish_seen_subcommand_from auth' -a 'login status logout'",
+    "complete -c devagent -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish'",
+  ];
+  return lines.join("\n");
+}
+
 const INSTRUCTIONS_TEMPLATE = `# DevAgent Instructions
 
 <!--

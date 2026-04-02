@@ -313,7 +313,7 @@ export function parseArgs(argv: string[]): CliArgs {
       process.exit(0);
     }
 
-    if (arg === "doctor" || arg === "config" || arg === "init" || arg === "setup") {
+    if (arg === "doctor" || arg === "config" || arg === "init" || arg === "setup" || arg === "update" || arg === "completions") {
       // Handled in main() before parseArgs completes
       result.query = `__cmd:${arg}:${args.slice(i + 1).join(" ")}`;
       return result;
@@ -420,6 +420,8 @@ Commands:
   devagent config get [key]       Show config value(s)
   devagent config set <key> <val> Set a config value
   devagent config path            Show config file location
+  devagent update                 Update to latest version
+  devagent completions <shell>    Generate shell completions (bash/zsh/fish)
   devagent version                Show version and runtime info
 
 Auth:
@@ -1154,11 +1156,13 @@ export async function main(): Promise<void> {
     const parts = cliArgs.query.slice(6).split(":");
     const cmd = parts[0]!;
     const cmdArgs = parts[1]?.trim().split(/\s+/).filter(Boolean) ?? [];
-    const { runDoctor, runConfig, runInit, runSetup } = await import("./commands.js");
+    const { runDoctor, runConfig, runInit, runSetup, runUpdate, runCompletions } = await import("./commands.js");
     if (cmd === "doctor") { await runDoctor(getVersion()); }
     else if (cmd === "config") { runConfig(cmdArgs); }
     else if (cmd === "init") { runInit(); }
     else if (cmd === "setup") { await runSetup(); }
+    else if (cmd === "update") { await runUpdate(); }
+    else if (cmd === "completions") { runCompletions(cmdArgs[0] ?? ""); }
     return;
   }
 
@@ -2209,15 +2213,30 @@ function runGitTextCommand(command: string, repoRoot: string): string | null {
   }
 }
 
+function shellEscapeArg(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildDiffScopeSuffix(pathFilters: ReadonlyArray<string>): string {
+  if (pathFilters.length === 0) {
+    return "";
+  }
+  return ` -- ${pathFilters.map(shellEscapeArg).join(" ")}`;
+}
+
 function loadLocalDiffTarget(
   repoRoot: string,
   target: ResolvedPromptCommandTarget,
+  pathFilters: ReadonlyArray<string> = [],
 ): string | null {
-  const command = target === "unstaged"
-    ? "git diff"
-    : target === "staged"
-      ? "git diff --cached"
-      : "git show --format=medium --patch --no-ext-diff HEAD";
+  const suffix = buildDiffScopeSuffix(pathFilters);
+  const command = target.kind === "unstaged"
+    ? `git diff${suffix}`
+    : target.kind === "staged"
+      ? `git diff --cached${suffix}`
+      : target.kind === "last-commit"
+        ? `git show --format=medium --patch --no-ext-diff HEAD${suffix}`
+        : `git show --format=medium --patch --no-ext-diff ${shellEscapeArg(target.ref)}${suffix}`;
 
   const output = runGitTextCommand(command, repoRoot);
   if (!output?.trim()) {
@@ -2227,18 +2246,22 @@ function loadLocalDiffTarget(
   return truncateToolOutput(output);
 }
 
-function resolveAutoPromptCommandTarget(repoRoot: string): ResolvedPromptCommandTarget {
-  const unstaged = runGitTextCommand("git diff --name-only", repoRoot);
+function resolveAutoPromptCommandTarget(
+  repoRoot: string,
+  pathFilters: ReadonlyArray<string> = [],
+): ResolvedPromptCommandTarget {
+  const suffix = buildDiffScopeSuffix(pathFilters);
+  const unstaged = runGitTextCommand(`git diff --name-only${suffix}`, repoRoot);
   if (unstaged?.trim()) {
-    return "unstaged";
+    return { kind: "unstaged" };
   }
 
-  const staged = runGitTextCommand("git diff --cached --name-only", repoRoot);
+  const staged = runGitTextCommand(`git diff --cached --name-only${suffix}`, repoRoot);
   if (staged?.trim()) {
-    return "staged";
+    return { kind: "staged" };
   }
 
-  return "last-commit";
+  return { kind: "last-commit" };
 }
 
 /**
@@ -2252,17 +2275,21 @@ async function maybePreloadReviewDiff(
   const reviewType = isReviewQuery(query);
   if (!reviewType) return null;
 
-  const diffOutput = loadLocalDiffTarget(repoRoot, reviewType);
-  return diffOutput ? formatPreloadedDiffMessage(reviewType, diffOutput) : null;
+  const diffOutput = loadLocalDiffTarget(repoRoot, { kind: reviewType });
+  return diffOutput ? formatPreloadedDiffMessage({ kind: reviewType }, diffOutput) : null;
 }
 
 async function prepareQueryForExecution(
   query: string,
   repoRoot: string,
-): Promise<{ readonly query: string; readonly prependedMessages: ReadonlyArray<Message> }> {
+): Promise<{
+  readonly query: string;
+  readonly prependedMessages: ReadonlyArray<Message>;
+  readonly finalTextValidator?: (candidate: string) => { readonly valid: boolean; readonly retryMessage?: string };
+}> {
   const preparedPromptCommandQuery = await preparePromptCommandQuery(query, {
-    resolveAutoTarget: async () => resolveAutoPromptCommandTarget(repoRoot),
-    loadDiff: async (target) => loadLocalDiffTarget(repoRoot, target),
+    resolveAutoTarget: async (pathFilters) => resolveAutoPromptCommandTarget(repoRoot, pathFilters),
+    loadDiff: async (target, pathFilters) => loadLocalDiffTarget(repoRoot, target, pathFilters),
   });
 
   if (preparedPromptCommandQuery) {
@@ -2271,8 +2298,9 @@ async function prepareQueryForExecution(
       prependedMessages: preparedPromptCommandQuery.preloadedDiffs.map((entry) => ({
         role: MessageRole.USER,
         content: entry.content,
-        pinned: true,
-      })),
+          pinned: true,
+        })),
+      finalTextValidator: preparedPromptCommandQuery.finalTextValidator,
     };
   }
 
@@ -2282,6 +2310,7 @@ async function prepareQueryForExecution(
     prependedMessages: preloadedDiff
       ? [{ role: MessageRole.USER, content: preloadedDiff, pinned: true }]
       : [],
+    finalTextValidator: undefined,
   };
 }
 
@@ -2342,6 +2371,7 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
   });
   const result = await loop.run(preparedQuery.query, {
     prependedMessages: preparedQuery.prependedMessages,
+    finalTextValidator: preparedQuery.finalTextValidator,
   });
 
   // Stop spinner in case LLM finished without emitting text
@@ -2439,6 +2469,7 @@ async function runTuiQuery(options: RunSingleQueryOptions): Promise<void> {
 
   await tuiLoop.run(preparedQuery.query, {
     prependedMessages: preparedQuery.prependedMessages,
+    finalTextValidator: preparedQuery.finalTextValidator,
   });
   // No flushOutput — TUI handles display via bus events
   // No spinner.stop — TUI has its own spinner
