@@ -19,7 +19,29 @@ export { spawnAndCapture } from "./builtins/spawn-capture.js";
 
 import type { ToolSpec } from "../core/index.js";
 import { ToolRegistry } from "./registry.js";
-import { builtinTools } from "./builtins/index.js";
+import {
+  readFileTool,
+  writeFileTool,
+  replaceInFileTool,
+  findFilesTool,
+  searchFilesTool,
+  runCommandTool,
+  gitStatusTool,
+  gitDiffTool,
+  gitCommitTool,
+} from "./builtins/index.js";
+
+const DEFAULT_BUILTIN_TOOLS: ReadonlyArray<ToolSpec> = [
+  readFileTool,
+  writeFileTool,
+  replaceInFileTool,
+  findFilesTool,
+  searchFilesTool,
+  runCommandTool,
+  gitStatusTool,
+  gitDiffTool,
+  gitCommitTool,
+];
 
 export interface DefaultToolRegistryOptions {
   readonly overrides?: ReadonlyArray<ToolSpec>;
@@ -42,7 +64,7 @@ export function createDefaultToolRegistry(options?: DefaultToolRegistryOptions):
   );
   const deferredNames = options?.deferredToolNames ?? new Set<string>();
 
-  for (const tool of builtinTools) {
+  for (const tool of DEFAULT_BUILTIN_TOOLS) {
     const effective = overrideMap.get(tool.name) ?? tool;
     if (deferredNames.has(tool.name)) {
       registry.registerDeferred(effective);

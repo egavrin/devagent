@@ -7,20 +7,29 @@
  *   3. Stub that throws a clear error
  */
 
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+
 let _Database: unknown;
 let _available = false;
 
 try {
-  // Build specifier at runtime so bundlers cannot statically match it
-  const _specifier = ["bun", "sqlite"].join(":");
-  const _mod = await import(_specifier);
-  _Database = _mod.Database;
-  _available = true;
+  if (typeof Bun !== "undefined") {
+    // Resolve through require() so the constructor is available synchronously.
+    const _mod = require("bun:sqlite") as typeof import("bun:sqlite");
+    _Database = _mod.Database;
+    _available = true;
+  } else {
+    const _mod = require("better-sqlite3") as { default?: unknown } | unknown;
+    _Database = (_mod as { default?: unknown }).default ?? _mod;
+    _available = true;
+  }
 } catch {
   try {
-    // Node.js fallback: better-sqlite3 has a near-identical sync API
-    const _mod = await import("better-sqlite3");
-    _Database = _mod.default;
+    // Bun can still fall back to better-sqlite3 if bun:sqlite is unavailable.
+    const _mod = require("better-sqlite3") as { default?: unknown } | unknown;
+    _Database = (_mod as { default?: unknown }).default ?? _mod;
     _available = true;
   } catch {
     // No SQLite available — provide a stub that throws on instantiation
