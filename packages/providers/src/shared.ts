@@ -108,6 +108,9 @@ export function classifyProviderError(err: unknown, providerName: string): Provi
   const msg = extractErrorMessage(err);
   const status = extractHttpStatus(err);
 
+  if (status === 401 || status === 403) {
+    return new ProviderError(`${providerName} authentication failed (${status}): ${msg}. Check your API key with 'devagent doctor'.`);
+  }
   if (status === 429) {
     const retryAfter = extractRetryAfter(err);
     return new RateLimitError(`${providerName} rate limited: ${msg}`, retryAfter);
@@ -117,6 +120,11 @@ export function classifyProviderError(err: unknown, providerName: string): Provi
   }
   if (isConnectionError(msg)) {
     return new ProviderConnectionError(`${providerName} connection error: ${msg}`);
+  }
+
+  // Catch non-iterable errors from AI SDK response parsing (e.g. invalid API key returning HTML/JSON error)
+  if (msg.includes("is not iterable") || msg.includes("not a function")) {
+    return new ProviderError(`${providerName} returned an unexpected response. Check your API key and model with 'devagent doctor'.`);
   }
 
   return new ProviderError(`${providerName} API error: ${msg}`);
