@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 import { TUI_HELP_MESSAGE } from "./App.js";
@@ -13,6 +16,13 @@ describe("PromptInput slash completions", () => {
     expect(getCompletions("please /r")).toContain("please /review");
     expect(getCompletions("/s")).toContain("/sessions");
     expect(getCompletions("/s")).toContain("/simplify");
+  });
+
+  it("keeps absolute-path completion working inside normal prompts", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "devagent-prompt-input-"));
+    mkdirSync(join(tempRoot, "foo-dir"));
+
+    expect(getCompletions(`edit ${tempRoot}/fo`)).toContain(`edit ${tempRoot}/foo-dir`);
   });
 });
 

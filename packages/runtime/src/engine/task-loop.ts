@@ -145,6 +145,12 @@ export interface AgentExecutionContext {
   readonly batchSize?: number;
 }
 
+interface RunPrependedState {
+  readonly insertionIndex: number;
+  readonly messages: ReadonlyArray<Message>;
+  readonly tokenCount: number;
+}
+
 // ─── Tool Output Truncation ─────────────────────────────────
 
 /** Maximum chars for a single tool output in the message array (~12K tokens). */
@@ -369,12 +375,7 @@ export class TaskLoop {
   async run(userQuery: string, options?: TaskRunOptions): Promise<TaskLoopResult> {
     this.resetRunState();
     const finalTextValidator = options?.finalTextValidator ?? this.finalTextValidator;
-
-    if (options?.prependedMessages) {
-      for (const message of options.prependedMessages) {
-        this.pushMessage(message);
-      }
-    }
+    this.installRunPrependedMessages(options?.prependedMessages);
 
     // Add user message
     this.pushMessage({
@@ -397,7 +398,8 @@ export class TaskLoop {
     let lastNonEmptyText: string | null = null;
     let status: TaskCompletionStatus = "success";
 
-    while (!this.aborted) {
+    try {
+      while (!this.aborted) {
       // Check budget (0 = unlimited)
       if (this.config.budget.maxIterations > 0 && this.iterations >= this.config.budget.maxIterations) {
         if (!budgetGraceUsed) {
@@ -711,6 +713,9 @@ export class TaskLoop {
       // Still empty after summary request — give up gracefully
       status = hadToolCalls ? "empty_response" : "success";
       break;
+      }
+    } finally {
+      this.removeRunPrependedMessages();
     }
 
     if (this.aborted && status === "success") {
@@ -784,6 +789,46 @@ export class TaskLoop {
   private pushMessage(msg: Message): void {
     this.messages.push(msg);
     this.estimatedTokens += estimateMessageTokens([msg]);
+  }
+
+  private installRunPrependedMessages(
+    prependedMessages: ReadonlyArray<Message> | undefined,
+  ): void {
+    if (!prependedMessages || prependedMessages.length === 0) {
+      this.runPrependedState = null;
+      return;
+    }
+
+    const messages = [...prependedMessages];
+    const tokenCount = estimateMessageTokens(messages);
+    this.runPrependedState = {
+      insertionIndex: this.messages.length,
+      messages,
+      tokenCount,
+    };
+    this.estimatedTokens += tokenCount;
+  }
+
+  private removeRunPrependedMessages(): void {
+    if (!this.runPrependedState) {
+      return;
+    }
+
+    this.estimatedTokens = Math.max(0, this.estimatedTokens - this.runPrependedState.tokenCount);
+    this.runPrependedState = null;
+  }
+
+  private getMessagesForProvider(): ReadonlyArray<Message> {
+    if (!this.runPrependedState) {
+      return this.messages;
+    }
+
+    const { insertionIndex, messages } = this.runPrependedState;
+    return [
+      ...this.messages.slice(0, insertionIndex),
+      ...messages,
+      ...this.messages.slice(insertionIndex),
+    ];
   }
 
   // ─── Private ────────────────────────────────────────────────
@@ -1858,6 +1903,7 @@ export class TaskLoop {
 
   private delegateBatchId: string | null = null;
   private delegateBatchIteration: number | null = null;
+  private runPrependedState: RunPrependedState | null = null;
 
   private isParallelReadonlyDelegateCall(
     toolCall: PendingToolCall,
@@ -1880,7 +1926,7 @@ export class TaskLoop {
     const toolCalls: PendingToolCall[] = [];
     const pendingToolArgs = new Map<string, { name: string; chunks: string[] }>();
 
-    const stream = this.provider.chat(this.messages, tools);
+    const stream = this.provider.chat(this.getMessagesForProvider(), tools);
 
     for await (const chunk of stream) {
       switch (chunk.type) {

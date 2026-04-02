@@ -71,7 +71,9 @@ const COMMANDS: readonly PromptCommandName[] = ["review", "simplify"];
 const AUTO_TARGET: PromptCommandTarget = { kind: "auto" };
 const SIMPLIFY_LOCAL_FILE_THRESHOLD = 1;
 const SIMPLIFY_LOCAL_LINE_THRESHOLD = 40;
-const REVIEW_FINDING_PATTERN = /^(?:[-*]\s*)?\[(error|warning|info)\]\s+`?([^`\n]+?)`?(?::(\d+))?\s+[—-]\s+(.+)$/i;
+const REVIEW_BLOCKING_FINDING_PATTERN = /^(?:[-*]\s*)?\[(error|warning)\]\s+`?([^`\n]+?)`?(?::(\d+))?\s+[—-]\s+(.+)$/i;
+const REVIEW_NON_BLOCKING_SUGGESTION_PATTERN = /^(?:[-*]\s+)(?:`?([^`\n]+?)`?(?::(\d+))?\s+[—-]\s+)?(.+)$/i;
+const REVIEW_CODE_HEALTH_VERDICT_PATTERN = /\boverall:\s+.+code health\b/i;
 
 function isBoundaryBefore(char: string | undefined): boolean {
   return !char || /\s|[([{'"`,;!?]/.test(char);
@@ -298,6 +300,22 @@ function buildVerificationInstruction(segment: ResolvedPromptCommandSegment): st
   return "   Run focused verification after meaningful edits and report what you did or did not run.";
 }
 
+function buildReviewDelegationInstruction(
+  segment: ResolvedPromptCommandSegment,
+): string[] {
+  if (segment.delegatePreference === "forbid") {
+    return [
+      "   Do not spawn reviewer delegates for this step unless you need targeted independent evidence.",
+    ];
+  }
+
+  return [
+    "   Launch three readonly `reviewer` delegates before concluding.",
+    "   Use distinct lanes for correctness/regressions, tests/contracts, and performance/fail-fast risks.",
+    "   Aggregate the delegates' blocking issues, then produce one final review.",
+  ];
+}
+
 function buildWorkflowStep(
   segment: ResolvedPromptCommandSegment,
   index: number,
@@ -318,15 +336,18 @@ function buildWorkflowStep(
     stepLines.push("   Requirements:");
     stepLines.push("   Invoke the `review` skill before starting this step.");
     stepLines.push(`   Review the pre-loaded ${humanizeTarget(segment.target)} first.`);
-    if (segment.delegatePreference === "forbid") {
-      stepLines.push("   Do not spawn reviewer delegates for this step unless you need targeted independent evidence.");
-    } else if (segment.delegatePreference === "force") {
-      stepLines.push("   Use readonly `reviewer` delegates for at least one independent verification lane before concluding.");
-    } else {
-      stepLines.push("   Use readonly `reviewer` delegates when helpful for independent verification lanes.");
-    }
-    stepLines.push("   Return findings first with severity, file, and rationale for each finding.");
-    stepLines.push("   Structure the final answer as: Findings, Open Questions / Assumptions, Short Summary.");
+    stepLines.push(...buildReviewDelegationInstruction(segment));
+    stepLines.push("   Classify issues into blocking defects vs non-blocking suggestions.");
+    stepLines.push("   Reserve blocking findings for correctness, regressions, security, fail-fast violations, contract drift, serious missing coverage, or material performance risks.");
+    stepLines.push("   Focus on blocking issues first. Keep non-blocking suggestions brief and only include them when they are genuinely worthwhile.");
+    stepLines.push("   Put stylistic, readability, naming, and minor maintainability comments into Non-blocking Suggestions instead of blocking findings.");
+    stepLines.push("   Do not block on optional polish or chase perfection.");
+    stepLines.push("   Do not narrate your process, review steps, or delegate work.");
+    stepLines.push("   Do not add any preamble, status update, or duplicate headings.");
+    stepLines.push("   Start immediately with `Blocking Findings`.");
+    stepLines.push("   Every blocking finding must include severity, file, and rationale.");
+    stepLines.push("   Structure the final answer as: Blocking Findings, Non-blocking Suggestions, Open Questions / Assumptions, Short Summary.");
+    stepLines.push("   In Short Summary, include an explicit code-health verdict such as `Overall: improves code health` or `Overall: does not improve code health`.");
   } else {
     stepLines.push("   Requirements:");
     stepLines.push("   Invoke the `simplify` skill before starting this step.");
@@ -399,7 +420,13 @@ function collectSection(lines: ReadonlyArray<string>, startIndex: number): strin
   for (let index = startIndex + 1; index < lines.length; index++) {
     const line = lines[index]!;
     const heading = normalizeHeading(line);
-    if (heading === "findings" || heading === "open questions / assumptions" || heading === "short summary" || heading === "summary") {
+    if (
+      heading === "blocking findings" ||
+      heading === "non-blocking suggestions" ||
+      heading === "findings" ||
+      heading === "open questions / assumptions" ||
+      heading === "short summary"
+    ) {
       break;
     }
     section.push(line);
@@ -408,34 +435,51 @@ function collectSection(lines: ReadonlyArray<string>, startIndex: number): strin
 }
 
 function extractReviewSections(candidate: string): {
-  readonly findings: ReadonlyArray<string>;
+  readonly blockingFindings: ReadonlyArray<string>;
+  readonly nonBlockingSuggestions: ReadonlyArray<string>;
   readonly openQuestions: ReadonlyArray<string>;
   readonly summary: ReadonlyArray<string>;
 } | null {
   const lines = candidate.split("\n");
-  let findingsIndex = -1;
-  let openQuestionsIndex = -1;
-  let summaryIndex = -1;
+  const headings: Array<{ readonly heading: string; readonly index: number }> = [];
 
-  for (const [index, line] of lines.entries()) {
-    const heading = normalizeHeading(line);
-    if (heading === "findings") findingsIndex = index;
-    if (heading === "open questions / assumptions") openQuestionsIndex = index;
-    if (heading === "short summary" || heading === "summary") summaryIndex = index;
+  for (let index = 0; index < lines.length; index++) {
+    const heading = normalizeHeading(lines[index]!);
+    if (
+      heading === "blocking findings" ||
+      heading === "non-blocking suggestions" ||
+      heading === "open questions / assumptions" ||
+      heading === "short summary"
+    ) {
+      headings.push({ heading, index });
+    }
   }
 
-  if (findingsIndex === -1 || openQuestionsIndex === -1 || summaryIndex === -1) {
+  const expected = [
+    "blocking findings",
+    "non-blocking suggestions",
+    "open questions / assumptions",
+    "short summary",
+  ] as const;
+  const firstNonEmptyLineIndex = lines.findIndex((line) => line.trim().length > 0);
+
+  if (
+    firstNonEmptyLineIndex !== headings[0]?.index ||
+    headings.length !== expected.length ||
+    headings.some((entry, index) => entry.heading !== expected[index])
+  ) {
     return null;
   }
 
   return {
-    findings: collectSection(lines, findingsIndex),
-    openQuestions: collectSection(lines, openQuestionsIndex),
-    summary: collectSection(lines, summaryIndex),
+    blockingFindings: collectSection(lines, headings[0]!.index),
+    nonBlockingSuggestions: collectSection(lines, headings[1]!.index),
+    openQuestions: collectSection(lines, headings[2]!.index),
+    summary: collectSection(lines, headings[3]!.index),
   };
 }
 
-function findingsSectionIsValid(lines: ReadonlyArray<string>): boolean {
+function blockingFindingsSectionIsValid(lines: ReadonlyArray<string>): boolean {
   const contentLines = lines.map((line) => line.trim()).filter(Boolean);
   if (contentLines.length === 0) {
     return false;
@@ -445,7 +489,7 @@ function findingsSectionIsValid(lines: ReadonlyArray<string>): boolean {
   }
 
   return contentLines.every((line) => {
-    const match = line.match(REVIEW_FINDING_PATTERN);
+    const match = line.match(REVIEW_BLOCKING_FINDING_PATTERN);
     if (!match) return false;
     const file = match[2]?.trim() ?? "";
     const rationale = match[4]?.trim() ?? "";
@@ -453,12 +497,38 @@ function findingsSectionIsValid(lines: ReadonlyArray<string>): boolean {
   });
 }
 
+function nonBlockingSuggestionsSectionIsValid(lines: ReadonlyArray<string>): boolean {
+  const contentLines = lines.map((line) => line.trim()).filter(Boolean);
+  if (contentLines.length === 0) {
+    return false;
+  }
+  if (contentLines.length === 1 && /\b(no suggestions|no non-blocking suggestions|none)\b/i.test(contentLines[0]!)) {
+    return true;
+  }
+
+  return contentLines.every((line) => {
+    const match = line.match(REVIEW_NON_BLOCKING_SUGGESTION_PATTERN);
+    if (!match) {
+      return false;
+    }
+    const suggestionText = match[3]?.trim() ?? "";
+    if (suggestionText.length < 8) {
+      return false;
+    }
+    const file = match[1]?.trim() ?? "";
+    return !file || looksLikePath(file);
+  });
+}
+
 function buildReviewRetryMessage(): string {
   return [
     "Your previous /review response was not in the required final format.",
-    "Return exactly three sections: Findings, Open Questions / Assumptions, Short Summary.",
-    "Every finding must include severity, file, and rationale using `[error|warning|info] path:line - rationale`.",
-    "If there are no issues, say so explicitly inside Findings and summarize that no issues were found.",
+    "Do not add any preamble, process narration, or duplicated sections.",
+    "Start immediately with `Blocking Findings`.",
+    "Return exactly four sections in this order: Blocking Findings, Non-blocking Suggestions, Open Questions / Assumptions, Short Summary.",
+    "Every blocking finding must include severity, file, and rationale using `[error|warning] path:line - rationale`.",
+    "Non-blocking Suggestions must contain either bullet suggestions or explicit `None.`.",
+    "Short Summary must include an `Overall: ... code health` verdict.",
   ].join(" ");
 }
 
@@ -474,11 +544,14 @@ export function createPromptCommandFinalTextValidator(
     if (!sections) {
       return { valid: false, retryMessage: buildReviewRetryMessage() };
     }
-    if (!findingsSectionIsValid(sections.findings)) {
+    if (!blockingFindingsSectionIsValid(sections.blockingFindings)) {
+      return { valid: false, retryMessage: buildReviewRetryMessage() };
+    }
+    if (!nonBlockingSuggestionsSectionIsValid(sections.nonBlockingSuggestions)) {
       return { valid: false, retryMessage: buildReviewRetryMessage() };
     }
     const summaryText = sections.summary.join("\n").trim();
-    if (!summaryText) {
+    if (!summaryText || !REVIEW_CODE_HEALTH_VERDICT_PATTERN.test(summaryText)) {
       return { valid: false, retryMessage: buildReviewRetryMessage() };
     }
     return { valid: true };

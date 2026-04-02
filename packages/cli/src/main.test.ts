@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadQueryFromFile, parseArgs, renderHelpText } from "./main.js";
+import { loadQueryFromFile, parseArgs, renderHelpText, resolveAutoPromptCommandTarget } from "./main.js";
 
 describe("parseArgs", () => {
   it("parses --file <path>", () => {
@@ -56,5 +56,23 @@ describe("renderHelpText", () => {
     expect(help).not.toContain("devagent chat");
     expect(help).not.toContain("--plan");
     expect(help).not.toContain("session inspect");
+  });
+});
+
+describe("resolveAutoPromptCommandTarget", () => {
+  it("falls back to last-commit when the repo is clean and no path filters are provided", () => {
+    const runner = vi.fn(() => "");
+
+    expect(resolveAutoPromptCommandTarget("/repo", [], runner)).toEqual({ kind: "last-commit" });
+    expect(runner).toHaveBeenNthCalledWith(1, "git diff --name-only", "/repo");
+    expect(runner).toHaveBeenNthCalledWith(2, "git diff --cached --name-only", "/repo");
+  });
+
+  it("stays on local scope when path-filtered diffs are empty", () => {
+    const runner = vi.fn(() => "");
+
+    expect(resolveAutoPromptCommandTarget("/repo", ["packages/cli"], runner)).toEqual({ kind: "unstaged" });
+    expect(runner).toHaveBeenNthCalledWith(1, "git diff --name-only -- 'packages/cli'", "/repo");
+    expect(runner).toHaveBeenNthCalledWith(2, "git diff --cached --name-only -- 'packages/cli'", "/repo");
   });
 });

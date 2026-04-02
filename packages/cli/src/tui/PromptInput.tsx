@@ -221,7 +221,8 @@ export function PromptInput({ onSubmit, placeholder = "Ask anything… use /revi
 export function getCompletions(input: string, cwd?: string): string[] {
   const lastWordMatch = input.match(/(?:^|\s)(\S+)$/);
   const lastWord = lastWordMatch?.[1] ?? "";
-  if (lastWord.startsWith("/")) {
+  const looksLikeSlashCommand = lastWord.startsWith("/") && !lastWord.slice(1).includes("/");
+  if (looksLikeSlashCommand) {
     const prefix = input.slice(0, input.length - lastWord.length);
     return SLASH_COMMANDS
       .filter((command) => command.startsWith(lastWord))

@@ -190,6 +190,47 @@ describe("TaskLoop", () => {
     ]);
   });
 
+  it("does not leak prepended messages into later runs", async () => {
+    const seenMessages: Message[][] = [];
+    const provider: LLMProvider = {
+      id: "capture",
+      async *chat(messages): AsyncIterable<StreamChunk> {
+        seenMessages.push([...messages]);
+        yield { type: "text", content: "Done" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "You are a test assistant.",
+      repoRoot: "/tmp",
+    });
+
+    await loop.run("Inspect the diff", {
+      prependedMessages: [
+        {
+          role: MessageRole.USER,
+          content: "Pre-loaded diff",
+          pinned: true,
+        },
+      ],
+    });
+
+    await loop.run("Second turn");
+
+    expect(seenMessages).toHaveLength(2);
+    expect(seenMessages[0]?.map((message) => message.content)).toContain("Pre-loaded diff");
+    expect(seenMessages[1]?.map((message) => message.content)).not.toContain("Pre-loaded diff");
+  });
+
   it("injects seeded session state before the first provider call", async () => {
     const sessionState = new SessionState({ persist: false });
     sessionState.recordReadonlyCoverage("read_file", "src/already-read.ts");

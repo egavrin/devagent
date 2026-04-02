@@ -2,7 +2,7 @@
  * App — top-level Ink TUI application for devagent interactive mode.
  */
 
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback } from "react";
 import { Box, Text, Static, useInput, useApp } from "ink";
 import { PromptInput } from "./PromptInput.js";
 import { StatusBar } from "./StatusBar.js";
@@ -19,12 +19,6 @@ import type { LogEntry } from "./shared.js";
 import type { EventBus } from "@devagent/runtime";
 
 export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline";
-
-// Show last N lines of streaming text without expensive markdown parsing
-function renderStreamingPreview(text: string): string {
-  const lines = text.split("\n");
-  return (lines.length > 20 ? lines.slice(-20) : lines).join("\n");
-}
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -49,31 +43,6 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const [streamingFinalText, setStreamingFinalText] = useState("");
-  const [streamingDone, setStreamingDone] = useState(false);
-
-  // Throttle streaming updates: accumulate in ref, flush to state every 50ms
-  const streamingBufferRef = useRef("");
-  const throttleRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const startStreamingThrottle = useCallback(() => {
-    streamingBufferRef.current = "";
-    if (throttleRef.current) clearInterval(throttleRef.current);
-    throttleRef.current = setInterval(() => {
-      setStreamingFinalText(streamingBufferRef.current);
-    }, 50);
-  }, []);
-
-  const stopStreamingThrottle = useCallback(() => {
-    if (throttleRef.current) {
-      clearInterval(throttleRef.current);
-      throttleRef.current = null;
-    }
-    streamingBufferRef.current = "";
-  }, []);
-
-  // Cleanup on unmount
-  useEffect(() => () => { if (throttleRef.current) clearInterval(throttleRef.current); }, []);
 
   const {
     log, status, subagents, spinnerMessage,
@@ -84,8 +53,6 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
     bus, model, approvalMode,
     collapseFailures: true,
     compactPlanProgress: true,
-    onStreamingText: (content) => { streamingBufferRef.current += content; },
-    onToolStart: () => { stopStreamingThrottle(); setStreamingFinalText(""); },
     onApproval: (e) => setPendingApproval({ id: e.id, toolName: e.toolName, details: e.details }),
   });
 
@@ -160,18 +127,13 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
     refs.turnStart.current = Date.now();
     refs.turnToolCount.current = 0;
     refs.costAccum.current = 0;
-    startStreamingThrottle();
 
     let result: { iterations: number; toolCalls: number; lastText: string | null } = { iterations: 0, toolCalls: 0, lastText: null };
     try {
       result = await onQuery(trimmed);
       flushThinking();
       flushGroup();
-      stopStreamingThrottle();
-
-      // Hide streaming preview and add Static entry atomically
-      setStreamingDone(true);
-      const finalText = refs.textBuffer.current.trim() || result.lastText;
+      const finalText = result.lastText;
       if (finalText) {
         addLog({ id: nextId("final"), type: "final-output", data: { text: finalText } });
       }
@@ -186,15 +148,12 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
     } catch (err) {
       addLog({ id: nextId("error"), type: "error", data: { message: err instanceof Error ? err.message : String(err), code: "QUERY_ERROR" } });
     } finally {
-      stopStreamingThrottle();
       setRunning(false);
       setSubagents(new Map());
-      setStreamingFinalText("");
-      setStreamingDone(false);
       setSpinnerMessage(undefined);
       refs.textBuffer.current = "";
     }
-  }, [onQuery, onClear, exit, addLog, flushThinking, flushGroup, nextId, refs, setStatus, setSubagents, setSpinnerMessage, startStreamingThrottle, stopStreamingThrottle]);
+  }, [onQuery, onClear, exit, addLog, flushThinking, flushGroup, nextId, refs, setStatus, setSubagents, setSpinnerMessage]);
 
   const handleApproval = useCallback((approved: boolean, always?: boolean, reason?: string) => {
     if (!pendingApproval) return;
@@ -250,13 +209,6 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
           return <LogEntryView key={entry.id} entry={entry as LogEntry} />;
         }}
       </Static>
-
-      {streamingFinalText && !streamingDone && (
-        <Box borderLeft borderColor="green" paddingLeft={1}>
-          <Text>{renderStreamingPreview(streamingFinalText)}</Text>
-        </Box>
-      )}
-
       {hasActiveSubagents && <SubagentPanel agents={subagents} />}
       {pendingApproval && <ApprovalDialog request={pendingApproval} onResponse={handleApproval} />}
       {showCommandPalette && <CommandPalette commands={commands} onClose={() => setShowCommandPalette(false)} />}

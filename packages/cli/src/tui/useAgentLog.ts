@@ -59,12 +59,6 @@ export interface UseAgentLogResult {
   };
 }
 
-// ─── Hook ──────────────────────────────────────────────────
-
-function stripMarkdown(text: string): string {
-  return text.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
-}
-
 export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
   const {
     bus, model, approvalMode,
@@ -112,21 +106,11 @@ export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
   }, [addLog]);
 
   const flushThinking = useCallback(() => {
-    const text = textBufferRef.current.trim();
-    if (text) {
-      for (const line of text.split("\n").filter((l) => l.trim()).slice(0, 3)) {
-        addLog({
-          id: nextId("reasoning"), type: "reasoning",
-          data: { text: stripMarkdown(line.length > 120 ? line.slice(0, 117) + "..." : line) },
-        });
-      }
-    }
     if (thinkingStartRef.current !== null) {
       const duration = Date.now() - thinkingStartRef.current;
       if (duration > 500) addLog({ id: nextId("think-dur"), type: "thinking-duration", data: { durationMs: duration } });
       thinkingStartRef.current = null;
     }
-    textBufferRef.current = "";
   }, [addLog]);
 
   // Wire bus events
@@ -150,7 +134,6 @@ export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
     unsubs.push(bus.on("message:assistant", (e) => {
       if (e.agentId) return;
       if (e.partial) {
-        textBufferRef.current += e.content;
         if (e.chunk?.type === "text") onStreamingText?.(e.content);
         if (e.chunk?.type === "thinking" && thinkingStartRef.current === null) thinkingStartRef.current = Date.now();
       }

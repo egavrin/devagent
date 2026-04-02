@@ -2246,19 +2246,24 @@ function loadLocalDiffTarget(
   return truncateToolOutput(output);
 }
 
-function resolveAutoPromptCommandTarget(
+export function resolveAutoPromptCommandTarget(
   repoRoot: string,
   pathFilters: ReadonlyArray<string> = [],
+  runGit: (command: string, repoRoot: string) => string | null = runGitTextCommand,
 ): ResolvedPromptCommandTarget {
   const suffix = buildDiffScopeSuffix(pathFilters);
-  const unstaged = runGitTextCommand(`git diff --name-only${suffix}`, repoRoot);
+  const unstaged = runGit(`git diff --name-only${suffix}`, repoRoot);
   if (unstaged?.trim()) {
     return { kind: "unstaged" };
   }
 
-  const staged = runGitTextCommand(`git diff --cached --name-only${suffix}`, repoRoot);
+  const staged = runGit(`git diff --cached --name-only${suffix}`, repoRoot);
   if (staged?.trim()) {
     return { kind: "staged" };
+  }
+
+  if (pathFilters.length > 0) {
+    return { kind: "unstaged" };
   }
 
   return { kind: "last-commit" };
