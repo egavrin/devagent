@@ -879,11 +879,23 @@ export class TaskLoop {
         this.reinjectSkillContent();
         this.resetPostCompactionState(true);
         this.estimatedTokens = estimateMessageTokens(this.messages);
+        const postTokens = this.estimatedTokens;
         this.bus.emit("context:compacted", {
           removedCount: 0,
-          estimatedTokens: this.estimatedTokens,
+          estimatedTokens: postTokens,
           tokensBefore: estimatedTokens,
         });
+
+        // Warn if session memory compaction was aggressive
+        const smReduction = estimatedTokens > 0 ? (estimatedTokens - postTokens) / estimatedTokens : 0;
+        if (smReduction > 0.5) {
+          this.bus.emit("error", {
+            message: `Aggressive compaction: ${Math.round(smReduction * 100)}% reduction (${estimatedTokens} → ${postTokens} tokens) via session memory. Critical context may be lost.`,
+            code: "COMPACTION_AGGRESSIVE",
+            fatal: false,
+          });
+        }
+
         return; // Session memory compaction was sufficient
       }
     }

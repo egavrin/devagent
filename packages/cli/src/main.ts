@@ -76,9 +76,14 @@ import {
   formatSessionSummary,
   formatCompactionResult,
   formatReasoning,
+  setTerminalTitle,
+  terminalBell,
+  formatDiffPreview,
 } from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { OutputState } from "./output-state.js";
+import { StatusLine } from "./status-line.js";
+import { renderMarkdown } from "./markdown-render.js";
 import type { SubagentDisplayState } from "./output-state.js";
 import { buildProviderConfig } from "./provider-config.js";
 import { createSkillInfrastructure } from "./skill-setup.js";
@@ -127,6 +132,7 @@ interface CliArgs {
   verbosity: Verbosity;
   verboseCategories: string | undefined;
   authCommand: string | null;
+  sessionsCommand: boolean;
   resume: string | null;
   continue_: boolean;
   review: ReviewArgs | null;
@@ -228,6 +234,7 @@ export function parseArgs(argv: string[]): CliArgs {
     verbosity: "normal",
     verboseCategories: undefined,
     authCommand: null,
+    sessionsCommand: false,
     resume: null,
     continue_: false,
     review: null,
@@ -235,6 +242,11 @@ export function parseArgs(argv: string[]): CliArgs {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
+
+    if (arg === "sessions") {
+      result.sessionsCommand = true;
+      break;
+    }
 
     if (arg === "review") {
       // devagent review <file> [--rule <rule_file>] [--json] [--provider <p>] [--model <m>]
@@ -315,8 +327,10 @@ export function renderHelpText(): string {
 devagent — AI-powered development agent
 
 Usage:
+  devagent                         Interactive mode (REPL)
   devagent "<query>"              Natural language query
   devagent -f <path>               Read query from file
+  devagent sessions                List recent sessions
   devagent review <file> --rule <rule_file> [--json]
                                   Rule-based patch review
 
@@ -477,6 +491,7 @@ interface ToolsSetupResult {
   readonly gate: ApprovalGate;
   readonly verbosityConfig: VerbosityConfig;
   readonly lspToolCounts: Map<string, number>;
+  readonly statusLine: StatusLine | null;
   readonly trackInternalLSPDiagnostics: () => void;
   /** Mutable — may be swapped on resume. Access via getter closure. */
   sessionState: SessionState;
@@ -500,7 +515,46 @@ async function setupTools(
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
   const verbosityConfig = buildVerbosityConfig(cliArgs.verbosity, cliArgs.verboseCategories);
-  const { lspToolCounts } = setupEventHandlers(bus, config, cliArgs.verbosity, verbosityConfig);
+  // When TUI (Ink) will handle rendering, skip the ANSI event handlers
+  // that write to stderr — they would corrupt Ink's output.
+  // Still set up session-level tracking (cost, tool counts) via bus events below.
+  const willUseTui = (process.stderr.isTTY ?? false) && cliArgs.verbosity !== "quiet";
+  const { lspToolCounts, statusLine } = willUseTui
+    ? { lspToolCounts: new Map<string, number>(), statusLine: null }
+    : setupEventHandlers(bus, config, cliArgs.verbosity, verbosityConfig);
+
+  // In TUI mode, setupEventHandlers is skipped — register minimal tracking
+  // so OutputState has session-level metrics for the turn/session summary.
+  if (willUseTui) {
+    bus.on("cost:update", (event) => {
+      outputState.sessionTotalInputTokens += event.inputTokens;
+      outputState.sessionTotalOutputTokens += event.outputTokens;
+      outputState.sessionTotalCost += event.totalCost;
+      outputState.turnInputTokens += event.inputTokens;
+      outputState.turnCostDelta += event.totalCost;
+    });
+    bus.on("iteration:start", (event) => {
+      if (!event.agentId) {
+        outputState.currentIteration = event.iteration;
+        outputState.currentTokens = event.estimatedTokens;
+        outputState.maxContextTokens = event.maxContextTokens;
+        outputState.sessionTotalIterations++;
+      }
+    });
+    bus.on("tool:before", (event) => {
+      if (!event.name.startsWith("audit:")) {
+        outputState.sessionTotalToolCalls++;
+        outputState.turnToolCallCount++;
+        outputState.hadToolCalls = true;
+        outputState.sessionToolUsage.set(event.name, (outputState.sessionToolUsage.get(event.name) ?? 0) + 1);
+      }
+    });
+    bus.on("message:assistant", (event) => {
+      if (!event.agentId && event.partial) {
+        outputState.textBuffer += event.content;
+      }
+    });
+  }
   const trackInternalLSPDiagnostics = () => {
     const key = "diagnostics(double-check)";
     lspToolCounts.set(key, (lspToolCounts.get(key) ?? 0) + 1);
@@ -528,7 +582,7 @@ async function setupTools(
   let findingToolCallCount = 0;
   bus.on("tool:after", () => { findingToolCallCount++; });
   toolRegistry.register(createFindingTool(() => sessionState, () => findingToolCallCount));
-  if (skills.size > 0 && cliArgs.verbosity !== "quiet") {
+  if (skills.size > 0 && cliArgs.verbosity !== "quiet" && !willUseTui) {
     process.stderr.write(dim(`[skills] Discovered ${skills.size} skill(s)`) + "\n");
   }
 
@@ -587,14 +641,14 @@ async function setupTools(
 
   const doubleCheck = new DoubleCheck(effectiveDoubleCheck, bus);
 
-  if (effectiveDoubleCheck.enabled && cliArgs.verbosity !== "quiet") {
+  if (effectiveDoubleCheck.enabled && cliArgs.verbosity !== "quiet" && !willUseTui) {
     process.stderr.write(dim("[double-check] Validation enabled") + "\n");
   }
 
   // Wire test runner (works without LSP — just needs a shell)
   if (effectiveDoubleCheck.testCommand) {
     doubleCheck.setTestRunner(createShellTestRunner(projectRoot));
-    if (autoTestCommand && cliArgs.verbosity !== "quiet") {
+    if (autoTestCommand && cliArgs.verbosity !== "quiet" && !willUseTui) {
       process.stderr.write(dim(`[double-check] Auto-detected test command: ${autoTestCommand}`) + "\n");
     }
   }
@@ -608,6 +662,7 @@ async function setupTools(
     gate,
     verbosityConfig,
     lspToolCounts,
+    statusLine,
     trackInternalLSPDiagnostics,
     sessionState,
     skills,
@@ -734,7 +789,9 @@ async function setupLSP(
       arktsProvider: arktsProviderForLazy,
       onLSPDiagnostics: trackInternalLSPDiagnostics,
       onServerStarted: (server) => {
-        if (cliArgs.verbosity !== "quiet") {
+        // Only write to stderr in single-shot mode (query provided).
+        // In TUI mode (no query), Ink owns stderr — writing here corrupts output.
+        if (cliArgs.verbosity !== "quiet" && cliArgs.query) {
           spinner.log(
             dim(`[lsp] Auto-detected: ${server.command} (${server.languages.join(", ")})`),
           );
@@ -743,7 +800,6 @@ async function setupLSP(
       onUpgradeComplete: (count) => {
         if (count > 0) {
           hasLSPDiagnostics = true;
-          // Register routing LSP tools (routes to correct server by file extension)
           const clients = lazyRouter.getClients();
           if (clients.length > 0) {
             const resolver = (filePath: string) => lazyRouter.getClientForFile(filePath);
@@ -751,12 +807,12 @@ async function setupLSP(
               toolRegistry.register(tool);
             }
           }
-          if (cliArgs.verbosity !== "quiet") {
+          if (cliArgs.verbosity !== "quiet" && cliArgs.query) {
             spinner.log(
               dim(`[lsp] Upgraded to LSP diagnostics (${count} server(s))`),
             );
           }
-        } else if (cliArgs.verbosity !== "quiet") {
+        } else if (cliArgs.verbosity !== "quiet" && cliArgs.query) {
           spinner.log(dim("[double-check] Using compiler fallback diagnostics (no LSP servers in PATH)"));
         }
       },
@@ -1002,6 +1058,29 @@ export async function main(): Promise<void> {
 
   const cliArgs = parseArgs(process.argv);
 
+  // Sessions command — list recent sessions
+  if (cliArgs.sessionsCommand) {
+    const { SessionStore } = await import("@devagent/runtime");
+    const store = new SessionStore();
+    const sessions = store.listSessions(20);
+    if (sessions.length === 0) {
+      process.stderr.write(dim("No sessions found.\n"));
+    } else {
+      process.stderr.write(bold("Recent sessions:") + "\n\n");
+      for (const session of sessions) {
+        const date = new Date(session.updatedAt).toLocaleDateString();
+        const time = new Date(session.updatedAt).toLocaleTimeString();
+        const meta = session.metadata as Record<string, unknown> | undefined;
+        const cost = typeof meta?.["totalCost"] === "number"
+          ? green(` $${(meta["totalCost"] as number).toFixed(4)}`)
+          : "";
+        process.stderr.write(`  ${dim(session.id.slice(0, 8))} ${dim(date)} ${dim(time)}${cost}\n`);
+      }
+      process.stderr.write(dim(`\nUse --resume <id> to continue a session.\n`));
+    }
+    return;
+  }
+
   // Auth commands — handle before config loading (doesn't need provider setup)
   if (cliArgs.authCommand) {
     const { runAuthCommand } = await import("./auth.js");
@@ -1124,13 +1203,77 @@ export async function main(): Promise<void> {
       ? loadQueryFromFile(cliArgs.file, nodeReadFileSync, cliArgs.query)
       : cliArgs.query;
     if (!query) {
-      process.stderr.write(formatError("Query required. Use `devagent \"<query>\"`, `-f <path>`, or `devagent review ...`.") + "\n");
-      process.exit(1);
+      // No query — start interactive mode
+      // Use TUI (Ink) when stdin is a TTY, fall back to error when piped
+      if (!process.stdin.isTTY) {
+        process.stderr.write(formatError("Interactive mode requires a terminal. Provide a query: devagent \"<query>\"") + "\n");
+        process.exit(1);
+      }
+      const { startTui } = await import("./tui/index.js");
+      await startTui({
+        bus: tools.bus,
+        model: config.model,
+        approvalMode: config.approval.mode,
+        cwd: projectRoot,
+        version: "0.1.0",
+        onListSessions: () => {
+          try {
+            const sessions = persistence.sessionStore.listSessions(15);
+            return sessions.map((s) => ({
+              id: s.id,
+              updatedAt: s.updatedAt,
+              cost: (s.metadata as Record<string, unknown> | undefined)?.["totalCost"] as number | undefined,
+            }));
+          } catch { return []; }
+        },
+        onQuery: async (q) => {
+          outputState.resetTurn();
+          // Run query but skip flushOutput — TUI handles display via bus events
+          await runTuiQuery({ ...commonOptions, query: q });
+          return {
+            iterations: outputState.currentIteration,
+            toolCalls: outputState.turnToolCallCount,
+            lastText: outputState.textBuffer.trim() || null,
+          };
+        },
+        onClear: () => {
+          outputState.resetSession();
+          tools.sessionState = new SessionState(config.sessionState);
+          tuiLoop = null; // Reset persistent loop on /clear
+        },
+      });
+    } else if (process.stderr.isTTY && cliArgs.verbosity !== "quiet") {
+      // Single-shot with TUI rendering (unified path)
+      const { startSingleShotTui } = await import("./tui/index.js");
+      await startSingleShotTui({
+        bus: tools.bus,
+        query,
+        model: config.model,
+        approvalMode: config.approval.mode,
+        onQuery: async (q) => {
+          outputState.resetTurn();
+          await runSingleQuery({ ...commonOptions, query: q });
+          return {
+            iterations: outputState.currentIteration,
+            toolCalls: outputState.turnToolCallCount,
+            lastText: outputState.textBuffer.trim() || null,
+          };
+        },
+        onFinalOutput: (text) => {
+          // Write final output to stdout (outside Ink)
+          const rendered = process.stdout.isTTY
+            ? renderMarkdown(text)
+            : text;
+          process.stdout.write(rendered + "\n");
+        },
+      });
+    } else {
+      // Non-TTY or quiet mode — use old ANSI path (pipe-compatible)
+      await runSingleQuery({
+        ...commonOptions,
+        query,
+      });
     }
-    await runSingleQuery({
-      ...commonOptions,
-      query,
-    });
   } finally {
     crashSessionReporter.dispose();
 
@@ -1190,6 +1333,35 @@ export async function main(): Promise<void> {
 /** Shared spinner instance — started during LLM thinking, stopped on tool/text events. */
 const spinner = new Spinner();
 
+/** Extract a 1-line preview from tool output for key tools. */
+function extractToolPreview(toolName: string, output: string): string | null {
+  if (!output || output.length < 10) return null;
+
+  if (toolName === "search_files") {
+    const match = output.match(/^(\d+) match/);
+    if (match) return output.split("\n")[0]!.slice(0, 80);
+    return null;
+  }
+
+  if (toolName === "run_command") {
+    // Show first non-empty line of stdout, truncated
+    const lines = output.split("\n").filter((l) => l.trim() && !l.startsWith("Exit code:"));
+    if (lines.length > 0) {
+      const first = lines[0]!.trim();
+      return first.length > 80 ? first.slice(0, 77) + "..." : first;
+    }
+    return null;
+  }
+
+  if (toolName === "find_files") {
+    const lines = output.split("\n").filter((l) => l.trim());
+    if (lines.length > 0) return `${lines.length} file(s) found`;
+    return null;
+  }
+
+  return null;
+}
+
 /** Centralized mutable output state — replaces former module-level `let` declarations. */
 const outputState = new OutputState();
 
@@ -1199,10 +1371,15 @@ function setupEventHandlers(
   verbosity: Verbosity,
   verbosityConfig?: VerbosityConfig,
   os: OutputState = outputState,
-): { lspToolCounts: Map<string, number> } {
+): { lspToolCounts: Map<string, number>; statusLine: StatusLine | null } {
   const maxIter = config.budget.maxIterations;
   const vc = verbosityConfig ?? buildVerbosityConfig(verbosity, undefined);
   const toolParamsCache = new Map<string, Record<string, unknown>>();
+
+  // Persistent status line — shows cost, tokens, iteration at bottom of terminal
+  const statusLine = verbosity !== "quiet"
+    ? new StatusLine(config.model, config.approval.mode)
+    : null;
   const subagentRenderer = new SubagentPanelRenderer(
     verbosity !== "quiet" || isCategoryEnabled("tools", vc),
   );
@@ -1273,6 +1450,23 @@ function setupEventHandlers(
     os.currentIteration = event.iteration;
     os.currentTokens = event.estimatedTokens;
     os.maxContextTokens = event.maxContextTokens;
+
+    // Update metrics tracker and spinner suffix
+    if (statusLine) {
+      statusLine.update({
+        iteration: event.iteration,
+        maxIterations: event.maxIterations,
+        inputTokens: event.estimatedTokens,
+        maxContextTokens: event.maxContextTokens,
+      });
+      spinner.updateSuffix(statusLine.formatSpinnerSuffix());
+    }
+
+    // Update terminal title
+    const iterLabel = event.maxIterations > 0
+      ? `iter ${event.iteration}/${event.maxIterations}`
+      : `iter ${event.iteration}`;
+    setTerminalTitle(`devagent: ${iterLabel}`);
   });
 
   // ─── Tool events ──────────────────────────────────────────
@@ -1283,11 +1477,21 @@ function setupEventHandlers(
     // Stop spinner — a tool call arrived
     spinner.stop();
 
-    // Show buffered thinking text as dimmed reasoning, then clear
+    // Show buffered thinking text as dimmed reasoning (up to 3 lines), then clear
     if (os.textBuffer.trim() && verbosity !== "quiet") {
-      const reasoningLine = formatReasoning(os.textBuffer);
-      if (reasoningLine) {
-        spinner.log(reasoningLine);
+      const lines = os.textBuffer.trim().split(/\n/).filter((l: string) => l.trim());
+      const displayLines = lines.slice(0, 3);
+      for (const line of displayLines) {
+        const truncated = line.length > 120 ? line.slice(0, 117) + "..." : line;
+        spinner.log(dim(`  ℹ ${truncated}`));
+      }
+      // Show thinking duration if we tracked it
+      if (os.thinkingStartMs !== null) {
+        const durationMs = Date.now() - os.thinkingStartMs;
+        if (durationMs > 500) {
+          spinner.log(dim(`  ℹ Thought for ${(durationMs / 1000).toFixed(1)}s`));
+        }
+        os.thinkingStartMs = null;
       }
     }
     os.textBuffer = "";
@@ -1411,6 +1615,18 @@ function setupEventHandlers(
         ? event.result.output.substring(0, 500) + "…"
         : event.result.output;
       writeUiLine(dim(`  output: ${output}`));
+    } else if (verbosity !== "quiet" && event.result.success) {
+      // Diff preview for file edits
+      const diffPreview = formatDiffPreview(event.name, event.result.output);
+      if (diffPreview) {
+        writeUi(diffPreview + "\n");
+      }
+
+      // Tool output preview: show 1-line summary for key tools
+      const preview = extractToolPreview(event.name, event.result.output);
+      if (preview) {
+        writeUiLine(dim(`    → ${preview}`));
+      }
     }
 
     // Restart spinner after tool completes
@@ -1573,6 +1789,11 @@ function setupEventHandlers(
     if (event.partial) {
       spinner.stop();
       os.textBuffer += event.content;
+
+      // Track thinking start time
+      if (event.chunk?.type === "thinking" && os.thinkingStartMs === null) {
+        os.thinkingStartMs = Date.now();
+      }
     } else {
       flushToolGroup();
     }
@@ -1606,12 +1827,30 @@ function setupEventHandlers(
 
   // ─── Per-turn and session cost/token tracking ──────────────
 
+  let costWarningFired = false;
+  const costThreshold = config.budget.costWarningThreshold;
+
   bus.on("cost:update", (event) => {
     os.turnInputTokens += event.inputTokens;
     os.turnCostDelta += event.totalCost;
     os.sessionTotalInputTokens += event.inputTokens;
     os.sessionTotalOutputTokens += event.outputTokens;
     os.sessionTotalCost += event.totalCost;
+
+    // Update metrics tracker and spinner suffix
+    if (statusLine) {
+      statusLine.update({
+        cost: os.sessionTotalCost,
+        inputTokens: os.currentTokens || os.sessionTotalInputTokens,
+      });
+      spinner.updateSuffix(statusLine.formatSpinnerSuffix());
+    }
+
+    // Cost budget warning
+    if (!costWarningFired && costThreshold > 0 && os.sessionTotalCost >= costThreshold) {
+      costWarningFired = true;
+      writeUiLine(yellow(`[cost] Session cost $${os.sessionTotalCost.toFixed(4)} exceeds threshold $${costThreshold.toFixed(2)}. Use --max-iterations to limit.`));
+    }
   });
 
   // Session-level iteration and tool tracking
@@ -1653,23 +1892,40 @@ function setupEventHandlers(
 
   bus.on("approval:request", (event) => {
     spinner.stop();
+    statusLine?.suspend();
+
+    // Bordered approval box
+    const border = yellow("─".repeat(60));
+    const toolLine = `  ${bold(event.toolName)}`;
+    const detailLine = `  ${dim(event.details.length > 56 ? event.details.slice(0, 53) + "..." : event.details)}`;
+    process.stderr.write(`\n${border}\n${toolLine}\n${detailLine}\n${border}\n`);
+
     const rl = createInterface({
       input: process.stdin,
-      output: process.stdout,
+      output: process.stderr, // Prompt to stderr, not stdout
     });
     rl.question(
-      yellow(`[approval] ${event.toolName}: ${event.details}\nApprove? (y/n): `),
+      yellow("  Approve? [y]es / [n]o / [a]lways: "),
       (answer) => {
         rl.close();
+        const lower = answer.toLowerCase().trim();
+        const approved = lower.startsWith("y") || lower.startsWith("a");
         bus.emit("approval:response", {
           id: event.id,
-          approved: answer.toLowerCase().startsWith("y"),
+          approved,
+          feedback: lower.startsWith("a") ? "always" : undefined,
         });
+        statusLine?.resume();
       },
     );
   });
 
-  return { lspToolCounts };
+  // Clear status line when session ends
+  bus.on("session:end", () => {
+    statusLine?.clear();
+  });
+
+  return { lspToolCounts, statusLine };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -1741,7 +1997,11 @@ function flushOutput(result: TaskLoopResult, verbosity: Verbosity, os: OutputSta
 
   if (streamed) {
     if (os.hadToolCalls) process.stderr.write("\n");
-    process.stdout.write(os.textBuffer + "\n");
+    // Apply markdown rendering when stdout is a TTY (not piped)
+    const rendered = process.stdout.isTTY
+      ? renderMarkdown(os.textBuffer)
+      : os.textBuffer;
+    process.stdout.write(rendered + "\n");
   } else if (result.lastText?.trim()) {
     // No final response, but the LLM produced text earlier in the session
     if (verbosity !== "quiet") {
@@ -1749,7 +2009,10 @@ function flushOutput(result: TaskLoopResult, verbosity: Verbosity, os: OutputSta
         yellow("[warning] No final response. Showing last output from agent:") + "\n",
       );
     }
-    process.stdout.write(result.lastText + "\n");
+    const renderedLast = process.stdout.isTTY
+      ? renderMarkdown(result.lastText)
+      : result.lastText;
+    process.stdout.write(renderedLast + "\n");
   }
 
   // Status-specific messages
@@ -1932,6 +2195,27 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
   flushOutput(result, verbosity);
 
   if (verbosity !== "quiet") {
+    // File change summary — show created/modified files before turn summary
+    const modifiedFiles = result.messages
+      .filter((m) => m.role === "tool" && m.content)
+      .flatMap((m) => {
+        // Extract file paths from tool result artifacts
+        const toolMsg = result.messages.find(
+          (am) => am.role === "assistant" && am.toolCalls?.some((tc) => tc.callId === m.toolCallId),
+        );
+        if (!toolMsg?.toolCalls) return [];
+        const tc = toolMsg.toolCalls.find((c) => c.callId === m.toolCallId);
+        if (!tc || (tc.name !== "write_file" && tc.name !== "replace_in_file")) return [];
+        const path = tc.arguments["path"];
+        return typeof path === "string" ? [path] : [];
+      });
+    const uniqueFiles = [...new Set(modifiedFiles)];
+    if (uniqueFiles.length > 0) {
+      const fileList = uniqueFiles.slice(0, 5).join(", ");
+      const overflow = uniqueFiles.length > 5 ? ` (+${uniqueFiles.length - 5} more)` : "";
+      process.stderr.write(dim(`[files] ${uniqueFiles.length} modified: ${fileList}${overflow}`) + "\n");
+    }
+
     const elapsed = Date.now() - startTime;
     process.stderr.write(formatTurnSummary({
       iterationCount: result.iterations,
@@ -1940,5 +2224,64 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
       costDelta: outputState.turnCostDelta,
       elapsedMs: elapsed,
     }) + "\n");
+
+    // Ring bell on long runs so the user knows it finished
+    if (elapsed > 30_000) {
+      terminalBell();
+    }
   }
+
+  // Reset terminal title
+  setTerminalTitle("devagent");
+}
+
+// ─── TUI Query (no stdout/stderr writes, persistent loop) ────
+
+let tuiLoop: InstanceType<typeof TaskLoop> | null = null;
+
+async function runTuiQuery(options: RunSingleQueryOptions): Promise<void> {
+  const {
+    query, provider, toolRegistry, bus, gate, config, repoRoot, mode,
+    skills, contextManager, doubleCheck, sessionState,
+  } = options;
+
+  // Create loop once, reuse for multi-turn context
+  if (!tuiLoop) {
+    const systemPrompt = assembleSystemPrompt({
+      mode,
+      repoRoot,
+      skills,
+      availableTools: toolRegistry.getLoaded(),
+      deferredTools: toolRegistry.getDeferred(),
+      approvalMode: config.approval.mode,
+      provider: config.provider,
+      model: config.model,
+      agentModelOverrides: config.agentModelOverrides,
+      agentReasoningOverrides: config.agentReasoningOverrides,
+    });
+
+    setupSummarizeCallback(contextManager, provider, sessionState);
+
+    tuiLoop = new TaskLoop({
+      provider,
+      tools: toolRegistry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt,
+      repoRoot,
+      mode,
+      contextManager,
+      doubleCheck,
+      sessionState,
+    });
+  } else {
+    // Reset for new turn but keep message history
+    tuiLoop.resetIterations();
+  }
+
+  await tuiLoop.run(query);
+  // No flushOutput — TUI handles display via bus events
+  // No spinner.stop — TUI has its own spinner
+  // No stderr writes — would corrupt Ink
 }

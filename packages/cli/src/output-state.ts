@@ -57,6 +57,9 @@ export class OutputState {
    */
   textBuffer = "";
 
+  /** Timestamp when thinking started (for duration display). */
+  thinkingStartMs: number | null = null;
+
   /** Pending tool group for collapsing consecutive same-tool calls. */
   pendingToolGroup: {
     name: string;
@@ -97,6 +100,7 @@ export class OutputState {
     this.turnInputTokens = 0;
     this.turnCostDelta = 0;
     this.textBuffer = "";
+    this.thinkingStartMs = null;
     this.pendingToolGroup = null;
     this.subagentDisplay.clear();
     this.announcedSubagentBatches.clear();

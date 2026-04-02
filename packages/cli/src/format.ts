@@ -63,8 +63,51 @@ export function buildVerbosityConfig(
   return { base, categories };
 }
 
+// ─── Diff Preview ──────────────────────────────────────────
+
+/**
+ * Format a mini diff preview for file edit results.
+ * Shows up to maxLines of additions/deletions from tool output.
+ * Returns null if no meaningful diff found.
+ */
+export function formatDiffPreview(toolName: string, output: string, maxLines: number = 5): string | null {
+  if (!output || toolName === "write_file") {
+    // write_file doesn't produce diff output — just show bytes written
+    const bytesMatch = output?.match(/(\d+)\s*bytes?\s*written/i);
+    if (bytesMatch) return null; // already shown in tool end line
+    return null;
+  }
+
+  if (toolName !== "replace_in_file") return null;
+
+  // For replace_in_file, extract the replacement summary
+  const lines = output.split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return null;
+
+  // Show first few lines of the result as a dim preview
+  const preview = lines.slice(0, maxLines);
+  return preview.map((l) => dim(`    ${l}`)).join("\n");
+}
+
+// ─── Terminal Title & Bell ──────────────────────────────────
+
+const isTTY = process.stderr.isTTY ?? false;
+
+/** Set the terminal title (tab name). No-op if not a TTY. */
+export function setTerminalTitle(title: string): void {
+  if (!isTTY) return;
+  process.stderr.write(`\x1b]0;${title}\x07`);
+}
+
+/** Ring the terminal bell. No-op if not a TTY. */
+export function terminalBell(): void {
+  if (!isTTY) return;
+  process.stderr.write("\x07");
+}
+
 // ─── Spinner ────────────────────────────────────────────────
 
+// Shared with tui/shared.ts — keep in sync or import when ESM allows
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 const SPINNER_VERBS = [
@@ -77,17 +120,26 @@ export class Spinner {
   private frameIndex = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private message = "";
+  private startedAt = 0;
+  /** Optional metrics suffix appended after the message + elapsed time. */
+  private suffix = "";
 
   start(message?: string): void {
     this.stop();
     this.message = message ?? SPINNER_VERBS[Math.floor(Math.random() * SPINNER_VERBS.length)]! + "…";
     this.frameIndex = 0;
+    this.startedAt = Date.now();
     this.render();
     this.timer = setInterval(() => this.render(), 80);
   }
 
   update(message: string): void {
     this.message = message;
+  }
+
+  /** Update the metrics suffix shown after the spinner message. */
+  updateSuffix(suffix: string): void {
+    this.suffix = suffix;
   }
 
   stop(finalMessage?: string): void {
@@ -119,7 +171,10 @@ export class Spinner {
   private render(): void {
     const frame = SPINNER_FRAMES[this.frameIndex % SPINNER_FRAMES.length]!;
     this.frameIndex++;
-    process.stderr.write(`\x1b[2K\r${cyan(frame)} ${dim(this.message)}`);
+    const elapsed = Date.now() - this.startedAt;
+    const elapsedStr = elapsed >= 1000 ? ` ${dim(`(${(elapsed / 1000).toFixed(1)}s)`)}` : "";
+    const suffixStr = this.suffix ? ` ${dim(this.suffix)}` : "";
+    process.stderr.write(`\x1b[2K\r${cyan(frame)} ${dim(this.message)}${elapsedStr}${suffixStr}`);
   }
 }
 

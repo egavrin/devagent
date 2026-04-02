@@ -22,7 +22,8 @@
   "dependencies": {
     "@devagent-sdk/schema": "file:../devagent-sdk/packages/schema",
     "@devagent-sdk/types": "file:../devagent-sdk/packages/types",
-    "@devagent-sdk/validation": "file:../devagent-sdk/packages/validation"
+    "@devagent-sdk/validation": "file:../devagent-sdk/packages/validation",
+    "cli-highlight": "^2.1.11"
   },
   "scripts": {
     "build": "turbo run build",
