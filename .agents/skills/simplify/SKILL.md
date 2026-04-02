@@ -5,9 +5,32 @@ description: Identify and remove over-engineering — dead code, premature abstr
 
 # Simplify
 
-Find and remove unnecessary complexity from DevAgent code. Every simplification must be verified with typecheck + test + build.
+Find and remove unnecessary complexity from DevAgent code. Cover reuse, code quality, and efficiency. Every worthwhile simplification must be verified with focused checks.
 
-## What to Look For
+## 1. Start From the Change Scope
+
+- Inspect the selected local diff first: unstaged, staged, or last commit.
+- If no scope is specified, start from the current local change set before expanding further.
+- Keep the work grounded in the actual touched files unless the evidence clearly points to nearby shared code that should also change.
+
+## 2. Review Lanes
+
+Use an adaptive delegation policy:
+
+- Single-file, low-churn scopes should stay local by default.
+- Broader or higher-churn scopes should fan out into readonly delegates before editing.
+- If the user explicitly says `no delegates`, stay local unless blocked.
+- If the user explicitly asks for parallel review or delegates, honor that even on smaller scopes.
+
+When the scope merits delegation, use readonly delegates to review the same change set in parallel across three lanes:
+
+- **Reuse**: existing helpers or utilities that should replace new ad-hoc code
+- **Quality**: dead code, over-abstraction, fallback mazes, parameter sprawl, leaky abstractions
+- **Efficiency**: repeated work, unnecessary sync work, missed concurrency, no-op updates, hot-path bloat
+
+Aggregate the findings, then apply the worthwhile fixes in the main agent.
+
+## 3. What to Look For
 
 ### Dead Code
 
@@ -59,7 +82,7 @@ Replace with: resolve a single authoritative source, throw if missing.
 - Extra parameters "for future use"
 - Abstract base classes with a single implementation
 
-## Process
+## 4. Process
 
 ### 1. Identify Target
 
@@ -81,18 +104,21 @@ Make changes one at a time:
 - Replace fallback chains with fail-fast throws
 - Delete commented-out code
 - Remove unused parameters
+- Reuse existing utilities instead of cloning logic
+- Tighten obviously wasteful work in the changed path
 
 ### 4. Verify After Each Change
 
 ```bash
 bun run typecheck   # Types still valid
 bun run test        # Behavior unchanged
-bun run build       # Build still works
 ```
 
-Never batch multiple simplifications without verifying between them. A single bad removal can cascade into confusing errors.
+Run `bun run build` when the touched package or change shape makes it relevant.
 
-## What NOT to Simplify
+Never batch multiple risky simplifications without verifying between them. A single bad removal can cascade into confusing errors.
+
+## 5. What NOT to Simplify
 
 - **Public API contracts**: Don't remove exports that external consumers depend on
 - **Error handling at system boundaries**: Validation of user input, API responses, file I/O is necessary

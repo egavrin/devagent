@@ -18,6 +18,8 @@ import { tokenProgressBar } from "./shared.js";
 import type { LogEntry } from "./shared.js";
 import type { EventBus } from "@devagent/runtime";
 
+export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline";
+
 // Show last N lines of streaming text without expensive markdown parsing
 function renderStreamingPreview(text: string): string {
   const lines = text.split("\n");
@@ -100,7 +102,7 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
       return;
     }
     if (trimmed === "/help" || trimmed === "/h" || trimmed === "/?") {
-      addLog({ id: nextId("help"), type: "info", data: "Commands: /clear (reset), /sessions (history), /exit (quit) │ Shift+Enter for newline" });
+      addLog({ id: nextId("help"), type: "info", data: TUI_HELP_MESSAGE });
       return;
     }
     if (trimmed === "/sessions" || trimmed === "/s") {
@@ -228,6 +230,8 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
     { name: "Session list", description: "Show recent sessions", shortcut: "/sessions", action: () => handleSubmit("/sessions") },
     { name: "Help", description: "Show available commands", shortcut: "/help", action: () => handleSubmit("/help") },
     { name: "Rename session", description: "Set a name for the current session", shortcut: "/rename", action: () => handleSubmit("/rename") },
+    { name: "Review local changes", description: "Insert or run the embedded /review command anywhere in a prompt", shortcut: "/review", action: () => handleSubmit("/review") },
+    { name: "Simplify local changes", description: "Insert or run the embedded /simplify command anywhere in a prompt", shortcut: "/simplify", action: () => handleSubmit("/simplify") },
     { name: "Resume session", description: "List sessions to resume", shortcut: "/resume", action: () => handleSubmit("/resume") },
     { name: "Toggle theme", description: "Switch between dark and light mode", shortcut: "/theme", action: () => { addToast("Theme toggled (restart to apply)", "info"); } },
     { name: "Exit", description: "Quit devagent", shortcut: "Ctrl+C", action: () => exit() },

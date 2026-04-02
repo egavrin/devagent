@@ -113,6 +113,11 @@ export interface TaskLoopResult {
   readonly lastText: string | null;
 }
 
+export interface TaskRunOptions {
+  readonly prependedMessages?: ReadonlyArray<Message>;
+  readonly finalTextValidator?: FinalTextValidator;
+}
+
 interface PendingToolCall {
   readonly name: string;
   readonly arguments: Record<string, unknown>;
@@ -361,8 +366,15 @@ export class TaskLoop {
    * Returns when the LLM produces a final text response (no more tool calls)
    * or when the budget is exceeded.
    */
-  async run(userQuery: string): Promise<TaskLoopResult> {
+  async run(userQuery: string, options?: TaskRunOptions): Promise<TaskLoopResult> {
     this.resetRunState();
+    const finalTextValidator = options?.finalTextValidator ?? this.finalTextValidator;
+
+    if (options?.prependedMessages) {
+      for (const message of options.prependedMessages) {
+        this.pushMessage(message);
+      }
+    }
 
     // Add user message
     this.pushMessage({
@@ -651,7 +663,7 @@ export class TaskLoop {
           continue;
         }
 
-        const finalTextValidation = this.finalTextValidator?.(textContent) ?? { valid: true };
+        const finalTextValidation = finalTextValidator?.(textContent) ?? { valid: true };
         if (!finalTextValidation.valid) {
           this.pushMessage({
             role: MessageRole.ASSISTANT,

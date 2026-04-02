@@ -20,7 +20,17 @@ import { readdirSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { Box, Text, useInput } from "ink";
 
-const SLASH_COMMANDS = ["/help", "/clear", "/sessions", "/resume", "/rename", "/exit", "/quit"];
+export const SLASH_COMMANDS = [
+  "/help",
+  "/clear",
+  "/sessions",
+  "/resume",
+  "/rename",
+  "/review",
+  "/simplify",
+  "/exit",
+  "/quit",
+];
 
 export interface PromptInputProps {
   readonly onSubmit: (value: string) => void;
@@ -29,7 +39,7 @@ export interface PromptInputProps {
   readonly cwd?: string;
 }
 
-export function PromptInput({ onSubmit, placeholder = "Ask anything…", history = [], cwd }: PromptInputProps): React.ReactElement {
+export function PromptInput({ onSubmit, placeholder = "Ask anything… use /review or /simplify anywhere", history = [], cwd }: PromptInputProps): React.ReactElement {
   const [value, setValue] = useState("");
   const [cursorPos, setCursorPos] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -208,24 +218,30 @@ export function PromptInput({ onSubmit, placeholder = "Ask anything…", history
 
 // ─── Completion Logic ───────────────────────────────────────
 
-function getCompletions(input: string, cwd?: string): string[] {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("/")) {
-    return SLASH_COMMANDS.filter((c) => c.startsWith(trimmed));
+export function getCompletions(input: string, cwd?: string): string[] {
+  const lastWordMatch = input.match(/(?:^|\s)(\S+)$/);
+  const lastWord = lastWordMatch?.[1] ?? "";
+  if (lastWord.startsWith("/")) {
+    const prefix = input.slice(0, input.length - lastWord.length);
+    return SLASH_COMMANDS
+      .filter((command) => command.startsWith(lastWord))
+      .map((command) => `${prefix}${command}`);
   }
+
+  const trimmed = input.trim();
   const words = trimmed.split(/\s+/);
-  const lastWord = words[words.length - 1] ?? "";
-  if (lastWord.includes("/") || lastWord.startsWith(".")) {
+  const finalWord = words[words.length - 1] ?? "";
+  if (finalWord.includes("/") || finalWord.startsWith(".")) {
     try {
-      const resolvedDir = cwd ? join(cwd, dirname(lastWord)) : dirname(lastWord);
-      const prefix = basename(lastWord);
+      const resolvedDir = cwd ? join(cwd, dirname(finalWord)) : dirname(finalWord);
+      const prefix = basename(finalWord);
       const entries = readdirSync(resolvedDir);
       return entries
         .filter((e) => e.startsWith(prefix) && !e.startsWith("."))
         .slice(0, 10)
         .map((e) => {
           const pathPrefix = words.slice(0, -1).join(" ");
-          const newPath = dirname(lastWord) === "." ? e : join(dirname(lastWord), e);
+          const newPath = dirname(finalWord) === "." ? e : join(dirname(finalWord), e);
           return pathPrefix ? `${pathPrefix} ${newPath}` : newPath;
         });
     } catch { /* not readable */ }

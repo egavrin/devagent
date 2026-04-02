@@ -7,6 +7,7 @@ export type {
   TaskMode,
   TaskCompletionStatus,
   TaskLoopOptions,
+  TaskRunOptions,
   TaskLoopResult,
   MidpointCallback,
   FinalTextValidationResult,

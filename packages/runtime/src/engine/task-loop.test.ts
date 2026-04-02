@@ -148,6 +148,48 @@ describe("TaskLoop", () => {
     );
   });
 
+  it("prepends pinned messages for a single run", async () => {
+    const seenMessages: Message[][] = [];
+    const provider: LLMProvider = {
+      id: "capture",
+      async *chat(messages): AsyncIterable<StreamChunk> {
+        seenMessages.push([...messages]);
+        yield { type: "text", content: "Done" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "You are a test assistant.",
+      repoRoot: "/tmp",
+    });
+
+    await loop.run("Inspect the diff", {
+      prependedMessages: [
+        {
+          role: MessageRole.USER,
+          content: "Pre-loaded diff",
+          pinned: true,
+        },
+      ],
+    });
+
+    expect(seenMessages).toHaveLength(1);
+    expect(seenMessages[0]).toMatchObject([
+      { role: MessageRole.SYSTEM, content: "You are a test assistant." },
+      { role: MessageRole.USER, content: "Pre-loaded diff", pinned: true },
+      { role: MessageRole.USER, content: "Inspect the diff" },
+    ]);
+  });
+
   it("injects seeded session state before the first provider call", async () => {
     const sessionState = new SessionState({ persist: false });
     sessionState.recordReadonlyCoverage("read_file", "src/already-read.ts");
@@ -1203,6 +1245,46 @@ describe("TaskLoop", () => {
     expect(result.status).toBe("success");
     expect(result.iterations).toBe(2);
     expect(result.lastText).toBe("Progress: I've inspected the files.");
+  });
+
+  it("allows a per-run final-text validator override", async () => {
+    const provider = createMockProvider([
+      [
+        { type: "text", content: "Not structured yet." },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: '{"structured":{"summary":"ok"},"rendered":"done"}' },
+        { type: "done", content: "" },
+      ],
+      [
+        { type: "text", content: "Plain text is fine again." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const validated = await loop.run("First turn", {
+      finalTextValidator: (candidate) => ({
+        valid: candidate.trim().startsWith("{"),
+        retryMessage: "Return JSON.",
+      }),
+    });
+    expect(validated.lastText).toBe('{"structured":{"summary":"ok"},"rendered":"done"}');
+
+    const plain = await loop.run("Second turn");
+    expect(plain.lastText).toBe("Plain text is fine again.");
   });
 
   it("does not retain text from assistant turns that also contain tool calls as lastText", async () => {

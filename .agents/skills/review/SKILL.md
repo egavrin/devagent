@@ -5,89 +5,69 @@ description: Code review checklist for DevAgent contributions — fail-fast comp
 
 # Code Review
 
-Structured code review for changes to the DevAgent codebase. Review each area in order.
+Operational review workflow for local DevAgent changes. Use it when the user asks to review staged, unstaged, or recent local changes.
 
-## 1. Scope and Focus
+## 1. Establish Scope
 
-- Is the change minimal and focused on one concern?
-- Are there unrelated modifications (formatting, refactoring, feature creep)?
-- Could any part of this change be a separate commit/PR?
+- Start with the diff the user pointed at.
+- If no scope is specified, inspect the current local change set first: unstaged, then staged, then the last commit.
+- Stay local. Do not assume GitHub PR context unless the user explicitly asks for it.
 
-## 2. Fail-Fast Compliance
+## 2. Gather Evidence
 
-DevAgent's core principle. Flag any violations:
+- Read the changed files and the nearest call sites or dependent code paths.
+- Use readonly `reviewer` delegates for independent bug-finding lanes when the scope is large or the evidence can be parallelized.
+- Prefer concrete evidence over speculative style commentary.
 
-- **Silent catch blocks**: `catch {}` or `catch { return defaultValue }` — exceptions must propagate or be explicitly handled with logging/re-throw
-- **Best-effort returns**: Functions returning a fallback value when they should throw
-- **Defensive guards**: `if (!x) return` patterns that hide bugs instead of surfacing them
-- **Swallowed errors**: `catch (e) { console.log(e) }` without re-throwing
-- **Layered fallbacks**: Multiple try/catch or `?? defaultValue` chains that mask the real failure
+## 3. Review Priorities
 
-## 3. Type Safety
+Check the change in this order:
 
-- No `any` casts (`as any`, `: any`)
-- No type assertions that bypass checks (`as SomeType` without validation)
-- Readonly where appropriate (`readonly` properties, `ReadonlyArray`)
-- New interfaces properly exported from package `index.ts`
-- Generic types have meaningful constraints
+- Correctness and regressions
+- Fail-fast violations:
+  `catch {}`, fallback mazes, swallowed errors, defensive early returns that hide bugs
+- Type safety:
+  `any`, unsafe assertions, missing readonly boundaries, export drift
+- Test coverage:
+  missing or weak tests for new behavior and error paths
+- Module boundaries:
+  invalid cross-package imports, executor contract drift
+- Performance:
+  repeated work, unnecessary sync work, N+1 patterns, broad scans on hot paths
 
-## 4. Test Coverage
+## 4. What Counts as a Real Finding
 
-- Every new behavior has a corresponding test
-- Tests verify behavior, not implementation details
-- Test names describe what is being tested, not how
-- Tests use the standard patterns:
-  - Tool tests: `mkdtempSync` + `ToolContext` fixture
-  - Runtime task-loop/review tests: mock `LLMProvider` + `makeConfig` fixture
-- Edge cases covered: empty input, missing data, error paths
+Report a finding only when it is:
 
-## 5. Module Boundaries
+- Introduced by the change under review
+- Concrete and fixable at a specific location
+- Material to correctness, reliability, security, or performance
+- Defensible without hidden assumptions
 
-Enforce the dependency DAG:
+If confidence is low, move it to open questions instead of reporting it as a hard finding.
 
+## 5. Output Format
+
+Always present results in this order:
+
+1. Findings
+2. Open Questions / Assumptions
+3. Short Summary
+
+For each finding, use:
+
+```text
+[severity] path:line — description
 ```
-runtime ← cli, executor, providers, arkts
-providers ← cli
-```
 
-- `runtime` must NEVER import from `cli`, `executor`, `providers`, or `arkts`
-- `providers` must NEVER import from `cli`, `executor`, or `arkts`
-- `executor` must preserve the `devagent execute` machine contract
-- Cross-package imports use the package name (`@devagent/runtime`), not relative paths
+Every finding must include:
 
-## 6. Error Handling
-
-- Uses `DevAgentError` hierarchy, not raw `new Error()`
-- Error codes are meaningful (match the error class's `.code` property)
-- `extractErrorMessage()` used for unknown caught values
-- No `catch` blocks that lose the original error's stack trace (use `{ cause: err }`)
-
-## 7. Configuration Changes
-
-If the change adds or modifies config:
-
-- Type defined in `packages/runtime/src/core/types.ts`
-- Default value provided in `packages/runtime/src/core/config.ts`
-- TOML parsing handles the new field
-- Validation rejects invalid values with clear error messages
-- Documented in AGENTS.md if user-facing
-
-## 8. Export Hygiene
-
-- New public types/classes exported from package `index.ts`
-- No unnecessary exports (internal helpers stay private)
-- Re-exports use `export type` for type-only exports
-- Export order: types first, then values
-
-## Review Output Format
-
-For each issue found:
-
-```
-[severity] file:line — description
-```
+- severity
+- file (and line when known)
+- rationale explaining why the issue matters
 
 Severities:
-- **error**: Must fix before merge (bugs, security issues, fail-fast violations)
-- **warning**: Should fix (missing tests, poor naming, minor type issues)
-- **info**: Consider fixing (style, potential simplification)
+
+- `error`: must-fix bugs, security issues, fail-fast violations
+- `warning`: should-fix missing tests, reliability gaps, meaningful type issues
+- `info`: worthwhile but non-blocking improvements
