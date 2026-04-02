@@ -4,7 +4,8 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync as nodeReadFileSync } from "node:fs";
+import { readFileSync as nodeReadFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -32,13 +33,60 @@ import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers"
 /** Package version — embedded at build time or read from package.json. */
 function getVersion(): string {
   try {
-    // In bundle: try to read from the generated dist/package.json
     const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "package.json");
     const pkg = JSON.parse(nodeReadFileSync(pkgPath, "utf-8"));
     return pkg.version ?? "0.1.0";
   } catch {
     return "0.1.0";
   }
+}
+
+/**
+ * Non-blocking update check. Queries npm registry at most once per 24h.
+ * Prints a hint to stderr if a newer version is available.
+ */
+function checkForUpdates(): void {
+  const PACKAGE = "@egavrin/devagent";
+  const cacheDir = join(homedir(), ".cache", "devagent");
+  const cachePath = join(cacheDir, "update-check.json");
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+
+  // Check cache
+  try {
+    if (existsSync(cachePath)) {
+      const cached = JSON.parse(nodeReadFileSync(cachePath, "utf-8"));
+      if (Date.now() - cached.checkedAt < ONE_DAY) {
+        if (cached.latest && cached.latest !== getVersion()) {
+          process.stderr.write(
+            `\x1b[33mUpdate available: ${getVersion()} → ${cached.latest}\x1b[0m — ` +
+            `npm i -g ${PACKAGE}\n`,
+          );
+        }
+        return;
+      }
+    }
+  } catch { /* ignore cache read errors */ }
+
+  // Async fetch — fire and forget, never blocks startup
+  fetch(`https://registry.npmjs.org/${PACKAGE}/latest`, {
+    signal: AbortSignal.timeout(3000),
+  })
+    .then((res) => res.json())
+    .then((data: any) => {
+      const latest = data?.version as string | undefined;
+      if (!latest) return;
+      try {
+        mkdirSync(cacheDir, { recursive: true });
+        writeFileSync(cachePath, JSON.stringify({ latest, checkedAt: Date.now() }));
+      } catch { /* ignore cache write errors */ }
+      if (latest !== getVersion()) {
+        process.stderr.write(
+          `\x1b[33mUpdate available: ${getVersion()} → ${latest}\x1b[0m — ` +
+          `npm i -g ${PACKAGE}\n`,
+        );
+      }
+    })
+    .catch(() => { /* network error — silently ignore */ });
 }
 import {
   createRoutingLSPTools,
@@ -99,6 +147,11 @@ import { renderMarkdown } from "./markdown-render.js";
 import type { SubagentDisplayState } from "./output-state.js";
 import { buildProviderConfig } from "./provider-config.js";
 import { createSkillInfrastructure } from "./skill-setup.js";
+import {
+  formatPreloadedDiffMessage,
+  preparePromptCommandQuery,
+  type ResolvedPromptCommandTarget,
+} from "./prompt-commands.js";
 
 // ─── Argument Parsing ────────────────────────────────────────
 
@@ -1057,6 +1110,8 @@ async function setupSessionPersistence(
 // ─── Main ──────────────────────────────────────────────────
 
 export async function main(): Promise<void> {
+  checkForUpdates();
+
   if (process.argv[2] === "execute") {
     const {
       executeTask,
@@ -2141,6 +2196,51 @@ export function isReviewQuery(query: string): "staged" | "unstaged" | false {
   return "unstaged";
 }
 
+function runGitTextCommand(command: string, repoRoot: string): string | null {
+  try {
+    return execSync(command, {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      maxBuffer: 1024 * 1024 * 5,
+      timeout: 10_000,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function loadLocalDiffTarget(
+  repoRoot: string,
+  target: ResolvedPromptCommandTarget,
+): string | null {
+  const command = target === "unstaged"
+    ? "git diff"
+    : target === "staged"
+      ? "git diff --cached"
+      : "git show --format=medium --patch --no-ext-diff HEAD";
+
+  const output = runGitTextCommand(command, repoRoot);
+  if (!output?.trim()) {
+    return null;
+  }
+
+  return truncateToolOutput(output);
+}
+
+function resolveAutoPromptCommandTarget(repoRoot: string): ResolvedPromptCommandTarget {
+  const unstaged = runGitTextCommand("git diff --name-only", repoRoot);
+  if (unstaged?.trim()) {
+    return "unstaged";
+  }
+
+  const staged = runGitTextCommand("git diff --cached --name-only", repoRoot);
+  if (staged?.trim()) {
+    return "staged";
+  }
+
+  return "last-commit";
+}
+
 /**
  * Pre-load the git diff for review queries.
  * Returns a pre-formatted user message or null if not a review query.
@@ -2152,22 +2252,37 @@ async function maybePreloadReviewDiff(
   const reviewType = isReviewQuery(query);
   if (!reviewType) return null;
 
-  try {
-    const cmd = reviewType === "staged" ? "git diff --cached" : "git diff";
-    const diffOutput = execSync(cmd, {
-      cwd: repoRoot,
-      encoding: "utf-8",
-      maxBuffer: 1024 * 1024 * 5, // 5MB
-      timeout: 10_000,
-    });
+  const diffOutput = loadLocalDiffTarget(repoRoot, reviewType);
+  return diffOutput ? formatPreloadedDiffMessage(reviewType, diffOutput) : null;
+}
 
-    if (!diffOutput.trim()) return null;
+async function prepareQueryForExecution(
+  query: string,
+  repoRoot: string,
+): Promise<{ readonly query: string; readonly prependedMessages: ReadonlyArray<Message> }> {
+  const preparedPromptCommandQuery = await preparePromptCommandQuery(query, {
+    resolveAutoTarget: async () => resolveAutoPromptCommandTarget(repoRoot),
+    loadDiff: async (target) => loadLocalDiffTarget(repoRoot, target),
+  });
 
-    const truncated = truncateToolOutput(diffOutput);
-    return `[Pre-loaded ${reviewType} diff for review]\n\n${truncated}`;
-  } catch {
-    return null; // Fail silently — the model will fetch its own diff
+  if (preparedPromptCommandQuery) {
+    return {
+      query: preparedPromptCommandQuery.rewrittenQuery,
+      prependedMessages: preparedPromptCommandQuery.preloadedDiffs.map((entry) => ({
+        role: MessageRole.USER,
+        content: entry.content,
+        pinned: true,
+      })),
+    };
   }
+
+  const preloadedDiff = await maybePreloadReviewDiff(query, repoRoot);
+  return {
+    query,
+    prependedMessages: preloadedDiff
+      ? [{ role: MessageRole.USER, content: preloadedDiff, pinned: true }]
+      : [],
+  };
 }
 
 // ─── Single Query ────────────────────────────────────────────
@@ -2205,17 +2320,7 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     getTurnNumber: () => 0,
   });
 
-  // Pre-load diff for review tasks to eliminate discovery overhead
-  let effectiveInitialMessages = initialMessages;
-  if (!initialMessages) {
-    const preloadedDiff = await maybePreloadReviewDiff(query, repoRoot);
-    if (preloadedDiff) {
-      effectiveInitialMessages = [
-        { role: MessageRole.SYSTEM, content: systemPrompt },
-        { role: MessageRole.USER, content: preloadedDiff, pinned: true },
-      ];
-    }
-  }
+  const preparedQuery = await prepareQueryForExecution(query, repoRoot);
 
   outputState.resetTurn();
   const startTime = Date.now();
@@ -2231,11 +2336,13 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
     mode,
     contextManager,
     doubleCheck,
-    initialMessages: effectiveInitialMessages,
+    initialMessages,
     sessionState,
     midpointCallback,
   });
-  const result = await loop.run(query);
+  const result = await loop.run(preparedQuery.query, {
+    prependedMessages: preparedQuery.prependedMessages,
+  });
 
   // Stop spinner in case LLM finished without emitting text
   spinner.stop();
@@ -2293,6 +2400,7 @@ async function runTuiQuery(options: RunSingleQueryOptions): Promise<void> {
     query, provider, toolRegistry, bus, gate, config, repoRoot, mode,
     skills, contextManager, doubleCheck, sessionState,
   } = options;
+  const preparedQuery = await prepareQueryForExecution(query, repoRoot);
 
   // Create loop once, reuse for multi-turn context
   if (!tuiLoop) {
@@ -2329,7 +2437,9 @@ async function runTuiQuery(options: RunSingleQueryOptions): Promise<void> {
     tuiLoop.resetIterations();
   }
 
-  await tuiLoop.run(query);
+  await tuiLoop.run(preparedQuery.query, {
+    prependedMessages: preparedQuery.prependedMessages,
+  });
   // No flushOutput — TUI handles display via bus events
   // No spinner.stop — TUI has its own spinner
   // No stderr writes — would corrupt Ink
