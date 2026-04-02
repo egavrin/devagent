@@ -11,7 +11,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { streamText } from "ai";
 import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
 import { ProviderError } from "@devagent/runtime";
-import { convertMessages, convertTools, processProviderStream, resolveCapabilities, stripNullArgs } from "./shared.js";
+import { classifyProviderError, convertMessages, convertTools, processProviderStream, resolveCapabilities, stripNullArgs } from "./shared.js";
 
 // Re-export shared utilities so existing consumers (tests, index.ts) don't break.
 export { resolveCapabilities, stripNullArgs } from "./shared.js";
@@ -125,17 +125,22 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
         }
         const hasProviderOpts = Object.keys(openaiProviderOpts).length > 0;
 
-        const result = streamText({
-          model,
-          messages: aiMessages,
-          tools: aiTools,
-          maxTokens: config.maxTokens ?? caps.defaultMaxTokens,
-          ...(caps.supportsTemperature ? { temperature: config.temperature ?? 0 } : {}),
-          abortSignal: abortController.signal,
-          ...(hasProviderOpts
-            ? { providerOptions: { openai: openaiProviderOpts } }
-            : {}),
-        });
+        let result;
+        try {
+          result = streamText({
+            model,
+            messages: aiMessages,
+            tools: aiTools,
+            maxTokens: config.maxTokens ?? caps.defaultMaxTokens,
+            ...(caps.supportsTemperature ? { temperature: config.temperature ?? 0 } : {}),
+            abortSignal: abortController.signal,
+            ...(hasProviderOpts
+              ? { providerOptions: { openai: openaiProviderOpts } }
+              : {}),
+          });
+        } catch (err) {
+          throw classifyProviderError(err, "OpenAI");
+        }
 
         yield* processProviderStream({
           providerName: "OpenAI",

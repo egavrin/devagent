@@ -7,7 +7,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { streamText } from "ai";
 import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
 import { ProviderError } from "@devagent/runtime";
-import { convertMessages, convertTools, processProviderStream } from "./shared.js";
+import { classifyProviderError, convertMessages, convertTools, processProviderStream } from "./shared.js";
 
 export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
   if (!config.apiKey) {
@@ -38,14 +38,19 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
         const defaultMaxTokens = caps?.defaultMaxTokens ?? 4096;
         const supportsTemp = caps?.supportsTemperature ?? true;
 
-        const result = streamText({
-          model: anthropic(config.model),
-          messages: aiMessages,
-          tools: aiTools,
-          maxTokens: config.maxTokens ?? defaultMaxTokens,
-          ...(supportsTemp ? { temperature: config.temperature ?? 0 } : {}),
-          abortSignal: abortController.signal,
-        });
+        let result;
+        try {
+          result = streamText({
+            model: anthropic(config.model),
+            messages: aiMessages,
+            tools: aiTools,
+            maxTokens: config.maxTokens ?? defaultMaxTokens,
+            ...(supportsTemp ? { temperature: config.temperature ?? 0 } : {}),
+            abortSignal: abortController.signal,
+          });
+        } catch (err) {
+          throw classifyProviderError(err, "Anthropic");
+        }
 
         yield* processProviderStream({
           providerName: "Anthropic",
