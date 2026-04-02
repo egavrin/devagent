@@ -1,6 +1,6 @@
 {
   "name": "devagent-ts",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "private": true,
   "packageManager": "bun@1.3.10",
   "license": "MIT",
@@ -34,6 +34,9 @@
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean",
     "dev": "turbo run dev",
+    "embed": "bun run scripts/embed-assets.ts",
+    "bundle": "bun run scripts/bundle.ts",
+    "build:publish": "bun run build && bun run bundle",
     "install-cli": "cd packages/cli && bun link",
     "install-lsp": "bash scripts/install-lsp-servers.sh",
     "check:oss": "node ./scripts/check-oss.mjs",
@@ -42,6 +45,7 @@
     "validate:live:scenario": "bun run scripts/live-validation.ts --scenario"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/bun": "^1.3.10",
     "@typescript-eslint/parser": "^8.56.1",
     "turbo": "^2.5.0",

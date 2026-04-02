@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ModelCapabilities } from "./types.js";
 import { extractErrorMessage } from "./errors.js";
+import { EMBEDDED_MODEL_TOML } from "./embedded-models.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -84,6 +85,9 @@ export function loadModelRegistry(
   for (const dir of searchDirs) {
     loadModelsFromDir(dir);
   }
+
+  // Fallback: load embedded model definitions (for bundled CLI)
+  loadModelsFromEmbedded();
 }
 
 /**
@@ -149,6 +153,10 @@ function loadModelsFromDir(dir: string): void {
 
 function loadModelFile(filePath: string): void {
   const content = readFileSync(filePath, "utf-8");
+  parseModelToml(content);
+}
+
+function parseModelToml(content: string): void {
   const parsed = parseToml(content) as Record<string, unknown>;
 
   const provider = parsed["provider"] as string | undefined;
@@ -156,7 +164,6 @@ function loadModelFile(filePath: string): void {
 
   if (!provider) return;
 
-  // Each top-level key that is an object (table) is a model definition
   for (const [key, value] of Object.entries(parsed)) {
     if (key === "provider" || key === "base_url") continue;
     if (typeof value !== "object" || value === null) continue;
@@ -193,6 +200,17 @@ function loadModelFile(filePath: string): void {
       capabilities,
       pricing,
     });
+  }
+}
+
+function loadModelsFromEmbedded(): void {
+  for (const [filename, content] of Object.entries(EMBEDDED_MODEL_TOML)) {
+    try {
+      parseModelToml(content);
+    } catch (err) {
+      const message = extractErrorMessage(err);
+      console.error(`[model-registry] Failed to parse embedded ${filename}: ${message}`);
+    }
   }
 }
 

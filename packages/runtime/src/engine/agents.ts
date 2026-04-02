@@ -4,7 +4,12 @@
  * and restricted tool set. Agents are spawned by the delegate tool.
  */
 
-import { readFileSync } from "node:fs";
+import {
+  PROMPT_AGENT_GENERAL,
+  PROMPT_AGENT_REVIEWER,
+  PROMPT_AGENT_ARCHITECT,
+  PROMPT_AGENT_EXPLORE,
+} from "./prompts/embedded.js";
 import type {
   LLMProvider,
   DevAgentConfig,
@@ -104,7 +109,7 @@ function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
       type: AgentType.GENERAL,
       name: "General",
       description: "Default agent. Answers questions, writes code, runs commands.",
-      systemPromptTemplate: loadRolePrompt("agent-general.md"),
+      systemPromptTemplate: PROMPT_AGENT_GENERAL,
       defaultMode: "act",
       allowedToolCategories: ["readonly", "mutating", "workflow", "external"],
     },
@@ -112,7 +117,7 @@ function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
       type: AgentType.REVIEWER,
       name: "Reviewer",
       description: "Code review with structured output. Read-only tools only.",
-      systemPromptTemplate: loadRolePrompt("agent-reviewer.md"),
+      systemPromptTemplate: PROMPT_AGENT_REVIEWER,
       defaultMode: "plan",
       allowedToolCategories: ["readonly"],
     },
@@ -120,7 +125,7 @@ function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
       type: AgentType.ARCHITECT,
       name: "Architect",
       description: "Design documents and task breakdown. Read-only tools only.",
-      systemPromptTemplate: loadRolePrompt("agent-architect.md"),
+      systemPromptTemplate: PROMPT_AGENT_ARCHITECT,
       defaultMode: "plan",
       allowedToolCategories: ["readonly"],
     },
@@ -128,7 +133,7 @@ function getAgentDefinitions(): ReadonlyArray<AgentDefinition> {
       type: AgentType.EXPLORE,
       name: "Explore",
       description: "Codebase search and discovery. Read-only tools only. Fast iteration cap.",
-      systemPromptTemplate: loadRolePrompt("agent-explore.md"),
+      systemPromptTemplate: PROMPT_AGENT_EXPLORE,
       defaultMode: "act",
       allowedToolCategories: ["readonly"],
     },
@@ -435,10 +440,6 @@ function seedSessionState(child: SessionState, parent: SessionState): void {
   for (const fact of parent.toJSON().envFacts ?? []) {
     child.addEnvFact(fact.key, fact.value);
   }
-}
-
-function loadRolePrompt(filename: string): string {
-  return readFileSync(new URL(`./prompts/${filename}`, import.meta.url), "utf-8");
 }
 
 function allowsChildDelegation(

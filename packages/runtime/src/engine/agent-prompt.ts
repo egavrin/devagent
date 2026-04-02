@@ -1,16 +1,13 @@
 import * as fs from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import type { AgentType, SkillRegistry, ToolSpec } from "../core/index.js";
 import { AgentType as AgentTypeEnum, LRUCache } from "../core/index.js";
 import { formatBriefing } from "./briefing.js";
 import type { TurnBriefing } from "./briefing.js";
 import type { DeferredToolStub } from "../tools/index.js";
+import { PROMPT_AGENT_COMMON } from "./prompts/embedded.js";
 
-const PROMPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const TOTAL_MAX_CHARS = 32 * 1024;
-let cachedCommonPrompt: string | null = null;
-let commonPromptReadCount = 0;
 
 /** Memoization cache for assembled prompts. Keyed by hash of inputs. */
 const promptCache = new LRUCache<string, string>(10);
@@ -77,14 +74,7 @@ interface AgentPromptCapabilities {
 }
 
 function loadCommonPrompt(): string {
-  if (cachedCommonPrompt === null) {
-    cachedCommonPrompt = fs.readFileSync(
-      join(PROMPTS_DIR, "prompts", "agent-common.md"),
-      "utf-8",
-    );
-    commonPromptReadCount++;
-  }
-  return cachedCommonPrompt;
+  return PROMPT_AGENT_COMMON;
 }
 
 function deriveAgentPromptCapabilities(
@@ -278,13 +268,14 @@ export function loadAgentProjectInstructions(repoRoot: string): string | null {
     .join("\n\n");
 }
 
+/** @deprecated Prompts are now embedded constants — cache reset is a no-op. */
 export function __resetCommonPromptCacheForTesting(): void {
-  cachedCommonPrompt = null;
-  commonPromptReadCount = 0;
+  // No-op: prompts are embedded constants, no filesystem cache to reset.
 }
 
+/** @deprecated Prompts are now embedded constants — always returns 0. */
 export function __getCommonPromptReadCountForTesting(): number {
-  return commonPromptReadCount;
+  return 0;
 }
 
 /** Format the deferred tools prompt section. Shared by CLI and engine prompt assemblers. */

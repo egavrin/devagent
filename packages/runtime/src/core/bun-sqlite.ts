@@ -1,40 +1,45 @@
 /**
- * Bridge module for bun:sqlite.
+ * Bridge module for SQLite.
  *
- * Vitest uses Vite's module resolver which cannot handle the `bun:` protocol.
- * This shim tries a dynamic import with a runtime-computed specifier; if that
- * fails (e.g. on Linux CI where Vite's ESM loader rejects bun: even for
- * dynamic imports), it falls back to a stub class.  Tests that need real
- * sqlite use `BUN_SQLITE_AVAILABLE` to skip gracefully.
+ * Fallback chain:
+ *   1. bun:sqlite (Bun runtime — built-in, fastest)
+ *   2. better-sqlite3 (Node.js — native addon, npm dependency)
+ *   3. Stub that throws a clear error
  */
 
 let _Database: unknown;
 let _available = false;
 
 try {
-  // Build specifier at runtime so Vite cannot statically match it
+  // Build specifier at runtime so bundlers cannot statically match it
   const _specifier = ["bun", "sqlite"].join(":");
   const _mod = await import(_specifier);
   _Database = _mod.Database;
   _available = true;
 } catch {
-  // bun:sqlite not loadable in this environment — provide a stub that throws
-  // a clear error if anyone tries to instantiate it.
-  _Database = class StubDatabase {
-    constructor() {
-      throw new Error(
-        "bun:sqlite is not available in this environment. " +
-          "Tests requiring SQLite should be skipped with BUN_SQLITE_AVAILABLE.",
-      );
-    }
-  };
+  try {
+    // Node.js fallback: better-sqlite3 has a near-identical sync API
+    const _mod = await import("better-sqlite3");
+    _Database = _mod.default;
+    _available = true;
+  } catch {
+    // No SQLite available — provide a stub that throws on instantiation
+    _Database = class StubDatabase {
+      constructor() {
+        throw new Error(
+          "No SQLite library available. " +
+            "Install better-sqlite3 (npm i better-sqlite3) or use Bun runtime.",
+        );
+      }
+    };
+  }
 }
 
-/** Re-exported Database constructor (real bun:sqlite or stub). */
+/** Re-exported Database constructor (bun:sqlite, better-sqlite3, or stub). */
 export const Database = _Database as typeof import("bun:sqlite").Database;
 
 /** Instance type so callers can use `Database` in type position. */
 export type Database = InstanceType<typeof Database>;
 
-/** `true` when the real bun:sqlite module loaded successfully. */
+/** `true` when a real SQLite library loaded successfully. */
 export const BUN_SQLITE_AVAILABLE: boolean = _available;

@@ -28,6 +28,18 @@ import {
 import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, VerbosityConfig } from "@devagent/runtime";
 import { AgentType, ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
+
+/** Package version — embedded at build time or read from package.json. */
+function getVersion(): string {
+  try {
+    // In bundle: try to read from the generated dist/package.json
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "package.json");
+    const pkg = JSON.parse(nodeReadFileSync(pkgPath, "utf-8"));
+    return pkg.version ?? "0.1.0";
+  } catch {
+    return "0.1.0";
+  }
+}
 import {
   createRoutingLSPTools,
   ToolRegistry,
@@ -243,6 +255,17 @@ export function parseArgs(argv: string[]): CliArgs {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
 
+    if (arg === "version") {
+      console.log(getVersion());
+      process.exit(0);
+    }
+
+    if (arg === "doctor" || arg === "config" || arg === "init" || arg === "setup") {
+      // Handled in main() before parseArgs completes
+      result.query = `__cmd:${arg}:${args.slice(i + 1).join(" ")}`;
+      return result;
+    }
+
     if (arg === "sessions") {
       result.sessionsCommand = true;
       break;
@@ -304,6 +327,9 @@ export function parseArgs(argv: string[]): CliArgs {
       result.resume = args[++i]!;
     } else if (arg === "--continue") {
       result.continue_ = true;
+    } else if (arg === "--version" || arg === "-V") {
+      console.log(getVersion());
+      process.exit(0);
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -334,6 +360,15 @@ Usage:
   devagent review <file> --rule <rule_file> [--json]
                                   Rule-based patch review
 
+Commands:
+  devagent setup                  Interactive first-time setup (provider, model, config)
+  devagent init                   Initialize project config (.devagent/ + AGENTS.md)
+  devagent doctor                 Check environment and dependencies
+  devagent config get [key]       Show config value(s)
+  devagent config set <key> <val> Set a config value
+  devagent config path            Show config file location
+  devagent version                Show version and runtime info
+
 Auth:
   devagent auth login             Store API key for a provider
   devagent auth status            Show configured credentials
@@ -352,6 +387,7 @@ Options:
   --full-auto           Full-auto mode (auto-approve everything)
   -v, --verbose         Verbose output (show full tool params and results)
   -q, --quiet           Quiet output (errors only)
+  -V, --version         Show version
   -h, --help            Show this help
 
 Environment:
@@ -1057,6 +1093,19 @@ export async function main(): Promise<void> {
   }
 
   const cliArgs = parseArgs(process.argv);
+
+  // Subcommands: doctor, config, init
+  if (cliArgs.query?.startsWith("__cmd:")) {
+    const parts = cliArgs.query.slice(6).split(":");
+    const cmd = parts[0]!;
+    const cmdArgs = parts[1]?.trim().split(/\s+/).filter(Boolean) ?? [];
+    const { runDoctor, runConfig, runInit, runSetup } = await import("./commands.js");
+    if (cmd === "doctor") { await runDoctor(getVersion()); }
+    else if (cmd === "config") { runConfig(cmdArgs); }
+    else if (cmd === "init") { runInit(); }
+    else if (cmd === "setup") { await runSetup(); }
+    return;
+  }
 
   // Sessions command — list recent sessions
   if (cliArgs.sessionsCommand) {

@@ -127,7 +127,8 @@ describe("assembleAgentSystemPrompt", () => {
       availableTools: readonlyTools,
     });
 
-    expect(__getCommonPromptReadCountForTesting()).toBe(1);
+    // Prompts are now embedded constants — read count is always 0
+    expect(__getCommonPromptReadCountForTesting()).toBe(0);
     __resetCommonPromptCacheForTesting();
   });
 

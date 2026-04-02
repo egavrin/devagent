@@ -39,6 +39,11 @@ Thumbs.db
 .env
 .env.*
 
+# Generated embedded assets (scripts/embed-assets.ts)
+packages/cli/src/prompts/embedded.ts
+packages/runtime/src/engine/prompts/embedded.ts
+packages/runtime/src/core/embedded-models.ts
+
 # DevAgent local config
 .devagent.toml
 .devagent/

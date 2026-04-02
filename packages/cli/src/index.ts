@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * @devagent/cli — CLI frontend.
  * Supports single-query execution, review, and machine orchestration.

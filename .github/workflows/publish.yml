@@ -1,13 +1,15 @@
-name: CI
+name: Publish to npm
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  ci:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +26,11 @@ jobs:
         with:
           bun-version: "1.3.10"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
       - name: Install SDK dependencies
         working-directory: devagent-sdk
         run: bun install
@@ -36,10 +43,6 @@ jobs:
         working-directory: devagent
         run: bun install
 
-      - name: Lint
-        working-directory: devagent
-        run: bun run lint
-
       - name: Typecheck
         working-directory: devagent
         run: bun run typecheck
@@ -48,16 +51,18 @@ jobs:
         working-directory: devagent
         run: bun run test
 
-      - name: OSS readiness
-        working-directory: devagent
-        run: bun run check:oss
-
       - name: Bundle
         working-directory: devagent
         run: bun run bundle
 
-      - name: Smoke test bundle
+      - name: Smoke test
         working-directory: devagent
         run: |
           bun dist/devagent.js --help
           bun dist/devagent.js --version
+
+      - name: Publish
+        working-directory: devagent/dist
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

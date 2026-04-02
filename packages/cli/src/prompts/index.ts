@@ -3,9 +3,6 @@
  * from markdown files into a single system prompt.
  */
 
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { SkillRegistry } from "@devagent/runtime";
 import type {
   AgentType,
@@ -20,38 +17,12 @@ import {
   deriveRootPromptCapabilities,
 } from "./fragments.js";
 import { loadProjectContext } from "./project-context.js";
-
-const PROMPTS_DIR = dirname(fileURLToPath(import.meta.url));
-
-function loadPromptFile(filename: string): string {
-  return readFileSync(join(PROMPTS_DIR, filename), "utf-8");
-}
-
-// Cache loaded prompt files (they never change during a process lifetime)
-let cachedBase: string | null = null;
-let cachedTools: string | null = null;
-let cachedModeAct: string | null = null;
-let cachedReview: string | null = null;
-
-function getBase(): string {
-  cachedBase ??= loadPromptFile("base.md");
-  return cachedBase;
-}
-
-function getTools(): string {
-  cachedTools ??= loadPromptFile("tools.md");
-  return cachedTools;
-}
-
-function getModeAct(): string {
-  cachedModeAct ??= loadPromptFile("mode-act.md");
-  return cachedModeAct;
-}
-
-function getReview(): string {
-  cachedReview ??= loadPromptFile("review.md");
-  return cachedReview;
-}
+import {
+  PROMPT_BASE,
+  PROMPT_TOOLS,
+  PROMPT_MODE_ACT,
+  PROMPT_REVIEW,
+} from "./embedded.js";
 
 export interface AssemblePromptOptions {
   readonly mode: TaskMode;
@@ -79,13 +50,13 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
   const capabilities = deriveRootPromptCapabilities(opts.availableTools);
 
   // Core identity and behavior
-  sections.push(getBase());
+  sections.push(PROMPT_BASE);
 
   // Generic tool usage strategy
-  sections.push(getTools());
+  sections.push(PROMPT_TOOLS);
 
   // Mode-specific constraints
-  sections.push(getModeAct());
+  sections.push(PROMPT_MODE_ACT);
 
   // Capability-aware task-shape and tool-specific guidance
   sections.push(
@@ -99,7 +70,7 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
 
   // Review guidelines (loaded conditionally)
   if (opts.includeReview) {
-    sections.push(getReview());
+    sections.push(PROMPT_REVIEW);
   }
 
   // Environment context
