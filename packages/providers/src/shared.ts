@@ -313,7 +313,7 @@ export function convertTools(
 
     if (strict) {
       // OpenAI strict mode: all properties required, non-required become nullable
-      const requiredSet = new Set(t.paramSchema.required ?? []);
+      const requiredSet = new Set(Array.isArray(t.paramSchema.required) ? t.paramSchema.required : []);
       const allPropertyNames = Object.keys(rawProps);
 
       const strictProps: Record<string, Record<string, unknown>> = {};
@@ -346,7 +346,7 @@ export function convertTools(
         parameters: jsonSchema({
           type: t.paramSchema.type as "object",
           properties: rawProps,
-          required: [...(t.paramSchema.required ?? [])],
+          required: Array.isArray(t.paramSchema.required) ? [...t.paramSchema.required] : [],
         }),
       });
     }

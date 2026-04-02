@@ -61,7 +61,7 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
             // ChatGPT Codex: inject required fields
             if (codexOpts) {
               if (codexOpts.store !== undefined) body["store"] = codexOpts.store;
-              if (codexOpts.include) body["include"] = [...codexOpts.include];
+              if (codexOpts.include && Array.isArray(codexOpts.include)) body["include"] = [...codexOpts.include];
               delete body["max_output_tokens"];
             }
             // Strip fields the endpoint rejects
