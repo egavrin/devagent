@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { execSync } from "node:child_process";
+import { MINIMUM_NODE_MAJOR, renderRuntimeBootstrap } from "../packages/cli/src/runtime-version.ts";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const DIST = join(ROOT, "dist");
@@ -67,6 +68,9 @@ if (!bundleContent.startsWith("#!/")) {
 // Make executable
 execSync(`chmod +x ${join(DIST, "devagent.js")}`);
 
+writeFileSync(join(DIST, "bootstrap.js"), renderRuntimeBootstrap("./devagent.js"));
+execSync(`chmod +x ${join(DIST, "bootstrap.js")}`);
+
 // ── Step 3: Generate package.json ───────────────────────────
 
 console.log("→ Generating package.json...");
@@ -78,9 +82,9 @@ const distPkg = {
   version,
   description: "AI coding agent CLI",
   type: "module",
-  bin: { devagent: "devagent.js" },
-  files: ["devagent.js", "README.md", "LICENSE"],
-  engines: { node: ">=20" },
+  bin: { devagent: "bootstrap.js" },
+  files: ["bootstrap.js", "devagent.js", "README.md", "LICENSE"],
+  engines: { node: `>=${MINIMUM_NODE_MAJOR}` },
   publishConfig: { access: "public" },
   repository: rootPkg.repository,
   bugs: rootPkg.bugs,
@@ -114,5 +118,5 @@ const stats = Bun.file(join(DIST, "devagent.js"));
 const sizeKB = Math.round((await stats.size) / 1024);
 console.log(`\n✓ Bundle ready: dist/devagent.js (${sizeKB} KB)`);
 console.log(`  Package: ${distPkg.name}@${version}`);
-console.log(`  Test: node dist/devagent.js --help`);
+console.log(`  Test: node dist/bootstrap.js --help`);
 console.log(`  Publish: cd dist && npm publish --access public`);
