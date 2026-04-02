@@ -89,8 +89,6 @@ const distPkg = {
   dependencies: {
     "cli-highlight": "^2.1.11",
     "better-sqlite3": "^11.0.0",
-  },
-  optionalDependencies: {
     "typescript-language-server": "^4.3.0",
     "typescript": "^5.7.0",
     "pyright": "^1.1.0",
