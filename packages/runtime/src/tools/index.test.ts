@@ -1,5 +1,7 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
-import type { ToolSpec } from "../core/index.js";
+import type { ToolSpec } from "../core/types.js";
 import { createDefaultToolRegistry } from "./index.js";
 
 function makeTool(name: string): ToolSpec {
@@ -27,4 +29,36 @@ describe("createDefaultToolRegistry", () => {
 
     expect(result.output).toBe("override");
   });
+
+  it("avoids runtime imports from the async core barrel in tool sources", () => {
+    const sourceFiles = collectTypeScriptFiles(import.meta.dirname).filter(
+      (filePath) => !filePath.endsWith(".test.ts"),
+    );
+
+    for (const filePath of sourceFiles) {
+      const content = readFileSync(filePath, "utf-8");
+      const runtimeCoreImports = content.match(
+        /^import\s+(?!type\b).*from\s+["'](?:\.\.\/core\/index\.js|\.\.\/\.\.\/core\/index\.js)["'];?$/gm,
+      );
+      expect(runtimeCoreImports, filePath).toBeNull();
+    }
+  });
 });
+
+function collectTypeScriptFiles(dirPath: string): string[] {
+  const entries = readdirSync(dirPath, { withFileTypes: true });
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    const entryPath = join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectTypeScriptFiles(entryPath));
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".ts")) {
+      files.push(entryPath);
+    }
+  }
+
+  return files;
+}

@@ -16,8 +16,8 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
-import type { ToolSpec } from "../../core/index.js";
-import { ToolError, extractErrorMessage } from "../../core/index.js";
+import type { ToolSpec } from "../../core/types.js";
+import { ToolError, extractErrorMessage } from "../../core/errors.js";
 import { FileTime } from "./file-time.js";
 import { resolvePathInRepo } from "./path-guard.js";
 

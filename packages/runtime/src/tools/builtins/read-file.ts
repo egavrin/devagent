@@ -4,8 +4,8 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import type { ToolSpec } from "../../core/index.js";
-import { ToolError } from "../../core/index.js";
+import type { ToolSpec } from "../../core/types.js";
+import { ToolError } from "../../core/errors.js";
 import { FileTime } from "./file-time.js";
 import { resolveReadonlyPath, type ReadonlyToolOptions } from "./readonly-paths.js";
 

@@ -7,10 +7,10 @@
   },
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc && cp src/prompts/*.md dist/prompts/",
-    "test": "vitest run --passWithNoTests",
+    "build": "bun run ../../scripts/embed-assets.ts && tsc && cp src/prompts/*.md dist/prompts/",
+    "test": "bun run ../../scripts/embed-assets.ts && vitest run --passWithNoTests",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bun run ../../scripts/embed-assets.ts && tsc --noEmit",
     "clean": "rm -rf dist",
     "dev": "tsc --watch",
     "install-cli": "bun link"

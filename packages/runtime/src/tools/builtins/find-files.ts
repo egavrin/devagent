@@ -3,7 +3,7 @@
  * Category: readonly.
  */
 
-import type { ToolSpec } from "../../core/index.js";
+import type { ToolSpec } from "../../core/types.js";
 import { resolveReadonlyPath, toRootRelativePath, type ReadonlyToolOptions } from "./readonly-paths.js";
 import { globToRegex, normalizeGlobPattern } from "./glob-utils.js";
 import { walkDirectory } from "./walk-directory.js";

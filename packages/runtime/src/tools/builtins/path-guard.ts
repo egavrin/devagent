@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import { resolve, relative, isAbsolute, dirname, basename } from "node:path";
-import { ToolError , extractErrorMessage } from "../../core/index.js";
+import { ToolError , extractErrorMessage } from "../../core/errors.js";
 
 function resolveWithSymlinkAwareness(
   targetPath: string,

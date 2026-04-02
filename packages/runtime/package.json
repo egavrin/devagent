@@ -15,11 +15,11 @@
     }
   },
   "scripts": {
-    "build": "tsc && mkdir -p dist/engine/prompts && cp src/engine/prompts/*.md dist/engine/prompts/",
-    "test": "vitest run --passWithNoTests",
+    "build": "bun run ../../scripts/embed-assets.ts && tsc && mkdir -p dist/engine/prompts && cp src/engine/prompts/*.md dist/engine/prompts/",
+    "test": "bun run ../../scripts/embed-assets.ts && vitest run --passWithNoTests",
     "lint": "eslint src/",
     "lint:arkts": "eslint --config eslint.arkts.cjs src/",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bun run ../../scripts/embed-assets.ts && tsc --noEmit",
     "clean": "rm -rf dist"
   },
   "dependencies": {

@@ -4,8 +4,8 @@
  */
 
 import { execFileSync } from "node:child_process";
-import type { ToolSpec } from "../../core/index.js";
-import { ToolError , extractErrorMessage } from "../../core/index.js";
+import type { ToolSpec } from "../../core/types.js";
+import { ToolError , extractErrorMessage } from "../../core/errors.js";
 
 const DISALLOWED_ARG_CHARS = /[;&|`$<>\n\r\0]/;
 

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { relative } from "node:path";
-import { ToolError } from "../../core/index.js";
-import type { SkillAccessManager } from "../../core/index.js";
+import { ToolError } from "../../core/errors.js";
+import type { SkillAccessManager } from "../../core/skills/index.js";
 import {
   normalizeRelativePath,
   resolvePathInRepo,

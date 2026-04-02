@@ -11,8 +11,8 @@
  * Fail fast: throws on duplicate names or missing tools.
  */
 
-import type { ToolSpec, ToolCategory } from "../core/index.js";
-import { ToolNotFoundError } from "../core/index.js";
+import type { ToolSpec, ToolCategory } from "../core/types.js";
+import { ToolNotFoundError } from "../core/errors.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
