@@ -20,9 +20,11 @@ describe("parseNodeMajor", () => {
 
 describe("getUnsupportedRuntimeMessage", () => {
   it("rejects unsupported Node.js runtimes with an actionable message", () => {
-    expect(getUnsupportedRuntimeMessage({ nodeVersion: "v19.9.0", hasBun: false })).toContain(
-      `DevAgent requires Node.js >= ${MINIMUM_NODE_MAJOR} or Bun >= ${MINIMUM_BUN_VERSION}.`,
-    );
+    const message = getUnsupportedRuntimeMessage({ nodeVersion: "v19.9.0", hasBun: false });
+
+    expect(message).toContain(`DevAgent requires Node.js >= ${MINIMUM_NODE_MAJOR} or Bun >= ${MINIMUM_BUN_VERSION}.`);
+    expect(message).toContain("nvm install 20 && nvm use 20");
+    expect(message).toContain(`switch to Bun ${MINIMUM_BUN_VERSION}+`);
   });
 
   it("allows supported Node.js runtimes", () => {
@@ -41,5 +43,6 @@ describe("renderRuntimeBootstrap", () => {
     expect(script).toContain('import("./devagent.js")');
     expect(script).toContain(`minimumNodeMajor = ${MINIMUM_NODE_MAJOR}`);
     expect(script).toContain('DevAgent requires Node.js >= " + minimumNodeMajor');
+    expect(script).toContain("nvm install 20 && nvm use 20");
   });
 });

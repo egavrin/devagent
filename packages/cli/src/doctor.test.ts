@@ -72,6 +72,22 @@ function makeInput(overrides: Partial<DoctorReportInput> = {}): DoctorReportInpu
 }
 
 describe("doctor report", () => {
+  it("shows actionable runtime remediation for Ubuntu users on old Node", () => {
+    const report = buildDoctorReport(makeInput({
+      runtimeLabel: "Node v18.19.0",
+      runtimeError: "Node.js >= 20 required",
+    }));
+
+    const output = renderDoctorReport(report);
+
+    expect(output).toContain("Blocking issues:");
+    expect(output).toContain("  - Runtime: Node.js >= 20 required");
+    expect(output).toContain("nvm install 20 && nvm use 20");
+    expect(output).toContain("Bun >= 1.3");
+    expect(output).toContain("  ✗ Runtime: Node v18.19.0: Node.js >= 20 required");
+    expect(output).toContain("Some checks failed.");
+  });
+
   it("prioritizes provider/model mismatch and shows gateway next steps", () => {
     const report = buildDoctorReport(makeInput({
       config: makeConfig({ provider: "openai", model: "cortex" }),

@@ -28,6 +28,15 @@ describe("documentation parity", () => {
     expect(readme).toContain("| `ANTHROPIC_API_KEY` | Anthropic API key |");
   });
 
+  it("documents the supported runtime floor and Ubuntu-safe Node setup", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain("DevAgent requires Node.js 20+ or Bun 1.3+.");
+    expect(readme).toContain("do not rely on `apt install nodejs` for this project");
+    expect(readme).toContain("nvm install 20");
+    expect(readme).toContain("nvm use 20");
+    expect(readme).toContain("bunx @egavrin/devagent");
+  });
+
   it("describes the interactive surface as the TUI, not a REPL", () => {
     const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
     expect(readme).toContain("Interactive TUI");

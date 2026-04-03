@@ -28,7 +28,8 @@ export function getUnsupportedRuntimeMessage(
     `Unsupported Node.js runtime: ${runtime.nodeVersion}.`,
     `DevAgent requires Node.js >= ${MINIMUM_NODE_MAJOR} or Bun >= ${MINIMUM_BUN_VERSION}.`,
     'Older Node.js releases can crash before startup with "Invalid regular expression flags".',
-    "Upgrade Node.js and run the command again.",
+    `Install Node.js ${MINIMUM_NODE_MAJOR}+ (recommended on Ubuntu: nvm install 20 && nvm use 20) or switch to Bun ${MINIMUM_BUN_VERSION}+.`,
+    "Then run the command again.",
   ].join("\n");
 }
 
@@ -45,7 +46,8 @@ if (!Number.isFinite(major) || major < minimumNodeMajor) {
     "Unsupported Node.js runtime: " + runtimeVersion + "\\n" +
     "DevAgent requires Node.js >= " + minimumNodeMajor + " or Bun >= " + minimumBunVersion + ".\\n" +
     "Older Node.js releases can crash before startup with \\"Invalid regular expression flags\\".\\n" +
-    "Upgrade Node.js and run the command again.\\n"
+    "Install Node.js " + minimumNodeMajor + "+ (recommended on Ubuntu: nvm install 20 && nvm use 20) or switch to Bun " + minimumBunVersion + "+.\\n" +
+    "Then run the command again.\\n"
   );
   process.exit(1);
 }

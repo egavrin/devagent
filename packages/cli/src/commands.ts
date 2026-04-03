@@ -325,7 +325,11 @@ function buildBlockingIssues(
     issues.push({
       title: "Runtime",
       detail: checks.runtimeCheck.detail ?? "runtime check failed",
-      nextSteps: ["Install Node.js >= 20 or Bun >= 1.3 and retry."],
+      nextSteps: [
+        "Install Node.js >= 20 (recommended on Ubuntu: nvm install 20 && nvm use 20).",
+        "Or use Bun >= 1.3 if you prefer a Bun-first setup.",
+        "Then retry: devagent doctor",
+      ],
     });
   }
   if (checks.gitCheck.status === "blocking") {

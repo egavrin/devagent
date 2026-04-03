@@ -4,6 +4,8 @@ AI-powered coding agent for the terminal. Reads your codebase, writes code, runs
 
 ## Install
 
+DevAgent requires Node.js 20+ or Bun 1.3+.
+
 ```bash
 npm i -g @egavrin/devagent
 ```
@@ -12,6 +14,18 @@ Or run without installing:
 
 ```bash
 npx @egavrin/devagent "fix failing tests"
+```
+
+On Ubuntu, do not rely on `apt install nodejs` for this project. Use Node 20 instead:
+
+```bash
+nvm install 20 && nvm use 20
+```
+
+If you prefer Bun, Bun 1.3+ is also supported:
+
+```bash
+bunx @egavrin/devagent "fix failing tests"
 ```
 
 ## Quick Start
