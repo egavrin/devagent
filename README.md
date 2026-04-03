@@ -72,6 +72,9 @@ devagent "explain the config system"
 # Query from file
 devagent -f prompt.md
 
+# Top-level help
+devagent help
+
 # Provider/model override
 devagent --provider openai --model gpt-4.1 "optimize this function"
 
@@ -92,6 +95,7 @@ devagent review patch.diff --rule rules/security.md --json
 
 | Command | Description |
 |---------|-------------|
+| `devagent help` | Show top-level help |
 | `devagent configure` | Guided global configuration wizard |
 | `devagent doctor` | Check environment and dependencies |
 | `devagent config get/set/path` | Inspect or edit global config directly |

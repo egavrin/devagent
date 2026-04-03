@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +46,16 @@ describe("parseArgs", () => {
         subcommand: {
           name: "setup",
           args: ["--help"],
+        },
+      });
+  });
+
+  it("recognizes bare help as a top-level help command", () => {
+    expect(parseArgs(["node", "devagent", "help"]))
+      .toMatchObject({
+        subcommand: {
+          name: "help",
+          args: [],
         },
       });
   });
@@ -127,6 +139,72 @@ describe("renderHelpText", () => {
     });
 
     expect(builtHelp.trim()).toBe(renderHelpText().trim());
+  });
+
+  it("matches the built CLI help alias output after build", () => {
+    execFileSync("bun", ["run", "build"], {
+      cwd: cliPackageDir,
+      stdio: "pipe",
+    });
+
+    const builtHelp = execFileSync("bun", ["dist/index.js", "help"], {
+      cwd: cliPackageDir,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(builtHelp.trim()).toBe(renderHelpText().trim());
+  });
+
+  it("lets the help alias succeed when config references an unset env var", () => {
+    execFileSync("bun", ["run", "build"], {
+      cwd: cliPackageDir,
+      stdio: "pipe",
+    });
+
+    const home = mkdtempSync(join(tmpdir(), "devagent-help-home-"));
+    try {
+      const configDir = join(home, ".config", "devagent");
+      const configPath = join(configDir, "config.toml");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(configPath, 'provider = "openai"\n\n[providers.openai]\napi_key = "env:OPENAI_API_KEY"\n');
+
+      const builtHelp = execFileSync("bun", ["dist/index.js", "help"], {
+        cwd: cliPackageDir,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          HOME: home,
+        },
+      });
+
+      expect(builtHelp.trim()).toBe(renderHelpText().trim());
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects extra arguments after the help alias with usage guidance", () => {
+    execFileSync("bun", ["run", "build"], {
+      cwd: cliPackageDir,
+      stdio: "pipe",
+    });
+
+    try {
+      execFileSync("bun", ["dist/index.js", "help", "config"], {
+        cwd: cliPackageDir,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      expect.unreachable("expected help alias with extra args to fail");
+    } catch (error) {
+      const execError = error as Error & { stdout?: string; stderr?: string; status?: number };
+      expect(execError.status).toBe(2);
+      expect(execError.stderr).toContain('Usage: devagent help');
+      expect(execError.stderr).toContain(renderHelpText().trim());
+      expect(execError.stderr).not.toContain('Environment variable "OPENAI_API_KEY" referenced in config but not set');
+    }
   });
 });
 

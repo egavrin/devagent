@@ -47,6 +47,8 @@ describe("documentation parity", () => {
 
   it("documents configure as the public onboarding command", () => {
     const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain("devagent help");
+    expect(readme).toContain("| `devagent help` | Show top-level help |");
     expect(readme).toContain("devagent configure");
     expect(readme).toContain("| `devagent configure` | Guided global configuration wizard |");
     expect(readme).toContain("| `devagent config get/set/path` | Inspect or edit global config directly |");

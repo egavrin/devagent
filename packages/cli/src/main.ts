@@ -208,7 +208,7 @@ interface ReviewArgs {
 }
 
 interface CliSubcommand {
-  name: "doctor" | "config" | "configure" | "setup" | "init" | "update" | "completions" | "install-lsp";
+  name: "help" | "doctor" | "config" | "configure" | "setup" | "init" | "update" | "completions" | "install-lsp";
   args: string[];
 }
 
@@ -230,6 +230,7 @@ interface CliArgs {
 }
 
 const SUBCOMMANDS = new Set<CliSubcommand["name"]>([
+  "help",
   "doctor",
   "config",
   "configure",
@@ -463,6 +464,7 @@ Usage:
                                   Rule-based patch review
 
 Commands:
+  devagent help                   Show top-level help
   devagent configure              Guided global configuration wizard
   devagent doctor                 Check environment and dependencies
   devagent config <...>           Inspect or edit global config directly
@@ -527,6 +529,12 @@ export function renderSessionsList(sessions: ReadonlyArray<Session>): string {
 
 function printHelp(): void {
   console.log(renderHelpText());
+}
+
+function printHelpUsageError(): never {
+  process.stderr.write(formatError("Usage: devagent help") + "\n");
+  process.stderr.write(renderHelpText() + "\n");
+  process.exit(2);
 }
 
 
@@ -1288,7 +1296,13 @@ export async function main(): Promise<void> {
     const cmd = cliArgs.subcommand.name;
     const cmdArgs = cliArgs.subcommand.args;
     const { runDoctor, runConfig, runInit, runSetup, runConfigure, runUpdate, runCompletions, runInstallLsp } = await import("./commands.js");
-    if (cmd === "doctor") { await runDoctor(getVersion(), cmdArgs); }
+    if (cmd === "help") {
+      if (cmdArgs.length > 0) {
+        printHelpUsageError();
+      }
+      printHelp();
+    }
+    else if (cmd === "doctor") { await runDoctor(getVersion(), cmdArgs); }
     else if (cmd === "config") { runConfig(cmdArgs); }
     else if (cmd === "setup") { runSetup(cmdArgs); }
     else if (cmd === "init") { runInit(cmdArgs); }
