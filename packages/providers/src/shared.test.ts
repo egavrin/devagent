@@ -121,6 +121,14 @@ describe("classifyProviderError", () => {
     const result2 = classifyProviderError(undefined, "Test");
     expect(result2).toBeInstanceOf(ProviderError);
   });
+
+  it("mentions provider, model, and credentials for auth failures", () => {
+    const err = { status: 401, message: "invalid x-api-key" };
+    const result = classifyProviderError(err, "TestProvider");
+
+    expect(result.message).toContain("Check your provider, model, and credentials");
+    expect(result.message).not.toContain("Check your API key");
+  });
 });
 
 // ─── stripNullArgs ──────────────────────────────────────────

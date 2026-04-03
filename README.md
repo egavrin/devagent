@@ -29,6 +29,13 @@ devagent "add unit tests for the parser module"
 devagent "review my last commit for issues"
 ```
 
+Devagent API gateway:
+
+```bash
+DEVAGENT_API_KEY=ilg_your_gateway_key \
+devagent --provider devagent-api --model cortex "fix failing tests"
+```
+
 ## Features
 
 - **Multi-provider** — Anthropic, OpenAI, Devagent API, DeepSeek, OpenRouter, Ollama, ChatGPT, GitHub Copilot
@@ -113,6 +120,20 @@ architect = "high"
 
 Project config: `.devagent/instructions.md` and `AGENTS.md` in your repo root.
 
+Devagent API gateway config:
+
+The deployed gateway is OpenAI-compatible under the hood, but in DevAgent you should use the built-in `devagent-api` provider with model `cortex`, not a direct upstream provider configuration.
+
+```toml
+provider = "devagent-api"
+model = "cortex"
+```
+
+```bash
+export DEVAGENT_API_KEY=ilg_your_gateway_key
+devagent doctor
+```
+
 ## Shell Completions
 
 ```bash
@@ -132,7 +153,7 @@ devagent completions fish > ~/.config/fish/completions/devagent.fish
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OPENAI_API_KEY` | OpenAI API key |
-| `DEVAGENT_API_KEY` | Devagent API gateway key, and generic API key fallback for the default provider |
+| `DEVAGENT_API_KEY` | Devagent API gateway key (virtual key starting with `ilg_`) |
 | `DEEPSEEK_API_KEY` | DeepSeek API key |
 | `OPENROUTER_API_KEY` | OpenRouter API key |
 | `DEVAGENT_PROVIDER` | Default provider |

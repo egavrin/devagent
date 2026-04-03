@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  CliCommandScenarioInvocation,
   CliScenarioInvocation,
   ExecuteScenarioInvocation,
   ScenarioPreSetupStep,
@@ -219,6 +220,13 @@ function parseCliInvocation(raw: Record<string, unknown>, filePath: string): Cli
   };
 }
 
+function parseCliCommandInvocation(raw: Record<string, unknown>, filePath: string): CliCommandScenarioInvocation {
+  return {
+    type: "cli-command",
+    args: expectStringArray(raw["args"], "invocation.args", filePath),
+  };
+}
+
 export function validateScenarioManifest(raw: unknown, filePath: string): ValidationScenario {
   if (!raw || typeof raw !== "object") {
     throw new Error(`Invalid manifest ${filePath}: expected object.`);
@@ -256,6 +264,8 @@ export function validateScenarioManifest(raw: unknown, filePath: string): Valida
     ? parseExecuteInvocation(invocationRecord, filePath)
     : invocationType === "cli"
       ? parseCliInvocation(invocationRecord, filePath)
+      : invocationType === "cli-command"
+        ? parseCliCommandInvocation(invocationRecord, filePath)
       : (() => {
           throw new Error(`Invalid invocation.type in ${filePath}: ${invocationType}`);
         })();
@@ -269,10 +279,23 @@ export function validateScenarioManifest(raw: unknown, filePath: string): Valida
         ]),
       )
     : undefined;
+  const commandEnvRaw = record["commandEnv"];
+  const commandEnv = commandEnvRaw && typeof commandEnvRaw === "object"
+    ? Object.fromEntries(
+        Object.entries(commandEnvRaw as Record<string, unknown>).map(([key, value]) => [
+          key,
+          expectString(value, `commandEnv.${key}`, filePath),
+        ]),
+      )
+    : undefined;
 
   const timeoutMs = record["timeoutMs"];
   if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || timeoutMs <= 0)) {
     throw new Error(`Invalid timeoutMs in ${filePath}: expected positive number.`);
+  }
+  const expectedExitCode = record["expectedExitCode"];
+  if (expectedExitCode !== undefined && (!Number.isInteger(expectedExitCode) || Number(expectedExitCode) < 0)) {
+    throw new Error(`Invalid expectedExitCode in ${filePath}: expected integer >= 0.`);
   }
 
   return {
@@ -294,10 +317,12 @@ export function validateScenarioManifest(raw: unknown, filePath: string): Valida
           throw new Error(`Invalid cleanupPolicy in ${filePath}: expected "destroy".`);
         })(),
     ...(variables ? { variables } : {}),
+    ...(commandEnv ? { commandEnv } : {}),
     ...(record["baselineAfterSetup"] === true ? { baselineAfterSetup: true } : {}),
-    ...(record["requiresChatgptAuth"] === true ? { requiresChatgptAuth: true } : {}),
-    ...(record["requiresArktsLinter"] === true ? { requiresArktsLinter: true } : {}),
+    ...(typeof record["requiresChatgptAuth"] === "boolean" ? { requiresChatgptAuth: record["requiresChatgptAuth"] as boolean } : {}),
+    ...(typeof record["requiresArktsLinter"] === "boolean" ? { requiresArktsLinter: record["requiresArktsLinter"] as boolean } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+    ...(typeof expectedExitCode === "number" ? { expectedExitCode } : {}),
     ...(parseRequiredToolCalls(record["requiredToolCalls"], filePath)
       ? { requiredToolCalls: parseRequiredToolCalls(record["requiredToolCalls"], filePath)! }
       : {}),

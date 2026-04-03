@@ -1,0 +1,75 @@
+{
+  "id": "doctor-provider-model-mismatch",
+  "description": "CLI doctor scenario for a provider/model mismatch with actionable gateway remediation.",
+  "suites": ["full"],
+  "targetRepo": "arkcompiler_runtime_core_docs",
+  "surface": "cli",
+  "taskShape": "readonly",
+  "isolationMode": "worktree",
+  "preSetup": [
+    {
+      "kind": "write-file",
+      "path": ".devagent.toml",
+      "content": "provider = \"openai\"\nmodel = \"cortex\"\n"
+    }
+  ],
+  "commandEnv": {
+    "HOME": "${outputDir}/home"
+  },
+  "invocation": {
+    "type": "cli-command",
+    "args": ["doctor"]
+  },
+  "expectedExitCode": 1,
+  "expectedArtifacts": [],
+  "assertions": [
+    {
+      "type": "contains",
+      "source": "stdout",
+      "value": "Blocking issues:"
+    },
+    {
+      "type": "contains",
+      "source": "stdout",
+      "value": "Configured model \"cortex\" belongs to provider \"devagent-api\"; current provider is \"openai\"."
+    },
+    {
+      "type": "contains",
+      "source": "stdout",
+      "value": "Run now: devagent --provider devagent-api --model cortex \"<your prompt>\""
+    },
+    {
+      "type": "contains",
+      "source": "stdout",
+      "value": "provider = \"devagent-api\""
+    },
+    {
+      "type": "contains",
+      "source": "stdout",
+      "value": "model = \"cortex\""
+    },
+    {
+      "type": "contains",
+      "source": "stdout",
+      "value": "export DEVAGENT_API_KEY=ilg_..."
+    },
+    {
+      "type": "contains",
+      "source": "stdout",
+      "value": "Credential: missing"
+    },
+    {
+      "type": "contains",
+      "source": "stdout",
+      "value": "Model owner: devagent-api"
+    },
+    {
+      "type": "contains",
+      "source": "stdout",
+      "value": "! Provider: openai:"
+    }
+  ],
+  "verificationCommands": [],
+  "cleanupPolicy": "destroy",
+  "requiresChatgptAuth": false
+}

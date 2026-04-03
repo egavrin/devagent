@@ -8,138 +8,665 @@ import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import {
+  CredentialStore,
+  findProjectRoot,
   loadConfig,
   loadModelRegistry,
   getRegisteredModels,
+  lookupModelEntry,
 } from "@devagent/runtime";
+import type { CredentialInfo, DevAgentConfig } from "@devagent/runtime";
+import type { ProviderModelCompatibilityIssue } from "./provider-model-compat.js";
+import {
+  formatProviderModelCompatibilityError,
+  formatProviderModelCompatibilityHint,
+  getProviderModelCompatibilityIssue,
+} from "./provider-model-compat.js";
+
+type DoctorCheckStatus = "pass" | "blocking" | "advisory";
+
+export interface DoctorCheck {
+  readonly label: string;
+  readonly status: DoctorCheckStatus;
+  readonly detail?: string;
+}
+
+export interface DoctorIssue {
+  readonly title: string;
+  readonly detail: string;
+  readonly nextSteps: ReadonlyArray<string>;
+}
+
+export interface DoctorProviderStatus {
+  readonly id: string;
+  readonly hint: string;
+  readonly active: boolean;
+  readonly hasCredential: boolean;
+}
+
+export interface DoctorLspStatus {
+  readonly label: string;
+  readonly found: boolean;
+  readonly install: string;
+}
+
+export interface DoctorProviderCredentialIssue {
+  readonly status: "blocking" | "advisory";
+  readonly detail: string;
+}
+
+export interface DoctorReportInput {
+  readonly version: string;
+  readonly runtimeLabel: string;
+  readonly runtimeError?: string;
+  readonly gitError?: string;
+  readonly configPath?: string;
+  readonly configSearchPaths: ReadonlyArray<string>;
+  readonly config: DevAgentConfig;
+  readonly providerStatuses: ReadonlyArray<DoctorProviderStatus>;
+  readonly providerCredentialIssue?: DoctorProviderCredentialIssue;
+  readonly modelRegistryError?: string;
+  readonly modelRegistryCount?: number;
+  readonly modelRegistered: boolean;
+  readonly modelOwner?: string;
+  readonly providerModelIssue?: ProviderModelCompatibilityIssue;
+  readonly lspStatuses: ReadonlyArray<DoctorLspStatus>;
+  readonly platformLabel: string;
+  readonly providerSource: "cli" | "env" | "config" | "default";
+  readonly modelSource: "cli" | "env" | "config" | "default";
+  readonly credentialSource: string;
+}
+
+export interface DoctorReport {
+  readonly version: string;
+  readonly blockingIssues: ReadonlyArray<DoctorIssue>;
+  readonly runtimeCheck: DoctorCheck;
+  readonly gitCheck: DoctorCheck;
+  readonly configCheck: DoctorCheck;
+  readonly providerCheck: DoctorCheck;
+  readonly providerStatuses: ReadonlyArray<DoctorProviderStatus>;
+  readonly modelRegistryCheck: DoctorCheck;
+  readonly modelCheck: DoctorCheck;
+  readonly providerModelCheck: DoctorCheck;
+  readonly effectiveConfig: {
+    readonly provider: string;
+    readonly providerSource: "cli" | "env" | "config" | "default";
+    readonly model: string;
+    readonly modelSource: "cli" | "env" | "config" | "default";
+    readonly credentialSource: string;
+    readonly modelOwner?: string;
+  };
+  readonly lspStatuses: ReadonlyArray<DoctorLspStatus>;
+  readonly platformCheck: DoctorCheck;
+  readonly ok: boolean;
+}
+
+interface ProviderDescriptor {
+  readonly id: string;
+  readonly env: string;
+  readonly hint: string;
+  readonly credentialMode: "api" | "oauth" | "none";
+}
+
+interface DoctorConfigFile {
+  readonly text: string;
+  readonly topLevelProvider?: string;
+  readonly topLevelModel?: string;
+}
+
+function makeCheck(
+  label: string,
+  status: DoctorCheckStatus,
+  detail?: string,
+): DoctorCheck {
+  return { label, status, ...(detail ? { detail } : {}) };
+}
+
+function statusIcon(status: DoctorCheckStatus): string {
+  switch (status) {
+    case "pass":
+      return "✓";
+    case "advisory":
+      return "!";
+    case "blocking":
+      return "✗";
+  }
+}
+
+function formatCheck(check: DoctorCheck): string {
+  return check.detail
+    ? `  ${statusIcon(check.status)} ${check.label}: ${check.detail}`
+    : `  ${statusIcon(check.status)} ${check.label}`;
+}
+
+function getProviderDescriptor(providerId: string): ProviderDescriptor | undefined {
+  return PROVIDERS.find((provider) => provider.id === providerId);
+}
+
+function hasProviderCredential(
+  providerId: string,
+  config: DevAgentConfig,
+  storedCredentials: Readonly<Record<string, CredentialInfo>>,
+): boolean {
+  const descriptor = getProviderDescriptor(providerId);
+  if (!descriptor || descriptor.credentialMode === "none") {
+    return true;
+  }
+
+  const providerConfig = config.providers[providerId];
+  const stored = storedCredentials[providerId];
+  if (descriptor.credentialMode === "oauth") {
+    return Boolean(providerConfig?.oauthToken || stored?.type === "oauth");
+  }
+  return Boolean(
+    providerConfig?.apiKey ||
+    (descriptor.env && process.env[descriptor.env]) ||
+    stored?.type === "api",
+  );
+}
+
+function buildProviderStatuses(
+  config: DevAgentConfig,
+  storedCredentials: Readonly<Record<string, CredentialInfo>>,
+): DoctorProviderStatus[] {
+  return PROVIDERS.map((provider) => ({
+    id: provider.id,
+    hint: provider.hint,
+    active: provider.id === config.provider,
+    hasCredential: hasProviderCredential(provider.id, config, storedCredentials),
+  }));
+}
+
+function loadDoctorConfigFile(configPath: string | undefined): DoctorConfigFile {
+  if (!configPath) {
+    return { text: "" };
+  }
+  try {
+    const text = readFileSync(configPath, "utf-8");
+    return {
+      text,
+      ...(matchTopLevelTomlString(text, "provider") ? { topLevelProvider: matchTopLevelTomlString(text, "provider")! } : {}),
+      ...(matchTopLevelTomlString(text, "model") ? { topLevelModel: matchTopLevelTomlString(text, "model")! } : {}),
+    };
+  } catch {
+    return { text: "" };
+  }
+}
+
+function resolveConfigValueSource(
+  envKey: string,
+  fileValue: string | undefined,
+): "cli" | "env" | "config" | "default" {
+  if (process.env[envKey]) {
+    return "env";
+  }
+  if (typeof fileValue === "string" && fileValue.length > 0) {
+    return "config";
+  }
+  return "default";
+}
+
+function matchTopLevelTomlString(text: string, key: string): string | undefined {
+  const match = text.match(new RegExp(`^${key}\\s*=\\s*"([^"]+)"`, "m"));
+  return match?.[1];
+}
+
+function providerHasConfigCredential(
+  fileConfig: DoctorConfigFile,
+  providerId: string,
+): boolean {
+  if (/(^|\n)api_key\s*=\s*"[^"]+"/m.test(fileConfig.text)) {
+    return true;
+  }
+  const sectionPattern = new RegExp(`\\[providers\\.${escapeRegExp(providerId)}\\]([\\s\\S]*?)(?=\\n\\[|$)`, "m");
+  const sectionMatch = fileConfig.text.match(sectionPattern);
+  if (!sectionMatch) {
+    return false;
+  }
+  return /(api_key|apiKey|oauthToken|oauth_token)\s*=\s*"[^"]+"/m.test(sectionMatch[1] ?? "");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function resolveCredentialSource(
+  providerId: string,
+  config: DevAgentConfig,
+  storedCredentials: Readonly<Record<string, CredentialInfo>>,
+  fileConfig: DoctorConfigFile,
+): string {
+  const descriptor = getProviderDescriptor(providerId);
+  if (!descriptor || descriptor.credentialMode === "none") {
+    return `missing (not required for ${providerId})`;
+  }
+
+  const stored = storedCredentials[providerId];
+  const providerConfig = config.providers[providerId];
+  if (descriptor.credentialMode === "oauth") {
+    if (stored?.type === "oauth") {
+      return "stored oauth";
+    }
+    if (providerConfig?.oauthToken) {
+      return "config";
+    }
+    return "missing";
+  }
+
+  if (descriptor.env && process.env[descriptor.env]) {
+    return `env (${descriptor.env})`;
+  }
+  if (providerId === "devagent-api" && process.env["DEVAGENT_API_KEY"]) {
+    return "env (DEVAGENT_API_KEY)";
+  }
+  if (providerHasConfigCredential(fileConfig, providerId)) {
+    return "config";
+  }
+  if (stored?.type === "api") {
+    return "stored api key";
+  }
+  return "missing";
+}
+
+function buildLspStatuses(): DoctorLspStatus[] {
+  return LSP_SERVERS.map((lsp) => ({
+    label: lsp.label,
+    found: commandExists(lsp.command),
+    install: lsp.install,
+  }));
+}
+
+function buildProviderCredentialIssue(
+  provider: string,
+  hasCredential: boolean,
+  hasProviderModelMismatch: boolean,
+): DoctorProviderCredentialIssue | undefined {
+  if (hasCredential) {
+    return undefined;
+  }
+
+  const envKey = getProviderEnvKey(provider);
+  const descriptor = getProviderDescriptor(provider);
+  if (!descriptor || descriptor.credentialMode === "none") {
+    return undefined;
+  }
+
+  const detail = descriptor.credentialMode === "oauth"
+    ? `no stored login (run devagent auth login)${hasProviderModelMismatch ? ". Secondary until provider/model pairing is fixed." : ""}`
+    : `no API key (set ${envKey ?? "DEVAGENT_API_KEY"} or run devagent auth login)${hasProviderModelMismatch ? ". Secondary until provider/model pairing is fixed." : ""}`;
+
+  return {
+    status: hasProviderModelMismatch ? "advisory" : "blocking",
+    detail,
+  };
+}
+
+function buildProviderModelIssueSteps(
+  issue: ProviderModelCompatibilityIssue,
+): string[] {
+  if (issue.model === "cortex" || issue.expectedProvider === "devagent-api") {
+    return [
+      'Run now: devagent --provider devagent-api --model cortex "<your prompt>"',
+      "Set in ~/.config/devagent/config.toml:",
+      'provider = "devagent-api"',
+      'model = "cortex"',
+      "Export credentials: export DEVAGENT_API_KEY=ilg_...",
+      "Or store credentials: devagent auth login",
+    ];
+  }
+
+  return [
+    `Run now: devagent --provider ${issue.expectedProvider} --model ${issue.model} "<your prompt>"`,
+    `Or switch to a model registered for "${issue.configuredProvider}".`,
+  ];
+}
+
+function buildProviderCredentialIssueSteps(providerId: string): string[] {
+  const descriptor = getProviderDescriptor(providerId);
+  if (!descriptor) {
+    return ['Run: devagent auth login'];
+  }
+  if (descriptor.credentialMode === "oauth") {
+    return [
+      "Run: devagent auth login",
+      'Then retry: devagent "<your prompt>"',
+    ];
+  }
+  const placeholder = providerId === "devagent-api" ? "ilg_..." : "<your_api_key>";
+  return [
+    `Export credentials: export ${descriptor.env}=${placeholder}`,
+    "Or store credentials: devagent auth login",
+    'Then retry: devagent "<your prompt>"',
+  ];
+}
+
+function buildBlockingIssues(
+  input: DoctorReportInput,
+  checks: {
+    readonly runtimeCheck: DoctorCheck;
+    readonly gitCheck: DoctorCheck;
+    readonly configCheck: DoctorCheck;
+    readonly providerCheck: DoctorCheck;
+    readonly modelRegistryCheck: DoctorCheck;
+    readonly modelCheck: DoctorCheck;
+    readonly providerModelCheck: DoctorCheck;
+  },
+): DoctorIssue[] {
+  const issues: DoctorIssue[] = [];
+
+  if (checks.runtimeCheck.status === "blocking") {
+    issues.push({
+      title: "Runtime",
+      detail: checks.runtimeCheck.detail ?? "runtime check failed",
+      nextSteps: ["Install Node.js >= 20 or Bun >= 1.3 and retry."],
+    });
+  }
+  if (checks.gitCheck.status === "blocking") {
+    issues.push({
+      title: "Git",
+      detail: checks.gitCheck.detail ?? "git not found in PATH",
+      nextSteps: ["Install Git and retry devagent doctor."],
+    });
+  }
+  if (checks.configCheck.status === "blocking") {
+    issues.push({
+      title: "Config file",
+      detail: checks.configCheck.detail ?? "config file not found",
+      nextSteps: [
+        "Run: devagent setup",
+        "Or create ~/.config/devagent/config.toml with your provider and model.",
+      ],
+    });
+  }
+  if (input.providerModelIssue && checks.providerModelCheck.status === "blocking") {
+    issues.push({
+      title: "Provider/model pairing",
+      detail: formatProviderModelCompatibilityError(input.providerModelIssue),
+      nextSteps: buildProviderModelIssueSteps(input.providerModelIssue),
+    });
+  }
+  if (checks.providerCheck.status === "blocking") {
+    issues.push({
+      title: "Provider credentials",
+      detail: checks.providerCheck.detail ?? `provider "${input.config.provider}" is missing credentials`,
+      nextSteps: buildProviderCredentialIssueSteps(input.config.provider),
+    });
+  }
+  if (checks.modelRegistryCheck.status === "blocking") {
+    issues.push({
+      title: "Model registry",
+      detail: checks.modelRegistryCheck.detail ?? "model registry failed to load",
+      nextSteps: [
+        "Rebuild or reinstall DevAgent so bundled model definitions are available.",
+        "Then rerun: devagent doctor",
+      ],
+    });
+  }
+  if (checks.modelCheck.status === "blocking") {
+    issues.push({
+      title: "Model",
+      detail: checks.modelCheck.detail ?? `model "${input.config.model}" is not registered`,
+      nextSteps: [
+        "Run: devagent setup",
+        `Or choose a registered model for provider "${input.config.provider}".`,
+      ],
+    });
+  }
+
+  const foundLsp = input.lspStatuses.some((lsp) => lsp.found);
+  if (!foundLsp) {
+    issues.push({
+      title: "LSP servers",
+      detail: "none found",
+      nextSteps: ["Run: devagent install-lsp"],
+    });
+  }
+
+  return issues;
+}
+
+export function buildDoctorReport(input: DoctorReportInput): DoctorReport {
+  const runtimeCheck = makeCheck(
+    `Runtime: ${input.runtimeLabel}`,
+    input.runtimeError ? "blocking" : "pass",
+    input.runtimeError,
+  );
+  const gitCheck = makeCheck(
+    "Git",
+    input.gitError ? "blocking" : "pass",
+    input.gitError,
+  );
+  const configCheck = makeCheck(
+    "Config file",
+    input.configPath ? "pass" : "blocking",
+    input.configPath
+      ? undefined
+      : `not found (searched: ${input.configSearchPaths.join(", ")})`,
+  );
+  const providerCheck = makeCheck(
+    `Provider: ${input.config.provider}`,
+    input.providerCredentialIssue?.status ?? "pass",
+    input.providerCredentialIssue?.detail,
+  );
+  const modelRegistryCheck = input.modelRegistryError
+    ? makeCheck("Model registry", "blocking", input.modelRegistryError)
+    : makeCheck(`Model registry: ${input.modelRegistryCount ?? 0} models loaded`, "pass");
+  const modelCheck = input.modelRegistryError
+    ? makeCheck("Model", "advisory", "skipped until model registry loads")
+    : makeCheck(
+        `Model: ${input.config.model}`,
+        input.modelRegistered ? "pass" : "blocking",
+        input.modelRegistered ? undefined : `model "${input.config.model}" not in registry`,
+      );
+  const providerModelCheck = input.modelRegistryError || !input.modelRegistered
+    ? makeCheck("Provider/model pairing", "advisory", "skipped until the configured model is known")
+    : input.providerModelIssue
+      ? makeCheck(
+          "Provider/model pairing",
+          "blocking",
+          [
+            formatProviderModelCompatibilityError(input.providerModelIssue),
+            formatProviderModelCompatibilityHint(input.providerModelIssue),
+          ].filter(Boolean).join(" "),
+        )
+      : makeCheck("Provider/model pairing", "pass");
+  const platformCheck = makeCheck(`Platform: ${input.platformLabel}`, "pass");
+
+  const blockingIssues = buildBlockingIssues(input, {
+    runtimeCheck,
+    gitCheck,
+    configCheck,
+    providerCheck,
+    modelRegistryCheck,
+    modelCheck,
+    providerModelCheck,
+  });
+
+  const foundLsp = input.lspStatuses.some((lsp) => lsp.found);
+  const ok = blockingIssues.length === 0 && foundLsp;
+
+  return {
+    version: input.version,
+    blockingIssues,
+    runtimeCheck,
+    gitCheck,
+    configCheck,
+    providerCheck,
+    providerStatuses: input.providerStatuses,
+    modelRegistryCheck,
+    modelCheck,
+    providerModelCheck,
+    effectiveConfig: {
+      provider: input.config.provider,
+      providerSource: input.providerSource,
+      model: input.config.model,
+      modelSource: input.modelSource,
+      credentialSource: input.credentialSource,
+      ...(input.modelOwner ? { modelOwner: input.modelOwner } : {}),
+    },
+    lspStatuses: input.lspStatuses,
+    platformCheck,
+    ok,
+  };
+}
+
+export function renderDoctorReport(report: DoctorReport): string {
+  const lines: string[] = [`devagent v${report.version}`, ""];
+
+  if (report.blockingIssues.length > 0) {
+    lines.push("Blocking issues:", "");
+    for (const issue of report.blockingIssues) {
+      lines.push(`  - ${issue.title}: ${issue.detail}`);
+    }
+    lines.push("", "What to do next:", "");
+    for (const issue of report.blockingIssues) {
+      lines.push(`  ${issue.title}:`);
+      for (const step of issue.nextSteps) {
+        lines.push(`    ${step}`);
+      }
+    }
+    lines.push("");
+  }
+
+  lines.push("Effective config:", "");
+  lines.push(`  Provider: ${report.effectiveConfig.provider} (${report.effectiveConfig.providerSource})`);
+  lines.push(`  Model: ${report.effectiveConfig.model} (${report.effectiveConfig.modelSource})`);
+  lines.push(`  Credential: ${report.effectiveConfig.credentialSource}`);
+  if (report.effectiveConfig.modelOwner) {
+    lines.push(`  Model owner: ${report.effectiveConfig.modelOwner}`);
+  }
+  lines.push("");
+
+  lines.push("Checks:", "");
+  lines.push(formatCheck(report.runtimeCheck));
+  lines.push(formatCheck(report.gitCheck));
+  lines.push(formatCheck(report.configCheck));
+  lines.push(formatCheck(report.providerCheck));
+  lines.push("");
+  lines.push("  Available providers:");
+  for (const provider of report.providerStatuses) {
+    const status = provider.hasCredential ? "✓" : "·";
+    const active = provider.active ? " (active)" : "";
+    lines.push(`    ${status} ${provider.id}${active} — ${provider.hint}`);
+  }
+  lines.push("");
+  lines.push(formatCheck(report.modelRegistryCheck));
+  lines.push(formatCheck(report.modelCheck));
+  lines.push(formatCheck(report.providerModelCheck));
+  lines.push("  LSP servers:");
+  for (const lsp of report.lspStatuses) {
+    const status = lsp.found ? "✓" : "·";
+    const install = lsp.found ? "" : ` — install: ${lsp.install}`;
+    lines.push(`    ${status} ${lsp.label}${install}`);
+  }
+  if (!report.lspStatuses.some((lsp) => lsp.found)) {
+    lines.push("    (none found — run 'devagent install-lsp' to install)");
+  }
+  lines.push("");
+  lines.push(formatCheck(report.platformCheck));
+  lines.push("");
+  lines.push(report.ok ? "All checks passed." : "Some checks failed.");
+
+  return lines.join("\n");
+}
 
 // ─── doctor ─────────────────────────────────────────────────
 
 export async function runDoctor(version: string): Promise<void> {
-  let allOk = true;
-
-  function check(label: string, fn: () => string | null): void {
-    const err = fn();
-    if (err) {
-      console.log(`  ✗ ${label}: ${err}`);
-      allOk = false;
-    } else {
-      console.log(`  ✓ ${label}`);
-    }
+  const runtime = typeof Bun !== "undefined" ? `Bun ${Bun.version}` : `Node ${process.version}`;
+  const runtimeMajor = parseInt(process.version.replace("v", ""), 10);
+  const runtimeError =
+    runtimeMajor < 20 && typeof Bun === "undefined"
+      ? "Node.js >= 20 required"
+      : undefined;
+  let gitError: string | undefined;
+  try {
+    execSync("git --version", { encoding: "utf-8", timeout: 5000 });
+  } catch {
+    gitError = "git not found in PATH";
   }
 
-  console.log(`devagent v${version}\n`);
-  console.log("Checks:\n");
-
-  // Runtime
-  const runtime = typeof Bun !== "undefined" ? `Bun ${Bun.version}` : `Node ${process.version}`;
-  check(`Runtime: ${runtime}`, () => {
-    const major = parseInt(process.version.replace("v", ""), 10);
-    if (major < 20 && typeof Bun === "undefined") return "Node.js >= 20 required";
-    return null;
-  });
-
-  // Git
-  check("Git", () => {
-    try {
-      const v = execSync("git --version", { encoding: "utf-8", timeout: 5000 }).trim();
-      return null;
-    } catch {
-      return "git not found in PATH";
-    }
-  });
-
-  // Config
+  const projectRoot = findProjectRoot() ?? process.cwd();
   const configPaths = [
+    join(projectRoot, ".devagent.toml"),
+    join(projectRoot, "devagent.toml"),
     join(homedir(), ".config", "devagent", "config.toml"),
     join(homedir(), ".devagent.toml"),
-    ".devagent.toml",
-    "devagent.toml",
   ];
   const foundConfig = configPaths.find((p) => existsSync(p));
-  check(`Config file`, () => {
-    if (foundConfig) return null;
-    return `not found (searched: ${configPaths.join(", ")})`;
-  });
+  const fileConfig = loadDoctorConfigFile(foundConfig);
+  const config = loadConfig(projectRoot);
+  const storedCredentials = new CredentialStore().all();
+  const providerStatuses = buildProviderStatuses(config, storedCredentials);
+  const lspStatuses = buildLspStatuses();
 
-  // Provider credentials
-  const config = loadConfig();
-  check(`Provider: ${config.provider}`, () => {
-    const envKey = getProviderEnvKey(config.provider);
-    if (envKey && process.env[envKey]) return null;
-    const prov = config.providers[config.provider];
-    if (prov?.apiKey) return null;
-    return `no API key (set ${envKey ?? "DEVAGENT_API_KEY"} or run devagent auth login)`;
-  });
-
-  // Show available providers
-  console.log("\n  Available providers:");
-  for (const p of PROVIDERS) {
-    const envKey = getProviderEnvKey(p.id);
-    const hasKey = (envKey && process.env[envKey]) || config.providers[p.id]?.apiKey;
-    const status = hasKey ? "✓" : "·";
-    const active = p.id === config.provider ? " (active)" : "";
-    console.log(`    ${status} ${p.id}${active} — ${p.hint}`);
-  }
-  console.log("");
-
-  // Model registry
+  let modelRegistryError: string | undefined;
+  let modelRegistryCount = 0;
+  let modelRegistered = false;
   try {
     loadModelRegistry();
     const models = getRegisteredModels();
-    check(`Model registry: ${models.length} models loaded`, () => {
-      if (models.length === 0) return "no models found";
-      return null;
-    });
-
-    // Check configured model exists
-    check(`Model: ${config.model}`, () => {
-      if (models.includes(config.model)) return null;
-      return `model "${config.model}" not in registry`;
-    });
+    modelRegistryCount = models.length;
+    modelRegistered = models.includes(config.model);
   } catch (err) {
-    check("Model registry", () => String(err));
+    modelRegistryError = String(err);
   }
 
-  // LSP servers — check each individually
-  console.log("  LSP servers:");
-  let lspCount = 0;
-  for (const lsp of LSP_SERVERS) {
-    const found = commandExists(lsp.command);
-    if (found) lspCount++;
-    const status = found ? "✓" : "·";
-    const install = found ? "" : ` — install: ${lsp.install}`;
-    console.log(`    ${status} ${lsp.label}${install}`);
-  }
-  if (lspCount === 0) {
-    console.log("    (none found — run 'devagent install-lsp' to install)");
-    allOk = false;
-  }
-  console.log("");
+  const providerModelIssue =
+    modelRegistryError || !modelRegistered
+      ? undefined
+      : getProviderModelCompatibilityIssue(config.provider, config.model);
+  const modelOwner =
+    modelRegistryError || !modelRegistered
+      ? undefined
+      : lookupModelEntry(config.model)?.provider;
+  const activeProviderHasCredential = hasProviderCredential(
+    config.provider,
+    config,
+    storedCredentials,
+  );
+  const providerCredentialIssue = buildProviderCredentialIssue(
+    config.provider,
+    activeProviderHasCredential,
+    Boolean(providerModelIssue),
+  );
 
-  // Platform
-  check(`Platform: ${process.platform} ${process.arch}`, () => null);
+  const report = buildDoctorReport({
+    version,
+    runtimeLabel: runtime,
+    ...(runtimeError ? { runtimeError } : {}),
+    ...(gitError ? { gitError } : {}),
+    ...(foundConfig ? { configPath: foundConfig } : {}),
+    configSearchPaths: configPaths,
+    config,
+    providerStatuses,
+    ...(providerCredentialIssue ? { providerCredentialIssue } : {}),
+    ...(modelRegistryError ? { modelRegistryError } : {}),
+    modelRegistryCount,
+    modelRegistered,
+    ...(modelOwner ? { modelOwner } : {}),
+    ...(providerModelIssue ? { providerModelIssue } : {}),
+    lspStatuses,
+    platformLabel: `${process.platform} ${process.arch}`,
+    providerSource: resolveConfigValueSource("DEVAGENT_PROVIDER", fileConfig.topLevelProvider),
+    modelSource: resolveConfigValueSource("DEVAGENT_MODEL", fileConfig.topLevelModel),
+    credentialSource: resolveCredentialSource(config.provider, config, storedCredentials, fileConfig),
+  });
 
-  console.log("");
-  if (allOk) {
-    console.log("All checks passed.");
-    process.exit(0);
-  } else {
-    console.log("Some checks failed.");
-    process.exit(1);
-  }
+  process.stdout.write(renderDoctorReport(report) + "\n");
+  process.exit(report.ok ? 0 : 1);
 }
 
 const PROVIDERS = [
-  { id: "anthropic", env: "ANTHROPIC_API_KEY", hint: "set ANTHROPIC_API_KEY or devagent auth login" },
-  { id: "openai", env: "OPENAI_API_KEY", hint: "set OPENAI_API_KEY or devagent auth login" },
-  { id: "devagent-api", env: "DEVAGENT_API_KEY", hint: "set DEVAGENT_API_KEY or devagent auth login" },
-  { id: "deepseek", env: "DEEPSEEK_API_KEY", hint: "set DEEPSEEK_API_KEY or devagent auth login" },
-  { id: "openrouter", env: "OPENROUTER_API_KEY", hint: "set OPENROUTER_API_KEY or devagent auth login" },
-  { id: "chatgpt", env: "CHATGPT_API_KEY", hint: "devagent auth login (ChatGPT Plus/Pro)" },
-  { id: "github-copilot", env: "GITHUB_TOKEN", hint: "devagent auth login (GitHub device flow)" },
-  { id: "ollama", env: "", hint: "local — no API key needed (ollama must be running)" },
-];
+  { id: "anthropic", env: "ANTHROPIC_API_KEY", hint: "set ANTHROPIC_API_KEY or devagent auth login", credentialMode: "api" },
+  { id: "openai", env: "OPENAI_API_KEY", hint: "set OPENAI_API_KEY or devagent auth login", credentialMode: "api" },
+  { id: "devagent-api", env: "DEVAGENT_API_KEY", hint: "set DEVAGENT_API_KEY or devagent auth login", credentialMode: "api" },
+  { id: "deepseek", env: "DEEPSEEK_API_KEY", hint: "set DEEPSEEK_API_KEY or devagent auth login", credentialMode: "api" },
+  { id: "openrouter", env: "OPENROUTER_API_KEY", hint: "set OPENROUTER_API_KEY or devagent auth login", credentialMode: "api" },
+  { id: "chatgpt", env: "", hint: "devagent auth login (ChatGPT Plus/Pro)", credentialMode: "oauth" },
+  { id: "github-copilot", env: "", hint: "devagent auth login (GitHub device flow)", credentialMode: "oauth" },
+  { id: "ollama", env: "", hint: "local — no API key needed (ollama must be running)", credentialMode: "none" },
+] as const satisfies ReadonlyArray<ProviderDescriptor>;
 
 const LSP_SERVERS = [
   { command: "typescript-language-server", label: "TypeScript/JavaScript", install: "npm i -g typescript-language-server typescript", npmPackages: ["typescript-language-server", "typescript"] },

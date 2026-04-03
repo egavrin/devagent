@@ -13,6 +13,14 @@ describe("documentation parity", () => {
     expect(readme).not.toContain("desktop/");
   });
 
+  it("documents the devagent-api gateway pairing with cortex", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain('provider = "devagent-api"');
+    expect(readme).toContain('model = "cortex"');
+    expect(readme).toContain("DEVAGENT_API_KEY=ilg_");
+    expect(readme).toContain("OpenAI-compatible under the hood");
+  });
+
   it("does not expose legacy workflow-run guidance in live docs", () => {
     const files = [
       join(repoRoot, "README.md"),

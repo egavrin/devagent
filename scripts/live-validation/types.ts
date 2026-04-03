@@ -56,9 +56,15 @@ export interface CliScenarioInvocation {
   readonly extraArgs?: ReadonlyArray<string>;
 }
 
+export interface CliCommandScenarioInvocation {
+  readonly type: "cli-command";
+  readonly args: ReadonlyArray<string>;
+}
+
 export type ValidationScenarioInvocation =
   | ExecuteScenarioInvocation
-  | CliScenarioInvocation;
+  | CliScenarioInvocation
+  | CliCommandScenarioInvocation;
 
 export interface ContainsAssertion {
   readonly type: "contains";
@@ -98,12 +104,14 @@ export interface ValidationScenario {
   readonly verificationCommands: ReadonlyArray<VerificationCommand>;
   readonly cleanupPolicy: "destroy";
   readonly variables?: Readonly<Record<string, string>>;
+  readonly commandEnv?: Readonly<Record<string, string>>;
   readonly baselineAfterSetup?: boolean;
   readonly requiresChatgptAuth?: boolean;
   readonly requiresArktsLinter?: boolean;
   readonly timeoutMs?: number;
   readonly requiredToolCalls?: ReadonlyArray<ToolCallRequirement>;
   readonly requiredToolBatches?: ReadonlyArray<ToolBatchRequirement>;
+  readonly expectedExitCode?: number;
 }
 
 export interface AssertionResult {

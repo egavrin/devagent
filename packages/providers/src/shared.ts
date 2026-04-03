@@ -109,7 +109,7 @@ export function classifyProviderError(err: unknown, providerName: string): Provi
   const status = extractHttpStatus(err);
 
   if (status === 401 || status === 403) {
-    return new ProviderError(`${providerName} authentication failed (${status}): ${msg}. Check your API key with 'devagent doctor'.`);
+    return new ProviderError(`${providerName} authentication failed (${status}): ${msg}. Check your provider, model, and credentials with 'devagent doctor'.`);
   }
   if (status === 429) {
     const retryAfter = extractRetryAfter(err);

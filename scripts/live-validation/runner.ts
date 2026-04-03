@@ -705,12 +705,26 @@ function buildVariables(
   };
 }
 
+function buildCommandEnv(
+  scenario: ValidationScenario,
+  variables: Record<string, string>,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const [key, value] of Object.entries(scenario.commandEnv ?? {})) {
+    env[key] = renderTemplate(value, variables);
+  }
+  return env;
+}
+
 function buildCliArgs(
   scenario: ValidationScenario,
   provider: string,
   model: string,
   variables: Record<string, string>,
 ): string[] {
+  if (scenario.invocation.type === "cli-command") {
+    return scenario.invocation.args.map((entry) => renderTemplate(entry, variables));
+  }
   if (scenario.invocation.type !== "cli") {
     throw new Error(`Scenario ${scenario.id} is not a CLI scenario.`);
   }
@@ -832,16 +846,18 @@ export async function runValidationScenario(
   const cliLogDir = join(outputDir, "cli-logs");
   let workspace: IsolationWorkspace | null = null;
   try {
-    const authStatus = await loadAuthStatus(options);
-    if ((scenario.requiresChatgptAuth ?? true) && !authStatus.configuredProviders.includes("chatgpt")) {
-      return await createFailureReport(
-        scenario,
-        options,
-        sourceRepoRoot,
-        outputDir,
-        "provider",
-        "ChatGPT auth is not configured. Run `devagent auth login` first.",
-      );
+    if (scenario.requiresChatgptAuth ?? true) {
+      const authStatus = await loadAuthStatus(options);
+      if (!authStatus.configuredProviders.includes("chatgpt")) {
+        return await createFailureReport(
+          scenario,
+          options,
+          sourceRepoRoot,
+          outputDir,
+          "provider",
+          "ChatGPT auth is not configured. Run `devagent auth login` first.",
+        );
+      }
     }
     if (scenario.requiresArktsLinter && (!linterPath || !existsSync(join(linterPath, "dist", "tslinter.js")))) {
       return await createFailureReport(
@@ -887,6 +903,7 @@ export async function runValidationScenario(
     }
 
     const command = options.command ?? defaultCommand(options.devagentRoot);
+    const commandEnv = buildCommandEnv(scenario, variables);
     let invocationResult: CommandResult;
     let executedArgs: string[];
 
@@ -908,6 +925,7 @@ export async function runValidationScenario(
         executedArgs,
         workspace.path,
         scenario.timeoutMs ?? 600_000,
+        commandEnv,
       );
     } else {
       executedArgs = [...command.baseArgs, ...buildCliArgs(scenario, options.provider, options.model, variables)];
@@ -916,6 +934,7 @@ export async function runValidationScenario(
         executedArgs,
         workspace.path,
         scenario.timeoutMs ?? 600_000,
+        commandEnv,
       );
     }
 
@@ -931,7 +950,8 @@ export async function runValidationScenario(
       toolCallObservation.eventsText,
     );
 
-    if (invocationResult.exitCode !== 0) {
+    const expectedExitCode = scenario.expectedExitCode ?? 0;
+    if (invocationResult.exitCode !== expectedExitCode) {
       const failureClass = classifyInvocationFailure(invocationResult.stderr, invocationResult.timedOut);
       const finishedAt = new Date().toISOString();
       const report: ValidationScenarioReport = {
@@ -944,7 +964,7 @@ export async function runValidationScenario(
         model: options.model,
         status: "failed",
         failureClass,
-        failureMessage: invocationResult.stderr.trim() || invocationResult.stdout.trim() || "Scenario command failed.",
+        failureMessage: invocationResult.stderr.trim() || invocationResult.stdout.trim() || `Scenario command exited with ${invocationResult.exitCode}, expected ${expectedExitCode}.`,
         startedAt,
         finishedAt,
         durationMs: Date.now() - new Date(startedAt).getTime(),

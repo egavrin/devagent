@@ -109,8 +109,9 @@ describe("validateScenarioManifest", () => {
 
     expect(scenarios.some((scenario) => scenario.id === "ets-frontend-execute-repair")).toBe(true);
     expect(scenarios.filter((scenario) => scenario.suites.includes("smoke"))).toHaveLength(3);
-    expect(scenarios.filter((scenario) => scenario.suites.includes("full"))).toHaveLength(6);
+    expect(scenarios.filter((scenario) => scenario.suites.includes("full"))).toHaveLength(7);
     expect(scenarios.find((scenario) => scenario.id === "ets-frontend-execute-repair")?.suites).toEqual(["full"]);
+    expect(scenarios.find((scenario) => scenario.id === "doctor-provider-model-mismatch")?.expectedExitCode).toBe(1);
     expect(scenarios.find((scenario) => scenario.id === "runtime-core-docs-execute-triage")?.requiredToolCalls).toEqual([
       { tool: "delegate", minCalls: 2 },
     ]);
@@ -488,6 +489,114 @@ process.exit(0);
     expect(report.assertionResults.every((result) => result.passed)).toBe(true);
     expect(report.eventsSourcePath).toContain("cli-logs");
     expect(report.observedToolCalls).toMatchObject({ delegate: 1 });
+  });
+
+  it("supports CLI subcommand scenarios with expected failing exit codes", async () => {
+    const harnessRoot = await makeTempDir("devagent-live-harness-");
+    const sourceRoot = await makeTempDir("devagent-live-doctor-src-");
+    await writeFile(join(sourceRoot, "README.md"), "# Source\n");
+    await initGitRepo(sourceRoot);
+    await commitAll(sourceRoot, "initial");
+
+    const fakeCli = join(harnessRoot, "fake-devagent-doctor.mjs");
+    await writeFile(fakeCli, `
+const args = process.argv.slice(2);
+if (args[0] === "auth" && args[1] === "status") {
+  process.stderr.write("Provider  Source  Key\\n");
+  process.exit(0);
+}
+if (args[0] === "doctor") {
+  process.stdout.write([
+    "devagent v0.1.0",
+    "",
+    "Blocking issues:",
+    "",
+    "  - Provider/model pairing: Configured model \\"cortex\\" belongs to provider \\"devagent-api\\"; current provider is \\"openai\\". Switch provider or choose a model registered for \\"openai\\".",
+    "",
+    "What to do next:",
+    "",
+    "  Provider/model pairing:",
+    "    Run now: devagent --provider devagent-api --model cortex \\"<your prompt>\\"",
+    "    Set in ~/.config/devagent/config.toml:",
+    "    provider = \\"devagent-api\\"",
+    "    model = \\"cortex\\"",
+    "    Export credentials: export DEVAGENT_API_KEY=ilg_...",
+    "    Or store credentials: devagent auth login",
+    "",
+    "Effective config:",
+    "",
+    "  Provider: openai (config)",
+    "  Model: cortex (config)",
+    "  Credential: missing",
+    "  Model owner: devagent-api",
+    "",
+    "Checks:",
+    "",
+    "  ! Provider: openai: no API key (set OPENAI_API_KEY or run devagent auth login). Secondary until provider/model pairing is fixed.",
+    "",
+    "Some checks failed.",
+  ].join("\\n"));
+  process.exit(1);
+}
+process.exit(1);
+`);
+    chmodSync(fakeCli, 0o755);
+
+    const scenario: ValidationScenario = validateScenarioManifest({
+      id: "doctor-provider-model-mismatch",
+      description: "Doctor mismatch",
+      suites: ["full"],
+      targetRepo: "arkcompiler_runtime_core_docs",
+      surface: "cli",
+      taskShape: "readonly",
+      isolationMode: "temp-copy",
+      preSetup: [
+        {
+          kind: "write-file",
+          path: ".devagent.toml",
+          content: 'provider = "openai"\\nmodel = "cortex"\\n',
+        },
+      ],
+      invocation: {
+        type: "cli-command",
+        args: ["doctor"],
+      },
+      expectedExitCode: 1,
+      expectedArtifacts: [],
+      assertions: [
+        { type: "contains", source: "stdout", value: "Blocking issues:" },
+        { type: "contains", source: "stdout", value: 'Run now: devagent --provider devagent-api --model cortex "<your prompt>"' },
+        { type: "contains", source: "stdout", value: 'provider = "devagent-api"' },
+        { type: "contains", source: "stdout", value: 'model = "cortex"' },
+        { type: "contains", source: "stdout", value: "export DEVAGENT_API_KEY=ilg_..." },
+        { type: "contains", source: "stdout", value: "Credential: missing" },
+        { type: "contains", source: "stdout", value: "Model owner: devagent-api" },
+        { type: "contains", source: "stdout", value: "! Provider: openai:" },
+      ],
+      verificationCommands: [],
+      cleanupPolicy: "destroy",
+      requiresChatgptAuth: false,
+    }, "inline");
+
+    const outputRoot = await makeTempDir("devagent-live-output-");
+    const report = await runValidationScenario(scenario, {
+      devagentRoot: dirname(dirname(harnessRoot)),
+      sourceRepoRoots: {
+        arkcompiler_runtime_core_docs: sourceRoot,
+      },
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      outputRoot,
+      command: {
+        executable: "node",
+        baseArgs: [fakeCli],
+      },
+      authStatusOverride: { configuredProviders: [] },
+    });
+
+    expect(report.status).toBe("passed");
+    expect(report.command.exitCode).toBe(1);
+    expect(report.assertionResults.every((result) => result.passed)).toBe(true);
   });
 
   it("hydrates ArkTS linter assets into execute temp-copy workspaces", async () => {

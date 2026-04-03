@@ -45,6 +45,11 @@ import { loadRepoContext, buildContextPrompt } from "./repo-context.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { createShellTestRunner } from "./double-check-wiring.js";
 import { buildProviderConfig } from "./provider-config.js";
+import {
+  formatProviderModelCompatibilityError,
+  formatProviderModelCompatibilityHint,
+  getProviderModelCompatibilityIssue,
+} from "./provider-model-compat.js";
 import { createSkillInfrastructure } from "./skill-setup.js";
 
 export interface WorkflowQueryOptions {
@@ -208,6 +213,15 @@ export async function setupAndRunWorkflowQuery(
   const cliDir = dirname(fileURLToPath(import.meta.url));
   const devagentModelsDir = resolveBundledModelsDir(cliDir);
   loadModelRegistry(projectRoot, [devagentModelsDir]);
+
+  const providerModelIssue = getProviderModelCompatibilityIssue(config.provider, config.model);
+  if (providerModelIssue) {
+    const hint = formatProviderModelCompatibilityHint(providerModelIssue);
+    const message = hint
+      ? `${formatProviderModelCompatibilityError(providerModelIssue)} ${hint}`
+      : formatProviderModelCompatibilityError(providerModelIssue);
+    throw new Error(message);
+  }
 
   // Auto-size context budget from model registry
   const registryEntry = lookupModelEntry(config.model);

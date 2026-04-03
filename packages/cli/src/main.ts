@@ -124,6 +124,11 @@ import { createArkTSDiagnosticProvider } from "@devagent/arkts";
 import { assembleSystemPrompt } from "./prompts/index.js";
 import { detectProjectTestCommand } from "./test-command-detect.js";
 import {
+  formatProviderModelCompatibilityError,
+  formatProviderModelCompatibilityHint,
+  getProviderModelCompatibilityIssue,
+} from "./provider-model-compat.js";
+import {
   Spinner,
   dim, red, cyan, green, yellow, bold,
   formatToolStart,
@@ -521,6 +526,18 @@ async function setupConfig(cliArgs: CliArgs): Promise<ConfigSetupResult> {
   const cliDir = dirname(fileURLToPath(import.meta.url));
   const devagentModelsDir = resolveBundledModelsDir(cliDir);
   loadModelRegistry(projectRoot, [devagentModelsDir]);
+
+  const providerModelIssue = getProviderModelCompatibilityIssue(config.provider, config.model);
+  if (providerModelIssue) {
+    process.stderr.write(
+      formatError(formatProviderModelCompatibilityError(providerModelIssue)) + "\n",
+    );
+    const hint = formatProviderModelCompatibilityHint(providerModelIssue);
+    if (hint) {
+      process.stderr.write(dim(hint) + "\n");
+    }
+    process.exit(1);
+  }
 
   // Auto-size context budget from model registry when user hasn't overridden it.
   // Without this, a model with 192K context gets the default 100K budget.
