@@ -44,7 +44,7 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
             model: anthropic(config.model),
             messages: aiMessages,
             tools: aiTools,
-            maxTokens: config.maxTokens ?? defaultMaxTokens,
+            maxOutputTokens: config.maxTokens ?? defaultMaxTokens,
             ...(supportsTemp ? { temperature: config.temperature ?? 0 } : {}),
             abortSignal: abortController.signal,
           });
@@ -75,4 +75,3 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
     },
   };
 }
-

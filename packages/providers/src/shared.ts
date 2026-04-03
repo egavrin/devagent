@@ -47,14 +47,14 @@ export async function* processProviderStream(
         case "text-delta":
           yield {
             type: "text",
-            content: part.textDelta,
+            content: part.text,
           };
           break;
 
         case "tool-call": {
           const args = transformArgs
-            ? transformArgs(part.args as Record<string, unknown>)
-            : part.args;
+            ? transformArgs(part.input as Record<string, unknown>)
+            : part.input;
           yield {
             type: "tool_call",
             content: JSON.stringify(args),
@@ -64,10 +64,10 @@ export async function* processProviderStream(
           break;
         }
 
-        case "reasoning":
+        case "reasoning-delta":
           yield {
             type: "thinking",
-            content: typeof part.textDelta === "string" ? part.textDelta : "",
+            content: typeof part.text === "string" ? part.text : "",
           };
           break;
 
@@ -78,13 +78,31 @@ export async function* processProviderStream(
           yield {
             type: "done",
             content: "",
-            usage: part.usage
+            usage: part.totalUsage
               ? {
-                  promptTokens: part.usage.promptTokens,
-                  completionTokens: part.usage.completionTokens,
+                  promptTokens: part.totalUsage.inputTokens ?? 0,
+                  completionTokens: part.totalUsage.outputTokens ?? 0,
                 }
               : undefined,
           };
+          break;
+
+        case "text-start":
+        case "text-end":
+        case "reasoning-start":
+        case "reasoning-end":
+        case "tool-input-start":
+        case "tool-input-delta":
+        case "tool-input-end":
+        case "tool-result":
+        case "tool-error":
+        case "source":
+        case "file":
+        case "start-step":
+        case "finish-step":
+        case "start":
+        case "abort":
+        case "raw":
           break;
       }
     }
@@ -201,7 +219,7 @@ export function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[]
           const parts: Array<
             | { type: "text"; text: string }
             | { type: "reasoning"; text: string }
-            | { type: "tool-call"; toolCallId: string; toolName: string; args: Record<string, unknown> }
+            | { type: "tool-call"; toolCallId: string; toolName: string; input: Record<string, unknown> }
           > = [];
           // Preserve thinking/reasoning content across tool use boundaries
           if (msg.thinking) {
@@ -215,7 +233,7 @@ export function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[]
               type: "tool-call" as const,
               toolCallId: tc.callId,
               toolName: tc.name,
-              args: tc.arguments,
+              input: tc.arguments,
             });
           }
           result.push({ role: "assistant", content: parts });
@@ -239,7 +257,7 @@ export function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[]
               type: "tool-result" as const,
               toolCallId: msg.toolCallId ?? "",
               toolName: "", // Name resolved by SDK via toolCallId
-              result: msg.content ?? "",
+              output: { type: "text" as const, value: msg.content ?? "" },
             },
           ],
         });
@@ -340,7 +358,7 @@ export function convertTools(
 
       result[t.name] = aiTool({
         description: t.description,
-        parameters: jsonSchema({
+        inputSchema: jsonSchema({
           type: t.paramSchema.type as "object",
           properties: strictProps,
           required: allPropertyNames,
@@ -351,7 +369,7 @@ export function convertTools(
       // Base mode: pass through as-is
       result[t.name] = aiTool({
         description: t.description,
-        parameters: jsonSchema({
+        inputSchema: jsonSchema({
           type: t.paramSchema.type as "object",
           properties: rawProps,
           required: Array.isArray(t.paramSchema.required) ? [...t.paramSchema.required] : [],

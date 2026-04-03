@@ -21,9 +21,9 @@
   },
   "dependencies": {
     "@devagent/runtime": "workspace:*",
-    "ai": "^4.0.0",
-    "@ai-sdk/anthropic": "^1.0.0",
-    "@ai-sdk/openai": "^1.0.0"
+    "ai": "^5.0.52",
+    "@ai-sdk/anthropic": "^2.0.74",
+    "@ai-sdk/openai": "^2.0.102"
   },
   "devDependencies": {
     "vitest": "^3.0.0",

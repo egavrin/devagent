@@ -131,7 +131,7 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
             model,
             messages: aiMessages,
             tools: aiTools,
-            maxTokens: config.maxTokens ?? caps.defaultMaxTokens,
+            maxOutputTokens: config.maxTokens ?? caps.defaultMaxTokens,
             ...(caps.supportsTemperature ? { temperature: config.temperature ?? 0 } : {}),
             abortSignal: abortController.signal,
             ...(hasProviderOpts
@@ -167,4 +167,3 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
     },
   };
 }
-
