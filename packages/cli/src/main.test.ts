@@ -3,16 +3,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EventBus, SessionState } from "@devagent/runtime";
+import { AgentType, EventBus, SessionState } from "@devagent/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DevAgentConfig, LLMProvider, Session, SessionStore } from "@devagent/runtime";
 import {
   loadQueryFromFile,
   parseArgs,
+  performUpdateCheck,
   renderHelpText,
   renderSessionsList,
   resolveAutoPromptCommandTarget,
+  setupEventHandlers,
   setupSessionPersistence,
 } from "./main.js";
 
@@ -300,6 +302,38 @@ describe("renderSessionsList", () => {
   });
 });
 
+describe("performUpdateCheck", () => {
+  it("suppresses destroyed-stream writes in the async update notice path", async () => {
+    const streamDestroyed = Object.assign(new Error("stream destroyed"), {
+      code: "ERR_STREAM_DESTROYED",
+    });
+    const stderr = {
+      destroyed: false,
+      writableEnded: false,
+      writableFinished: false,
+      write: vi.fn(() => {
+        throw streamDestroyed;
+      }),
+    };
+    const fetchImpl = vi.fn(async () => ({
+      json: async () => ({ version: "9.9.9" }),
+    })) as typeof fetch;
+
+    await expect(performUpdateCheck({
+      stderr: stderr as unknown as NodeJS.WriteStream,
+      fetchImpl,
+      existsSync: () => false,
+      mkdirSync: vi.fn(),
+      writeFileSync: vi.fn(),
+      getVersion: () => "0.1.0",
+      now: () => 0,
+    })).resolves.toBeUndefined();
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(stderr.write).toHaveBeenCalledOnce();
+  });
+});
+
 function createSessionTestConfig(): DevAgentConfig {
   return {
     provider: "openai",
@@ -478,5 +512,60 @@ describe("setupSessionPersistence", () => {
 
     expect(first.id).not.toBe(second.id);
     expect(store.listSessions()).toHaveLength(2);
+  });
+});
+
+describe("setupEventHandlers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("stops spinner and panel timers during cleanup", () => {
+    vi.useFakeTimers();
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    Object.defineProperty(process.stderr, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+
+    try {
+      const writeSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const bus = new EventBus();
+      const handlers = setupEventHandlers(
+        bus,
+        {
+          model: "gpt-5",
+          budget: { maxIterations: 4, costWarningThreshold: 0 },
+          approval: { mode: "default" },
+        } as unknown as DevAgentConfig,
+        "normal",
+      );
+
+      bus.emit("message:user", { content: "hello" });
+      bus.emit("subagent:start", {
+        agentId: "root-sub-1",
+        parentAgentId: "root",
+        depth: 1,
+        agentType: AgentType.GENERAL,
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        laneLabel: "docs/spec",
+      });
+
+      writeSpy.mockClear();
+      handlers.cleanup();
+      writeSpy.mockClear();
+
+      vi.advanceTimersByTime(500);
+
+      expect(writeSpy).not.toHaveBeenCalled();
+    } finally {
+      if (originalIsTTY) {
+        Object.defineProperty(process.stderr, "isTTY", originalIsTTY);
+      } else {
+        delete (process.stderr as { isTTY?: boolean }).isTTY;
+      }
+    }
   });
 });

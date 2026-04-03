@@ -12,7 +12,7 @@ import { Spinner } from "./Spinner.js";
 import { SubagentPanel } from "./SubagentPanel.js";
 import { LogEntryView } from "./LogEntryView.js";
 import { useAgentLog } from "./useAgentLog.js";
-import type { InteractiveQueryResult } from "./shared.js";
+import { getTurnCompletionNotice, type InteractiveQueryResult } from "./shared.js";
 import type { EventBus } from "@devagent/runtime";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -51,10 +51,10 @@ export function SingleShotApp({ bus, query, onQuery, model, approvalMode, onFina
         const finalText = refs.textBuffer.current.trim() || result.lastText;
         if (finalText) onFinalOutput(finalText);
 
-        addLog({
-          id: nextId("summary"), type: "turn-summary",
-          data: { iterations: result.iterations, toolCalls: refs.turnToolCount.current, cost: refs.costAccum.current, elapsedMs: Date.now() - refs.turnStart.current },
-        });
+        const completionNotice = getTurnCompletionNotice(result.status);
+        if (completionNotice) {
+          addLog({ id: nextId("budget"), type: "info", data: completionNotice });
+        }
       } catch (err) {
         addLog({ id: nextId("e"), type: "error", data: { message: err instanceof Error ? err.message : String(err), code: "QUERY_ERROR" } });
       }

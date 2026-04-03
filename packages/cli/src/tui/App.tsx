@@ -15,12 +15,17 @@ import { ToastContainer, type ToastMessage } from "./Toast.js";
 import { Welcome } from "./Welcome.js";
 import { LogEntryView } from "./LogEntryView.js";
 import { useAgentLog } from "./useAgentLog.js";
-import { cycleApprovalMode, getApprovalModeColor, type InteractiveQueryResult, tokenProgressBar } from "./shared.js";
+import {
+  cycleApprovalMode,
+  getApprovalModeColor,
+  getTurnCompletionNotice,
+  type InteractiveQueryResult,
+  tokenProgressBar,
+} from "./shared.js";
 import type { LogEntry } from "./shared.js";
 import type { EventBus } from "@devagent/runtime";
 
 export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline │ Shift+Tab toggles safety mode";
-export const ITERATION_LIMIT_NOTICE = "Iteration limit exhausted. Type /continue to proceed.";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -167,17 +172,10 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
         addLog({ id: nextId("final"), type: "final-output", data: { text: finalText } });
       }
 
-      addLog({
-        id: nextId("summary"), type: "turn-summary",
-        data: {
-          iterations: result.iterations, toolCalls: result.toolCalls,
-          cost: refs.costAccum.current, elapsedMs: Date.now() - refs.turnStart.current,
-        },
-      });
-
-      if (result.status === "budget_exceeded") {
-        addLog({ id: nextId("budget"), type: "info", data: ITERATION_LIMIT_NOTICE });
-        addToast(ITERATION_LIMIT_NOTICE, "warning");
+      const completionNotice = getTurnCompletionNotice(result.status);
+      if (completionNotice) {
+        addLog({ id: nextId("budget"), type: "info", data: completionNotice });
+        addToast(completionNotice, "warning");
       }
     } catch (err) {
       addLog({ id: nextId("error"), type: "error", data: { message: err instanceof Error ? err.message : String(err), code: "QUERY_ERROR" } });

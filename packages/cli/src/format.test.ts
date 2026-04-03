@@ -9,7 +9,6 @@ import {
   formatContextGauge,
   formatEnrichedError,
   inferErrorSuggestion,
-  formatTurnSummary,
   formatSessionSummary,
   formatCompactionResult,
   formatReasoning,
@@ -215,40 +214,6 @@ describe("formatEnrichedError", () => {
     });
     expect(result).toContain("Something broke");
     expect(result).not.toContain("Recent tool chain");
-  });
-});
-
-// ─── Improvement 3: Per-Turn Summary ──────────────────────────
-
-describe("formatTurnSummary", () => {
-  it("includes all stats", () => {
-    const result = formatTurnSummary({
-      iterationCount: 3,
-      toolCallCount: 8,
-      inputTokens: 45000,
-      costDelta: 0.042,
-      elapsedMs: 12300,
-    });
-    expect(result).toContain("3 iterations");
-    expect(result).toContain("8 tool calls");
-    expect(result).toContain("45k input tokens");
-    expect(result).toContain("$0.0420");
-    expect(result).toContain("12.3s");
-  });
-
-  it("omits zero-value fields", () => {
-    const result = formatTurnSummary({
-      iterationCount: 1,
-      toolCallCount: 0,
-      inputTokens: 0,
-      costDelta: 0,
-      elapsedMs: 500,
-    });
-    expect(result).toContain("1 iterations");
-    expect(result).not.toContain("tool calls");
-    expect(result).not.toContain("input tokens");
-    expect(result).not.toContain("$");
-    expect(result).toContain("500ms");
   });
 });
 
@@ -721,6 +686,56 @@ describe("SubagentPanelRenderer", () => {
 
     expect(writeSpy).toHaveBeenCalledTimes(1);
     expect(String(writeSpy.mock.calls[0]?.[0])).toContain("iter 4");
+  });
+
+  it("suppresses destroyed-stream errors while redrawing panels", () => {
+    const renderer = new SubagentPanelRenderer(true);
+    writeSpy.mockImplementation(() => {
+      throw Object.assign(new Error("destroyed"), { code: "ERR_STREAM_DESTROYED" });
+    });
+
+    expect(() => {
+      renderer.setPanels([makePanel()]);
+      vi.advanceTimersByTime(100);
+      renderer.cleanup();
+    }).not.toThrow();
+  });
+});
+
+describe("Spinner teardown safety", () => {
+  const originalIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+  let writeSpy: ReturnType<typeof vi.spyOn<typeof process.stderr, "write">>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    Object.defineProperty(process.stderr, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      throw Object.assign(new Error("destroyed"), { code: "ERR_STREAM_DESTROYED" });
+    });
+  });
+
+  afterEach(() => {
+    writeSpy.mockRestore();
+    if (originalIsTTY) {
+      Object.defineProperty(process.stderr, "isTTY", originalIsTTY);
+    } else {
+      delete (process.stderr as { isTTY?: boolean }).isTTY;
+    }
+    vi.useRealTimers();
+  });
+
+  it("does not throw when stderr is destroyed mid-render", () => {
+    const spinner = new Spinner();
+
+    expect(() => {
+      spinner.start("Working");
+      vi.advanceTimersByTime(100);
+      spinner.log("line");
+      spinner.stop("done");
+    }).not.toThrow();
   });
 });
 

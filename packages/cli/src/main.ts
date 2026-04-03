@@ -54,24 +54,46 @@ function semverNewer(a: string, b: string): boolean {
   return false;
 }
 
+interface PerformUpdateCheckOptions {
+  readonly packageName?: string;
+  readonly cacheDir?: string;
+  readonly cachePath?: string;
+  readonly fetchImpl?: typeof fetch;
+  readonly existsSync?: typeof existsSync;
+  readonly readFileSync?: typeof nodeReadFileSync;
+  readonly mkdirSync?: typeof mkdirSync;
+  readonly writeFileSync?: typeof writeFileSync;
+  readonly stderr?: WritableStreamLike;
+  readonly getVersion?: () => string;
+  readonly now?: () => number;
+}
+
 /**
  * Non-blocking update check. Queries npm registry at most once per 24h.
  * Prints a hint to stderr if a newer version is available.
  */
-function checkForUpdates(): void {
-  const PACKAGE = "@egavrin/devagent";
-  const cacheDir = join(homedir(), ".cache", "devagent");
-  const cachePath = join(cacheDir, "update-check.json");
+export async function performUpdateCheck(options: PerformUpdateCheckOptions = {}): Promise<void> {
+  const PACKAGE = options.packageName ?? "@egavrin/devagent";
+  const cacheDir = options.cacheDir ?? join(homedir(), ".cache", "devagent");
+  const cachePath = options.cachePath ?? join(cacheDir, "update-check.json");
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const pathExists = options.existsSync ?? existsSync;
+  const readFileSync = options.readFileSync ?? nodeReadFileSync;
+  const makeDir = options.mkdirSync ?? mkdirSync;
+  const writeFile = options.writeFileSync ?? writeFileSync;
+  const stderr = options.stderr ?? process.stderr;
+  const version = options.getVersion ?? getVersion;
+  const now = options.now ?? Date.now;
   const ONE_DAY = 24 * 60 * 60 * 1000;
 
-  // Check cache
   try {
-    if (existsSync(cachePath)) {
-      const cached = JSON.parse(nodeReadFileSync(cachePath, "utf-8"));
-      if (Date.now() - cached.checkedAt < ONE_DAY) {
-        if (cached.latest && semverNewer(cached.latest, getVersion())) {
-          process.stderr.write(
-            `\x1b[33mUpdate available: ${getVersion()} → ${cached.latest}\x1b[0m — ` +
+    if (pathExists(cachePath)) {
+      const cached = JSON.parse(readFileSync(cachePath, "utf-8"));
+      if (now() - cached.checkedAt < ONE_DAY) {
+        if (cached.latest && semverNewer(cached.latest, version())) {
+          safeWrite(
+            stderr,
+            `\x1b[33mUpdate available: ${version()} → ${cached.latest}\x1b[0m — ` +
             `npm i -g ${PACKAGE}\n`,
           );
         }
@@ -80,26 +102,35 @@ function checkForUpdates(): void {
     }
   } catch { /* ignore cache read errors */ }
 
-  // Async fetch — fire and forget, never blocks startup
-  fetch(`https://registry.npmjs.org/${PACKAGE}/latest`, {
-    signal: AbortSignal.timeout(3000),
-  })
-    .then((res) => res.json())
-    .then((data: any) => {
-      const latest = data?.version as string | undefined;
-      if (!latest) return;
-      try {
-        mkdirSync(cacheDir, { recursive: true });
-        writeFileSync(cachePath, JSON.stringify({ latest, checkedAt: Date.now() }));
-      } catch { /* ignore cache write errors */ }
-      if (semverNewer(latest, getVersion())) {
-        process.stderr.write(
-          `\x1b[33mUpdate available: ${getVersion()} → ${latest}\x1b[0m — ` +
-          `npm i -g ${PACKAGE}\n`,
-        );
-      }
-    })
-    .catch(() => { /* network error — silently ignore */ });
+  let data: any;
+  try {
+    const response = await fetchImpl(`https://registry.npmjs.org/${PACKAGE}/latest`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    data = await response.json();
+  } catch {
+    return;
+  }
+
+  const latest = data?.version as string | undefined;
+  if (!latest) return;
+
+  try {
+    makeDir(cacheDir, { recursive: true });
+    writeFile(cachePath, JSON.stringify({ latest, checkedAt: now() }));
+  } catch { /* ignore cache write errors */ }
+
+  if (semverNewer(latest, version())) {
+    safeWrite(
+      stderr,
+      `\x1b[33mUpdate available: ${version()} → ${latest}\x1b[0m — ` +
+      `npm i -g ${PACKAGE}\n`,
+    );
+  }
+}
+
+function checkForUpdates(): void {
+  void performUpdateCheck();
 }
 import {
   createRoutingLSPTools,
@@ -151,13 +182,15 @@ import {
   formatContextGauge,
   formatEnrichedError,
   inferErrorSuggestion,
-  formatTurnSummary,
   formatSessionSummary,
   formatCompactionResult,
   formatReasoning,
   setTerminalTitle,
   terminalBell,
   formatDiffPreview,
+  safeWrite,
+  safeWriteLine,
+  type WritableStreamLike,
 } from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { OutputState } from "./output-state.js";
@@ -284,7 +317,7 @@ interface CrashSessionReporter {
 }
 
 interface CrashSessionReporterProcess {
-  stderr: { write: (chunk: string) => boolean };
+  stderr: WritableStreamLike;
   once: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => void;
   off: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => void;
   exit: (code?: number) => never;
@@ -299,7 +332,7 @@ export function createCrashSessionReporter(
 
   const printSessionId = (): void => {
     if (printed || verbosity === "quiet") return;
-    proc.stderr.write(dim(`[session] ${sessionId}`) + "\n");
+    safeWriteLine(proc.stderr, dim(`[session] ${sessionId}`));
     printed = true;
   };
 
@@ -309,13 +342,13 @@ export function createCrashSessionReporter(
   };
 
   const onUncaughtException = (err: unknown): void => {
-    proc.stderr.write(formatError(`Uncaught exception: ${extractErrorMessage(err)}`) + "\n");
+    safeWriteLine(proc.stderr, formatError(`Uncaught exception: ${extractErrorMessage(err)}`));
     printSessionId();
     proc.exit(1);
   };
 
   const onUnhandledRejection = (reason: unknown): void => {
-    proc.stderr.write(formatError(`Unhandled rejection: ${extractErrorMessage(reason)}`) + "\n");
+    safeWriteLine(proc.stderr, formatError(`Unhandled rejection: ${extractErrorMessage(reason)}`));
     printSessionId();
     proc.exit(1);
   };
@@ -734,6 +767,7 @@ interface ToolsSetupResult {
   readonly verbosityConfig: VerbosityConfig;
   readonly lspToolCounts: Map<string, number>;
   readonly statusLine: StatusLine | null;
+  readonly cleanup: () => void;
   readonly trackInternalLSPDiagnostics: () => void;
   /** Mutable — may be swapped on resume. Access via getter closure. */
   sessionState: SessionState;
@@ -764,8 +798,8 @@ async function setupTools(
   // that write to stderr — they would corrupt Ink's output.
   // Still set up session-level tracking (cost, tool counts) via bus events below.
   const willUseTui = (process.stderr.isTTY ?? false) && cliArgs.verbosity !== "quiet";
-  const { lspToolCounts, statusLine } = willUseTui
-    ? { lspToolCounts: new Map<string, number>(), statusLine: null }
+  const { lspToolCounts, statusLine, cleanup } = willUseTui
+    ? { lspToolCounts: new Map<string, number>(), statusLine: null, cleanup: () => {} }
     : setupEventHandlers(bus, config, cliArgs.verbosity, verbosityConfig);
 
   // In TUI mode, setupEventHandlers is skipped — register minimal tracking
@@ -909,6 +943,7 @@ async function setupTools(
     verbosityConfig,
     lspToolCounts,
     statusLine,
+    cleanup,
     trackInternalLSPDiagnostics,
     sessionState,
     skills,
@@ -1659,7 +1694,7 @@ export async function main(): Promise<void> {
           const rendered = process.stdout.isTTY
             ? renderMarkdown(text)
             : text;
-          process.stdout.write(rendered + "\n");
+          safeWrite(process.stdout, rendered + "\n");
         },
       });
     } else {
@@ -1676,7 +1711,7 @@ export async function main(): Promise<void> {
       const parts = [...tools.lspToolCounts.entries()]
         .map(([name, count]) => `${name}=${count}`)
         .join(", ");
-      process.stderr.write(dim(`[lsp-usage] ${parts}`) + "\n");
+      safeWriteLine(process.stderr, dim(`[lsp-usage] ${parts}`));
     }
 
     // Session summary
@@ -1688,7 +1723,7 @@ export async function main(): Promise<void> {
       });
       if (cliArgs.verbosity !== "quiet" && isCategoryEnabled("session", tools.verbosityConfig)) {
         const planSteps = tools.sessionState.getPlan();
-        process.stderr.write(formatSessionSummary({
+        safeWriteLine(process.stderr, formatSessionSummary({
           sessionId: activeSession.id,
           totalIterations: outputState.sessionTotalIterations,
           totalToolCalls: outputState.sessionTotalToolCalls,
@@ -1703,7 +1738,7 @@ export async function main(): Promise<void> {
           elapsedMs: Date.now() - (persistence.getActiveSessionStartTime() ?? Date.now()),
           completionReason: "completed",
           delegatedWork,
-        }) + "\n");
+        }));
       }
 
       // Print session ID for future resume
@@ -1713,6 +1748,7 @@ export async function main(): Promise<void> {
     }
 
     // Cleanup
+    tools.cleanup();
     if (lsp.lspRouter) {
       try {
         await lsp.lspRouter.stopAll();
@@ -1761,13 +1797,13 @@ function extractToolPreview(toolName: string, output: string): string | null {
 /** Centralized mutable output state — replaces former module-level `let` declarations. */
 const outputState = new OutputState();
 
-function setupEventHandlers(
+export function setupEventHandlers(
   bus: EventBus,
   config: DevAgentConfig,
   verbosity: Verbosity,
   verbosityConfig?: VerbosityConfig,
   os: OutputState = outputState,
-): { lspToolCounts: Map<string, number>; statusLine: StatusLine | null } {
+): { lspToolCounts: Map<string, number>; statusLine: StatusLine | null; cleanup: () => void } {
   const maxIter = config.budget.maxIterations;
   const vc = verbosityConfig ?? buildVerbosityConfig(verbosity, undefined);
   const toolParamsCache = new Map<string, Record<string, unknown>>();
@@ -1804,7 +1840,7 @@ function setupEventHandlers(
 
   function writeUi(text: string): void {
     withSubagentPanelsHidden(() => {
-      process.stderr.write(text);
+      safeWrite(process.stderr, text);
     });
   }
 
@@ -2294,7 +2330,7 @@ function setupEventHandlers(
     const border = yellow("─".repeat(60));
     const toolLine = `  ${bold(event.toolName)}`;
     const detailLine = `  ${dim(event.details.length > 56 ? event.details.slice(0, 53) + "..." : event.details)}`;
-    process.stderr.write(`\n${border}\n${toolLine}\n${detailLine}\n${border}\n`);
+    safeWrite(process.stderr, `\n${border}\n${toolLine}\n${detailLine}\n${border}\n`);
 
     const rl = createInterface({
       input: process.stdin,
@@ -2321,7 +2357,14 @@ function setupEventHandlers(
     statusLine?.clear();
   });
 
-  return { lspToolCounts, statusLine };
+  return {
+    lspToolCounts,
+    statusLine,
+    cleanup: () => {
+      spinner.stop();
+      subagentRenderer.cleanup();
+    },
+  };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -2388,47 +2431,60 @@ Be concise and structured.${stateContext}`,
  * Flush buffered output and handle TaskCompletionStatus.
  * Falls back to result.lastText when the final streamed response is empty.
  */
+export function getTurnStatusNotice(
+  status: "success" | "empty_response" | "budget_exceeded" | "aborted",
+  output: { readonly streamedText: string; readonly lastText: string | null },
+): string | null {
+  switch (status) {
+    case "empty_response":
+      return !output.streamedText.trim() && !output.lastText?.trim()
+        ? "Agent completed but produced no output."
+        : null;
+    case "budget_exceeded":
+      return "Iteration limit reached — partial results shown.";
+    case "aborted":
+      return "Agent was interrupted.";
+    default:
+      return null;
+  }
+}
+
 function flushOutput(result: TaskLoopResult, verbosity: Verbosity, os: OutputState = outputState): void {
   const streamed = os.textBuffer.trim();
 
   if (streamed) {
-    if (os.hadToolCalls) process.stderr.write("\n");
+    if (os.hadToolCalls) safeWrite(process.stderr, "\n");
     // Apply markdown rendering when stdout is a TTY (not piped)
     const rendered = process.stdout.isTTY
       ? renderMarkdown(os.textBuffer)
       : os.textBuffer;
-    process.stdout.write(rendered + "\n");
+    safeWrite(process.stdout, rendered + "\n");
   } else if (result.lastText?.trim()) {
     // No final response, but the LLM produced text earlier in the session
     if (verbosity !== "quiet") {
-      process.stderr.write(
-        yellow("[warning] No final response. Showing last output from agent:") + "\n",
+      safeWriteLine(
+        process.stderr,
+        yellow("[warning] No final response. Showing last output from agent:"),
       );
     }
     const renderedLast = process.stdout.isTTY
       ? renderMarkdown(result.lastText)
       : result.lastText;
-    process.stdout.write(renderedLast + "\n");
+    safeWrite(process.stdout, renderedLast + "\n");
   }
 
   // Status-specific messages
   if (verbosity !== "quiet") {
-    switch (result.status) {
-      case "empty_response":
-        if (!os.textBuffer.trim() && !result.lastText?.trim()) {
-          process.stderr.write(
-            yellow("[warning] Agent completed but produced no output.") + "\n",
-          );
-        }
-        break;
-      case "budget_exceeded":
-        process.stderr.write(
-          yellow("[warning] Iteration limit reached — partial results shown.") + "\n",
-        );
-        break;
-      case "aborted":
-        process.stderr.write(dim("[info] Agent was interrupted.") + "\n");
-        break;
+    const notice = getTurnStatusNotice(result.status, {
+      streamedText: os.textBuffer,
+      lastText: result.lastText,
+    });
+    if (notice) {
+      if (result.status === "aborted") {
+        safeWriteLine(process.stderr, dim(`[info] ${notice}`));
+      } else {
+        safeWriteLine(process.stderr, yellow(`[warning] ${notice}`));
+      }
     }
   }
 }
@@ -2692,17 +2748,10 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<TaskLoopR
     if (uniqueFiles.length > 0) {
       const fileList = uniqueFiles.slice(0, 5).join(", ");
       const overflow = uniqueFiles.length > 5 ? ` (+${uniqueFiles.length - 5} more)` : "";
-      process.stderr.write(dim(`[files] ${uniqueFiles.length} modified: ${fileList}${overflow}`) + "\n");
+      safeWriteLine(process.stderr, dim(`[files] ${uniqueFiles.length} modified: ${fileList}${overflow}`));
     }
 
     const elapsed = Date.now() - startTime;
-    process.stderr.write(formatTurnSummary({
-      iterationCount: result.iterations,
-      toolCallCount: outputState.turnToolCallCount,
-      inputTokens: outputState.turnInputTokens,
-      costDelta: outputState.turnCostDelta,
-      elapsedMs: elapsed,
-    }) + "\n");
 
     // Ring bell on long runs so the user knows it finished
     if (elapsed > 30_000) {

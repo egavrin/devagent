@@ -15,9 +15,11 @@ export const SPINNER_VERBS = [
   "Deliberating", "Exploring", "Weighing", "Pondering", "Reviewing",
 ];
 
+export const ITERATION_LIMIT_NOTICE = "Iteration limit exhausted. Type /continue to proceed.";
+
 // ─── Log Entry Types ────────────────────────────────────────
 
-export type LogEntryType = "tool" | "tool-group" | "reasoning" | "thinking-duration" | "plan" | "error" | "info" | "compaction" | "final-output" | "turn-summary";
+export type LogEntryType = "tool" | "tool-group" | "reasoning" | "thinking-duration" | "plan" | "error" | "info" | "compaction" | "final-output";
 
 export interface LogEntry {
   readonly id: string;
@@ -30,6 +32,10 @@ export interface InteractiveQueryResult {
   readonly toolCalls: number;
   readonly lastText: string | null;
   readonly status: TaskCompletionStatus;
+}
+
+export function getTurnCompletionNotice(status: TaskCompletionStatus): string | null {
+  return status === "budget_exceeded" ? ITERATION_LIMIT_NOTICE : null;
 }
 
 export const APPROVAL_MODE_ORDER = [

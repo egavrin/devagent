@@ -10,7 +10,6 @@ import { ToolDisplay, ToolGroupDisplay, type ToolEvent, type ToolGroupEvent } fr
 import { PlanView, type PlanStep } from "./PlanView.js";
 import { ThinkingDuration, ErrorView } from "./MessageView.js";
 import { FinalOutput } from "./FinalOutput.js";
-import { TurnSummary } from "./TurnSummary.js";
 import type { LogEntry } from "./shared.js";
 import { cleanTime } from "./shared.js";
 
@@ -36,10 +35,6 @@ export const LogEntryView = React.memo(function LogEntryView({ entry }: { entry:
     }
     case "final-output":
       return <FinalOutput text={(entry.data as { text: string }).text} />;
-    case "turn-summary": {
-      const s = entry.data as { iterations: number; toolCalls: number; cost: number; elapsedMs: number };
-      return <Box marginTop={1}><TurnSummary iterations={s.iterations} toolCalls={s.toolCalls} cost={s.cost} elapsedMs={s.elapsedMs} /></Box>;
-    }
     case "info": {
       const data = String(entry.data);
       // User query

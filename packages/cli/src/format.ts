@@ -14,6 +14,50 @@ import type {
 } from "@devagent/runtime";
 import { formatDuration } from "@devagent/runtime";
 
+export interface WritableStreamLike {
+  write: (chunk: string) => boolean;
+  destroyed?: boolean;
+  writableDestroyed?: boolean;
+  writableEnded?: boolean;
+  writableFinished?: boolean;
+}
+
+function isIgnorableStreamWriteError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ERR_STREAM_DESTROYED" || code === "EPIPE";
+}
+
+function isStreamUnavailable(stream: WritableStreamLike): boolean {
+  return Boolean(
+    stream.destroyed ||
+    stream.writableDestroyed ||
+    stream.writableEnded ||
+    stream.writableFinished,
+  );
+}
+
+export function safeWrite(stream: WritableStreamLike, chunk: string): boolean {
+  if (isStreamUnavailable(stream)) {
+    return false;
+  }
+
+  try {
+    return stream.write(chunk);
+  } catch (error) {
+    if (isIgnorableStreamWriteError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export function safeWriteLine(stream: WritableStreamLike, line: string): boolean {
+  return safeWrite(stream, `${line}\n`);
+}
+
 // ─── Color Helpers ──────────────────────────────────────────
 
 const useColor = !process.env["NO_COLOR"];
@@ -96,13 +140,13 @@ const isTTY = process.stderr.isTTY ?? false;
 /** Set the terminal title (tab name). No-op if not a TTY. */
 export function setTerminalTitle(title: string): void {
   if (!isTTY) return;
-  process.stderr.write(`\x1b]0;${title}\x07`);
+  safeWrite(process.stderr, `\x1b]0;${title}\x07`);
 }
 
 /** Ring the terminal bell. No-op if not a TTY. */
 export function terminalBell(): void {
   if (!isTTY) return;
-  process.stderr.write("\x07");
+  safeWrite(process.stderr, "\x07");
 }
 
 // ─── Spinner ────────────────────────────────────────────────
@@ -147,9 +191,9 @@ export class Spinner {
     clearInterval(this.timer);
     this.timer = null;
     // Clear the spinner line
-    process.stderr.write("\x1b[2K\r");
+    safeWrite(process.stderr, "\x1b[2K\r");
     if (finalMessage) {
-      process.stderr.write(finalMessage + "\n");
+      safeWriteLine(process.stderr, finalMessage);
     }
   }
 
@@ -157,10 +201,10 @@ export class Spinner {
   log(line: string): void {
     if (this.timer) {
       // Clear spinner, write the line, then re-render
-      process.stderr.write(`\x1b[2K\r${line}\n`);
+      safeWrite(process.stderr, `\x1b[2K\r${line}\n`);
       this.render();
     } else {
-      process.stderr.write(line + "\n");
+      safeWriteLine(process.stderr, line);
     }
   }
 
@@ -174,7 +218,7 @@ export class Spinner {
     const elapsed = Date.now() - this.startedAt;
     const elapsedStr = elapsed >= 1000 ? ` ${dim(`(${(elapsed / 1000).toFixed(1)}s)`)}` : "";
     const suffixStr = this.suffix ? ` ${dim(this.suffix)}` : "";
-    process.stderr.write(`\x1b[2K\r${cyan(frame)} ${dim(this.message)}${elapsedStr}${suffixStr}`);
+    safeWrite(process.stderr, `\x1b[2K\r${cyan(frame)} ${dim(this.message)}${elapsedStr}${suffixStr}`);
   }
 }
 
@@ -387,33 +431,6 @@ export function formatPlan(
     }
   });
   return lines.join("\n");
-}
-
-// ─── Per-Turn Summary ───────────────────────────────────────
-
-interface TurnStats {
-  readonly toolCallCount: number;
-  readonly iterationCount: number;
-  readonly inputTokens: number;
-  readonly costDelta: number;
-  readonly elapsedMs: number;
-}
-
-export function formatTurnSummary(stats: TurnStats): string {
-  const parts: string[] = [];
-  parts.push(`${stats.iterationCount} iterations`);
-  if (stats.toolCallCount > 0) {
-    parts.push(`${stats.toolCallCount} tool calls`);
-  }
-  if (stats.inputTokens > 0) {
-    const kIn = Math.round(stats.inputTokens / 1000);
-    parts.push(`${kIn}k input tokens`);
-  }
-  if (stats.costDelta > 0) {
-    parts.push(`$${stats.costDelta.toFixed(4)}`);
-  }
-  parts.push(formatDuration(stats.elapsedMs));
-  return `${green("✓")} ${bold("Done")} ${dim(`(${parts.join(", ")})`)}`;
 }
 
 export function formatError(message: string): string {
@@ -782,7 +799,7 @@ export class SubagentPanelRenderer {
     this.clearRendered();
     const lines = this.formatPanels(this.panels);
     if (lines.length === 0) return;
-    process.stderr.write(lines.join("\n") + "\n");
+    safeWrite(process.stderr, lines.join("\n") + "\n");
     this.renderedLineCount = lines.length;
   }
 
@@ -802,15 +819,15 @@ export class SubagentPanelRenderer {
 
   private clearRendered(): void {
     if (!this.enabled || this.renderedLineCount === 0) return;
-    process.stderr.write(`\x1b[${this.renderedLineCount}F`);
+    safeWrite(process.stderr, `\x1b[${this.renderedLineCount}F`);
     for (let i = 0; i < this.renderedLineCount; i++) {
-      process.stderr.write("\x1b[2K");
+      safeWrite(process.stderr, "\x1b[2K");
       if (i < this.renderedLineCount - 1) {
-        process.stderr.write("\x1b[1E");
+        safeWrite(process.stderr, "\x1b[1E");
       }
     }
     if (this.renderedLineCount > 1) {
-      process.stderr.write(`\x1b[${this.renderedLineCount - 1}F`);
+      safeWrite(process.stderr, `\x1b[${this.renderedLineCount - 1}F`);
     }
     this.renderedLineCount = 0;
   }

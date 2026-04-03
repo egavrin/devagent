@@ -4,7 +4,8 @@ import { render, Static, Text } from "ink";
 import { EventBus } from "@devagent/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ITERATION_LIMIT_NOTICE, TranscriptView } from "./App.js";
+import { TranscriptView } from "./App.js";
+import { ITERATION_LIMIT_NOTICE } from "./shared.js";
 import { useAgentLog } from "./useAgentLog.js";
 import type { LogEntry } from "./shared.js";
 
