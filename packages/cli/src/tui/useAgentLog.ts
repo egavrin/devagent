@@ -88,7 +88,7 @@ export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
   const pendingGroupRef = useRef<{ name: string; count: number; summaries: string[]; totalMs: number; lastSuccess: boolean } | null>(null);
 
   const addLog = useCallback((entry: LogEntry) => {
-    setLog((prev) => [...prev.slice(-50), entry]);
+    setLog((prev) => [...prev, entry]);
   }, []);
 
   const flushGroup = useCallback(() => {

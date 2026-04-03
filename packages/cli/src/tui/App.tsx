@@ -36,6 +36,24 @@ export interface AppProps {
   readonly version?: string;
 }
 
+export interface TranscriptViewProps {
+  readonly showWelcome: boolean;
+  readonly log: ReadonlyArray<LogEntry>;
+  readonly model: string;
+  readonly version?: string;
+}
+
+export function TranscriptView({ showWelcome, log, model, version }: TranscriptViewProps): React.ReactElement {
+  return (
+    <>
+      {showWelcome && <Welcome model={model} version={version} />}
+      <Static items={[...log]}>
+        {(entry) => <LogEntryView key={entry.id} entry={entry} />}
+      </Static>
+    </>
+  );
+}
+
 // ─── App Component ──────────────────────────────────────────
 
 export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions, model, approvalMode, cwd, version }: AppProps): React.ReactElement {
@@ -225,14 +243,7 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
 
   return (
     <>
-      <Static items={showWelcome ? [{ id: "welcome", type: "welcome" as const }, ...log] : log}>
-        {(entry) => {
-          if ("type" in entry && entry.type === "welcome") {
-            return <Welcome key="welcome" model={model} version={version} />;
-          }
-          return <LogEntryView key={entry.id} entry={entry as LogEntry} />;
-        }}
-      </Static>
+      <TranscriptView showWelcome={showWelcome} log={log} model={model} version={version} />
       {hasActiveSubagents && <SubagentPanel agents={subagents} />}
       {pendingApproval && <ApprovalDialog request={pendingApproval} onResponse={handleApproval} />}
       {showCommandPalette && <CommandPalette commands={commands} onClose={() => setShowCommandPalette(false)} />}
