@@ -118,4 +118,31 @@ describe("createCrashSessionReporter", () => {
     expect(sessionWrites).toHaveLength(1);
     expect(off).toHaveBeenCalledTimes(3);
   });
+
+  it("suppresses destroyed-stream errors while still exiting on SIGINT", () => {
+    const onceHandlers = new Map<string, (...args: any[]) => void>();
+    const exit = vi.fn(() => {
+      throw new Error("exit");
+    }) as unknown as (code?: number) => never;
+    const proc = {
+      stderr: {
+        destroyed: false,
+        writableEnded: false,
+        writableFinished: false,
+        write: vi.fn(() => {
+          throw Object.assign(new Error("destroyed"), { code: "ERR_STREAM_DESTROYED" });
+        }),
+      },
+      once: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => {
+        onceHandlers.set(event, listener);
+      },
+      off: vi.fn(),
+      exit,
+    };
+
+    createCrashSessionReporter("s-destroyed", "normal", proc);
+
+    expect(() => onceHandlers.get("SIGINT")!()).toThrow("exit");
+    expect(exit).toHaveBeenCalledWith(130);
+  });
 });
