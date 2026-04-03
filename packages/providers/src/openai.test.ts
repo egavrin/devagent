@@ -152,16 +152,13 @@ function makeStreamingResponse(): Response {
     start(controller) {
       const encoder = new TextEncoder();
       controller.enqueue(encoder.encode(
-        'data: {"type":"response.created","response":{"id":"resp_test","created_at":0,"model":"gpt-4o"}}\n\n',
+        'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"pong"},"finish_reason":null}]}\n\n',
       ));
       controller.enqueue(encoder.encode(
-        'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_test","phase":"final_answer"}}\n\n',
+        'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n',
       ));
       controller.enqueue(encoder.encode(
-        'data: {"type":"response.output_text.delta","item_id":"msg_test","delta":"pong","content_index":0}\n\n',
-      ));
-      controller.enqueue(encoder.encode(
-        'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1},"service_tier":"default"}}\n\n',
+        "data: [DONE]\n\n",
       ));
       controller.close();
     },

@@ -122,12 +122,22 @@ function createOpenRouterProvider(config: ProviderConfig): LLMProvider {
 /**
  * Devagent API provider — wraps the OpenAI provider for the deployed gateway.
  * Uses the stable HTTPS gateway base URL and injects x-request-id for tracing.
+ *
+ * The gateway currently exposes Chat Completions at /v1/chat/completions and
+ * returns 404 for /v1/responses. Keep this transport override explicit so AI
+ * SDK upgrades cannot silently route cortex through /responses again.
  */
 function createDevagentApiProvider(config: ProviderConfig): LLMProvider {
   const provider = createOpenAIProvider({
     ...config,
     baseUrl: config.baseUrl ?? "https://internal-llm-gateway.157.245.27.88.nip.io/v1",
     requestIdHeaderName: config.requestIdHeaderName ?? "x-request-id",
+    capabilities: {
+      ...config.capabilities,
+      useResponsesApi: false,
+      reasoning: true,
+      supportsTemperature: false,
+    },
   });
 
   return {

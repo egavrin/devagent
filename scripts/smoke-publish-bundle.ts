@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -10,9 +11,13 @@ const DIST = join(ROOT, "dist");
 const BUNDLE_PATH = join(DIST, "devagent.js");
 const BOOTSTRAP_PATH = join(DIST, "bootstrap.js");
 
-main();
+void main().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+});
 
-function main(): void {
+async function main(): Promise<void> {
   ensureBundleExists();
   verifyBundleMarkers();
 
@@ -46,6 +51,28 @@ function main(): void {
         "DEEPSEEK_API_KEY",
       ],
     });
+
+    const stubGateway = await startStubGateway(nodeBin);
+    try {
+      writeGatewayConfig(isolatedHome, stubGateway.baseUrl);
+      runSmokeCommand(nodeBin, ["bootstrap.js", "--provider", "devagent-api", "--model", "cortex", "hello"], {
+        expectedExitCode: 1,
+        description: "gateway transport smoke",
+        homeDir: isolatedHome,
+        envOverrides: {
+          DEVAGENT_API_KEY: "ilg_smoke_test_key",
+        },
+        clearedEnvKeys: [
+          "OPENAI_API_KEY",
+          "ANTHROPIC_API_KEY",
+          "OPENROUTER_API_KEY",
+          "DEEPSEEK_API_KEY",
+        ],
+      });
+      stubGateway.assertTransportContract();
+    } finally {
+      await stubGateway.stop();
+    }
   } finally {
     rmSync(isolatedHome, { recursive: true, force: true });
   }
@@ -211,6 +238,7 @@ interface SmokeCommandOptions {
   readonly expectedOutput?: string;
   readonly homeDir: string;
   readonly clearedEnvKeys?: ReadonlyArray<string>;
+  readonly envOverrides?: Readonly<Record<string, string>>;
 }
 
 function runSmokeCommand(
@@ -229,6 +257,7 @@ function runSmokeCommand(
   for (const envKey of options.clearedEnvKeys ?? []) {
     delete env[envKey];
   }
+  Object.assign(env, options.envOverrides ?? {});
 
   const result = spawnSync(nodeBin, args, {
     cwd: DIST,
@@ -255,4 +284,160 @@ function runSmokeCommand(
       `${options.description} did not include expected output: ${options.expectedOutput}\n${output.trim()}`,
     );
   }
+}
+
+function writeGatewayConfig(homeDir: string, baseUrl: string): void {
+  const configDir = join(homeDir, ".config", "devagent");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(
+    join(configDir, "config.toml"),
+    [
+      'provider = "devagent-api"',
+      'model = "cortex"',
+      "",
+      '[providers.devagent-api]',
+      `base_url = "${baseUrl}"`,
+      "",
+    ].join("\n"),
+  );
+}
+
+interface StubGatewayHandle {
+  readonly baseUrl: string;
+  readonly assertTransportContract: () => void;
+  readonly stop: () => Promise<void>;
+}
+
+async function startStubGateway(nodeBin: string): Promise<StubGatewayHandle> {
+  const stubDir = mkdtempSync(join(tmpdir(), "devagent-gateway-stub-"));
+  const portPath = join(stubDir, "port.txt");
+  const requestLogPath = join(stubDir, "requests.log");
+  const serverScriptPath = join(stubDir, "server.mjs");
+
+  writeFileSync(
+    serverScriptPath,
+    [
+      'import { createServer } from "node:http";',
+      'import { appendFileSync, writeFileSync } from "node:fs";',
+      "",
+      "const [portPath, requestLogPath] = process.argv.slice(2);",
+      "const server = createServer(async (req, res) => {",
+      '  appendFileSync(requestLogPath, `${req.method} ${req.url}\\n`);',
+      "  for await (const _chunk of req) {",
+      "    void _chunk;",
+      "  }",
+      '  if (req.url === "/v1/chat/completions") {',
+      "    res.statusCode = 401;",
+      '    res.setHeader("content-type", "application/json");',
+      '    res.end(JSON.stringify({ error: { code: "invalid_auth", message: "Missing runtime bearer token." } }));',
+      "    return;",
+      "  }",
+      '  if (req.url === "/v1/responses") {',
+      "    res.statusCode = 404;",
+      '    res.setHeader("content-type", "text/plain; charset=UTF-8");',
+      '    res.end("404 Not Found");',
+      "    return;",
+      "  }",
+      "  res.statusCode = 404;",
+      '  res.end("not found");',
+      "});",
+      'server.listen(0, "127.0.0.1", () => {',
+      "  const address = server.address();",
+      '  if (!address || typeof address === "string") {',
+      '    throw new Error("Failed to resolve stub gateway address");',
+      "  }",
+      "  writeFileSync(portPath, String(address.port));",
+      "});",
+      'process.on("SIGTERM", () => server.close(() => process.exit(0)));',
+      'process.on("SIGINT", () => server.close(() => process.exit(0)));',
+      "",
+    ].join("\n"),
+  );
+
+  const child = spawn(nodeBin, [serverScriptPath, portPath, requestLogPath], {
+    cwd: stubDir,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const output = captureChildOutput(child);
+
+  try {
+    const port = await waitForPortFile(portPath, child, output);
+    return {
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      assertTransportContract: () => {
+        const requests = existsSync(requestLogPath)
+          ? readFileSync(requestLogPath, "utf-8").split("\n").filter(Boolean)
+          : [];
+        if (!requests.includes("POST /v1/chat/completions")) {
+          throw new Error(
+            `gateway transport smoke did not hit /v1/chat/completions.\nRequests:\n${requests.join("\n")}`,
+          );
+        }
+        if (requests.includes("POST /v1/responses")) {
+          throw new Error(
+            `gateway transport smoke unexpectedly hit /v1/responses.\nRequests:\n${requests.join("\n")}`,
+          );
+        }
+      },
+      stop: async () => {
+        await stopStubGateway(child);
+        rmSync(stubDir, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    await stopStubGateway(child);
+    rmSync(stubDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function captureChildOutput(child: ChildProcessWithoutNullStreams): { stdout: string; stderr: string } {
+  const output = { stdout: "", stderr: "" };
+  child.stdout.on("data", (chunk: Buffer | string) => {
+    output.stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk: Buffer | string) => {
+    output.stderr += chunk.toString();
+  });
+  return output;
+}
+
+async function waitForPortFile(
+  portPath: string,
+  child: ChildProcessWithoutNullStreams,
+  output: { stdout: string; stderr: string },
+): Promise<string> {
+  const timeoutAt = Date.now() + 5_000;
+  while (Date.now() < timeoutAt) {
+    if (existsSync(portPath)) {
+      return readFileSync(portPath, "utf-8").trim();
+    }
+    if (child.exitCode !== null) {
+      throw new Error(
+        `Stub gateway exited before startup.\n${[output.stdout, output.stderr].filter(Boolean).join("\n").trim()}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  throw new Error(
+    `Timed out waiting for stub gateway startup.\n${[output.stdout, output.stderr].filter(Boolean).join("\n").trim()}`,
+  );
+}
+
+async function stopStubGateway(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null) {
+    return;
+  }
+
+  child.kill("SIGTERM");
+  const timeoutAt = Date.now() + 2_000;
+  while (Date.now() < timeoutAt) {
+    if (child.exitCode !== null) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  child.kill("SIGKILL");
 }

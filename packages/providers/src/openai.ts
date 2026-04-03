@@ -108,9 +108,12 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
         // Resolve capabilities from explicit config (no heuristics)
         const caps = resolveCapabilities(config.capabilities);
 
+        // AI SDK 5 routes openai(modelId) through the Responses API. Use the
+        // explicit chat constructor when the provider contract expects
+        // /chat/completions.
         const model = caps.useResponsesApi
           ? openai.responses(config.model)
-          : openai(config.model);
+          : openai.chat(config.model);
 
         // Build providerOptions — merge reasoning effort with Codex-specific options
         const openaiProviderOpts: Record<string, string | number | boolean | null> = {};
