@@ -135,11 +135,17 @@ function readTomlFile(filePath: string): Record<string, unknown> {
   return parseToml(content) as Record<string, unknown>;
 }
 
-function resolveEnvValue(value: unknown): unknown {
+function resolveEnvValue(
+  value: unknown,
+  options?: { readonly allowMissing?: boolean },
+): unknown {
   if (typeof value === "string" && value.startsWith("env:")) {
     const envKey = value.slice(4);
     const envValue = process.env[envKey];
     if (envValue === undefined) {
+      if (options?.allowMissing) {
+        return undefined;
+      }
       throw new Error(
         `Environment variable "${envKey}" referenced in config but not set`,
       );
@@ -172,10 +178,13 @@ function parseModelCapabilities(
 
 function mergeProviderConfig(
   raw: Record<string, unknown>,
+  options?: { readonly allowMissingApiKeyEnv?: boolean },
 ): ProviderConfig {
   const capabilities = parseModelCapabilities(raw);
   return {
-    apiKey: resolveEnvValue(raw["api_key"] ?? raw["apiKey"]) as
+    apiKey: resolveEnvValue(raw["api_key"] ?? raw["apiKey"], {
+      allowMissing: options?.allowMissingApiKeyEnv,
+    }) as
       | string
       | undefined,
     baseUrl: raw["base_url"] as string | undefined ?? raw["baseUrl"] as string | undefined,
@@ -458,6 +467,17 @@ export function loadConfig(
     }
   }
 
+  // Check env overrides
+  const envProvider = process.env["DEVAGENT_PROVIDER"];
+  const envModel = process.env["DEVAGENT_MODEL"];
+
+  // Determine provider early so we can resolve active-provider credentials strictly.
+  const provider =
+    envProvider ??
+    overrides?.provider ??
+    (fileConfig["provider"] as string) ??
+    DEFAULT_CONFIG.provider;
+
   // Build providers map
   const rawProviders = (fileConfig["providers"] ?? {}) as Record<
     string,
@@ -465,14 +485,12 @@ export function loadConfig(
   >;
   const providers: Record<string, ProviderConfig> = {};
   for (const [key, value] of Object.entries(rawProviders)) {
-    providers[key] = mergeProviderConfig(value);
+    providers[key] = mergeProviderConfig(value, {
+      allowMissingApiKeyEnv: key !== provider,
+    });
   }
 
   const credentialStore = new CredentialStore();
-
-  // Check env overrides
-  const envProvider = process.env["DEVAGENT_PROVIDER"];
-  const envModel = process.env["DEVAGENT_MODEL"];
 
   // Merge approval
   const rawApproval = (fileConfig["approval"] ?? {}) as Record<
@@ -526,13 +544,6 @@ export function loadConfig(
 
   // Resolve top-level api_key: TOML > env var > stored credentials
   const topLevelApiKey = fileConfig["api_key"] as string | undefined;
-
-  // Determine provider early so we can look up stored credentials
-  const provider =
-    envProvider ??
-    overrides?.provider ??
-    (fileConfig["provider"] as string) ??
-    DEFAULT_CONFIG.provider;
 
   const rawSubagents = (fileConfig["subagents"] ?? {}) as Record<string, unknown>;
   const explicitAgentModelOverrides = parseAgentStringMap(

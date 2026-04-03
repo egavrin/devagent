@@ -206,6 +206,49 @@ describe("renderHelpText", () => {
       expect(execError.stderr).not.toContain('Environment variable "OPENAI_API_KEY" referenced in config but not set');
     }
   });
+
+  it("reports the selected provider when an inactive config env ref is unset", () => {
+    execFileSync("bun", ["run", "build"], {
+      cwd: join(cliPackageDir, "..", "runtime"),
+      stdio: "pipe",
+    });
+
+    execFileSync("bun", ["run", "build"], {
+      cwd: cliPackageDir,
+      stdio: "pipe",
+    });
+
+    const home = mkdtempSync(join(tmpdir(), "devagent-provider-override-home-"));
+    try {
+      const configDir = join(home, ".config", "devagent");
+      const configPath = join(configDir, "config.toml");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        'provider = "openai"\n\n[providers.openai]\napi_key = "env:OPENAI_API_KEY"\n',
+      );
+
+      try {
+        execFileSync("bun", ["dist/index.js", "--provider", "devagent-api", "--model", "cortex", "test"], {
+          cwd: cliPackageDir,
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            HOME: home,
+          },
+        });
+        expect.unreachable("expected provider setup to fail without a devagent-api key");
+      } catch (error) {
+        const execError = error as Error & { stdout?: string; stderr?: string; status?: number };
+        expect(execError.status).toBe(1);
+        expect(execError.stderr).toContain('No API key configured for provider "devagent-api".');
+        expect(execError.stderr).not.toContain('Environment variable "OPENAI_API_KEY" referenced in config but not set');
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveAutoPromptCommandTarget", () => {

@@ -304,6 +304,35 @@ base_url = "https://example.test/v1"
     expect(config.model).toBe("meta-llama/llama-3");
   });
 
+  it("does not fail on inactive provider env refs when overrides select a different provider", () => {
+    const dir = join(tmpdir(), `devagent-test-inactive-env-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, ".devagent.toml"),
+      `
+provider = "openai"
+model = "gpt-4.1"
+
+[providers.openai]
+api_key = "env:OPENAI_API_KEY"
+model = "gpt-4.1"
+`,
+    );
+
+    try {
+      const config = loadConfig(dir, {
+        provider: "devagent-api",
+        model: "cortex",
+      });
+
+      expect(config.provider).toBe("devagent-api");
+      expect(config.model).toBe("cortex");
+      expect(config.providers["openai"]?.apiKey).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("applies OpenAI-family default subagent model and reasoning profiles", () => {
     const dir = join(tmpdir(), `devagent-test-subagent-defaults-${Date.now()}`);
     mkdirSync(dir, { recursive: true });
