@@ -67,9 +67,23 @@ const KNOWN_PROVIDERS: readonly ProviderEntry[] = listProviderCredentialDescript
     authMethods: PROVIDER_AUTH_METHODS[provider.id] ?? ["api-key"],
   }));
 
+export function renderAuthHelpText(): string {
+  return `Usage:
+  devagent auth login
+  devagent auth status
+  devagent auth logout
+
+Manage stored provider credentials for DevAgent.`;
+}
+
 // ─── Entry Point ────────────────────────────────────────────
 
 export async function runAuthCommand(subcommand: string): Promise<void> {
+  if (subcommand === "--help" || subcommand === "-h") {
+    process.stdout.write(renderAuthHelpText() + "\n");
+    return;
+  }
+
   switch (subcommand) {
     case "login":
       await authLogin();

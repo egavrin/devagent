@@ -45,6 +45,22 @@ describe("documentation parity", () => {
     expect(readme).not.toContain("REPL");
   });
 
+  it("documents configure as the public onboarding command", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain("devagent configure");
+    expect(readme).toContain("| `devagent configure` | Guided global configuration wizard |");
+    expect(readme).toContain("| `devagent config get/set/path` | Inspect or edit global config directly |");
+    expect(readme).not.toContain("`devagent setup`");
+    expect(readme).not.toContain("`devagent init`");
+  });
+
+  it("describes project instructions as optional manual files", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain("Project instructions are optional.");
+    expect(readme).toContain("Create `AGENTS.md` manually");
+    expect(readme).not.toContain(".devagent/instructions.md");
+  });
+
   it("does not expose legacy workflow-run guidance in live docs", () => {
     const files = [
       join(repoRoot, "README.md"),

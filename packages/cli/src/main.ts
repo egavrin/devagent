@@ -204,10 +204,11 @@ interface ReviewArgs {
   patchFile: string;
   ruleFile: string | null;
   jsonOutput: boolean;
+  help: boolean;
 }
 
 interface CliSubcommand {
-  name: "doctor" | "config" | "init" | "setup" | "update" | "completions" | "install-lsp";
+  name: "doctor" | "config" | "configure" | "setup" | "init" | "update" | "completions" | "install-lsp";
   args: string[];
 }
 
@@ -226,6 +227,24 @@ interface CliArgs {
   continue_: boolean;
   review: ReviewArgs | null;
   subcommand: CliSubcommand | null;
+}
+
+const SUBCOMMANDS = new Set<CliSubcommand["name"]>([
+  "doctor",
+  "config",
+  "configure",
+  "setup",
+  "init",
+  "update",
+  "completions",
+  "install-lsp",
+]);
+
+function renderReviewHelpText(): string {
+  return `Usage:
+  devagent review <file> --rule <rule_file> [--json]
+
+Run the rule-based review pipeline on a patch or diff file.`;
 }
 
 export function loadQueryFromFile(
@@ -339,9 +358,9 @@ export function parseArgs(argv: string[]): CliArgs {
       process.exit(0);
     }
 
-    if (arg === "doctor" || arg === "config" || arg === "init" || arg === "setup" || arg === "update" || arg === "completions" || arg === "install-lsp") {
+    if (SUBCOMMANDS.has(arg as CliSubcommand["name"])) {
       result.subcommand = {
-        name: arg,
+        name: arg as CliSubcommand["name"],
         args: args.slice(i + 1),
       };
       return result;
@@ -354,12 +373,14 @@ export function parseArgs(argv: string[]): CliArgs {
 
     if (arg === "review") {
       // devagent review <file> [--rule <rule_file>] [--json] [--provider <p>] [--model <m>]
-      const reviewArgs: ReviewArgs = { patchFile: "", ruleFile: null, jsonOutput: false };
+      const reviewArgs: ReviewArgs = { patchFile: "", ruleFile: null, jsonOutput: false, help: false };
       i++;
       while (i < args.length) {
         const rarg = args[i]!;
         if (rarg === "--rule" && i + 1 < args.length) {
           reviewArgs.ruleFile = args[++i]!;
+        } else if (rarg === "--help" || rarg === "-h") {
+          reviewArgs.help = true;
         } else if (rarg === "--json") {
           reviewArgs.jsonOutput = true;
         } else if (rarg === "--provider" && i + 1 < args.length) {
@@ -442,12 +463,9 @@ Usage:
                                   Rule-based patch review
 
 Commands:
-  devagent setup                  Interactive first-time setup (provider, model, config)
-  devagent init                   Initialize project config (.devagent/ + AGENTS.md)
+  devagent configure              Guided global configuration wizard
   devagent doctor                 Check environment and dependencies
-  devagent config get [key]       Show config value(s)
-  devagent config set <key> <val> Set a config value
-  devagent config path            Show config file location
+  devagent config <...>           Inspect or edit global config directly
   devagent install-lsp             Install LSP servers for code intelligence
   devagent update                 Update to latest version
   devagent completions <shell>    Generate shell completions (bash/zsh/fish)
@@ -1265,18 +1283,19 @@ export async function main(): Promise<void> {
 
   const cliArgs = parseArgs(process.argv);
 
-  // Subcommands: doctor, config, init
+  // Subcommands: doctor, config, configure
   if (cliArgs.subcommand) {
     const cmd = cliArgs.subcommand.name;
     const cmdArgs = cliArgs.subcommand.args;
-    const { runDoctor, runConfig, runInit, runSetup, runUpdate, runCompletions, runInstallLsp } = await import("./commands.js");
-    if (cmd === "doctor") { await runDoctor(getVersion()); }
+    const { runDoctor, runConfig, runInit, runSetup, runConfigure, runUpdate, runCompletions, runInstallLsp } = await import("./commands.js");
+    if (cmd === "doctor") { await runDoctor(getVersion(), cmdArgs); }
     else if (cmd === "config") { runConfig(cmdArgs); }
-    else if (cmd === "init") { runInit(); }
-    else if (cmd === "setup") { await runSetup(); }
-    else if (cmd === "update") { await runUpdate(); }
-    else if (cmd === "install-lsp") { runInstallLsp(); }
-    else if (cmd === "completions") { runCompletions(cmdArgs[0] ?? ""); }
+    else if (cmd === "setup") { runSetup(cmdArgs); }
+    else if (cmd === "init") { runInit(cmdArgs); }
+    else if (cmd === "configure") { await runConfigure(cmdArgs); }
+    else if (cmd === "update") { await runUpdate(cmdArgs); }
+    else if (cmd === "install-lsp") { runInstallLsp(cmdArgs); }
+    else if (cmd === "completions") { runCompletions(cmdArgs); }
     return;
   }
 
@@ -1307,8 +1326,13 @@ export async function main(): Promise<void> {
     const { runReviewPipeline } = await import("@devagent/runtime");
     const reviewArgs = cliArgs.review;
 
+    if (reviewArgs.help) {
+      process.stdout.write(renderReviewHelpText() + "\n");
+      return;
+    }
+
     if (!reviewArgs.patchFile) {
-      process.stderr.write(formatError("Usage: devagent review <file> [--rule <rule_file>] [--json]") + "\n");
+      process.stderr.write(formatError(renderReviewHelpText()) + "\n");
       process.exit(1);
     }
 

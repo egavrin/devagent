@@ -1,7 +1,13 @@
+import { execFileSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Session } from "@devagent/runtime";
 import { loadQueryFromFile, parseArgs, renderHelpText, renderSessionsList, resolveAutoPromptCommandTarget } from "./main.js";
+
+const cliSrcDir = dirname(fileURLToPath(import.meta.url));
+const cliPackageDir = join(cliSrcDir, "..");
 
 describe("parseArgs", () => {
   it("parses --file <path>", () => {
@@ -20,6 +26,24 @@ describe("parseArgs", () => {
         subcommand: {
           name: "config",
           args: ["set", "providers.openai.apiKey", "env:OPENAI_API_KEY"],
+        },
+      });
+  });
+
+  it("recognizes configure and keeps setup as a retired command", () => {
+    expect(parseArgs(["node", "devagent", "configure"]))
+      .toMatchObject({
+        subcommand: {
+          name: "configure",
+          args: [],
+        },
+      });
+
+    expect(parseArgs(["node", "devagent", "setup", "--help"]))
+      .toMatchObject({
+        subcommand: {
+          name: "setup",
+          args: ["--help"],
         },
       });
   });
@@ -66,6 +90,14 @@ describe("renderHelpText", () => {
     expect(renderHelpText()).toContain("devagent-api");
   });
 
+  it("presents configure as the public onboarding command", () => {
+    const help = renderHelpText();
+    expect(help).toContain("devagent configure");
+    expect(help).toContain("Inspect or edit global config directly");
+    expect(help).not.toContain("devagent setup");
+    expect(help).not.toContain("devagent init");
+  });
+
   it("does not advertise removed interactive or plan surfaces", () => {
     const help = renderHelpText();
     expect(help).not.toContain("devagent chat");
@@ -80,6 +112,21 @@ describe("renderHelpText", () => {
     expect(help).toContain("ANTHROPIC_API_KEY");
     expect(help).toContain("--max-iterations <n>  Max tool-call iterations (default: 0 (unlimited))");
     expect(help).not.toContain("Interactive mode (REPL)");
+  });
+
+  it("matches the built CLI help output after build", () => {
+    execFileSync("bun", ["run", "build"], {
+      cwd: cliPackageDir,
+      stdio: "pipe",
+    });
+
+    const builtHelp = execFileSync("bun", ["dist/index.js", "--help"], {
+      cwd: cliPackageDir,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(builtHelp.trim()).toBe(renderHelpText().trim());
   });
 });
 

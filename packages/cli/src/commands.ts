@@ -1,8 +1,8 @@
 /**
- * CLI subcommands: doctor, config, init.
+ * CLI subcommands: doctor, config, configure.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
@@ -37,6 +37,73 @@ import {
 } from "./global-config.js";
 
 type DoctorCheckStatus = "pass" | "blocking" | "advisory";
+
+function hasHelpFlag(args: ReadonlyArray<string>): boolean {
+  return args.includes("--help") || args.includes("-h");
+}
+
+export function renderDoctorHelpText(): string {
+  return `Usage:
+  devagent doctor
+
+Check the current environment, global config, provider credentials, model registry,
+and LSP availability.`;
+}
+
+export function renderConfigHelpText(): string {
+  return `Usage:
+  devagent config path
+  devagent config get [key]
+  devagent config set <key> <value>
+
+Inspect or edit the global DevAgent config directly at ~/.config/devagent/config.toml.`;
+}
+
+export function renderConfigureHelpText(): string {
+  return `Usage:
+  devagent configure
+
+Guided onboarding for global DevAgent defaults. Writes provider, model, approval,
+budget, and subagent settings to ~/.config/devagent/config.toml.`;
+}
+
+export function renderSetupHelpText(): string {
+  return `Usage:
+  devagent setup
+
+This command has been removed from the public CLI.
+Use devagent configure for guided global configuration.`;
+}
+
+export function renderInitHelpText(): string {
+  return `Usage:
+  devagent init
+
+This command has been removed from the public CLI.
+DevAgent no longer scaffolds project instruction files automatically.
+Create AGENTS.md manually when you want repository-specific guidance.`;
+}
+
+export function renderInstallLspHelpText(): string {
+  return `Usage:
+  devagent install-lsp
+
+Install npm-managed LSP servers that power DevAgent code intelligence.`;
+}
+
+export function renderUpdateHelpText(): string {
+  return `Usage:
+  devagent update
+
+Check npm for the latest published version and upgrade the installed CLI.`;
+}
+
+export function renderCompletionsHelpText(): string {
+  return `Usage:
+  devagent completions <bash|zsh|fish>
+
+Generate shell completions for the public CLI surface.`;
+}
 
 export interface DoctorCheck {
   readonly label: string;
@@ -344,7 +411,7 @@ function buildBlockingIssues(
       title: "Config file",
       detail: checks.configCheck.detail ?? "config file not found",
       nextSteps: [
-        "Run: devagent setup",
+        "Run: devagent configure",
         "Or create ~/.config/devagent/config.toml with your provider and model.",
       ],
     });
@@ -378,7 +445,7 @@ function buildBlockingIssues(
       title: "Model",
       detail: checks.modelCheck.detail ?? `model "${input.config.model}" is not registered`,
       nextSteps: [
-        "Run: devagent setup",
+        "Run: devagent configure",
         `Or choose a registered model for provider "${input.config.provider}".`,
       ],
     });
@@ -543,7 +610,12 @@ export function renderDoctorReport(report: DoctorReport): string {
 
 // ─── doctor ─────────────────────────────────────────────────
 
-export async function runDoctor(version: string): Promise<void> {
+export async function runDoctor(version: string, args: ReadonlyArray<string> = []): Promise<void> {
+  if (hasHelpFlag(args)) {
+    console.log(renderDoctorHelpText());
+    return;
+  }
+
   migrateLegacyGlobalConfigIfNeeded();
   const runtime = typeof Bun !== "undefined" ? `Bun ${Bun.version}` : `Node ${process.version}`;
   const runtimeMajor = parseInt(process.version.replace("v", ""), 10);
@@ -650,7 +722,12 @@ function commandExists(cmd: string): boolean {
 
 // ─── install-lsp ────────────────────────────────────────────
 
-export function runInstallLsp(): void {
+export function runInstallLsp(args: ReadonlyArray<string> = []): void {
+  if (hasHelpFlag(args)) {
+    console.log(renderInstallLspHelpText());
+    return;
+  }
+
   const isBun = typeof globalThis.Bun !== "undefined";
   const pm = isBun ? "bun" : "npm";
 
@@ -714,6 +791,11 @@ export function runInstallLsp(): void {
 // ─── config ─────────────────────────────────────────────────
 
 export function runConfig(args: string[]): void {
+  if (hasHelpFlag(args)) {
+    console.log(renderConfigHelpText());
+    return;
+  }
+
   migrateLegacyGlobalConfigIfNeeded();
   const sub = args[0];
 
@@ -761,85 +843,32 @@ export function runConfig(args: string[]): void {
   process.exit(2);
 }
 
-// ─── init ───────────────────────────────────────────────────
+// ─── init (retired) ────────────────────────────────────────
 
-export function runInit(): void {
-  const cwd = process.cwd();
-  const devagentDir = join(cwd, ".devagent");
-
-  if (existsSync(devagentDir)) {
-    console.log(".devagent/ already exists.");
-  } else {
-    mkdirSync(devagentDir, { recursive: true });
-    console.log("Created .devagent/");
+export function runInit(args: ReadonlyArray<string> = []): void {
+  if (hasHelpFlag(args)) {
+    console.log(renderInitHelpText());
+    return;
   }
 
-  // Instructions file
-  const instructionsPath = join(devagentDir, "instructions.md");
-  if (!existsSync(instructionsPath)) {
-    writeFileSync(instructionsPath, INSTRUCTIONS_TEMPLATE);
-    console.log("Created .devagent/instructions.md");
-  } else {
-    console.log(".devagent/instructions.md already exists.");
+  console.error("devagent init has been removed from the public CLI.");
+  console.error("DevAgent no longer scaffolds project instruction files automatically.");
+  console.error("Create AGENTS.md manually when you want repository-specific guidance.");
+  process.exit(2);
+}
+
+export function runSetup(args: ReadonlyArray<string> = []): void {
+  if (hasHelpFlag(args)) {
+    console.log(renderSetupHelpText());
+    return;
   }
 
-  // AGENTS.md
-  const agentsPath = join(cwd, "AGENTS.md");
-  if (!existsSync(agentsPath)) {
-    const projectType = detectProjectType(cwd);
-    writeFileSync(agentsPath, generateAgentsMd(projectType));
-    console.log(`Created AGENTS.md (detected: ${projectType})`);
-  } else {
-    console.log("AGENTS.md already exists.");
-  }
-
-  console.log("\nDone. Edit these files to customize agent behavior.");
+  console.error("devagent setup has been removed from the public CLI.");
+  console.error("Use devagent configure for guided global configuration.");
+  process.exit(2);
 }
 
-export function detectProjectType(dir: string): string {
-  if (existsSync(join(dir, "package.json"))) return "node";
-  if (existsSync(join(dir, "Cargo.toml"))) return "rust";
-  if (existsSync(join(dir, "go.mod"))) return "go";
-  if (existsSync(join(dir, "pyproject.toml")) || existsSync(join(dir, "setup.py"))) return "python";
-  if (existsSync(join(dir, "pom.xml")) || existsSync(join(dir, "build.gradle"))) return "java";
-  const entries = readdirSync(dir, { encoding: "utf8" });
-  if (entries.some((entry) => entry.endsWith(".sln"))) return "dotnet";
-  return "generic";
-}
-
-function generateAgentsMd(projectType: string): string {
-  const buildCmds: Record<string, string> = {
-    node: "npm install\nnpm run build\nnpm test",
-    rust: "cargo build\ncargo test",
-    go: "go build ./...\ngo test ./...",
-    python: "pip install -e .\npytest",
-    java: "mvn compile\nmvn test",
-    dotnet: "dotnet build\ndotnet test",
-    generic: "# Add your build/test commands here",
-  };
-
-  return `# Project Agent Instructions
-
-## Build and Test
-
-\`\`\`bash
-${buildCmds[projectType] ?? buildCmds.generic}
-\`\`\`
-
-## Conventions
-
-- Follow existing code style and patterns
-- Keep changes minimal and focused
-- Write tests for new functionality
-- Run tests before considering work complete
-
-## Architecture
-
-<!-- Describe your project's architecture, key directories, and design decisions -->
-`;
-}
-
-// ─── setup ──────────────────────────────────────────────────
+// ─── configure ──────────────────────────────────────────────
 
 const SETUP_PROVIDERS = [
   { id: "anthropic", name: "Anthropic", envVar: "ANTHROPIC_API_KEY", defaultModel: "claude-sonnet-4-20250514", hint: "Get key at https://console.anthropic.com/settings/keys" },
@@ -848,11 +877,16 @@ const SETUP_PROVIDERS = [
   { id: "deepseek", name: "DeepSeek", envVar: "DEEPSEEK_API_KEY", defaultModel: "deepseek-chat", hint: "Get key at https://platform.deepseek.com/api_keys" },
   { id: "openrouter", name: "OpenRouter", envVar: "OPENROUTER_API_KEY", defaultModel: "anthropic/claude-sonnet-4-20250514", hint: "Get key at https://openrouter.ai/keys" },
   { id: "ollama", name: "Ollama (local)", envVar: "", defaultModel: "qwen3:32b", hint: "No API key needed — ollama must be running locally" },
-  { id: "chatgpt", name: "ChatGPT (Pro/Plus)", envVar: "", defaultModel: "gpt-4.1", hint: "Use 'devagent auth login' after setup" },
-  { id: "github-copilot", name: "GitHub Copilot", envVar: "", defaultModel: "gpt-4.1", hint: "Use 'devagent auth login' after setup" },
+  { id: "chatgpt", name: "ChatGPT (Pro/Plus)", envVar: "", defaultModel: "gpt-4.1", hint: "Use 'devagent auth login' after configuration" },
+  { id: "github-copilot", name: "GitHub Copilot", envVar: "", defaultModel: "gpt-4.1", hint: "Use 'devagent auth login' after configuration" },
 ];
 
-export async function runSetup(): Promise<void> {
+export async function runConfigure(args: ReadonlyArray<string> = []): Promise<void> {
+  if (hasHelpFlag(args)) {
+    console.log(renderConfigureHelpText());
+    return;
+  }
+
   migrateLegacyGlobalConfigIfNeeded();
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   const ask = (prompt: string): Promise<string> =>
@@ -861,7 +895,7 @@ export async function runSetup(): Promise<void> {
   const configPath = getGlobalConfigPath();
   const isUpdate = existsSync(configPath);
 
-  console.log("DevAgent Setup\n");
+  console.log("DevAgent Configure\n");
   if (isUpdate) console.log(`(Existing config at ${configPath} will be updated)\n`);
 
   // 1. Provider selection
@@ -897,7 +931,7 @@ export async function runSetup(): Promise<void> {
   } else if (provider.id === "ollama") {
     console.log("  No API key needed for Ollama.\n");
   } else {
-    console.log(`  Run 'devagent auth login' after setup to authenticate.\n`);
+    console.log("  Run 'devagent auth login' after configuration to authenticate.\n");
   }
 
   // 3. Model selection
@@ -1064,12 +1098,16 @@ export async function runSetup(): Promise<void> {
     console.log(`  1. Run 'devagent doctor' to verify`);
     console.log(`  2. Run 'devagent "hello"' to test`);
   }
-  console.log(`  - Run 'devagent init' in a project to add project-level config`);
 }
 
 // ─── update ─────────────────────────────────────────────────
 
-export async function runUpdate(): Promise<void> {
+export async function runUpdate(args: ReadonlyArray<string> = []): Promise<void> {
+  if (hasHelpFlag(args)) {
+    console.log(renderUpdateHelpText());
+    return;
+  }
+
   const PACKAGE = "@egavrin/devagent";
 
   console.log("Checking for updates...");
@@ -1123,7 +1161,7 @@ function getCurrentVersion(): string {
 // ─── completions ────────────────────────────────────────────
 
 const COMMANDS = [
-  "setup", "init", "doctor", "config", "update", "completions",
+  "configure", "doctor", "config", "update", "completions",
   "version", "sessions", "review", "auth", "execute",
 ];
 const FLAGS = [
@@ -1132,7 +1170,13 @@ const FLAGS = [
   "--full-auto", "--verbose", "--quiet", "--file",
 ];
 
-export function runCompletions(shell: string): void {
+export function runCompletions(args: ReadonlyArray<string> = []): void {
+  if (hasHelpFlag(args)) {
+    console.log(renderCompletionsHelpText());
+    return;
+  }
+
+  const shell = args[0] ?? "";
   switch (shell) {
     case "bash":
       console.log(bashCompletions());
@@ -1277,17 +1321,3 @@ function fishCompletions(): string {
   ];
   return lines.join("\n");
 }
-
-const INSTRUCTIONS_TEMPLATE = `# DevAgent Instructions
-
-<!--
-  This file provides project-specific instructions to devagent.
-  It is loaded automatically when devagent runs in this directory.
--->
-
-## Guidelines
-
-- Follow the project's existing coding conventions
-- Prefer editing existing files over creating new ones
-- Run tests after making changes
-`;

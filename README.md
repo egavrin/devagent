@@ -32,7 +32,7 @@ bunx @egavrin/devagent "fix failing tests"
 
 ```bash
 # First-time setup (provider, model, API key, subagents)
-devagent setup
+devagent configure
 
 # Check your environment
 devagent doctor
@@ -92,10 +92,9 @@ devagent review patch.diff --rule rules/security.md --json
 
 | Command | Description |
 |---------|-------------|
-| `devagent setup` | Interactive first-time setup |
-| `devagent init` | Initialize project config (`.devagent/` + `AGENTS.md`) |
+| `devagent configure` | Guided global configuration wizard |
 | `devagent doctor` | Check environment and dependencies |
-| `devagent config get/set/path` | Manage configuration |
+| `devagent config get/set/path` | Inspect or edit global config directly |
 | `devagent update` | Update to latest version |
 | `devagent completions <shell>` | Generate shell completions (bash/zsh/fish) |
 | `devagent auth login/status/logout` | Manage provider credentials |
@@ -132,7 +131,8 @@ reviewer = "high"
 architect = "high"
 ```
 
-Project config: `.devagent/instructions.md` and `AGENTS.md` in your repo root.
+Project instructions are optional.
+Create `AGENTS.md` manually in a repository when you want repo-specific guidance for DevAgent.
 
 Devagent API gateway config:
 
