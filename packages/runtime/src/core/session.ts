@@ -496,5 +496,5 @@ function rowToMessage(row: MessageRow): Message {
 // ─── Helpers ────────────────────────────────────────────────
 
 function getDefaultDbPath(): string {
-  return join(homedir(), ".config", "devagent", "sessions.db");
+  return join(process.env["HOME"] ?? homedir(), ".config", "devagent", "sessions.db");
 }

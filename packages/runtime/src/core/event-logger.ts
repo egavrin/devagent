@@ -31,7 +31,7 @@ export interface LogEntry {
 
 // ─── Default log directory ──────────────────────────────────
 
-const DEFAULT_LOG_DIR = join(homedir(), ".config", "devagent", "logs");
+const DEFAULT_LOG_DIR = join(process.env["HOME"] ?? homedir(), ".config", "devagent", "logs");
 
 // ─── EventLogger ────────────────────────────────────────────
 

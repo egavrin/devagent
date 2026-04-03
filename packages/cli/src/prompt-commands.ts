@@ -263,14 +263,14 @@ function buildSimplifyDelegationInstruction(
   if (segment.delegatePreference === "forbid") {
     return [
       "   Do not spawn reviewer delegates for this step unless you are blocked on missing evidence.",
-      "   Keep the simplify pass local and focused.",
+      "   Keep the simplify pass local, skeptical, and deletion-first.",
     ];
   }
 
   if (segment.delegatePreference === "force") {
     return [
       "   Launch three readonly `reviewer` delegates for reuse, quality, and efficiency before editing.",
-      "   Aggregate their findings, then apply the worthwhile fixes in the main agent.",
+      "   Aggregate their findings, then use them to remove code aggressively in the main agent before refactoring what remains.",
     ];
   }
 
@@ -282,14 +282,14 @@ function buildSimplifyDelegationInstruction(
     ) {
       return [
         `   Stay local for this step because the scope is small (${complexity.filesChanged} file, ${complexity.changedLines} changed lines).`,
-        "   Only fan out if you uncover evidence that the touched code depends on a broader shared path.",
+        "   Only fan out if you uncover evidence that the touched code depends on a broader shared path or added unjustified surface nearby.",
       ];
     }
   }
 
   return [
     "   Launch three readonly `reviewer` delegates for reuse, quality, and efficiency before editing.",
-    "   Aggregate their findings, then apply the worthwhile fixes in the main agent.",
+    "   Aggregate their findings, then use them to remove code aggressively in the main agent before refactoring what remains.",
   ];
 }
 
@@ -352,7 +352,11 @@ function buildWorkflowStep(
     stepLines.push("   Requirements:");
     stepLines.push("   Invoke the `simplify` skill before starting this step.");
     stepLines.push(`   Simplify the pre-loaded ${humanizeTarget(segment.target)} first.`);
-    stepLines.push("   Cover reuse, code quality, and efficiency or performance improvements.");
+    stepLines.push("   Cover reuse, code quality, efficiency or performance, and explicit minimization or deletion.");
+    stepLines.push("   Challenge newly added surface area, not just implementation details.");
+    stepLines.push("   Treat new files, exports, config keys, tests, and docs as removable candidates unless they are clearly justified.");
+    stepLines.push("   Prefer collapsing feature scope over keeping a larger patch and only cleaning style or structure.");
+    stepLines.push("   Aggregate delegate evidence, then perform a deletion-first synthesis pass before editing.");
     stepLines.push(...buildSimplifyDelegationInstruction(segment, diff));
     stepLines.push(buildVerificationInstruction(segment));
   }

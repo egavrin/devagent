@@ -44,7 +44,7 @@ export interface CredentialStoreOptions {
 // ─── Default Path ───────────────────────────────────────────
 
 function getDefaultFilePath(): string {
-  return join(homedir(), ".config", "devagent", "credentials.json");
+  return join(process.env["HOME"] ?? homedir(), ".config", "devagent", "credentials.json");
 }
 
 // ─── Store ──────────────────────────────────────────────────

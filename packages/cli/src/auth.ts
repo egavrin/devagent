@@ -12,6 +12,7 @@ import { createInterface } from "node:readline";
 import {
   CredentialStore,
   getOAuthProvider,
+  listProviderCredentialDescriptors,
   generatePKCE,
   generateState,
   startCallbackServer,
@@ -34,61 +35,37 @@ interface ProviderEntry {
   readonly id: string;
   readonly name: string;
   readonly hint: string;
-  readonly envVar: string;
   readonly authMethods: readonly ("api-key" | "browser-oauth" | "device-code")[];
 }
 
-const KNOWN_PROVIDERS: readonly ProviderEntry[] = [
-  {
-    id: "anthropic",
-    name: "Anthropic (API key)",
-    hint: "Starts with sk-ant-. Get one at https://console.anthropic.com/settings/keys",
-    envVar: "ANTHROPIC_API_KEY",
-    authMethods: ["api-key"],
-  },
-  {
-    id: "openai",
-    name: "OpenAI (API key)",
-    hint: "Starts with sk-. Get one at https://platform.openai.com/api-keys",
-    envVar: "OPENAI_API_KEY",
-    authMethods: ["api-key"],
-  },
-  {
-    id: "devagent-api",
-    name: "Devagent API (gateway key)",
-    hint: "Use a gateway virtual key starting with ilg_",
-    envVar: "DEVAGENT_API_KEY",
-    authMethods: ["api-key"],
-  },
-  {
-    id: "chatgpt",
-    name: "ChatGPT (Pro/Plus account)",
-    hint: "Login with your ChatGPT subscription",
-    envVar: "",
-    authMethods: ["device-code"],
-  },
-  {
-    id: "deepseek",
-    name: "DeepSeek (API key)",
-    hint: "Get one at https://platform.deepseek.com/api_keys",
-    envVar: "DEEPSEEK_API_KEY",
-    authMethods: ["api-key"],
-  },
-  {
-    id: "openrouter",
-    name: "OpenRouter (API key)",
-    hint: "Get one at https://openrouter.ai/keys",
-    envVar: "OPENROUTER_API_KEY",
-    authMethods: ["api-key"],
-  },
-  {
-    id: "github-copilot",
-    name: "GitHub Copilot",
-    hint: "Login with your GitHub account",
-    envVar: "",
-    authMethods: ["device-code"],
-  },
-];
+const PROVIDER_NAMES: Readonly<Record<string, string>> = {
+  anthropic: "Anthropic (API key)",
+  openai: "OpenAI (API key)",
+  "devagent-api": "Devagent API (gateway key)",
+  chatgpt: "ChatGPT (Pro/Plus account)",
+  deepseek: "DeepSeek (API key)",
+  openrouter: "OpenRouter (API key)",
+  "github-copilot": "GitHub Copilot",
+};
+
+const PROVIDER_AUTH_METHODS: Readonly<Record<string, readonly ("api-key" | "browser-oauth" | "device-code")[]>> = {
+  anthropic: ["api-key"],
+  openai: ["api-key"],
+  "devagent-api": ["api-key"],
+  chatgpt: ["device-code"],
+  deepseek: ["api-key"],
+  openrouter: ["api-key"],
+  "github-copilot": ["device-code"],
+};
+
+const KNOWN_PROVIDERS: readonly ProviderEntry[] = listProviderCredentialDescriptors()
+  .filter((provider) => provider.id !== "ollama")
+  .map((provider) => ({
+    id: provider.id,
+    name: PROVIDER_NAMES[provider.id] ?? provider.id,
+    hint: provider.hint,
+    authMethods: PROVIDER_AUTH_METHODS[provider.id] ?? ["api-key"],
+  }));
 
 // ─── Entry Point ────────────────────────────────────────────
 
@@ -214,7 +191,7 @@ async function authLogin(): Promise<void> {
         const q2 = (prompt: string): Promise<string> =>
           new Promise((resolve) => rl2.question(prompt, resolve));
         try {
-          await authLoginApiKey(providerId, providerEntry?.hint, q2);
+          await authLoginApiKey(providerId, q2);
         } finally {
           rl2.close();
         }
@@ -226,7 +203,7 @@ async function authLogin(): Promise<void> {
     if (providerEntry?.hint) {
       process.stderr.write(dim(providerEntry.hint) + "\n");
     }
-    await authLoginApiKey(providerId, providerEntry?.hint, question);
+    await authLoginApiKey(providerId, question);
   } finally {
     // rl might already be closed for OAuth flows — safe to call close() multiple times
     rl.close();
@@ -237,7 +214,6 @@ async function authLogin(): Promise<void> {
 
 async function authLoginApiKey(
   providerId: string,
-  _hint: string | undefined,
   question: (prompt: string) => Promise<string>,
 ): Promise<void> {
   const apiKey = (await question("API key: ")).trim();
@@ -454,19 +430,51 @@ function authStatus(): void {
   const stored = store.all();
 
   process.stderr.write(bold("Credential status") + "\n\n");
+  const providers = collectCredentialStatusEntries(stored, process.env);
 
-  // Check stored credentials
+  if (providers.length === 0) {
+    process.stderr.write(
+      dim("No credentials configured.") + "\n" +
+      dim('Run "devagent auth login" to add one.') + "\n",
+    );
+    return;
+  }
+
+  // Print table
+  const maxId = Math.max(...providers.map((entry) => entry.id.length), 8);
+  const maxSrc = Math.max(
+    ...providers.map((entry) => entry.source.length),
+    6,
+  );
+
+  process.stderr.write(
+    dim("Provider".padEnd(maxId + 2) + "Source".padEnd(maxSrc + 2) + "Key") +
+      "\n",
+  );
+
+  for (const entry of providers) {
+    let line = cyan(entry.id.padEnd(maxId + 2)) +
+      entry.source.padEnd(maxSrc + 2) +
+      dim(entry.masked);
+    if (entry.extra) {
+      line += "  " + dim(entry.extra);
+    }
+    process.stderr.write(line + "\n");
+  }
+}
+
+export function collectCredentialStatusEntries(
+  stored: Readonly<Record<string, CredentialInfo>>,
+  env: NodeJS.ProcessEnv,
+): Array<{ id: string; source: string; masked: string; extra?: string }> {
   const providers = new Map<string, { source: string; masked: string; extra?: string }>();
 
   for (const [id, cred] of Object.entries(stored)) {
     if (cred.type === "oauth") {
-      const expiryStr = cred.expiresAt != null
-        ? formatExpiry(cred.expiresAt)
-        : "no expiry";
       providers.set(id, {
         source: "oauth",
         masked: maskToken(cred.accessToken),
-        extra: expiryStr,
+        extra: cred.expiresAt != null ? formatExpiry(cred.expiresAt) : "no expiry",
       });
     } else {
       providers.set(id, {
@@ -476,54 +484,19 @@ function authStatus(): void {
     }
   }
 
-  // Check env vars
-  const envKey = process.env["DEVAGENT_API_KEY"];
-  if (envKey) {
-    providers.set("(DEVAGENT_API_KEY)", {
-      source: "env",
-      masked: maskKey(envKey),
+  for (const descriptor of listProviderCredentialDescriptors()) {
+    if (!descriptor.envVar) continue;
+    const value = env[descriptor.envVar];
+    if (!value) continue;
+    providers.set(descriptor.id, {
+      source: `env:${descriptor.envVar}`,
+      masked: maskKey(value),
     });
   }
-  for (const p of KNOWN_PROVIDERS) {
-    if (!p.envVar) continue;
-    const val = process.env[p.envVar];
-    if (val) {
-      providers.set(p.id, {
-        source: `env:${p.envVar}`,
-        masked: maskKey(val),
-      });
-    }
-  }
 
-  if (providers.size === 0) {
-    process.stderr.write(
-      dim("No credentials configured.") + "\n" +
-      dim('Run "devagent auth login" to add one.') + "\n",
-    );
-    return;
-  }
-
-  // Print table
-  const maxId = Math.max(...[...providers.keys()].map((k) => k.length), 8);
-  const maxSrc = Math.max(
-    ...[...providers.values()].map((v) => v.source.length),
-    6,
-  );
-
-  process.stderr.write(
-    dim("Provider".padEnd(maxId + 2) + "Source".padEnd(maxSrc + 2) + "Key") +
-      "\n",
-  );
-
-  for (const [id, info] of providers) {
-    let line = cyan(id.padEnd(maxId + 2)) +
-      info.source.padEnd(maxSrc + 2) +
-      dim(info.masked);
-    if (info.extra) {
-      line += "  " + dim(info.extra);
-    }
-    process.stderr.write(line + "\n");
-  }
+  return [...providers.entries()]
+    .map(([id, info]) => ({ id, ...info }))
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 // ─── Logout ─────────────────────────────────────────────────

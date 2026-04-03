@@ -1,10 +1,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { loadConfig, findProjectRoot, DEFAULT_CONTEXT } from "./config.js";
-import { writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 describe("loadConfig", () => {
+  let originalHome: string | undefined;
+  let tempHome: string;
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), "devagent-config-home-"));
+    originalHome = process.env["HOME"];
+    process.env["HOME"] = tempHome;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) {
+      delete process.env["HOME"];
+    } else {
+      process.env["HOME"] = originalHome;
+    }
+    rmSync(tempHome, { recursive: true, force: true });
+  });
+
   it("returns defaults when no config file exists", () => {
     const config = loadConfig("/nonexistent/path");
 
@@ -201,6 +219,44 @@ api_key = "test-key"
         delete process.env["DEVAGENT_MODEL"];
       } else {
         process.env["DEVAGENT_MODEL"] = original["DEVAGENT_MODEL"];
+      }
+    }
+  });
+
+  it("injects provider-specific env credentials for the active provider", () => {
+    const original = { ...process.env };
+    process.env["OPENAI_API_KEY"] = "sk-openai";
+
+    try {
+      const config = loadConfig("/nonexistent/path", {
+        provider: "openai",
+        model: "gpt-4.1",
+      });
+      expect(config.providers["openai"]?.apiKey).toBe("sk-openai");
+    } finally {
+      if (original["OPENAI_API_KEY"] === undefined) {
+        delete process.env["OPENAI_API_KEY"];
+      } else {
+        process.env["OPENAI_API_KEY"] = original["OPENAI_API_KEY"];
+      }
+    }
+  });
+
+  it("does not apply DEVAGENT_API_KEY to non-gateway providers", () => {
+    const original = { ...process.env };
+    process.env["DEVAGENT_API_KEY"] = "ilg-gateway";
+
+    try {
+      const config = loadConfig("/nonexistent/path", {
+        provider: "openai",
+        model: "gpt-4.1",
+      });
+      expect(config.providers["openai"]?.apiKey).toBeUndefined();
+    } finally {
+      if (original["DEVAGENT_API_KEY"] === undefined) {
+        delete process.env["DEVAGENT_API_KEY"];
+      } else {
+        process.env["DEVAGENT_API_KEY"] = original["DEVAGENT_API_KEY"];
       }
     }
   });

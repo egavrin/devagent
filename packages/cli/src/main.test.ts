@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadQueryFromFile, parseArgs, renderHelpText, resolveAutoPromptCommandTarget } from "./main.js";
+import type { Session } from "@devagent/runtime";
+import { loadQueryFromFile, parseArgs, renderHelpText, renderSessionsList, resolveAutoPromptCommandTarget } from "./main.js";
 
 describe("parseArgs", () => {
   it("parses --file <path>", () => {
@@ -11,6 +12,16 @@ describe("parseArgs", () => {
   it("parses -f <path> with other flags", () => {
     expect(parseArgs(["node", "devagent", "-f", "task.md", "--full-auto", "--provider", "openai"]))
       .toMatchObject({ file: "task.md", provider: "openai", query: null });
+  });
+
+  it("preserves structured subcommand args without flattening quoted values", () => {
+    expect(parseArgs(["node", "devagent", "config", "set", "providers.openai.apiKey", "env:OPENAI_API_KEY"]))
+      .toMatchObject({
+        subcommand: {
+          name: "config",
+          args: ["set", "providers.openai.apiKey", "env:OPENAI_API_KEY"],
+        },
+      });
   });
 });
 
@@ -61,6 +72,14 @@ describe("renderHelpText", () => {
     expect(help).not.toContain("--plan");
     expect(help).not.toContain("session inspect");
   });
+
+  it("describes the TUI and provider-specific env vars", () => {
+    const help = renderHelpText();
+    expect(help).toContain("Interactive TUI");
+    expect(help).toContain("OPENAI_API_KEY");
+    expect(help).toContain("ANTHROPIC_API_KEY");
+    expect(help).not.toContain("Interactive mode (REPL)");
+  });
 });
 
 describe("resolveAutoPromptCommandTarget", () => {
@@ -78,5 +97,22 @@ describe("resolveAutoPromptCommandTarget", () => {
     expect(resolveAutoPromptCommandTarget("/repo", ["packages/cli"], runner)).toEqual({ kind: "unstaged" });
     expect(runner).toHaveBeenNthCalledWith(1, "git diff --name-only -- 'packages/cli'", "/repo");
     expect(runner).toHaveBeenNthCalledWith(2, "git diff --cached --name-only -- 'packages/cli'", "/repo");
+  });
+});
+
+describe("renderSessionsList", () => {
+  it("prints full session ids and the reusable resume hint", () => {
+    const sessions: Session[] = [{
+      id: "12345678-aaaa-bbbb-cccc-1234567890ab",
+      createdAt: 1,
+      updatedAt: 1,
+      messages: [],
+      metadata: { totalCost: 0.125 },
+    }];
+
+    const output = renderSessionsList(sessions);
+
+    expect(output).toContain("12345678-aaaa-bbbb-cccc-1234567890ab");
+    expect(output).toContain("--resume <full-id-or-unique-prefix>");
   });
 });

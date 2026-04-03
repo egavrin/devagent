@@ -113,14 +113,16 @@ describe("preparePromptCommandQuery", () => {
     ]);
   });
 
-  it("rewrites simplify commands with efficiency coverage", async () => {
+  it("rewrites simplify commands with minimization and surface-challenge coverage", async () => {
     const prepared = await preparePromptCommandQuery("fix the bug, then /simplify the touched code", {
       resolveAutoTarget: async () => ({ kind: "last-commit" }),
       loadDiff: async () => "diff --git a/file.ts b/file.ts",
     });
 
     expect(prepared?.rewrittenQuery).toContain("Invoke the `simplify` skill");
-    expect(prepared?.rewrittenQuery).toContain("efficiency or performance");
+    expect(prepared?.rewrittenQuery).toContain("explicit minimization or deletion");
+    expect(prepared?.rewrittenQuery).toContain("Challenge newly added surface area");
+    expect(prepared?.rewrittenQuery).toContain("new files, exports, config keys, tests, and docs");
     expect(prepared?.resolvedSegments[0]?.target).toEqual({ kind: "last-commit" });
   });
 
@@ -182,6 +184,7 @@ describe("preparePromptCommandQuery", () => {
     });
 
     expect(prepared?.rewrittenQuery).toContain("Launch three readonly `reviewer` delegates");
+    expect(prepared?.rewrittenQuery).toContain("remove code aggressively in the main agent before refactoring what remains");
   });
 
   it("honors no-delegates and skip-tests directives explicitly", async () => {
@@ -194,6 +197,7 @@ describe("preparePromptCommandQuery", () => {
     );
 
     expect(prepared?.rewrittenQuery).toContain("Do not spawn reviewer delegates for this step");
+    expect(prepared?.rewrittenQuery).toContain("skeptical, and deletion-first");
     expect(prepared?.rewrittenQuery).toContain("Skip verification commands unless the user later asks for them");
   });
 

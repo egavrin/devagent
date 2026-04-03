@@ -80,7 +80,7 @@ export function loadModelRegistry(
   }
 
   // Global models directory
-  searchDirs.push(join(homedir(), ".config", "devagent", "models"));
+  searchDirs.push(join(process.env["HOME"] ?? homedir(), ".config", "devagent", "models"));
 
   for (const dir of searchDirs) {
     loadModelsFromDir(dir);

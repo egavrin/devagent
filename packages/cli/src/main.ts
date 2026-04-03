@@ -24,11 +24,13 @@ import {
   DEFAULT_BUDGET,
   DEFAULT_CONTEXT,
   EventLogger,
+  getProviderCredentialEnvVar,
   loggedSubagentRunFromEvent,
 } from "@devagent/runtime";
-import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, VerbosityConfig } from "@devagent/runtime";
+import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, Session, VerbosityConfig } from "@devagent/runtime";
 import { AgentType, ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
+import { migrateLegacyGlobalConfigIfNeeded } from "./global-config.js";
 
 /** Package version — embedded at build time or read from package.json. */
 function getVersion(): string {
@@ -203,6 +205,11 @@ interface ReviewArgs {
   jsonOutput: boolean;
 }
 
+interface CliSubcommand {
+  name: "doctor" | "config" | "init" | "setup" | "update" | "completions" | "install-lsp";
+  args: string[];
+}
+
 interface CliArgs {
   query: string | null;
   file: string | null;
@@ -217,6 +224,7 @@ interface CliArgs {
   resume: string | null;
   continue_: boolean;
   review: ReviewArgs | null;
+  subcommand: CliSubcommand | null;
 }
 
 export function loadQueryFromFile(
@@ -319,6 +327,7 @@ export function parseArgs(argv: string[]): CliArgs {
     resume: null,
     continue_: false,
     review: null,
+    subcommand: null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -330,8 +339,10 @@ export function parseArgs(argv: string[]): CliArgs {
     }
 
     if (arg === "doctor" || arg === "config" || arg === "init" || arg === "setup" || arg === "update" || arg === "completions" || arg === "install-lsp") {
-      // Handled in main() before parseArgs completes
-      result.query = `__cmd:${arg}:${args.slice(i + 1).join(" ")}`;
+      result.subcommand = {
+        name: arg,
+        args: args.slice(i + 1),
+      };
       return result;
     }
 
@@ -422,7 +433,7 @@ export function renderHelpText(): string {
 devagent — AI-powered development agent
 
 Usage:
-  devagent                         Interactive mode (REPL)
+  devagent                         Interactive TUI
   devagent "<query>"              Natural language query
   devagent -f <path>               Read query from file
   devagent sessions                List recent sessions
@@ -465,11 +476,34 @@ Options:
 Environment:
   DEVAGENT_PROVIDER     Default provider
   DEVAGENT_MODEL        Default model
-  DEVAGENT_API_KEY      API key for the default provider
+  ANTHROPIC_API_KEY     Anthropic API key
+  OPENAI_API_KEY        OpenAI API key
+  DEVAGENT_API_KEY      Devagent API gateway key
+  DEEPSEEK_API_KEY      DeepSeek API key
+  OPENROUTER_API_KEY    OpenRouter API key
 
 Installation:
   bun run build && bun run install-cli    Install as 'devagent' command
 `;
+}
+
+export function renderSessionsList(sessions: ReadonlyArray<Session>): string {
+  if (sessions.length === 0) {
+    return `${dim("No sessions found.")}\n`;
+  }
+
+  const lines = [bold("Recent sessions:"), ""];
+  for (const session of sessions) {
+    const date = new Date(session.updatedAt).toLocaleDateString();
+    const time = new Date(session.updatedAt).toLocaleTimeString();
+    const meta = session.metadata as Record<string, unknown> | undefined;
+    const cost = typeof meta?.["totalCost"] === "number"
+      ? green(` $${(meta["totalCost"] as number).toFixed(4)}`)
+      : "";
+    lines.push(`  ${dim(session.id)} ${dim(date)} ${dim(time)}${cost}`);
+  }
+  lines.push("", dim("Use --resume <full-id-or-unique-prefix> to continue a session."));
+  return lines.join("\n") + "\n";
 }
 
 function printHelp(): void {
@@ -491,6 +525,10 @@ interface ConfigSetupResult {
  * load the model registry, and auto-size the context budget.
  */
 async function setupConfig(cliArgs: CliArgs): Promise<ConfigSetupResult> {
+  const migration = migrateLegacyGlobalConfigIfNeeded();
+  if (migration.migrated) {
+    process.stderr.write(dim("[config] Migrated legacy config.json to config.toml") + "\n");
+  }
   const projectRoot = findProjectRoot() ?? process.cwd();
 
   // Load config with CLI overrides
@@ -590,11 +628,14 @@ function setupProvider(config: DevAgentConfig, cliArgs: CliArgs): ProviderSetupR
   // Providers that don't require an API key (local endpoints or OAuth-based)
   const noKeyProviders = new Set(["ollama", "chatgpt", "github-copilot"]);
   if (!providerConfig.apiKey && !providerConfig.oauthToken && !noKeyProviders.has(config.provider)) {
+    const envVar = getProviderCredentialEnvVar(config.provider);
     process.stderr.write(
       formatError(`No API key configured for provider "${config.provider}".`) + "\n",
     );
     process.stderr.write(
-      dim('Run "devagent auth login" to store a key, or set DEVAGENT_API_KEY') + "\n",
+      dim(envVar
+        ? `Run "devagent auth login" to store a key, or set ${envVar}`
+        : 'Run "devagent auth login" to store a key.') + "\n",
     );
     process.exit(1);
   }
@@ -960,6 +1001,42 @@ interface SessionPersistenceResult {
   sessionState: SessionState;
 }
 
+function resolveResumeTarget(
+  sessionStore: SessionStore,
+  resumeIdOrPrefix: string,
+): import("@devagent/runtime").Session | null {
+  const exact = sessionStore.getSession(resumeIdOrPrefix);
+  if (exact) {
+    return exact;
+  }
+
+  if (resumeIdOrPrefix.length < 8) {
+    throw new Error(`Session prefix "${resumeIdOrPrefix}" is too short. Use at least 8 characters or the full session ID.`);
+  }
+
+  const matches: Session[] = [];
+  for (let offset = 0; ; offset += 100) {
+    const batch = sessionStore.listSessions(100, offset);
+    if (batch.length === 0) {
+      break;
+    }
+    matches.push(...batch.filter((session) => session.id.startsWith(resumeIdOrPrefix)));
+    if (matches.length > 1) {
+      break;
+    }
+  }
+  if (matches.length === 1) {
+    return matches[0]!;
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Ambiguous session prefix "${resumeIdOrPrefix}". Matching sessions:\n${matches.map((session) => `- ${session.id}`).join("\n")}`,
+    );
+  }
+
+  throw new Error(`No session found for "${resumeIdOrPrefix}".`);
+}
+
 /**
  * Create or resume a session: load prior messages/briefing, create session
  * record, bind session state to disk, set up event logger and bus-based
@@ -981,9 +1058,11 @@ async function setupSessionPersistence(
   let resumeBriefing: TurnBriefing | undefined;
   let prevSession: import("@devagent/runtime").Session | null = null;
   if (cliArgs.resume || cliArgs.continue_) {
-    prevSession = cliArgs.resume
-      ? sessionStore.getSession(cliArgs.resume)
-      : sessionStore.listSessions(1)[0] ?? null;
+    if (cliArgs.resume) {
+      prevSession = resolveResumeTarget(sessionStore, cliArgs.resume);
+    } else {
+      prevSession = sessionStore.listSessions(1)[0] ?? null;
+    }
 
     if (prevSession) {
       const useTurnIsolation = config.context.turnIsolation !== false;
@@ -1018,7 +1097,7 @@ async function setupSessionPersistence(
           );
         }
       }
-    } else {
+    } else if (cliArgs.continue_) {
       const searchId = cliArgs.resume ?? "most recent";
       process.stderr.write(
         yellow(`[session] No session found: ${searchId}`) + "\n",
@@ -1181,10 +1260,9 @@ export async function main(): Promise<void> {
   const cliArgs = parseArgs(process.argv);
 
   // Subcommands: doctor, config, init
-  if (cliArgs.query?.startsWith("__cmd:")) {
-    const parts = cliArgs.query.slice(6).split(":");
-    const cmd = parts[0]!;
-    const cmdArgs = parts[1]?.trim().split(/\s+/).filter(Boolean) ?? [];
+  if (cliArgs.subcommand) {
+    const cmd = cliArgs.subcommand.name;
+    const cmdArgs = cliArgs.subcommand.args;
     const { runDoctor, runConfig, runInit, runSetup, runUpdate, runCompletions, runInstallLsp } = await import("./commands.js");
     if (cmd === "doctor") { await runDoctor(getVersion()); }
     else if (cmd === "config") { runConfig(cmdArgs); }
@@ -1201,21 +1279,7 @@ export async function main(): Promise<void> {
     const { SessionStore } = await import("@devagent/runtime");
     const store = new SessionStore();
     const sessions = store.listSessions(20);
-    if (sessions.length === 0) {
-      process.stderr.write(dim("No sessions found.\n"));
-    } else {
-      process.stderr.write(bold("Recent sessions:") + "\n\n");
-      for (const session of sessions) {
-        const date = new Date(session.updatedAt).toLocaleDateString();
-        const time = new Date(session.updatedAt).toLocaleTimeString();
-        const meta = session.metadata as Record<string, unknown> | undefined;
-        const cost = typeof meta?.["totalCost"] === "number"
-          ? green(` $${(meta["totalCost"] as number).toFixed(4)}`)
-          : "";
-        process.stderr.write(`  ${dim(session.id.slice(0, 8))} ${dim(date)} ${dim(time)}${cost}\n`);
-      }
-      process.stderr.write(dim(`\nUse --resume <id> to continue a session.\n`));
-    }
+    process.stderr.write(renderSessionsList(sessions));
     return;
   }
 
@@ -1344,7 +1408,7 @@ export async function main(): Promise<void> {
       // No query — start interactive mode
       // Use TUI (Ink) when stdin is a TTY, fall back to error when piped
       if (!process.stdin.isTTY) {
-        process.stderr.write(formatError("Interactive mode requires a terminal. Provide a query: devagent \"<query>\"") + "\n");
+        process.stderr.write(formatError("Interactive TUI requires a terminal. Provide a query: devagent \"<query>\"") + "\n");
         process.exit(1);
       }
       const { startTui } = await import("./tui/index.js");

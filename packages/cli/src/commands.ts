@@ -9,19 +9,32 @@ import { execSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import {
   CredentialStore,
+  formatResolvedCredentialSource,
   findProjectRoot,
+  getProviderCredentialDescriptor,
   loadConfig,
   loadModelRegistry,
   getRegisteredModels,
+  listProviderCredentialDescriptors,
   lookupModelEntry,
+  resolveProviderCredentialStatus,
 } from "@devagent/runtime";
-import type { CredentialInfo, DevAgentConfig } from "@devagent/runtime";
+import type { CredentialInfo, DevAgentConfig, ProviderCredentialDescriptor as ProviderDescriptor } from "@devagent/runtime";
 import type { ProviderModelCompatibilityIssue } from "./provider-model-compat.js";
 import {
   formatProviderModelCompatibilityError,
   formatProviderModelCompatibilityHint,
   getProviderModelCompatibilityIssue,
 } from "./provider-model-compat.js";
+import {
+  getGlobalConfigPath,
+  getGlobalConfigValue,
+  listGlobalConfigEntries,
+  loadGlobalConfigObject,
+  migrateLegacyGlobalConfigIfNeeded,
+  setGlobalConfigValue,
+  writeGlobalConfigObject,
+} from "./global-config.js";
 
 type DoctorCheckStatus = "pass" | "blocking" | "advisory";
 
@@ -101,16 +114,9 @@ export interface DoctorReport {
   readonly ok: boolean;
 }
 
-interface ProviderDescriptor {
-  readonly id: string;
-  readonly env: string;
-  readonly hint: string;
-  readonly credentialMode: "api" | "oauth" | "none";
-}
-
 interface DoctorConfigFile {
-  readonly text: string;
   readonly topLevelProvider?: string;
+  readonly topLevelApiKey?: string;
   readonly topLevelModel?: string;
 }
 
@@ -140,56 +146,57 @@ function formatCheck(check: DoctorCheck): string {
 }
 
 function getProviderDescriptor(providerId: string): ProviderDescriptor | undefined {
-  return PROVIDERS.find((provider) => provider.id === providerId);
+  return getProviderCredentialDescriptor(providerId);
 }
 
 function hasProviderCredential(
   providerId: string,
   config: DevAgentConfig,
   storedCredentials: Readonly<Record<string, CredentialInfo>>,
+  topLevelApiKey?: string,
 ): boolean {
-  const descriptor = getProviderDescriptor(providerId);
-  if (!descriptor || descriptor.credentialMode === "none") {
-    return true;
-  }
-
-  const providerConfig = config.providers[providerId];
-  const stored = storedCredentials[providerId];
-  if (descriptor.credentialMode === "oauth") {
-    return Boolean(providerConfig?.oauthToken || stored?.type === "oauth");
-  }
-  return Boolean(
-    providerConfig?.apiKey ||
-    (descriptor.env && process.env[descriptor.env]) ||
-    stored?.type === "api",
-  );
+  return resolveProviderCredentialStatus({
+    providerId,
+    providerConfig: config.providers[providerId],
+    topLevelApiKey,
+    storedCredential: storedCredentials[providerId],
+  }).hasCredential;
 }
 
 function buildProviderStatuses(
   config: DevAgentConfig,
   storedCredentials: Readonly<Record<string, CredentialInfo>>,
+  topLevelApiKey?: string,
 ): DoctorProviderStatus[] {
-  return PROVIDERS.map((provider) => ({
+  return listProviderCredentialDescriptors().map((provider) => ({
     id: provider.id,
     hint: provider.hint,
     active: provider.id === config.provider,
-    hasCredential: hasProviderCredential(provider.id, config, storedCredentials),
+    hasCredential: hasProviderCredential(
+      provider.id,
+      config,
+      storedCredentials,
+      provider.id === config.provider ? topLevelApiKey : undefined,
+    ),
   }));
 }
 
 function loadDoctorConfigFile(configPath: string | undefined): DoctorConfigFile {
   if (!configPath) {
-    return { text: "" };
+    return {};
   }
   try {
     const text = readFileSync(configPath, "utf-8");
+    const topLevelApiKey = matchTopLevelTomlString(text, "api_key");
+    const topLevelProvider = matchTopLevelTomlString(text, "provider");
+    const topLevelModel = matchTopLevelTomlString(text, "model");
     return {
-      text,
-      ...(matchTopLevelTomlString(text, "provider") ? { topLevelProvider: matchTopLevelTomlString(text, "provider")! } : {}),
-      ...(matchTopLevelTomlString(text, "model") ? { topLevelModel: matchTopLevelTomlString(text, "model")! } : {}),
+      ...(topLevelApiKey ? { topLevelApiKey } : {}),
+      ...(topLevelProvider ? { topLevelProvider } : {}),
+      ...(topLevelModel ? { topLevelModel } : {}),
     };
   } catch {
-    return { text: "" };
+    return {};
   }
 }
 
@@ -211,21 +218,6 @@ function matchTopLevelTomlString(text: string, key: string): string | undefined 
   return match?.[1];
 }
 
-function providerHasConfigCredential(
-  fileConfig: DoctorConfigFile,
-  providerId: string,
-): boolean {
-  if (/(^|\n)api_key\s*=\s*"[^"]+"/m.test(fileConfig.text)) {
-    return true;
-  }
-  const sectionPattern = new RegExp(`\\[providers\\.${escapeRegExp(providerId)}\\]([\\s\\S]*?)(?=\\n\\[|$)`, "m");
-  const sectionMatch = fileConfig.text.match(sectionPattern);
-  if (!sectionMatch) {
-    return false;
-  }
-  return /(api_key|apiKey|oauthToken|oauth_token)\s*=\s*"[^"]+"/m.test(sectionMatch[1] ?? "");
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -236,36 +228,12 @@ function resolveCredentialSource(
   storedCredentials: Readonly<Record<string, CredentialInfo>>,
   fileConfig: DoctorConfigFile,
 ): string {
-  const descriptor = getProviderDescriptor(providerId);
-  if (!descriptor || descriptor.credentialMode === "none") {
-    return `missing (not required for ${providerId})`;
-  }
-
-  const stored = storedCredentials[providerId];
-  const providerConfig = config.providers[providerId];
-  if (descriptor.credentialMode === "oauth") {
-    if (stored?.type === "oauth") {
-      return "stored oauth";
-    }
-    if (providerConfig?.oauthToken) {
-      return "config";
-    }
-    return "missing";
-  }
-
-  if (descriptor.env && process.env[descriptor.env]) {
-    return `env (${descriptor.env})`;
-  }
-  if (providerId === "devagent-api" && process.env["DEVAGENT_API_KEY"]) {
-    return "env (DEVAGENT_API_KEY)";
-  }
-  if (providerHasConfigCredential(fileConfig, providerId)) {
-    return "config";
-  }
-  if (stored?.type === "api") {
-    return "stored api key";
-  }
-  return "missing";
+  return formatResolvedCredentialSource(resolveProviderCredentialStatus({
+    providerId,
+    providerConfig: config.providers[providerId],
+    topLevelApiKey: fileConfig.topLevelApiKey,
+    storedCredential: storedCredentials[providerId],
+  }));
 }
 
 function buildLspStatuses(): DoctorLspStatus[] {
@@ -285,7 +253,6 @@ function buildProviderCredentialIssue(
     return undefined;
   }
 
-  const envKey = getProviderEnvKey(provider);
   const descriptor = getProviderDescriptor(provider);
   if (!descriptor || descriptor.credentialMode === "none") {
     return undefined;
@@ -293,7 +260,7 @@ function buildProviderCredentialIssue(
 
   const detail = descriptor.credentialMode === "oauth"
     ? `no stored login (run devagent auth login)${hasProviderModelMismatch ? ". Secondary until provider/model pairing is fixed." : ""}`
-    : `no API key (set ${envKey ?? "DEVAGENT_API_KEY"} or run devagent auth login)${hasProviderModelMismatch ? ". Secondary until provider/model pairing is fixed." : ""}`;
+    : `no API key (set ${descriptor.envVar ?? "DEVAGENT_API_KEY"} or run devagent auth login)${hasProviderModelMismatch ? ". Secondary until provider/model pairing is fixed." : ""}`;
 
   return {
     status: hasProviderModelMismatch ? "advisory" : "blocking",
@@ -334,7 +301,7 @@ function buildProviderCredentialIssueSteps(providerId: string): string[] {
   }
   const placeholder = providerId === "devagent-api" ? "ilg_..." : "<your_api_key>";
   return [
-    `Export credentials: export ${descriptor.env}=${placeholder}`,
+    `Export credentials: export ${descriptor.envVar}=${placeholder}`,
     "Or store credentials: devagent auth login",
     'Then retry: devagent "<your prompt>"',
   ];
@@ -573,6 +540,7 @@ export function renderDoctorReport(report: DoctorReport): string {
 // ─── doctor ─────────────────────────────────────────────────
 
 export async function runDoctor(version: string): Promise<void> {
+  migrateLegacyGlobalConfigIfNeeded();
   const runtime = typeof Bun !== "undefined" ? `Bun ${Bun.version}` : `Node ${process.version}`;
   const runtimeMajor = parseInt(process.version.replace("v", ""), 10);
   const runtimeError =
@@ -587,17 +555,18 @@ export async function runDoctor(version: string): Promise<void> {
   }
 
   const projectRoot = findProjectRoot() ?? process.cwd();
+  const globalHome = process.env["HOME"] ?? homedir();
   const configPaths = [
     join(projectRoot, ".devagent.toml"),
     join(projectRoot, "devagent.toml"),
-    join(homedir(), ".config", "devagent", "config.toml"),
-    join(homedir(), ".devagent.toml"),
+    getGlobalConfigPath(globalHome),
+    join(globalHome, ".devagent.toml"),
   ];
   const foundConfig = configPaths.find((p) => existsSync(p));
   const fileConfig = loadDoctorConfigFile(foundConfig);
   const config = loadConfig(projectRoot);
   const storedCredentials = new CredentialStore().all();
-  const providerStatuses = buildProviderStatuses(config, storedCredentials);
+  const providerStatuses = buildProviderStatuses(config, storedCredentials, fileConfig.topLevelApiKey);
   const lspStatuses = buildLspStatuses();
 
   let modelRegistryError: string | undefined;
@@ -624,6 +593,7 @@ export async function runDoctor(version: string): Promise<void> {
     config.provider,
     config,
     storedCredentials,
+    fileConfig.topLevelApiKey,
   );
   const providerCredentialIssue = buildProviderCredentialIssue(
     config.provider,
@@ -657,17 +627,6 @@ export async function runDoctor(version: string): Promise<void> {
   process.exit(report.ok ? 0 : 1);
 }
 
-const PROVIDERS = [
-  { id: "anthropic", env: "ANTHROPIC_API_KEY", hint: "set ANTHROPIC_API_KEY or devagent auth login", credentialMode: "api" },
-  { id: "openai", env: "OPENAI_API_KEY", hint: "set OPENAI_API_KEY or devagent auth login", credentialMode: "api" },
-  { id: "devagent-api", env: "DEVAGENT_API_KEY", hint: "set DEVAGENT_API_KEY or devagent auth login", credentialMode: "api" },
-  { id: "deepseek", env: "DEEPSEEK_API_KEY", hint: "set DEEPSEEK_API_KEY or devagent auth login", credentialMode: "api" },
-  { id: "openrouter", env: "OPENROUTER_API_KEY", hint: "set OPENROUTER_API_KEY or devagent auth login", credentialMode: "api" },
-  { id: "chatgpt", env: "", hint: "devagent auth login (ChatGPT Plus/Pro)", credentialMode: "oauth" },
-  { id: "github-copilot", env: "", hint: "devagent auth login (GitHub device flow)", credentialMode: "oauth" },
-  { id: "ollama", env: "", hint: "local — no API key needed (ollama must be running)", credentialMode: "none" },
-] as const satisfies ReadonlyArray<ProviderDescriptor>;
-
 const LSP_SERVERS = [
   { command: "typescript-language-server", label: "TypeScript/JavaScript", install: "npm i -g typescript-language-server typescript", npmPackages: ["typescript-language-server", "typescript"] },
   { command: "pyright-langserver", label: "Python (Pyright)", install: "npm i -g pyright", npmPackages: ["pyright"] },
@@ -675,11 +634,6 @@ const LSP_SERVERS = [
   { command: "rust-analyzer", label: "Rust", install: "rustup component add rust-analyzer", npmPackages: null },
   { command: "bash-language-server", label: "Bash/Shell", install: "npm i -g bash-language-server", npmPackages: ["bash-language-server"] },
 ];
-
-function getProviderEnvKey(provider: string): string | null {
-  const p = PROVIDERS.find((x) => x.id === provider);
-  return p?.env || null;
-}
 
 function commandExists(cmd: string): boolean {
   try {
@@ -755,36 +709,33 @@ export function runInstallLsp(): void {
 
 // ─── config ─────────────────────────────────────────────────
 
-const GLOBAL_CONFIG_DIR = join(homedir(), ".config", "devagent");
-const GLOBAL_CONFIG_PATH = join(GLOBAL_CONFIG_DIR, "config.json");
-
 export function runConfig(args: string[]): void {
+  migrateLegacyGlobalConfigIfNeeded();
   const sub = args[0];
 
   if (!sub || sub === "path") {
-    console.log(GLOBAL_CONFIG_PATH);
+    console.log(getGlobalConfigPath());
     return;
   }
 
   if (sub === "get") {
     const key = args[1];
-    const data = loadConfigJson();
     if (!key) {
-      // Dump all
-      if (Object.keys(data).length === 0) {
+      const entries = listGlobalConfigEntries();
+      if (entries.length === 0) {
         console.log("(no config set)");
       } else {
-        for (const [k, v] of flatEntries(data)) {
-          console.log(`${k} = ${formatValue(v)}`);
+        for (const [entryKey, entryValue] of entries) {
+          console.log(`${entryKey} = ${entryValue}`);
         }
       }
       return;
     }
-    const value = getNestedValue(data, key);
+    const value = getGlobalConfigValue(key);
     if (value === undefined) {
       console.log(`(not set)`);
     } else {
-      console.log(formatValue(value));
+      console.log(value);
     }
     return;
   }
@@ -796,9 +747,7 @@ export function runConfig(args: string[]): void {
       console.error("Usage: devagent config set <key> <value>");
       process.exit(2);
     }
-    const data = loadConfigJson();
-    setNestedValue(data, key, parseValue(value));
-    saveConfigJson(data);
+    setGlobalConfigValue(key, value);
     console.log(`${key} = ${value}`);
     return;
   }
@@ -806,70 +755,6 @@ export function runConfig(args: string[]): void {
   console.error(`Unknown config subcommand: ${sub}`);
   console.error("Usage: devagent config {get|set|path}");
   process.exit(2);
-}
-
-function loadConfigJson(): Record<string, unknown> {
-  if (!existsSync(GLOBAL_CONFIG_PATH)) return {};
-  try {
-    return JSON.parse(readFileSync(GLOBAL_CONFIG_PATH, "utf-8")) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-function saveConfigJson(data: Record<string, unknown>): void {
-  mkdirSync(GLOBAL_CONFIG_DIR, { recursive: true });
-  writeFileSync(GLOBAL_CONFIG_PATH, JSON.stringify(data, null, 2) + "\n");
-}
-
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  const parts = path.split(".");
-  let current: unknown = obj;
-  for (const part of parts) {
-    if (current == null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-}
-
-function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
-  const parts = path.split(".");
-  let current = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    const part = parts[i]!;
-    if (!(part in current) || typeof current[part] !== "object" || current[part] === null) {
-      current[part] = {};
-    }
-    current = current[part] as Record<string, unknown>;
-  }
-  current[parts[parts.length - 1]!] = value;
-}
-
-function parseValue(s: string): unknown {
-  if (s === "true") return true;
-  if (s === "false") return false;
-  const n = Number(s);
-  if (!isNaN(n) && s.trim() !== "") return n;
-  return s;
-}
-
-function formatValue(v: unknown): string {
-  if (typeof v === "string") return v;
-  if (typeof v === "object" && v !== null) return JSON.stringify(v);
-  return String(v);
-}
-
-function flatEntries(obj: Record<string, unknown>, prefix = ""): Array<[string, unknown]> {
-  const entries: Array<[string, unknown]> = [];
-  for (const [k, v] of Object.entries(obj)) {
-    const key = prefix ? `${prefix}.${k}` : k;
-    if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-      entries.push(...flatEntries(v as Record<string, unknown>, key));
-    } else {
-      entries.push([key, v]);
-    }
-  }
-  return entries;
 }
 
 // ─── init ───────────────────────────────────────────────────
@@ -907,13 +792,14 @@ export function runInit(): void {
   console.log("\nDone. Edit these files to customize agent behavior.");
 }
 
-function detectProjectType(dir: string): string {
+export function detectProjectType(dir: string): string {
   if (existsSync(join(dir, "package.json"))) return "node";
   if (existsSync(join(dir, "Cargo.toml"))) return "rust";
   if (existsSync(join(dir, "go.mod"))) return "go";
   if (existsSync(join(dir, "pyproject.toml")) || existsSync(join(dir, "setup.py"))) return "python";
   if (existsSync(join(dir, "pom.xml")) || existsSync(join(dir, "build.gradle"))) return "java";
-  if (existsSync(join(dir, "*.sln"))) return "dotnet";
+  const entries = readdirSync(dir, { encoding: "utf8" });
+  if (entries.some((entry) => entry.endsWith(".sln"))) return "dotnet";
   return "generic";
 }
 
@@ -963,12 +849,12 @@ const SETUP_PROVIDERS = [
 ];
 
 export async function runSetup(): Promise<void> {
+  migrateLegacyGlobalConfigIfNeeded();
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   const ask = (prompt: string): Promise<string> =>
     new Promise((resolve) => rl.question(prompt, resolve));
 
-  const configDir = join(homedir(), ".config", "devagent");
-  const configPath = join(configDir, "config.toml");
+  const configPath = getGlobalConfigPath();
   const isUpdate = existsSync(configPath);
 
   console.log("DevAgent Setup\n");
@@ -1103,53 +989,62 @@ export async function runSetup(): Promise<void> {
   rl.close();
 
   // Write config.toml
-  const lines: string[] = [
-    "# DevAgent global configuration",
-    `# Generated by 'devagent setup' on ${new Date().toISOString().split("T")[0]}`,
-    "",
-    `provider = "${provider.id}"`,
-    `model = "${model}"`,
-    "",
-    "[approval]",
-    `mode = "${approvalMode}"`,
-    "",
-    "[budget]",
-    `max_iterations = ${maxIterations}`,
-  ];
+  const nextConfig = loadGlobalConfigObject();
+  nextConfig["provider"] = provider.id;
+  nextConfig["model"] = model;
+  nextConfig["approval"] = {
+    ...((nextConfig["approval"] as Record<string, unknown> | undefined) ?? {}),
+    mode: approvalMode,
+  };
+  nextConfig["budget"] = {
+    ...((nextConfig["budget"] as Record<string, unknown> | undefined) ?? {}),
+    max_iterations: maxIterations,
+  };
 
   // Subagent config
   const hasCustomModels = Object.entries(agentModels).some(([k, v]) => v !== model);
   const hasCustomReasoning = true; // Always write reasoning defaults
   if (hasCustomModels || hasCustomReasoning) {
-    lines.push("", "[subagents]", "# Per-agent model and reasoning overrides");
-    lines.push("# Agent types: general, explore, reviewer, architect");
+    const subagents = { ...((nextConfig["subagents"] as Record<string, unknown> | undefined) ?? {}) };
 
     if (hasCustomModels) {
-      lines.push("", "[subagents.agent_model_overrides]");
+      const modelOverrides: Record<string, string> = {};
       for (const agent of AGENT_TYPES) {
         const m = agentModels[agent.id];
         if (m && m !== model) {
-          lines.push(`${agent.id} = "${m}"`);
+          modelOverrides[agent.id] = m;
         }
       }
+      subagents["agent_model_overrides"] = modelOverrides;
     }
 
-    lines.push("", "[subagents.agent_reasoning_overrides]");
+    const reasoningOverrides: Record<string, string> = {};
     for (const agent of AGENT_TYPES) {
-      lines.push(`${agent.id} = "${agentReasoning[agent.id] ?? "medium"}"`);
+      reasoningOverrides[agent.id] = agentReasoning[agent.id] ?? "medium";
     }
+    subagents["agent_reasoning_overrides"] = reasoningOverrides;
+    nextConfig["subagents"] = subagents;
   }
 
   // Provider-specific config
   if (apiKey) {
-    lines.push("", `[providers.${provider.id}]`, `api_key = "${apiKey}"`);
+    const providers = { ...((nextConfig["providers"] as Record<string, unknown> | undefined) ?? {}) };
+    providers[provider.id] = {
+      ...((providers[provider.id] as Record<string, unknown> | undefined) ?? {}),
+      api_key: apiKey,
+    };
+    nextConfig["providers"] = providers;
   }
   if (provider.id === "ollama") {
-    lines.push("", "[providers.ollama]", 'base_url = "http://localhost:11434/v1"');
+    const providers = { ...((nextConfig["providers"] as Record<string, unknown> | undefined) ?? {}) };
+    providers["ollama"] = {
+      ...((providers["ollama"] as Record<string, unknown> | undefined) ?? {}),
+      base_url: "http://localhost:11434/v1",
+    };
+    nextConfig["providers"] = providers;
   }
 
-  mkdirSync(configDir, { recursive: true });
-  writeFileSync(configPath, lines.join("\n") + "\n");
+  writeGlobalConfigObject(nextConfig);
 
   console.log(`Config written to ${configPath}\n`);
   console.log("Next steps:");

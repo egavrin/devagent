@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { CredentialStore } from "./credentials.js";
 import { ConfigError , extractErrorMessage } from "./errors.js";
 import { LANGUAGE_EXTENSIONS } from "./languages.js";
+import { resolveProviderCredentialStatus } from "./provider-credentials.js";
 import type {
   DevAgentConfig,
   ApprovalPolicy,
@@ -122,7 +123,7 @@ function getConfigPaths(projectRoot?: string): ReadonlyArray<string> {
   }
 
   // Global config
-  const home = homedir();
+  const home = process.env["HOME"] ?? homedir();
   paths.push(join(home, ".config", "devagent", "config.toml"));
   paths.push(join(home, ".devagent.toml"));
 
@@ -472,7 +473,6 @@ export function loadConfig(
   // Check env overrides
   const envProvider = process.env["DEVAGENT_PROVIDER"];
   const envModel = process.env["DEVAGENT_MODEL"];
-  const envApiKey = process.env["DEVAGENT_API_KEY"];
 
   // Merge approval
   const rawApproval = (fileConfig["approval"] ?? {}) as Record<
@@ -564,18 +564,20 @@ export function loadConfig(
     overrides?.agentReasoningOverrides,
   );
 
-  const storedCred = credentialStore.get(provider);
-  const storedApiKey = storedCred?.type === "api" ? storedCred.key : undefined;
-  const resolvedApiKey = topLevelApiKey
+  const resolvedTopLevelApiKey = topLevelApiKey
     ? (resolveEnvValue(topLevelApiKey) as string)
-    : envApiKey ?? storedApiKey;
+    : undefined;
+  const activeCredential = resolveProviderCredentialStatus({
+    providerId: provider,
+    providerConfig: providers[provider],
+    topLevelApiKey: resolvedTopLevelApiKey,
+    storedCredential: credentialStore.get(provider),
+  });
 
-  // Apply resolved API key to active provider entry if it doesn't already define one.
-  // Priority: provider-level config > top-level/env > stored credentials.
-  if (resolvedApiKey) {
+  if (activeCredential.credentialMode === "api" && activeCredential.apiKey) {
     if (providers[provider]) {
       if (!providers[provider].apiKey) {
-        providers[provider] = { ...providers[provider], apiKey: resolvedApiKey };
+        providers[provider] = { ...providers[provider], apiKey: activeCredential.apiKey };
       }
     } else {
       providers[provider] = {
@@ -584,19 +586,9 @@ export function loadConfig(
           overrides?.model ??
           (fileConfig["model"] as string) ??
           DEFAULT_CONFIG.model,
-        apiKey: resolvedApiKey,
+        apiKey: activeCredential.apiKey,
         baseUrl: fileConfig["base_url"] as string | undefined,
       };
-    }
-  }
-
-  // Inject stored credentials into any provider entries still missing apiKey.
-  for (const [key, provConfig] of Object.entries(providers)) {
-    if (!provConfig.apiKey) {
-      const stored = credentialStore.get(key);
-      if (stored?.type === "api") {
-        providers[key] = { ...provConfig, apiKey: stored.key };
-      }
     }
   }
 

@@ -49,7 +49,7 @@ devagent --provider devagent-api --model cortex "fix failing tests"
 ## Usage
 
 ```bash
-# Interactive mode
+# Interactive TUI
 devagent
 
 # Single query
@@ -62,7 +62,7 @@ devagent -f prompt.md
 devagent --provider openai --model gpt-4.1 "optimize this function"
 
 # Resume a session
-devagent --resume <session-id>
+devagent --resume <session-id-or-unique-prefix>
 devagent --continue    # resume most recent
 
 # Approval modes

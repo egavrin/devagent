@@ -73,6 +73,18 @@ export type {
 
 // Config
 export { loadConfig, findProjectRoot, resolveProviderCredentials, DEFAULT_BUDGET, DEFAULT_CONTEXT } from "./config.js";
+export {
+  listProviderCredentialDescriptors,
+  getProviderCredentialDescriptor,
+  getProviderCredentialEnvVar,
+  resolveProviderCredentialStatus,
+  formatResolvedCredentialSource,
+} from "./provider-credentials.js";
+export type {
+  ProviderCredentialDescriptor,
+  ProviderCredentialMode,
+  ResolvedProviderCredentialStatus,
+} from "./provider-credentials.js";
 
 // Model registry
 export {

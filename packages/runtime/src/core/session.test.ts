@@ -83,6 +83,7 @@ describe.skipIf(!BUN_SQLITE_AVAILABLE)("SessionStore", () => {
         },
       });
     });
+
   });
 
   describe("listSessions", () => {

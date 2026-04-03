@@ -21,6 +21,20 @@ describe("documentation parity", () => {
     expect(readme).toContain("OpenAI-compatible under the hood");
   });
 
+  it("documents the canonical global config path and provider env vars", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain("Global config: `~/.config/devagent/config.toml`");
+    expect(readme).toContain("| `OPENAI_API_KEY` | OpenAI API key |");
+    expect(readme).toContain("| `ANTHROPIC_API_KEY` | Anthropic API key |");
+  });
+
+  it("describes the interactive surface as the TUI, not a REPL", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain("Interactive TUI");
+    expect(readme).not.toContain("Interactive mode");
+    expect(readme).not.toContain("REPL");
+  });
+
   it("does not expose legacy workflow-run guidance in live docs", () => {
     const files = [
       join(repoRoot, "README.md"),

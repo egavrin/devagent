@@ -14,7 +14,6 @@ export function buildProviderConfig(
 ): ProviderConfig {
   const baseProviderConfig = config.providers[config.provider] ?? {
     model: config.model,
-    apiKey: process.env["DEVAGENT_API_KEY"],
   };
   const registryCaps = lookupModelCapabilities(config.model);
   const resolvedReasoningEffort = agentType
