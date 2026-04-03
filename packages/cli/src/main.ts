@@ -130,6 +130,7 @@ import {
   formatProviderModelCompatibilityHint,
   getProviderModelCompatibilityIssue,
 } from "./provider-model-compat.js";
+import type { InteractiveQueryResult } from "./tui/shared.js";
 import {
   Spinner,
   dim, red, cyan, green, yellow, bold,
@@ -461,7 +462,7 @@ Options:
   -f, --file <path>    Read query from file
   --provider <name>     LLM provider (anthropic, openai, devagent-api, deepseek, openrouter, ollama, chatgpt, github-copilot)
   --model <id>          Model ID
-  --max-iterations <n>  Max tool-call iterations (default: 30, 0=unlimited)
+  --max-iterations <n>  Max tool-call iterations (default: 0 (unlimited))
   --reasoning <level>   Reasoning effort: low, medium, high
   --resume <id>         Resume a previous session by ID
   --continue            Resume the most recent session
@@ -660,6 +661,9 @@ interface ToolsSetupResult {
   readonly skillResolver: SkillResolver;
   readonly doubleCheck: DoubleCheck;
   readonly contextManager: ContextManager;
+  readonly delegateAmbientContext: {
+    approvalMode: string;
+  };
 }
 
 /**
@@ -756,6 +760,17 @@ async function setupTools(
 
   // ─── Delegate (subagent spawning) ─────────────────────────────
   const agentRegistry = new AgentRegistry();
+  const delegateAmbientContext = {
+    skills,
+    approvalMode: config.approval.mode,
+    providerLabel: `${config.provider} / ${config.model}`,
+    providerFactory: (agentConfig: DevAgentConfig, agentType: AgentType) => {
+      return providerRegistry.get(
+        agentConfig.provider,
+        buildProviderConfig(agentConfig, cliArgs.reasoning ?? undefined, agentType),
+      );
+    },
+  };
   toolRegistry.register(createDelegateTool({
     provider,
     tools: toolRegistry,
@@ -768,17 +783,7 @@ async function setupTools(
     getParentSessionState: () => sessionState,
     depth: 0,
     parentAgentType: AgentType.GENERAL,
-    ambient: {
-      skills,
-      approvalMode: config.approval.mode,
-      providerLabel: `${config.provider} / ${config.model}`,
-      providerFactory: (agentConfig, agentType) => {
-        return providerRegistry.get(
-          agentConfig.provider,
-          buildProviderConfig(agentConfig, cliArgs.reasoning ?? undefined, agentType),
-        );
-      },
-    },
+    ambient: delegateAmbientContext,
   }));
 
   // ─── Double-Check ──────────────────────────────────────────
@@ -830,6 +835,7 @@ async function setupTools(
     skillResolver,
     doubleCheck,
     contextManager,
+    delegateAmbientContext,
   };
 }
 
@@ -1401,6 +1407,20 @@ export async function main(): Promise<void> {
       briefing: persistence.resumeBriefing,
     };
 
+    const buildInteractiveSystemPrompt = (approvalMode: ApprovalMode): string => assembleSystemPrompt({
+      mode: "act",
+      repoRoot: projectRoot,
+      skills: tools.skills,
+      availableTools: tools.toolRegistry.getLoaded(),
+      deferredTools: tools.toolRegistry.getDeferred(),
+      approvalMode,
+      provider: config.provider,
+      model: config.model,
+      agentModelOverrides: config.agentModelOverrides,
+      agentReasoningOverrides: config.agentReasoningOverrides,
+    });
+    let interactiveApprovalMode = config.approval.mode;
+
     const query = cliArgs.file
       ? loadQueryFromFile(cliArgs.file, nodeReadFileSync, cliArgs.query)
       : cliArgs.query;
@@ -1428,15 +1448,33 @@ export async function main(): Promise<void> {
             }));
           } catch { return []; }
         },
-        onQuery: async (q) => {
+        onQuery: async (q): Promise<InteractiveQueryResult> => {
           outputState.resetTurn();
+          const interactiveConfig = interactiveApprovalMode === config.approval.mode
+            ? config
+            : {
+              ...config,
+              approval: {
+                ...config.approval,
+                mode: interactiveApprovalMode,
+              },
+            };
           // Run query but skip flushOutput — TUI handles display via bus events
-          await runTuiQuery({ ...commonOptions, query: q });
+          const result = await runTuiQuery({ ...commonOptions, config: interactiveConfig, query: q });
           return {
-            iterations: outputState.currentIteration,
+            iterations: result.iterations,
             toolCalls: outputState.turnToolCallCount,
-            lastText: outputState.textBuffer.trim() || null,
+            lastText: outputState.textBuffer.trim() || result.lastText || null,
+            status: result.status,
           };
+        },
+        onCycleApprovalMode: (mode) => {
+          interactiveApprovalMode = mode;
+          tools.gate.setMode(mode);
+          tools.delegateAmbientContext.approvalMode = mode;
+          if (tuiLoop) {
+            tuiLoop.updateSystemPrompt(buildInteractiveSystemPrompt(mode));
+          }
         },
         onClear: () => {
           outputState.resetSession();
@@ -1452,13 +1490,13 @@ export async function main(): Promise<void> {
         query,
         model: config.model,
         approvalMode: config.approval.mode,
-        onQuery: async (q) => {
-          outputState.resetTurn();
-          await runSingleQuery({ ...commonOptions, query: q });
+        onQuery: async (q): Promise<InteractiveQueryResult> => {
+          const result = await runSingleQuery({ ...commonOptions, query: q });
           return {
-            iterations: outputState.currentIteration,
+            iterations: result.iterations,
             toolCalls: outputState.turnToolCallCount,
-            lastText: outputState.textBuffer.trim() || null,
+            lastText: outputState.textBuffer.trim() || result.lastText || null,
+            status: result.status,
           };
         },
         onFinalOutput: (text) => {
@@ -2415,7 +2453,7 @@ async function prepareQueryForExecution(
 
 // ─── Single Query ────────────────────────────────────────────
 
-async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
+async function runSingleQuery(options: RunSingleQueryOptions): Promise<TaskLoopResult> {
   const {
     query, provider, toolRegistry, bus, gate, config, repoRoot, mode,
     skills, contextManager, doubleCheck, initialMessages, verbosity, sessionState, briefing,
@@ -2518,13 +2556,14 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<void> {
 
   // Reset terminal title
   setTerminalTitle("devagent");
+  return result;
 }
 
 // ─── TUI Query (no stdout/stderr writes, persistent loop) ────
 
 let tuiLoop: InstanceType<typeof TaskLoop> | null = null;
 
-async function runTuiQuery(options: RunSingleQueryOptions): Promise<void> {
+async function runTuiQuery(options: RunSingleQueryOptions): Promise<TaskLoopResult> {
   const {
     query, provider, toolRegistry, bus, gate, config, repoRoot, mode,
     skills, contextManager, doubleCheck, sessionState,
@@ -2566,11 +2605,12 @@ async function runTuiQuery(options: RunSingleQueryOptions): Promise<void> {
     tuiLoop.resetIterations();
   }
 
-  await tuiLoop.run(preparedQuery.query, {
+  const result = await tuiLoop.run(preparedQuery.query, {
     prependedMessages: preparedQuery.prependedMessages,
     finalTextValidator: preparedQuery.finalTextValidator,
   });
   // No flushOutput — TUI handles display via bus events
   // No spinner.stop — TUI has its own spinner
   // No stderr writes — would corrupt Ink
+  return result;
 }

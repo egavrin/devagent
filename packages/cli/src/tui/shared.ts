@@ -2,6 +2,9 @@
  * Shared constants, types, and helpers for TUI components.
  */
 
+import { ApprovalMode } from "@devagent/runtime";
+import type { TaskCompletionStatus } from "@devagent/runtime";
+
 // ─── Spinner Constants ──────────────────────────────────────
 
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -20,6 +23,45 @@ export interface LogEntry {
   readonly id: string;
   readonly type: LogEntryType;
   readonly data: unknown;
+}
+
+export interface InteractiveQueryResult {
+  readonly iterations: number;
+  readonly toolCalls: number;
+  readonly lastText: string | null;
+  readonly status: TaskCompletionStatus;
+}
+
+export const APPROVAL_MODE_ORDER = [
+  ApprovalMode.SUGGEST,
+  ApprovalMode.AUTO_EDIT,
+  ApprovalMode.FULL_AUTO,
+] as const;
+
+export type PromptTabAction = "cycle-mode" | "complete" | "none";
+
+export function cycleApprovalMode(mode: string): ApprovalMode {
+  const currentIndex = APPROVAL_MODE_ORDER.indexOf(mode as ApprovalMode);
+  const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % APPROVAL_MODE_ORDER.length : 0;
+  return APPROVAL_MODE_ORDER[nextIndex]!;
+}
+
+export function getApprovalModeColor(mode: string): "yellow" | "cyan" | "green" {
+  switch (mode) {
+    case ApprovalMode.SUGGEST:
+      return "yellow";
+    case ApprovalMode.AUTO_EDIT:
+      return "cyan";
+    case ApprovalMode.FULL_AUTO:
+      return "green";
+    default:
+      return "cyan";
+  }
+}
+
+export function resolvePromptTabAction(key: { readonly tab?: boolean; readonly shift?: boolean }): PromptTabAction {
+  if (!key.tab) return "none";
+  return key.shift ? "cycle-mode" : "complete";
 }
 
 // ─── Tool Helpers ───────────────────────────────────────────

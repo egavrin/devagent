@@ -231,6 +231,42 @@ describe("TaskLoop", () => {
     expect(seenMessages[1]?.map((message) => message.content)).not.toContain("Pre-loaded diff");
   });
 
+  it("updates the root system prompt without dropping prior history", async () => {
+    const seenMessages: Message[][] = [];
+    const provider: LLMProvider = {
+      id: "capture",
+      async *chat(messages): AsyncIterable<StreamChunk> {
+        seenMessages.push([...messages]);
+        yield { type: "text", content: `run-${seenMessages.length}` };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Prompt A",
+      repoRoot: "/tmp",
+    });
+
+    await loop.run("first turn");
+    loop.updateSystemPrompt("Prompt B");
+    loop.resetIterations();
+    await loop.run("second turn");
+
+    expect(seenMessages).toHaveLength(2);
+    expect(seenMessages[0]?.[0]).toMatchObject({ role: MessageRole.SYSTEM, content: "Prompt A" });
+    expect(seenMessages[1]?.[0]).toMatchObject({ role: MessageRole.SYSTEM, content: "Prompt B" });
+    expect(seenMessages[1]?.some((message) => message.role === MessageRole.USER && message.content === "first turn")).toBe(true);
+    expect(loop.getMessages()[0]).toMatchObject({ role: MessageRole.SYSTEM, content: "Prompt B" });
+  });
+
   it("injects seeded session state before the first provider call", async () => {
     const sessionState = new SessionState({ persist: false });
     sessionState.recordReadonlyCoverage("read_file", "src/already-read.ts");

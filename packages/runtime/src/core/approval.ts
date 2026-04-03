@@ -41,6 +41,7 @@ export interface ApprovalResult {
 export class ApprovalGate {
   private readonly policy: ApprovalPolicy;
   private readonly bus: EventBus | null;
+  private currentMode: ApprovalMode;
   private userResponseResolver:
     | ((approved: boolean) => void)
     | null = null;
@@ -48,6 +49,7 @@ export class ApprovalGate {
   constructor(policy: ApprovalPolicy, bus?: EventBus) {
     this.policy = policy;
     this.bus = bus ?? null;
+    this.currentMode = policy.mode;
 
     // Listen for user approval responses
     if (this.bus) {
@@ -135,7 +137,7 @@ export class ApprovalGate {
   }
 
   private decideByMode(category: ToolCategory): ApprovalDecision {
-    switch (this.policy.mode) {
+    switch (this.currentMode) {
       case ApprovalMode.SUGGEST:
         return this.decideSuggestMode(category);
       case ApprovalMode.AUTO_EDIT:
@@ -209,9 +211,17 @@ export class ApprovalGate {
         reason,
         filePath: request.filePath,
         description: request.description,
-        mode: this.policy.mode,
+        mode: this.currentMode,
       },
     });
+  }
+
+  getMode(): ApprovalMode {
+    return this.currentMode;
+  }
+
+  setMode(mode: ApprovalMode): void {
+    this.currentMode = mode;
   }
 }
 

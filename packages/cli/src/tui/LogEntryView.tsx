@@ -54,6 +54,9 @@ export const LogEntryView = React.memo(function LogEntryView({ entry }: { entry:
       if (data === "Cancelled." || data.includes("Cancelled")) {
         return <Text color="yellow">⚠ Cancelled</Text>;
       }
+      if (data.startsWith("Iteration limit exhausted.")) {
+        return <Text color="yellow">⚠ {data}</Text>;
+      }
       // Subagent completion with colored score
       if (data.includes("completed")) {
         const scoreMatch = data.match(/(?:score )?(\d+\.\d+),?\s*(?:partial|complete)/);

@@ -36,7 +36,7 @@ const DEFAULT_APPROVAL: ApprovalPolicy = {
 };
 
 export const DEFAULT_BUDGET: BudgetConfig = {
-  maxIterations: 30,
+  maxIterations: 0,
   maxContextTokens: 100_000,
   responseHeadroom: 2_000,
   costWarningThreshold: 1.0,

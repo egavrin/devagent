@@ -31,6 +31,7 @@ describe("documentation parity", () => {
   it("describes the interactive surface as the TUI, not a REPL", () => {
     const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
     expect(readme).toContain("Interactive TUI");
+    expect(readme).toContain("max_iterations = 0");
     expect(readme).not.toContain("Interactive mode");
     expect(readme).not.toContain("REPL");
   });

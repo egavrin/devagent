@@ -106,7 +106,7 @@ model = "claude-sonnet-4-20250514"
 mode = "suggest"
 
 [budget]
-max_iterations = 30
+max_iterations = 0
 
 [subagents.agent_model_overrides]
 explore = "claude-haiku-4-20250414"

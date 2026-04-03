@@ -239,7 +239,7 @@ export class TaskLoop {
   private readonly bus: EventBus;
   private readonly approvalGate: ApprovalGate;
   private readonly config: DevAgentConfig;
-  private readonly systemPrompt: string;
+  private systemPrompt: string;
   private readonly repoRoot: string;
   private readonly contextManager: ContextManager | null;
   private readonly doubleCheck: DoubleCheck | null;
@@ -750,6 +750,30 @@ export class TaskLoop {
    */
   getMessages(): ReadonlyArray<Message> {
     return this.messages;
+  }
+
+  /**
+   * Replace the root system prompt without clearing accumulated conversation
+   * history so future turns pick up the new ambient instructions.
+   */
+  updateSystemPrompt(systemPrompt: string): void {
+    this.systemPrompt = systemPrompt;
+
+    const firstSystemIndex = this.messages.findIndex((message) => message.role === MessageRole.SYSTEM);
+    if (firstSystemIndex >= 0) {
+      const prior = this.messages[firstSystemIndex]!;
+      this.messages[firstSystemIndex] = {
+        ...prior,
+        content: systemPrompt,
+      };
+    } else {
+      this.messages.unshift({
+        role: MessageRole.SYSTEM,
+        content: systemPrompt,
+      });
+    }
+
+    this.estimatedTokens = estimateMessageTokens(this.messages);
   }
 
   /**

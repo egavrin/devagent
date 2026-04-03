@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback } from "react";
 import { Box, Text, Static, useInput, useApp } from "ink";
+import { ApprovalMode } from "@devagent/runtime";
 import { PromptInput } from "./PromptInput.js";
 import { StatusBar } from "./StatusBar.js";
 import { Spinner } from "./Spinner.js";
@@ -14,18 +15,20 @@ import { ToastContainer, type ToastMessage } from "./Toast.js";
 import { Welcome } from "./Welcome.js";
 import { LogEntryView } from "./LogEntryView.js";
 import { useAgentLog } from "./useAgentLog.js";
-import { tokenProgressBar } from "./shared.js";
+import { cycleApprovalMode, getApprovalModeColor, type InteractiveQueryResult, tokenProgressBar } from "./shared.js";
 import type { LogEntry } from "./shared.js";
 import type { EventBus } from "@devagent/runtime";
 
-export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline";
+export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline │ Shift+Tab cycles approval mode";
+export const ITERATION_LIMIT_NOTICE = "Iteration limit exhausted. Type /continue to proceed.";
 
 // ─── Types ──────────────────────────────────────────────────
 
 export interface AppProps {
   readonly bus: EventBus;
-  readonly onQuery: (query: string) => Promise<{ iterations: number; toolCalls: number; lastText: string | null }>;
+  readonly onQuery: (query: string) => Promise<InteractiveQueryResult>;
   readonly onClear: () => void;
+  readonly onCycleApprovalMode: (mode: ApprovalMode) => void;
   readonly onListSessions?: () => ReadonlyArray<{ id: string; updatedAt: number; cost?: number }>;
   readonly model: string;
   readonly approvalMode: string;
@@ -35,7 +38,7 @@ export interface AppProps {
 
 // ─── App Component ──────────────────────────────────────────
 
-export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode, cwd, version }: AppProps): React.ReactElement {
+export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions, model, approvalMode, cwd, version }: AppProps): React.ReactElement {
   const [showWelcome, setShowWelcome] = useState(true);
   const { exit } = useApp();
   const [queryHistory, setQueryHistory] = useState<string[]>([]);
@@ -43,6 +46,7 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [currentApprovalMode, setCurrentApprovalMode] = useState(approvalMode);
 
   const {
     log, status, subagents, spinnerMessage,
@@ -50,11 +54,15 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
     setStatus, setSubagents, setSpinnerMessage,
     refs,
   } = useAgentLog({
-    bus, model, approvalMode,
+    bus, model, approvalMode: currentApprovalMode,
     collapseFailures: true,
     compactPlanProgress: true,
     onApproval: (e) => setPendingApproval({ id: e.id, toolName: e.toolName, details: e.details }),
   });
+
+  const addToast = useCallback((message: string, variant: "info" | "success" | "warning" | "error" = "info") => {
+    setToasts((prev) => [...prev, { id: nextId("toast"), message, variant }]);
+  }, [nextId]);
 
   // Handle input submission
   const handleSubmit = useCallback(async (value: string) => {
@@ -67,6 +75,9 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
       setStatus((s) => ({ ...s, cost: 0, iteration: 0, inputTokens: 0 }));
       addLog({ id: nextId("clear"), type: "info", data: "Context cleared." });
       return;
+    }
+    if (trimmed === "/continue") {
+      return handleSubmit("continue");
     }
     if (trimmed === "/help" || trimmed === "/h" || trimmed === "/?") {
       addLog({ id: nextId("help"), type: "info", data: TUI_HELP_MESSAGE });
@@ -128,7 +139,7 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
     refs.turnToolCount.current = 0;
     refs.costAccum.current = 0;
 
-    let result: { iterations: number; toolCalls: number; lastText: string | null } = { iterations: 0, toolCalls: 0, lastText: null };
+    let result: InteractiveQueryResult = { iterations: 0, toolCalls: 0, lastText: null, status: "success" };
     try {
       result = await onQuery(trimmed);
       flushThinking();
@@ -141,10 +152,15 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
       addLog({
         id: nextId("summary"), type: "turn-summary",
         data: {
-          iterations: result.iterations, toolCalls: refs.turnToolCount.current,
+          iterations: result.iterations, toolCalls: result.toolCalls,
           cost: refs.costAccum.current, elapsedMs: Date.now() - refs.turnStart.current,
         },
       });
+
+      if (result.status === "budget_exceeded") {
+        addLog({ id: nextId("budget"), type: "info", data: ITERATION_LIMIT_NOTICE });
+        addToast(ITERATION_LIMIT_NOTICE, "warning");
+      }
     } catch (err) {
       addLog({ id: nextId("error"), type: "error", data: { message: err instanceof Error ? err.message : String(err), code: "QUERY_ERROR" } });
     } finally {
@@ -153,7 +169,18 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
       setSpinnerMessage(undefined);
       refs.textBuffer.current = "";
     }
-  }, [onQuery, onClear, exit, addLog, flushThinking, flushGroup, nextId, refs, setStatus, setSubagents, setSpinnerMessage]);
+  }, [onQuery, onClear, exit, addLog, addToast, flushThinking, flushGroup, nextId, refs, setStatus, setSubagents, setSpinnerMessage, currentApprovalMode]);
+
+  const handleCycleApprovalMode = useCallback(() => {
+    if (running || pendingApproval || showCommandPalette) {
+      return;
+    }
+    const nextMode = cycleApprovalMode(currentApprovalMode);
+    setCurrentApprovalMode(nextMode);
+    setStatus((s) => ({ ...s, approvalMode: nextMode }));
+    onCycleApprovalMode(nextMode);
+    addToast(`Mode: ${nextMode}`, "info");
+  }, [addToast, currentApprovalMode, onCycleApprovalMode, pendingApproval, running, setStatus, showCommandPalette]);
 
   const handleApproval = useCallback((approved: boolean, always?: boolean, reason?: string) => {
     if (!pendingApproval) return;
@@ -176,23 +203,20 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
     }
   });
 
-  const addToast = useCallback((message: string, variant: "info" | "success" | "warning" | "error" = "info") => {
-    setToasts((prev) => [...prev, { id: nextId("toast"), message, variant }]);
-  }, [nextId]);
-
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   const commands: Command[] = [
     { name: "Clear context", description: "Reset conversation and session state", shortcut: "/clear", action: () => { onClear(); setSubagents(new Map()); addToast("Context cleared", "success"); } },
+    { name: "Continue", description: "Continue the current session after a pause or budget limit", shortcut: "/continue", action: () => handleSubmit("/continue") },
     { name: "Session list", description: "Show recent sessions", shortcut: "/sessions", action: () => handleSubmit("/sessions") },
     { name: "Help", description: "Show available commands", shortcut: "/help", action: () => handleSubmit("/help") },
     { name: "Rename session", description: "Set a name for the current session", shortcut: "/rename", action: () => handleSubmit("/rename") },
     { name: "Review local changes", description: "Insert or run the embedded /review command anywhere in a prompt", shortcut: "/review", action: () => handleSubmit("/review") },
     { name: "Simplify local changes", description: "Insert or run the embedded /simplify command anywhere in a prompt", shortcut: "/simplify", action: () => handleSubmit("/simplify") },
     { name: "Resume session", description: "List sessions to resume", shortcut: "/resume", action: () => handleSubmit("/resume") },
-    { name: "Toggle theme", description: "Switch between dark and light mode", shortcut: "/theme", action: () => { addToast("Theme toggled (restart to apply)", "info"); } },
+    { name: "Approval mode", description: "Cycle suggest, auto-edit, and full-auto", shortcut: "Shift+Tab", action: handleCycleApprovalMode },
     { name: "Exit", description: "Quit devagent", shortcut: "Ctrl+C", action: () => exit() },
   ];
 
@@ -221,12 +245,19 @@ export function App({ bus, onQuery, onClear, onListSessions, model, approvalMode
       )}
 
       {running && !pendingApproval && (
-        <Box borderStyle="round" borderColor="gray" paddingLeft={1} paddingRight={1}>
+        <Box borderStyle="round" borderColor={getApprovalModeColor(currentApprovalMode)} paddingLeft={1} paddingRight={1}>
           <Spinner active message={spinnerMessage} suffix={status.cost > 0 ? `$${status.cost.toFixed(4)}` : ""} />
         </Box>
       )}
       {!running && !pendingApproval && !showCommandPalette && (
-        <PromptInput onSubmit={handleSubmit} history={queryHistory} placeholder="Ask anything…" cwd={cwd} />
+        <PromptInput
+          onSubmit={handleSubmit}
+          onCycleApprovalMode={handleCycleApprovalMode}
+          history={queryHistory}
+          placeholder="Ask anything…"
+          cwd={cwd}
+          approvalMode={currentApprovalMode}
+        />
       )}
       <StatusBar {...status} cwd={cwd} running={running} hasApproval={!!pendingApproval} />
     </>

@@ -140,6 +140,23 @@ describe("ApprovalGate", () => {
     });
   });
 
+  describe("Dynamic mode changes", () => {
+    it("updates the active mode and decision logic", () => {
+      const gate = new ApprovalGate(makePolicy());
+
+      expect(gate.getMode()).toBe(ApprovalMode.SUGGEST);
+      expect(gate.decide(makeRequest({ toolCategory: "mutating" }))).toBe("ask");
+
+      gate.setMode(ApprovalMode.AUTO_EDIT);
+      expect(gate.getMode()).toBe(ApprovalMode.AUTO_EDIT);
+      expect(gate.decide(makeRequest({ toolCategory: "mutating" }))).toBe("allow");
+
+      gate.setMode(ApprovalMode.FULL_AUTO);
+      expect(gate.getMode()).toBe(ApprovalMode.FULL_AUTO);
+      expect(gate.decide(makeRequest({ toolCategory: "external", toolName: "web_search" }))).toBe("allow");
+    });
+  });
+
   describe("Per-tool overrides", () => {
     it("overrides mode-based decision", () => {
       const gate = new ApprovalGate(

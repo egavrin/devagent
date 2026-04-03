@@ -12,6 +12,7 @@ import { Spinner } from "./Spinner.js";
 import { SubagentPanel } from "./SubagentPanel.js";
 import { LogEntryView } from "./LogEntryView.js";
 import { useAgentLog } from "./useAgentLog.js";
+import type { InteractiveQueryResult } from "./shared.js";
 import type { EventBus } from "@devagent/runtime";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -19,7 +20,7 @@ import type { EventBus } from "@devagent/runtime";
 export interface SingleShotAppProps {
   readonly bus: EventBus;
   readonly query: string;
-  readonly onQuery: (query: string) => Promise<{ iterations: number; toolCalls: number; lastText: string | null }>;
+  readonly onQuery: (query: string) => Promise<InteractiveQueryResult>;
   readonly model: string;
   readonly approvalMode: string;
   readonly onFinalOutput: (text: string) => void;

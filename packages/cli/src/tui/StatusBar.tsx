@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { getApprovalModeColor } from "./shared.js";
 
 export interface StatusBarProps {
   readonly model: string;
@@ -26,6 +27,7 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
   const shortModel = model.length > 20 ? model.slice(0, 20) : model;
   const pct = maxContextTokens > 0 ? Math.round((inputTokens / maxContextTokens) * 100) : 0;
   const pctColor = pct > 80 ? "red" : pct > 60 ? "yellow" : "gray";
+  const modeColor = getApprovalModeColor(approvalMode);
 
   const iterLabel = maxIterations > 0
     ? `iter ${iteration}/${maxIterations}`
@@ -38,7 +40,7 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
   } else if (running) {
     shortcuts = "Ctrl+C cancel";
   } else {
-    shortcuts = "Ctrl+K cmds │ Ctrl+C exit";
+    shortcuts = "Shift+Tab mode │ Ctrl+K cmds │ Ctrl+C exit";
   }
 
   const dirName = cwd ? (cwd.split("/").pop() ?? cwd) : "";
@@ -50,7 +52,7 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
       {cost > 0 && <><Text color="gray"> │ </Text><Text color="green">${cost.toFixed(4)}</Text></>}
       {maxContextTokens > 0 && <><Text color="gray"> │ </Text><Text color={pctColor}>{formatTokens(inputTokens)}/{formatTokens(maxContextTokens)} ({pct}%)</Text></>}
       {iterLabel && <><Text color="gray"> │ </Text><Text color="gray">{iterLabel}</Text></>}
-      <Text color="gray"> │ </Text><Text color="gray">{approvalMode}</Text>
+      <Text color="gray"> │ </Text><Text color={modeColor} bold>{approvalMode}</Text>
       {dirName && <><Text color="gray"> │ </Text><Text dimColor>{dirName}</Text></>}
     </Box>
   );

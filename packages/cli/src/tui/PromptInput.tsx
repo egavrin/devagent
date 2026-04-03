@@ -19,10 +19,12 @@ import React, { useState, useRef } from "react";
 import { readdirSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { Box, Text, useInput } from "ink";
+import { getApprovalModeColor, resolvePromptTabAction } from "./shared.js";
 
 export const SLASH_COMMANDS = [
   "/help",
   "/clear",
+  "/continue",
   "/sessions",
   "/resume",
   "/rename",
@@ -34,18 +36,28 @@ export const SLASH_COMMANDS = [
 
 export interface PromptInputProps {
   readonly onSubmit: (value: string) => void;
+  readonly onCycleApprovalMode?: () => void;
   readonly placeholder?: string;
   readonly history?: ReadonlyArray<string>;
   readonly cwd?: string;
+  readonly approvalMode?: string;
 }
 
-export function PromptInput({ onSubmit, placeholder = "Ask anything… use /review or /simplify anywhere", history = [], cwd }: PromptInputProps): React.ReactElement {
+export function PromptInput({
+  onSubmit,
+  onCycleApprovalMode,
+  placeholder = "Ask anything… use /review or /simplify anywhere",
+  history = [],
+  cwd,
+  approvalMode = "suggest",
+}: PromptInputProps): React.ReactElement {
   const [value, setValue] = useState("");
   const [cursorPos, setCursorPos] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [completions, setCompletions] = useState<string[]>([]);
   const [completionIndex, setCompletionIndex] = useState(0);
   const savedInputRef = useRef("");
+  const accentColor = getApprovalModeColor(approvalMode);
 
   useInput((input, key) => {
     // Submit on Enter (without Shift)
@@ -95,8 +107,14 @@ export function PromptInput({ onSubmit, placeholder = "Ask anything… use /revi
       return;
     }
 
+    const tabAction = resolvePromptTabAction(key);
+    if (tabAction === "cycle-mode") {
+      onCycleApprovalMode?.();
+      return;
+    }
+
     // Tab completion
-    if (key.tab) {
+    if (tabAction === "complete") {
       if (completions.length > 0) {
         const next = (completionIndex + 1) % completions.length;
         setCompletionIndex(next);
@@ -182,7 +200,7 @@ export function PromptInput({ onSubmit, placeholder = "Ask anything… use /revi
 
       return (
         <Box key={i}>
-          <Text color="cyan">{i === 0 ? "❯ " : "… "}</Text>
+          <Text color={accentColor}>{i === 0 ? "❯ " : "… "}</Text>
           {cursorInLine ? (
             <Text>
               {line.slice(0, localCursor)}<Text inverse>{line[localCursor] ?? " "}</Text>{line.slice(localCursor + 1)}
@@ -195,22 +213,22 @@ export function PromptInput({ onSubmit, placeholder = "Ask anything… use /revi
     });
   };
 
-  return (
-    <Box flexDirection="column">
-      <Box borderStyle="round" borderColor="gray" paddingLeft={1} paddingRight={1}>
+    return (
+      <Box flexDirection="column">
+      <Box borderStyle="round" borderColor={accentColor} paddingLeft={1} paddingRight={1}>
         <Box flexDirection="column" flexGrow={1}>
           {isMultiLine ? (
             renderMultiLine()
           ) : (
             <Box>
-              <Text color="cyan">❯ </Text>
+              <Text color={accentColor}>❯ </Text>
               {renderWithCursor()}
             </Box>
           )}
         </Box>
       </Box>
       {completions.length > 1 && (
-        <Text dimColor>  Tab: {completionIndex + 1}/{completions.length}</Text>
+        <Text dimColor>  Tab: {completionIndex + 1}/{completions.length} · Shift+Tab: mode</Text>
       )}
     </Box>
   );

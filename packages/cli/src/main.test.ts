@@ -78,6 +78,7 @@ describe("renderHelpText", () => {
     expect(help).toContain("Interactive TUI");
     expect(help).toContain("OPENAI_API_KEY");
     expect(help).toContain("ANTHROPIC_API_KEY");
+    expect(help).toContain("--max-iterations <n>  Max tool-call iterations (default: 0 (unlimited))");
     expect(help).not.toContain("Interactive mode (REPL)");
   });
 });
