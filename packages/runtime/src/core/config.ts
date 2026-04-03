@@ -15,7 +15,9 @@ import { resolveProviderCredentialStatus } from "./provider-credentials.js";
 import type {
   DevAgentConfig,
   ApprovalPolicy,
-  ApprovalMode,
+  ApprovalPolicyMode,
+  SandboxMode,
+  NetworkAccessMode,
   BudgetConfig,
   ContextConfig,
   ArkTSConfig,
@@ -24,12 +26,26 @@ import type {
   AgentToolPermissionOverride,
   ReasoningEffort,
 } from "./types.js";
-import { AgentType } from "./types.js";
+import { AgentType, SafetyMode } from "./types.js";
 
 // ─── Defaults ────────────────────────────────────────────────
 
+interface SafetyConfig {
+  readonly mode: SafetyMode;
+  readonly approvalPolicy: ApprovalPolicyMode;
+  readonly sandboxMode: SandboxMode;
+  readonly networkAccess: NetworkAccessMode;
+}
+
+const DEFAULT_SAFETY: SafetyConfig = {
+  mode: SafetyMode.DEFAULT,
+  approvalPolicy: "on-request" as ApprovalPolicyMode,
+  sandboxMode: "workspace-write" as SandboxMode,
+  networkAccess: "off" as NetworkAccessMode,
+};
+
 const DEFAULT_APPROVAL: ApprovalPolicy = {
-  mode: "suggest" as ApprovalMode,
+  ...DEFAULT_SAFETY,
   auditLog: false,
   toolOverrides: {},
   pathRules: [],
@@ -196,13 +212,50 @@ function mergeProviderConfig(
   };
 }
 
-function parseApproval(
+function parseSafety(
   raw: Record<string, unknown>,
-): Partial<ApprovalPolicy> {
+): Partial<SafetyConfig> {
   return {
-    mode: raw["mode"] as ApprovalMode | undefined,
-    auditLog: raw["audit_log"] as boolean | undefined,
+    mode: raw["mode"] as SafetyMode | undefined,
+    approvalPolicy: (raw["approval_policy"] ?? raw["approvalPolicy"]) as ApprovalPolicyMode | undefined,
+    sandboxMode: (raw["sandbox_mode"] ?? raw["sandboxMode"]) as SandboxMode | undefined,
+    networkAccess: (raw["network_access"] ?? raw["networkAccess"]) as NetworkAccessMode | undefined,
   };
+}
+
+function mergeSafetyConfig(
+  parsed: Partial<SafetyConfig>,
+  overrides?: Partial<ApprovalPolicy>,
+): SafetyConfig {
+  const overrideMode = overrides?.mode === SafetyMode.DEFAULT || overrides?.mode === SafetyMode.AUTOPILOT
+    ? overrides.mode
+    : undefined;
+  const mode = overrideMode ?? parsed.mode ?? DEFAULT_SAFETY.mode;
+  const preset = getSafetyPreset(mode);
+  return {
+    mode,
+    approvalPolicy: overrides?.approvalPolicy ?? parsed.approvalPolicy ?? preset.approvalPolicy,
+    sandboxMode: overrides?.sandboxMode ?? parsed.sandboxMode ?? preset.sandboxMode,
+    networkAccess: overrides?.networkAccess ?? parsed.networkAccess ?? preset.networkAccess,
+  };
+}
+
+function getSafetyPreset(mode: SafetyMode): Omit<SafetyConfig, "mode"> {
+  switch (mode) {
+    case SafetyMode.AUTOPILOT:
+      return {
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+        networkAccess: "on",
+      };
+    case SafetyMode.DEFAULT:
+    default:
+      return {
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        networkAccess: "off",
+      };
+  }
 }
 
 function parseBudget(
@@ -390,6 +443,29 @@ function validateContextConfig(context: ContextConfig): void {
   }
 }
 
+function validateSafetyConfig(safety: SafetyConfig): void {
+  const validModes = new Set<SafetyMode>([
+    SafetyMode.DEFAULT,
+    SafetyMode.AUTOPILOT,
+  ]);
+  const validApprovalPolicies = new Set<ApprovalPolicyMode>(["strict", "on-request", "never"]);
+  const validSandboxModes = new Set<SandboxMode>(["read-only", "workspace-write", "danger-full-access"]);
+  const validNetworkAccess = new Set<NetworkAccessMode>(["off", "on"]);
+
+  if (!validModes.has(safety.mode)) {
+    throw new ConfigError(`Invalid safety.mode: ${String(safety.mode)}`);
+  }
+  if (!validApprovalPolicies.has(safety.approvalPolicy)) {
+    throw new ConfigError(`Invalid safety.approvalPolicy: ${String(safety.approvalPolicy)}`);
+  }
+  if (!validSandboxModes.has(safety.sandboxMode)) {
+    throw new ConfigError(`Invalid safety.sandboxMode: ${String(safety.sandboxMode)}`);
+  }
+  if (!validNetworkAccess.has(safety.networkAccess)) {
+    throw new ConfigError(`Invalid safety.networkAccess: ${String(safety.networkAccess)}`);
+  }
+}
+
 function validateSubagentConfig(config: DevAgentConfig): void {
   for (const [agentType, cap] of Object.entries(config.agentIterationCaps ?? {})) {
     if (!VALID_AGENT_TYPES.has(agentType) || !Number.isInteger(cap) || cap < 1) {
@@ -492,15 +568,26 @@ export function loadConfig(
 
   const credentialStore = new CredentialStore();
 
-  // Merge approval
-  const rawApproval = (fileConfig["approval"] ?? {}) as Record<
-    string,
-    unknown
-  >;
-  const approvalPartial = parseApproval(rawApproval);
+  if (fileConfig["approval"] !== undefined) {
+    throw new ConfigError(
+      'The [approval] section has been removed from interactive config. Use [safety] with mode = "default" or "autopilot" instead.',
+    );
+  }
+
+  const rawSafety = (fileConfig["safety"] ?? {}) as Record<string, unknown>;
+  const safety = mergeSafetyConfig(
+    parseSafety(rawSafety),
+    overrides?.approval,
+  );
+  validateSafetyConfig(safety);
+
+  // Merge approval (internal/runtime policy; file-backed by [safety], overrideable in code)
   const approval: ApprovalPolicy = {
     ...DEFAULT_APPROVAL,
-    ...stripUndefined(approvalPartial),
+    mode: safety.mode,
+    approvalPolicy: safety.approvalPolicy,
+    sandboxMode: safety.sandboxMode,
+    networkAccess: safety.networkAccess,
     ...overrides?.approval,
   };
 
@@ -680,7 +767,7 @@ export function loadConfig(
   const config: DevAgentConfig = {
     provider,
     model:
-      envModel ??
+    envModel ??
       overrides?.model ??
       (fileConfig["model"] as string) ??
       DEFAULT_CONFIG.model,

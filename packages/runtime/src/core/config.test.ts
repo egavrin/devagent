@@ -28,7 +28,8 @@ describe("loadConfig", () => {
 
     expect(config.provider).toBe("anthropic");
     expect(config.model).toBe("claude-sonnet-4-20250514");
-    expect(config.approval.mode).toBe("suggest");
+    expect(config.approval.mode).toBe("default");
+    expect(config.approval.approvalPolicy).toBe("on-request");
     expect(config.budget.maxIterations).toBe(0);
     expect(config.budget.enableCostTracking).toBe(true);
     expect(config.context.pruningStrategy).toBe("hybrid");
@@ -65,6 +66,25 @@ strict_mode = true
       expect(config.budget.costWarningThreshold).toBe(5.0);
       expect(config.arkts.enabled).toBe(true);
       expect(config.arkts.strictMode).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it("fails fast on legacy [approval] config", () => {
+    const dir = join(tmpdir(), `devagent-test-legacy-approval-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const configPath = join(dir, ".devagent.toml");
+    writeFileSync(
+      configPath,
+      `
+[approval]
+mode = "suggest"
+`,
+    );
+
+    try {
+      expect(() => loadConfig(dir)).toThrow("The [approval] section has been removed");
     } finally {
       rmSync(dir, { recursive: true });
     }

@@ -79,7 +79,7 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
     `Task mode: ${opts.mode}`,
   ];
   if (opts.approvalMode) {
-    envLines.push(`Approval mode: ${opts.approvalMode}`);
+    envLines.push(`Safety mode: ${opts.approvalMode}`);
   }
   if (opts.provider && opts.model) {
     envLines.push(`Provider: ${opts.provider} / ${opts.model}`);

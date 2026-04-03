@@ -40,11 +40,11 @@ describe("TUI help message", () => {
   });
 });
 
-describe("approval mode helpers", () => {
-  it("cycles suggest -> auto-edit -> full-auto -> suggest", () => {
-    expect(cycleApprovalMode("suggest")).toBe("auto-edit");
-    expect(cycleApprovalMode("auto-edit")).toBe("full-auto");
-    expect(cycleApprovalMode("full-auto")).toBe("suggest");
+describe("safety mode helpers", () => {
+  it("toggles default -> autopilot -> default", () => {
+    expect(cycleApprovalMode("default")).toBe("autopilot");
+    expect(cycleApprovalMode("autopilot")).toBe("default");
+    expect(cycleApprovalMode("legacy" as never)).toBe("default");
   });
 
   it("routes Shift+Tab to mode cycling while plain Tab stays on completion", () => {

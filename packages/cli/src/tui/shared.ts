@@ -2,7 +2,7 @@
  * Shared constants, types, and helpers for TUI components.
  */
 
-import { ApprovalMode } from "@devagent/runtime";
+import { SafetyMode } from "@devagent/runtime";
 import type { TaskCompletionStatus } from "@devagent/runtime";
 
 // ─── Spinner Constants ──────────────────────────────────────
@@ -33,26 +33,23 @@ export interface InteractiveQueryResult {
 }
 
 export const APPROVAL_MODE_ORDER = [
-  ApprovalMode.SUGGEST,
-  ApprovalMode.AUTO_EDIT,
-  ApprovalMode.FULL_AUTO,
+  SafetyMode.DEFAULT,
+  SafetyMode.AUTOPILOT,
 ] as const;
 
 export type PromptTabAction = "cycle-mode" | "complete" | "none";
 
-export function cycleApprovalMode(mode: string): ApprovalMode {
-  const currentIndex = APPROVAL_MODE_ORDER.indexOf(mode as ApprovalMode);
+export function cycleApprovalMode(mode: string): SafetyMode {
+  const currentIndex = APPROVAL_MODE_ORDER.indexOf(mode as SafetyMode);
   const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % APPROVAL_MODE_ORDER.length : 0;
   return APPROVAL_MODE_ORDER[nextIndex]!;
 }
 
-export function getApprovalModeColor(mode: string): "yellow" | "cyan" | "green" {
+export function getApprovalModeColor(mode: string): "cyan" | "green" {
   switch (mode) {
-    case ApprovalMode.SUGGEST:
-      return "yellow";
-    case ApprovalMode.AUTO_EDIT:
+    case SafetyMode.DEFAULT:
       return "cyan";
-    case ApprovalMode.FULL_AUTO:
+    case SafetyMode.AUTOPILOT:
       return "green";
     default:
       return "cyan";

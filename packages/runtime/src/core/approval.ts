@@ -1,21 +1,19 @@
 /**
- * Approval system — three-tier model for tool execution control.
+ * Approval system for interactive safety presets and legacy executor modes.
  *
- * | Mode       | File Read | File Write | Shell        | Network     |
- * |------------|-----------|------------|--------------|-------------|
- * | Suggest    | Yes       | Diff shown | Command shown| Blocked     |
- * | Auto-Edit  | Yes       | Yes        | Command shown| Blocked     |
- * | Full-Auto  | Yes       | Yes        | Sandboxed    | Sandboxed   |
+ * Modern interactive presets:
+ * - default: auto-allow in-repo edits and safe repo commands, ask at trust boundaries
+ * - autopilot: allow all actions
  *
- * Per-tool and per-path overrides. Audit log via event bus.
+ * Legacy executor modes remain supported for machine-contract compatibility.
  */
 
+import { isAbsolute, resolve } from "node:path";
 import type {
   ApprovalPolicy,
-  ToolSpec,
   ToolCategory,
 } from "./types.js";
-import { ApprovalMode } from "./types.js";
+import { ApprovalMode, SafetyMode } from "./types.js";
 import { ApprovalDeniedError } from "./errors.js";
 import type { EventBus } from "./events.js";
 
@@ -28,6 +26,8 @@ export interface ApprovalRequest {
   readonly toolCategory: ToolCategory;
   readonly filePath: string | null;
   readonly description: string;
+  readonly repoRoot?: string;
+  readonly arguments?: Readonly<Record<string, unknown>>;
 }
 
 export interface ApprovalResult {
@@ -41,10 +41,11 @@ export interface ApprovalResult {
 export class ApprovalGate {
   private readonly policy: ApprovalPolicy;
   private readonly bus: EventBus | null;
-  private currentMode: ApprovalMode;
+  private currentMode: ApprovalMode | SafetyMode;
   private userResponseResolver:
-    | ((approved: boolean) => void)
+    | ((response: { approved: boolean; feedback?: string }) => void)
     | null = null;
+  private readonly sessionAllowRules = new Set<string>();
 
   constructor(policy: ApprovalPolicy, bus?: EventBus) {
     this.policy = policy;
@@ -55,7 +56,10 @@ export class ApprovalGate {
     if (this.bus) {
       this.bus.on("approval:response", (event) => {
         if (this.userResponseResolver) {
-          this.userResponseResolver(event.approved);
+          this.userResponseResolver({
+            approved: event.approved,
+            feedback: event.feedback,
+          });
           this.userResponseResolver = null;
         }
       });
@@ -97,7 +101,11 @@ export class ApprovalGate {
       details: request.description,
     });
 
-    const approved = await this.waitForUserResponse();
+    const response = await this.waitForUserResponse();
+    if (response.approved && response.feedback === "session") {
+      this.sessionAllowRules.add(this.getSessionRuleKey(request));
+    }
+    const approved = response.approved;
     const reason = approved ? "user-approved" : "user-denied";
     this.logAudit(request, approved, reason);
 
@@ -117,6 +125,10 @@ export class ApprovalGate {
     const toolOverride = this.policy.toolOverrides[request.toolName];
     if (toolOverride) return toolOverride;
 
+    if (this.sessionAllowRules.has(this.getSessionRuleKey(request))) {
+      return "allow";
+    }
+
     // 2. Check per-path rules
     if (request.filePath) {
       const pathDecision = this.checkPathRules(request.filePath);
@@ -124,7 +136,7 @@ export class ApprovalGate {
     }
 
     // 3. Apply mode-based rules
-    return this.decideByMode(request.toolCategory);
+    return this.decideByMode(request);
   }
 
   private checkPathRules(filePath: string): ApprovalDecision | null {
@@ -136,7 +148,86 @@ export class ApprovalGate {
     return null;
   }
 
-  private decideByMode(category: ToolCategory): ApprovalDecision {
+  private decideByMode(request: ApprovalRequest): ApprovalDecision {
+    if (this.shouldUseLegacyMode()) {
+      return this.decideByLegacyMode(request.toolCategory);
+    }
+
+    const normalized = this.normalizeRequest(request);
+    const approvalPolicy = this.policy.approvalPolicy ?? "on-request";
+    const sandboxMode = this.policy.sandboxMode ?? "workspace-write";
+    const networkAccess = this.policy.networkAccess ?? "off";
+
+    if (request.toolCategory === "state") {
+      return "allow";
+    }
+
+    if (request.toolCategory === "external") {
+      return approvalPolicy === "never" || networkAccess === "on" ? "allow" : "ask";
+    }
+
+    if (normalized.hasSensitivePath) {
+      return approvalPolicy === "never" ? "allow" : "ask";
+    }
+
+    if (request.toolCategory === "readonly") {
+      if (normalized.filePath && normalized.isOutsideRepo) {
+        return approvalPolicy === "never" ? "allow" : "ask";
+      }
+      return "allow";
+    }
+
+    if (request.toolCategory === "mutating") {
+      if (request.toolName === "git_commit") {
+        return approvalPolicy === "never" ? "allow" : "ask";
+      }
+      if (approvalPolicy === "never") {
+        return "allow";
+      }
+      if (approvalPolicy === "strict") {
+        return "ask";
+      }
+      if (sandboxMode === "danger-full-access") {
+        return "allow";
+      }
+      if (normalized.filePath && normalized.isInsideRepo && !normalized.hasSensitivePath) {
+        return "allow";
+      }
+      return "ask";
+    }
+
+    if (request.toolCategory === "workflow") {
+      const command = normalized.command;
+      if (approvalPolicy === "never") {
+        return "allow";
+      }
+      if (approvalPolicy === "strict") {
+        return "ask";
+      }
+      if (!command || !normalized.commandRunsInRepo) {
+        return "ask";
+      }
+      return isDefaultSafeCommand(command) ? "allow" : "ask";
+    }
+
+    return "ask";
+  }
+
+  private shouldUseLegacyMode(): boolean {
+    if (this.policy.approvalPolicy || this.policy.sandboxMode || this.policy.networkAccess) {
+      return false;
+    }
+    switch (this.currentMode) {
+      case ApprovalMode.SUGGEST:
+      case ApprovalMode.AUTO_EDIT:
+      case ApprovalMode.FULL_AUTO:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private decideByLegacyMode(category: ToolCategory): ApprovalDecision {
     switch (this.currentMode) {
       case ApprovalMode.SUGGEST:
         return this.decideSuggestMode(category);
@@ -145,7 +236,6 @@ export class ApprovalGate {
       case ApprovalMode.FULL_AUTO:
         return this.decideFullAutoMode(category);
       default:
-        // Fail fast: unknown mode
         return "ask";
     }
   }
@@ -161,7 +251,7 @@ export class ApprovalGate {
       case "workflow":
         return "ask";
       case "external":
-        return "deny"; // network blocked in suggest mode
+        return "deny"; // network blocked in legacy suggest mode
       default:
         return "ask";
     }
@@ -185,12 +275,12 @@ export class ApprovalGate {
   }
 
   private decideFullAutoMode(category: ToolCategory): ApprovalDecision {
-    // Everything allowed in full-auto (sandboxed execution)
+    // Everything allowed in legacy full-auto mode
     return "allow";
   }
 
-  private waitForUserResponse(): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
+  private waitForUserResponse(): Promise<{ approved: boolean; feedback?: string }> {
+    return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
       this.userResponseResolver = resolve;
     });
   }
@@ -216,12 +306,61 @@ export class ApprovalGate {
     });
   }
 
-  getMode(): ApprovalMode {
+  getMode(): ApprovalMode | SafetyMode {
     return this.currentMode;
   }
 
-  setMode(mode: ApprovalMode): void {
+  setMode(mode: ApprovalMode | SafetyMode): void {
     this.currentMode = mode;
+    this.sessionAllowRules.clear();
+  }
+
+  private getSessionRuleKey(request: ApprovalRequest): string {
+    const normalized = this.normalizeRequest(request);
+    if (request.toolName === "run_command" && normalized.command) {
+      return `run_command:${normalized.command}`;
+    }
+    if (normalized.filePath) {
+      return `${request.toolName}:${normalized.filePath}`;
+    }
+    return `${request.toolName}:${request.description}`;
+  }
+
+  private normalizeRequest(request: ApprovalRequest): {
+    readonly filePath: string | null;
+    readonly isInsideRepo: boolean;
+    readonly isOutsideRepo: boolean;
+    readonly hasSensitivePath: boolean;
+    readonly command: string | null;
+    readonly commandRunsInRepo: boolean;
+  } {
+    const repoRoot = request.repoRoot ? resolve(request.repoRoot) : null;
+    const rawFilePath = request.filePath;
+    const normalizedFilePath = rawFilePath && repoRoot
+      ? resolvePath(rawFilePath, repoRoot)
+      : rawFilePath;
+    const isInsideRepo = normalizedFilePath && repoRoot
+      ? isSubpath(normalizedFilePath, repoRoot)
+      : false;
+    const command = typeof request.arguments?.["command"] === "string"
+      ? normalizeCommand(request.arguments["command"] as string)
+      : null;
+    const commandCwd = typeof request.arguments?.["cwd"] === "string"
+      ? request.arguments["cwd"] as string
+      : ".";
+    const resolvedCommandCwd = repoRoot ? resolvePath(commandCwd, repoRoot) : null;
+    const commandRunsInRepo = resolvedCommandCwd && repoRoot
+      ? isSubpath(resolvedCommandCwd, repoRoot)
+      : true;
+
+    return {
+      filePath: normalizedFilePath ?? null,
+      isInsideRepo,
+      isOutsideRepo: Boolean(normalizedFilePath && repoRoot && !isInsideRepo),
+      hasSensitivePath: Boolean(normalizedFilePath && isSensitivePath(normalizedFilePath)),
+      command,
+      commandRunsInRepo,
+    };
   }
 }
 
@@ -242,4 +381,69 @@ function matchPath(filePath: string, pattern: string): boolean {
 
   const regex = new RegExp(`^${regexStr}$`);
   return regex.test(filePath);
+}
+
+function resolvePath(pathValue: string, repoRoot: string): string {
+  return isAbsolute(pathValue) ? resolve(pathValue) : resolve(repoRoot, pathValue);
+}
+
+function isSubpath(targetPath: string, rootPath: string): boolean {
+  const normalizedRoot = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
+  return targetPath === rootPath || targetPath.startsWith(normalizedRoot);
+}
+
+function isSensitivePath(filePath: string): boolean {
+  const lowered = filePath.toLowerCase();
+  return (
+    lowered.includes("/.ssh/") ||
+    lowered.includes("/.aws/") ||
+    lowered.includes("/.config/") ||
+    lowered.endsWith("/.npmrc") ||
+    lowered.endsWith("/.pypirc") ||
+    lowered.endsWith("/.git-credentials") ||
+    lowered.endsWith("/credentials") ||
+    lowered.endsWith("/config") ||
+    lowered.includes("/secrets") ||
+    lowered.endsWith("/id_rsa") ||
+    lowered.endsWith("/id_ed25519") ||
+    lowered.includes("/.env")
+  );
+}
+
+function normalizeCommand(command: string): string {
+  return command.trim().replace(/\s+/g, " ");
+}
+
+function isDefaultSafeCommand(command: string): boolean {
+  const lower = command.toLowerCase();
+
+  if (
+    lower.includes("&&") ||
+    lower.includes("||") ||
+    lower.includes(";") ||
+    lower.includes("|") ||
+    lower.includes("`") ||
+    lower.includes("$(") ||
+    lower.includes(">") ||
+    lower.includes("<")
+  ) {
+    return false;
+  }
+
+  if (
+    /\b(npm|pnpm|yarn|bun)\s+(install|add|remove|unlink|update|upgrade)\b/.test(lower) ||
+    /\b(rm|chmod|chown|sudo|curl|wget|scp|ssh|mv|cp|tee|launchctl|systemctl)\b/.test(lower) ||
+    /\bsed\s+-i\b/.test(lower) ||
+    /\bgit\s+(commit|push|tag|merge|rebase|reset|checkout\s+-b|switch\s+-c|branch\s+-d|branch\s+-D|publish)\b/.test(lower)
+  ) {
+    return false;
+  }
+
+  return (
+    /^(ls|pwd|cat|head|tail|wc|rg|grep|find)\b/.test(lower) ||
+    /^sed\s+-n\b/.test(lower) ||
+    /^(bun|npm|pnpm|yarn)\s+(test|run test|run lint|run build|run dev|run typecheck|check|check:oss)\b/.test(lower) ||
+    /^(pytest|go test|cargo (test|check|build)|vitest|jest)\b/.test(lower) ||
+    /^git\s+(status|diff|log|show|rev-parse|remote -v|branch --show-current)\b/.test(lower)
+  );
 }

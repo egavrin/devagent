@@ -27,8 +27,8 @@ import {
   getProviderCredentialEnvVar,
   loggedSubagentRunFromEvent,
 } from "@devagent/runtime";
-import type { DevAgentConfig, ApprovalPolicy, LLMProvider, Message, Session, VerbosityConfig } from "@devagent/runtime";
-import { AgentType, ApprovalMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
+import type { DevAgentConfig, LLMProvider, Message, Session, VerbosityConfig } from "@devagent/runtime";
+import { AgentType, SafetyMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
 import { migrateLegacyGlobalConfigIfNeeded } from "./global-config.js";
 
@@ -215,6 +215,8 @@ interface CliSubcommand {
 interface CliArgs {
   query: string | null;
   file: string | null;
+  safetyMode: SafetyMode | null;
+  modeParseError: string | null;
   provider: string | null;
   model: string | null;
   maxIterations: number | null;
@@ -337,6 +339,8 @@ export function parseArgs(argv: string[]): CliArgs {
   const result: CliArgs = {
     query: null,
     file: null,
+    safetyMode: null,
+    modeParseError: null,
     provider: null,
     model: null,
     maxIterations: null,
@@ -399,12 +403,23 @@ export function parseArgs(argv: string[]): CliArgs {
       result.authCommand = args[i + 1] ?? "login";
       i++;
       return result; // auth is handled before anything else
-    } else if (arg === "--suggest") {
-      // handled in config override
-    } else if (arg === "--auto-edit") {
-      // handled in config override
-    } else if (arg === "--full-auto") {
-      // handled in config override
+    } else if (arg === "--mode" && i + 1 < args.length) {
+      const value = args[++i]!;
+      if (value === SafetyMode.DEFAULT || value === SafetyMode.AUTOPILOT) {
+        result.safetyMode = value;
+      } else {
+        result.modeParseError = `Invalid --mode value: ${value}. Expected one of: default, autopilot.`;
+      }
+    } else if (arg.startsWith("--mode=")) {
+      const value = arg.slice("--mode=".length);
+      if (value === SafetyMode.DEFAULT || value === SafetyMode.AUTOPILOT) {
+        result.safetyMode = value;
+      } else {
+        result.modeParseError = `Invalid --mode value: ${value}. Expected one of: default, autopilot.`;
+      }
+    } else if (arg === "--suggest" || arg === "--auto-edit" || arg === "--full-auto") {
+      const replacement = arg === "--full-auto" ? "--mode autopilot" : "--mode default";
+      result.modeParseError = `${arg} has been removed. Use ${replacement} instead.`;
     } else if (arg === "-q" || arg === "--quiet") {
       result.verbosity = "quiet";
     } else if (arg === "-v" || arg === "--verbose") {
@@ -444,13 +459,6 @@ export function parseArgs(argv: string[]): CliArgs {
   return result;
 }
 
-function getApprovalMode(argv: string[]): ApprovalMode | null {
-  if (argv.includes("--suggest")) return ApprovalMode.SUGGEST;
-  if (argv.includes("--auto-edit")) return ApprovalMode.AUTO_EDIT;
-  if (argv.includes("--full-auto")) return ApprovalMode.FULL_AUTO;
-  return null;
-}
-
 export function renderHelpText(): string {
   return `
 devagent — AI-powered development agent
@@ -480,15 +488,13 @@ Auth:
 
 Options:
   -f, --file <path>    Read query from file
+  --mode <mode>        Interactive safety mode: default, autopilot
   --provider <name>     LLM provider (anthropic, openai, devagent-api, deepseek, openrouter, ollama, chatgpt, github-copilot)
   --model <id>          Model ID
   --max-iterations <n>  Max tool-call iterations (default: 0 (unlimited))
   --reasoning <level>   Reasoning effort: low, medium, high
   --resume <id>         Resume a previous session by ID
   --continue            Resume the most recent session
-  --suggest             Suggest mode (show diffs, ask before writing)
-  --auto-edit           Auto-edit mode (auto-approve file writes)
-  --full-auto           Full-auto mode (auto-approve everything)
   -v, --verbose         Verbose output (show full tool params and results)
   -q, --quiet           Quiet output (errors only)
   -V, --version         Show version
@@ -537,6 +543,46 @@ function printHelpUsageError(): never {
   process.exit(2);
 }
 
+function getSafetyPreset(mode: SafetyMode): Pick<DevAgentConfig["approval"], "mode" | "approvalPolicy" | "sandboxMode" | "networkAccess"> {
+  switch (mode) {
+    case SafetyMode.AUTOPILOT:
+      return {
+        mode,
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+        networkAccess: "on",
+      };
+    case SafetyMode.DEFAULT:
+    default:
+      return {
+        mode,
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        networkAccess: "off",
+      };
+  }
+}
+
+function withInteractiveSafetyMode(
+  config: DevAgentConfig,
+  mode: SafetyMode,
+): DevAgentConfig {
+  const safety = getSafetyPreset(mode);
+  return {
+    ...config,
+    approval: {
+      ...config.approval,
+      ...safety,
+    },
+  };
+}
+
+function getInteractiveSafetyMode(config: DevAgentConfig): SafetyMode {
+  return config.approval.mode === SafetyMode.AUTOPILOT
+    ? SafetyMode.AUTOPILOT
+    : SafetyMode.DEFAULT;
+}
+
 
 
 // ─── Setup Helpers ─────────────────────────────────────────
@@ -559,11 +605,19 @@ async function setupConfig(cliArgs: CliArgs): Promise<ConfigSetupResult> {
   const projectRoot = findProjectRoot() ?? process.cwd();
 
   // Load config with CLI overrides
-  const approvalMode = getApprovalMode(process.argv);
   const configOverrides: Partial<DevAgentConfig> = {
     ...(cliArgs.provider ? { provider: cliArgs.provider } : {}),
     ...(cliArgs.model ? { model: cliArgs.model } : {}),
-    ...(approvalMode ? { approval: { mode: approvalMode } as ApprovalPolicy } : {}),
+    ...(cliArgs.safetyMode
+      ? {
+          approval: {
+            ...getSafetyPreset(cliArgs.safetyMode),
+            auditLog: false,
+            toolOverrides: {},
+            pathRules: [],
+          },
+        }
+      : {}),
   };
 
   let config = loadConfig(projectRoot, configOverrides);
@@ -788,7 +842,7 @@ async function setupTools(
   const agentRegistry = new AgentRegistry();
   const delegateAmbientContext = {
     skills,
-    approvalMode: config.approval.mode,
+    approvalMode: getInteractiveSafetyMode(config),
     providerLabel: `${config.provider} / ${config.model}`,
     providerFactory: (agentConfig: DevAgentConfig, agentType: AgentType) => {
       return providerRegistry.get(
@@ -813,11 +867,11 @@ async function setupTools(
   }));
 
   // ─── Double-Check ──────────────────────────────────────────
-  // Auto-enable DoubleCheck in full-auto mode unless explicitly disabled.
+  // Auto-enable DoubleCheck in autopilot mode unless explicitly disabled.
   // When enabled with no explicit test command, auto-detect from package.json
   // and enable test running so the LLM can self-correct from test failures.
-  const isFullAuto = config.approval.mode === ApprovalMode.FULL_AUTO;
-  const dcEnabled = config.doubleCheck?.enabled ?? isFullAuto;
+  const isAutonomous = getInteractiveSafetyMode(config) === SafetyMode.AUTOPILOT;
+  const dcEnabled = config.doubleCheck?.enabled ?? isAutonomous;
   const autoTestCommand = dcEnabled && !config.doubleCheck?.testCommand
     ? detectProjectTestCommand(projectRoot)
     : null;
@@ -1025,12 +1079,25 @@ async function setupLSP(
 /** Result of session persistence setup. */
 interface SessionPersistenceResult {
   readonly sessionStore: SessionStore;
-  readonly session: import("@devagent/runtime").Session;
   readonly initialMessages: Message[] | undefined;
   readonly resumeBriefing: TurnBriefing | undefined;
-  readonly eventLogger: EventLogger | null;
   /** Possibly updated sessionState (swapped on resume). */
   sessionState: SessionState;
+  readonly activateSession: (query?: string) => import("@devagent/runtime").Session;
+  readonly deactivateSession: (reason?: "completed" | "cancelled" | "error" | "budget_exceeded") => void;
+  readonly hasActiveSession: () => boolean;
+  readonly getActiveSession: () => import("@devagent/runtime").Session | null;
+  readonly getActiveSessionStartTime: () => number | null;
+  readonly printActiveSessionId: () => void;
+  readonly close: () => void;
+}
+
+interface SessionPersistenceSetupOptions {
+  readonly sessionStore?: SessionStore;
+  readonly createCrashReporter?: (
+    sessionId: string,
+    verbosity: Verbosity,
+  ) => CrashSessionReporter;
 }
 
 function resolveResumeTarget(
@@ -1070,18 +1137,20 @@ function resolveResumeTarget(
 }
 
 /**
- * Create or resume a session: load prior messages/briefing, create session
- * record, bind session state to disk, set up event logger and bus-based
- * message persistence.
+ * Prepare lazy session persistence. Resume state is restored up front, but the
+ * new session record is only created when the first real query runs.
  */
-async function setupSessionPersistence(
+export async function setupSessionPersistence(
   config: DevAgentConfig,
   cliArgs: CliArgs,
   provider: LLMProvider,
   bus: EventBus,
   sessionState: SessionState,
+  options: SessionPersistenceSetupOptions = {},
 ): Promise<SessionPersistenceResult> {
-  const sessionStore = new SessionStore();
+  const sessionStore = options.sessionStore ?? new SessionStore();
+  const createCrashReporter = options.createCrashReporter
+    ?? ((sessionId: string, verbosity: Verbosity) => createCrashSessionReporter(sessionId, verbosity));
 
   // Resume previous session if requested
   // Turn isolation: synthesize briefing from prior session instead of loading raw messages.
@@ -1137,14 +1206,6 @@ async function setupSessionPersistence(
     }
   }
 
-  // Create session record for this run
-  const session = sessionStore.createSession({
-    query: cliArgs.query ?? "(file query)",
-    provider: config.provider,
-    model: config.model,
-    mode: "act",
-  });
-
   // ─── Disk-backed SessionState ────────────────────────────────
   // Adapter: bridge SessionStore's object-typed methods with
   // the typed SessionStatePersistence interface from @devagent/runtime.
@@ -1172,40 +1233,80 @@ async function setupSessionPersistence(
       }
     }
   }
-  // Bind to current session for ongoing auto-save
-  effectiveSessionState.bind(session.id, sessionStatePersistence);
-
   // ─── Event Logger (JSONL persistence) ─────────────────────
-  let eventLogger: EventLogger | null = null;
   const loggingEnabled = config.logging?.enabled !== false;
-  if (loggingEnabled) {
-    // Rotate old logs (non-fatal — log cleanup should never block the user)
-    try {
-      const retentionDays = config.logging?.retentionDays ?? 30;
-      const deleted = EventLogger.rotate(retentionDays, config.logging?.logDir);
-      if (deleted > 0 && cliArgs.verbosity === "verbose") {
-        process.stderr.write(dim(`[logging] Rotated ${deleted} old log file(s)`) + "\n");
-      }
-    } catch {
-      // Non-fatal: documented exception to fail-fast
+  let activeSession: Session | null = null;
+  let activeSessionStartTime: number | null = null;
+  let eventLogger: EventLogger | null = null;
+  let crashSessionReporter: CrashSessionReporter | null = null;
+  let logsRotated = false;
+
+  const activateSession = (query?: string): Session => {
+    if (activeSession) {
+      return activeSession;
     }
 
-    eventLogger = new EventLogger(session.id, config.logging?.logDir);
-    eventLogger.attach(bus);
-  }
+    const session = sessionStore.createSession({
+      query: query ?? cliArgs.query ?? "(interactive query)",
+      provider: config.provider,
+      model: config.model,
+      mode: "act",
+    });
+    effectiveSessionState.bind(session.id, sessionStatePersistence);
+
+    if (loggingEnabled) {
+      if (!logsRotated) {
+        try {
+          const retentionDays = config.logging?.retentionDays ?? 30;
+          const deleted = EventLogger.rotate(retentionDays, config.logging?.logDir);
+          if (deleted > 0 && cliArgs.verbosity === "verbose") {
+            process.stderr.write(dim(`[logging] Rotated ${deleted} old log file(s)`) + "\n");
+          }
+        } catch {
+          // Non-fatal: documented exception to fail-fast
+        }
+        logsRotated = true;
+      }
+
+      eventLogger = new EventLogger(session.id, config.logging?.logDir);
+      eventLogger.attach(bus);
+    }
+
+    crashSessionReporter = createCrashReporter(session.id, cliArgs.verbosity);
+    activeSession = session;
+    activeSessionStartTime = Date.now();
+    bus.emit("session:start", { sessionId: session.id });
+    return session;
+  };
+
+  const deactivateSession = (
+    reason: "completed" | "cancelled" | "error" | "budget_exceeded" = "completed",
+  ): void => {
+    if (!activeSession) {
+      return;
+    }
+
+    bus.emit("session:end", { sessionId: activeSession.id, reason });
+    crashSessionReporter?.dispose();
+    crashSessionReporter = null;
+    eventLogger?.close();
+    eventLogger = null;
+    activeSession = null;
+    activeSessionStartTime = null;
+  };
 
   // Persist messages incrementally via bus events
   bus.on("message:user", (event) => {
-    if (event.agentId) return;
-    sessionStore.addMessage(session.id, {
+    if (event.agentId || !activeSession) return;
+    sessionStore.addMessage(activeSession.id, {
       role: MessageRole.USER,
       content: event.content,
     });
   });
   bus.on("message:assistant", (event) => {
-    if (event.agentId) return;
+    if (event.agentId || !activeSession) return;
     if (!event.partial) {
-      sessionStore.addMessage(session.id, {
+      sessionStore.addMessage(activeSession.id, {
         role: MessageRole.ASSISTANT,
         content: event.content,
         toolCalls: event.toolCalls,
@@ -1213,15 +1314,16 @@ async function setupSessionPersistence(
     }
   });
   bus.on("message:tool", (event) => {
-    if (event.agentId) return;
-    sessionStore.addMessage(session.id, {
+    if (event.agentId || !activeSession) return;
+    sessionStore.addMessage(activeSession.id, {
       role: MessageRole.TOOL,
       content: event.content,
       toolCallId: event.toolCallId,
     });
   });
   bus.on("cost:update", (event) => {
-    sessionStore.addCostRecord(session.id, {
+    if (!activeSession) return;
+    sessionStore.addCostRecord(activeSession.id, {
       inputTokens: event.inputTokens,
       outputTokens: event.outputTokens,
       cacheReadTokens: 0,
@@ -1232,7 +1334,8 @@ async function setupSessionPersistence(
 
   // Persist compaction events for forensic analysis
   bus.on("context:compacted", (event) => {
-    sessionStore.saveCompactionEvent(session.id, {
+    if (!activeSession) return;
+    sessionStore.saveCompactionEvent(activeSession.id, {
       tokensBefore: event.tokensBefore,
       tokensAfter: event.estimatedTokens,
       removedCount: event.removedCount,
@@ -1241,11 +1344,21 @@ async function setupSessionPersistence(
 
   return {
     sessionStore,
-    session,
     initialMessages,
     resumeBriefing,
-    eventLogger,
     sessionState: effectiveSessionState,
+    activateSession,
+    deactivateSession,
+    hasActiveSession: () => activeSession !== null,
+    getActiveSession: () => activeSession,
+    getActiveSessionStartTime: () => activeSessionStartTime,
+    printActiveSessionId: () => {
+      crashSessionReporter?.printSessionId();
+    },
+    close: () => {
+      deactivateSession();
+      sessionStore.close();
+    },
   };
 }
 
@@ -1290,6 +1403,11 @@ export async function main(): Promise<void> {
   }
 
   const cliArgs = parseArgs(process.argv);
+
+  if (cliArgs.modeParseError) {
+    process.stderr.write(formatError(cliArgs.modeParseError) + "\n");
+    process.exit(2);
+  }
 
   // Subcommands: doctor, config, configure
   if (cliArgs.subcommand) {
@@ -1419,15 +1537,8 @@ export async function main(): Promise<void> {
   );
   // If session state was swapped on resume, propagate back so closures see it
   tools.sessionState = persistence.sessionState;
-
-  const crashSessionReporter = createCrashSessionReporter(
-    persistence.session.id,
-    cliArgs.verbosity,
-  );
-
-  const sessionStartTime = Date.now();
   try {
-    const commonOptions = {
+    const buildRunOptions = () => ({
       provider,
       toolRegistry: tools.toolRegistry,
       bus: tools.bus,
@@ -1443,21 +1554,22 @@ export async function main(): Promise<void> {
       verbosityConfig: tools.verbosityConfig,
       sessionState: tools.sessionState,
       briefing: persistence.resumeBriefing,
-    };
+    });
 
-    const buildInteractiveSystemPrompt = (approvalMode: ApprovalMode): string => assembleSystemPrompt({
+    const buildInteractiveSystemPrompt = (safetyMode: SafetyMode): string => assembleSystemPrompt({
       mode: "act",
       repoRoot: projectRoot,
       skills: tools.skills,
       availableTools: tools.toolRegistry.getLoaded(),
       deferredTools: tools.toolRegistry.getDeferred(),
-      approvalMode,
+      approvalMode: safetyMode,
       provider: config.provider,
       model: config.model,
       agentModelOverrides: config.agentModelOverrides,
       agentReasoningOverrides: config.agentReasoningOverrides,
     });
-    let interactiveApprovalMode = config.approval.mode;
+    const initialSafetyMode = getInteractiveSafetyMode(config);
+    let interactiveApprovalMode = initialSafetyMode;
 
     const query = cliArgs.file
       ? loadQueryFromFile(cliArgs.file, nodeReadFileSync, cliArgs.query)
@@ -1473,7 +1585,7 @@ export async function main(): Promise<void> {
       await startTui({
         bus: tools.bus,
         model: config.model,
-        approvalMode: config.approval.mode,
+        approvalMode: initialSafetyMode,
         cwd: projectRoot,
         version: "0.1.0",
         onListSessions: () => {
@@ -1488,17 +1600,12 @@ export async function main(): Promise<void> {
         },
         onQuery: async (q): Promise<InteractiveQueryResult> => {
           outputState.resetTurn();
-          const interactiveConfig = interactiveApprovalMode === config.approval.mode
+          persistence.activateSession(q);
+          const interactiveConfig = interactiveApprovalMode === initialSafetyMode
             ? config
-            : {
-              ...config,
-              approval: {
-                ...config.approval,
-                mode: interactiveApprovalMode,
-              },
-            };
+            : withInteractiveSafetyMode(config, interactiveApprovalMode);
           // Run query but skip flushOutput — TUI handles display via bus events
-          const result = await runTuiQuery({ ...commonOptions, config: interactiveConfig, query: q });
+          const result = await runTuiQuery({ ...buildRunOptions(), config: interactiveConfig, query: q });
           return {
             iterations: result.iterations,
             toolCalls: outputState.turnToolCallCount,
@@ -1515,8 +1622,17 @@ export async function main(): Promise<void> {
           }
         },
         onClear: () => {
+          const activeSession = persistence.getActiveSession();
+          if (activeSession) {
+            const delegatedWork = outputState.buildDelegatedWorkSummary();
+            persistence.sessionStore.updateSessionMetadata(activeSession.id, {
+              delegatedWork,
+            });
+          }
+          persistence.deactivateSession();
           outputState.resetSession();
           tools.sessionState = new SessionState(config.sessionState);
+          persistence.sessionState = tools.sessionState;
           tuiLoop = null; // Reset persistent loop on /clear
         },
       });
@@ -1527,9 +1643,10 @@ export async function main(): Promise<void> {
         bus: tools.bus,
         query,
         model: config.model,
-        approvalMode: config.approval.mode,
+        approvalMode: initialSafetyMode,
         onQuery: async (q): Promise<InteractiveQueryResult> => {
-          const result = await runSingleQuery({ ...commonOptions, query: q });
+          persistence.activateSession(q);
+          const result = await runSingleQuery({ ...buildRunOptions(), query: q });
           return {
             iterations: result.iterations,
             toolCalls: outputState.turnToolCallCount,
@@ -1547,14 +1664,13 @@ export async function main(): Promise<void> {
       });
     } else {
       // Non-TTY or quiet mode — use old ANSI path (pipe-compatible)
+      persistence.activateSession(query);
       await runSingleQuery({
-        ...commonOptions,
+        ...buildRunOptions(),
         query,
       });
     }
   } finally {
-    crashSessionReporter.dispose();
-
     // Print LSP tool usage summary (for measuring value)
     if (tools.lspToolCounts.size > 0 && cliArgs.verbosity !== "quiet") {
       const parts = [...tools.lspToolCounts.entries()]
@@ -1564,33 +1680,36 @@ export async function main(): Promise<void> {
     }
 
     // Session summary
-    const delegatedWork = outputState.buildDelegatedWorkSummary();
-    persistence.sessionStore.updateSessionMetadata(persistence.session.id, {
-      delegatedWork,
-    });
-    if (cliArgs.verbosity !== "quiet" && isCategoryEnabled("session", tools.verbosityConfig)) {
-      const planSteps = tools.sessionState.getPlan();
-      process.stderr.write(formatSessionSummary({
-        sessionId: persistence.session.id,
-        totalIterations: outputState.sessionTotalIterations,
-        totalToolCalls: outputState.sessionTotalToolCalls,
-        toolUsage: outputState.sessionToolUsage,
-        filesChanged: tools.sessionState.getModifiedFiles(),
-        planSteps: planSteps
-          ? planSteps.map((s) => ({ description: s.description, status: s.status }))
-          : undefined,
-        totalCost: outputState.sessionTotalCost,
-        totalInputTokens: outputState.sessionTotalInputTokens,
-        totalOutputTokens: outputState.sessionTotalOutputTokens,
-        elapsedMs: Date.now() - sessionStartTime,
-        completionReason: "completed",
+    const activeSession = persistence.getActiveSession();
+    if (activeSession) {
+      const delegatedWork = outputState.buildDelegatedWorkSummary();
+      persistence.sessionStore.updateSessionMetadata(activeSession.id, {
         delegatedWork,
-      }) + "\n");
-    }
+      });
+      if (cliArgs.verbosity !== "quiet" && isCategoryEnabled("session", tools.verbosityConfig)) {
+        const planSteps = tools.sessionState.getPlan();
+        process.stderr.write(formatSessionSummary({
+          sessionId: activeSession.id,
+          totalIterations: outputState.sessionTotalIterations,
+          totalToolCalls: outputState.sessionTotalToolCalls,
+          toolUsage: outputState.sessionToolUsage,
+          filesChanged: tools.sessionState.getModifiedFiles(),
+          planSteps: planSteps
+            ? planSteps.map((s) => ({ description: s.description, status: s.status }))
+            : undefined,
+          totalCost: outputState.sessionTotalCost,
+          totalInputTokens: outputState.sessionTotalInputTokens,
+          totalOutputTokens: outputState.sessionTotalOutputTokens,
+          elapsedMs: Date.now() - (persistence.getActiveSessionStartTime() ?? Date.now()),
+          completionReason: "completed",
+          delegatedWork,
+        }) + "\n");
+      }
 
-    // Print session ID for future resume
-    if (cliArgs.verbosity !== "quiet") {
-      process.stderr.write(dim(`[session] ${persistence.session.id}`) + "\n");
+      // Print session ID for future resume
+      if (cliArgs.verbosity !== "quiet") {
+        persistence.printActiveSessionId();
+      }
     }
 
     // Cleanup
@@ -1601,8 +1720,7 @@ export async function main(): Promise<void> {
         // Servers might already be dead
       }
     }
-    persistence.eventLogger?.close();
-    persistence.sessionStore.close();
+    persistence.close();
   }
 }
 
@@ -1656,7 +1774,7 @@ function setupEventHandlers(
 
   // Persistent status line — shows cost, tokens, iteration at bottom of terminal
   const statusLine = verbosity !== "quiet"
-    ? new StatusLine(config.model, config.approval.mode)
+    ? new StatusLine(config.model, getInteractiveSafetyMode(config))
     : null;
   const subagentRenderer = new SubagentPanelRenderer(
     verbosity !== "quiet" || isCategoryEnabled("tools", vc),
@@ -2183,15 +2301,15 @@ function setupEventHandlers(
       output: process.stderr, // Prompt to stderr, not stdout
     });
     rl.question(
-      yellow("  Approve? [y]es / [n]o / [a]lways: "),
+      yellow("  Approve? [y]once / [n]o / [s]ession: "),
       (answer) => {
         rl.close();
         const lower = answer.toLowerCase().trim();
-        const approved = lower.startsWith("y") || lower.startsWith("a");
+        const approved = lower.startsWith("y") || lower.startsWith("s");
         bus.emit("approval:response", {
           id: event.id,
           approved,
-          feedback: lower.startsWith("a") ? "always" : undefined,
+          feedback: lower.startsWith("s") ? "session" : undefined,
         });
         statusLine?.resume();
       },
@@ -2337,7 +2455,7 @@ function createMidpointCallback(opts: {
       skills: opts.skills,
       availableTools: opts.toolRegistry.getLoaded(),
       deferredTools: opts.toolRegistry.getDeferred(),
-      approvalMode: opts.config.approval.mode,
+      approvalMode: getInteractiveSafetyMode(opts.config),
       provider: opts.config.provider,
       model: opts.config.model,
       agentModelOverrides: opts.config.agentModelOverrides,
@@ -2503,7 +2621,7 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<TaskLoopR
     skills,
     availableTools: toolRegistry.getLoaded(),
     deferredTools: toolRegistry.getDeferred(),
-    approvalMode: config.approval.mode,
+    approvalMode: getInteractiveSafetyMode(config),
     provider: config.provider,
     model: config.model,
     agentModelOverrides: config.agentModelOverrides,
@@ -2616,7 +2734,7 @@ async function runTuiQuery(options: RunSingleQueryOptions): Promise<TaskLoopResu
       skills,
       availableTools: toolRegistry.getLoaded(),
       deferredTools: toolRegistry.getDeferred(),
-      approvalMode: config.approval.mode,
+      approvalMode: getInteractiveSafetyMode(config),
       provider: config.provider,
       model: config.model,
       agentModelOverrides: config.agentModelOverrides,

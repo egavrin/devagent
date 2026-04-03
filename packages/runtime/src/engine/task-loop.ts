@@ -2079,6 +2079,8 @@ export class TaskLoop {
       toolCategory: tool.category,
       filePath: (effectiveCall.arguments["path"] as string) ?? null,
       description: `${effectiveCall.name}: ${JSON.stringify(effectiveCall.arguments).substring(0, 200)}`,
+      repoRoot: this.repoRoot,
+      arguments: effectiveCall.arguments,
     });
 
     if (!approvalResult.approved) {

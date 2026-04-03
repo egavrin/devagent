@@ -311,7 +311,7 @@ export function assembleAgentSystemPrompt(
     `Date: ${new Date().toISOString().split("T")[0]}`,
   ];
   if (options.approvalMode) {
-    envLines.push(`Approval mode: ${options.approvalMode}`);
+    envLines.push(`Safety mode: ${options.approvalMode}`);
   }
   if (options.providerLabel) {
     envLines.push(`Provider: ${options.providerLabel}`);

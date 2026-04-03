@@ -14,7 +14,7 @@ export interface ApprovalRequest {
 
 export interface ApprovalDialogProps {
   readonly request: ApprovalRequest;
-  readonly onResponse: (approved: boolean, always?: boolean, reason?: string) => void;
+  readonly onResponse: (approved: boolean, session?: boolean, reason?: string) => void;
 }
 
 export function ApprovalDialog({ request, onResponse }: ApprovalDialogProps): React.ReactElement {
@@ -26,7 +26,7 @@ export function ApprovalDialog({ request, onResponse }: ApprovalDialogProps): Re
       const k = input.toLowerCase();
       if (k === "y") {
         onResponse(true);
-      } else if (k === "a") {
+      } else if (k === "s") {
         onResponse(true, true);
       } else if (k === "n") {
         setMode("reject-reason");
@@ -63,7 +63,7 @@ export function ApprovalDialog({ request, onResponse }: ApprovalDialogProps): Re
         <Box marginTop={1}>
           <Text color="green">[y]</Text><Text>es  </Text>
           <Text color="red">[n]</Text><Text>o  </Text>
-          <Text color="cyan">[a]</Text><Text>lways  </Text>
+          <Text color="cyan">[s]</Text><Text>ession  </Text>
           <Text dimColor>Esc cancel</Text>
         </Box>
       )}

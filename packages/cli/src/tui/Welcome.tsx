@@ -47,13 +47,13 @@ export function Welcome({ model, version }: WelcomeProps): React.ReactElement {
           <Text dimColor>  • Ctrl+K opens the command palette</Text>
           <Text dimColor>  • Shift+Enter for multi-line input</Text>
           <Text dimColor>  • Tab completes slash commands and file paths</Text>
-          <Text dimColor>  • Shift+Tab cycles suggest, auto-edit, and full-auto</Text>
+          <Text dimColor>  • Shift+Tab toggles default and autopilot</Text>
           <Text dimColor>  • Type /continue after an iteration-limit pause</Text>
           <Text dimColor>  • PgUp/PgDn scrolls through history</Text>
           <Text dimColor>  • Type /help for all commands</Text>
         </Box>
       ) : (
-        <Text dimColor>  Type /help for commands • Ctrl+K palette • Shift+Tab mode</Text>
+        <Text dimColor>  Type /help for commands • Ctrl+K palette • Shift+Tab safety</Text>
       )}
     </Box>
   );

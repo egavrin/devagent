@@ -71,7 +71,7 @@ function AgentLogHarness({ entries }: { readonly entries: ReadonlyArray<string> 
   const { log, addLog } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "suggest",
+    approvalMode: "default",
   });
   const emittedCount = useRef(0);
 

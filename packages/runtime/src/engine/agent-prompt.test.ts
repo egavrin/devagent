@@ -58,7 +58,7 @@ describe("assembleAgentSystemPrompt", () => {
       repoRoot,
       rolePrompt: "You are an Explore agent.",
       availableTools: readonlyTools,
-      approvalMode: "full-auto",
+      approvalMode: "autopilot",
       providerLabel: "openai / gpt-5",
       skills,
       briefing,
@@ -66,7 +66,7 @@ describe("assembleAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Use existing patterns.");
     expect(prompt).toContain("- review: Review code changes for regressions. (project)");
-    expect(prompt).toContain("Approval mode: full-auto");
+    expect(prompt).toContain("Safety mode: autopilot");
     expect(prompt).toContain("Provider: openai / gpt-5");
     expect(prompt).toContain("Investigated delegation bugs.");
   });
@@ -80,7 +80,7 @@ describe("assembleAgentSystemPrompt", () => {
       repoRoot,
       rolePrompt: "You are a Reviewer agent.",
       availableTools: readonlyTools,
-      approvalMode: "suggest",
+      approvalMode: "default",
       providerLabel: "mock / mock-model",
       skills: new SkillRegistry(),
     });
@@ -101,7 +101,7 @@ describe("assembleAgentSystemPrompt", () => {
         ...readonlyTools,
         { name: "delegate", category: "workflow" },
       ],
-      approvalMode: "suggest",
+      approvalMode: "default",
       providerLabel: "mock / mock-model",
       skills: new SkillRegistry(),
     });

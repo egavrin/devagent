@@ -19,6 +19,9 @@ export type {
   AgentToolPermissionOverride,
   ReasoningEffort,
   ApprovalPolicy,
+  ApprovalPolicyMode,
+  SandboxMode,
+  NetworkAccessMode,
   PathRule,
   DevAgentConfig,
   BudgetConfig,
@@ -38,6 +41,7 @@ export type {
 export {
   AgentType,
   MessageRole,
+  SafetyMode,
   ApprovalMode,
 } from "./types.js";
 

@@ -33,10 +33,10 @@ Before finalizing:
 - If you used `write_file`, immediately `read_file` the new file and run a syntax/build/test check.
 - Do not conclude while validation errors are still present.
 
-## Approval-Mode Behavior
+## Safety-Mode Behavior
 
-- `full-auto`: proactively run verification commands after implementation.
-- `suggest` / `auto-edit`: keep iteration fast; run expensive checks near handoff unless
+- `autopilot`: proactively run verification commands after implementation.
+- `default`: keep iteration fast; run expensive checks near handoff unless
   the task itself is test-related.
 
 ## Environment Failures

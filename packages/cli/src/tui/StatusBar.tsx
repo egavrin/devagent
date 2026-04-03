@@ -36,11 +36,11 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
   // Shortcuts section — context-aware
   let shortcuts = "";
   if (hasApproval) {
-    shortcuts = "[y]es [n]o [a]lways";
+    shortcuts = "[y]once [n]deny [s]ession";
   } else if (running) {
     shortcuts = "Ctrl+C cancel";
   } else {
-    shortcuts = "Shift+Tab mode │ Ctrl+K cmds │ Ctrl+C exit";
+    shortcuts = "Shift+Tab safety │ Ctrl+K cmds │ Ctrl+C exit";
   }
 
   const dirName = cwd ? (cwd.split("/").pop() ?? cwd) : "";

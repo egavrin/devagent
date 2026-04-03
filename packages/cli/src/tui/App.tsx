@@ -4,7 +4,7 @@
 
 import React, { useState, useCallback } from "react";
 import { Box, Text, Static, useInput, useApp } from "ink";
-import { ApprovalMode } from "@devagent/runtime";
+import { SafetyMode } from "@devagent/runtime";
 import { PromptInput } from "./PromptInput.js";
 import { StatusBar } from "./StatusBar.js";
 import { Spinner } from "./Spinner.js";
@@ -19,7 +19,7 @@ import { cycleApprovalMode, getApprovalModeColor, type InteractiveQueryResult, t
 import type { LogEntry } from "./shared.js";
 import type { EventBus } from "@devagent/runtime";
 
-export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline │ Shift+Tab cycles approval mode";
+export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline │ Shift+Tab toggles safety mode";
 export const ITERATION_LIMIT_NOTICE = "Iteration limit exhausted. Type /continue to proceed.";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -28,7 +28,7 @@ export interface AppProps {
   readonly bus: EventBus;
   readonly onQuery: (query: string) => Promise<InteractiveQueryResult>;
   readonly onClear: () => void;
-  readonly onCycleApprovalMode: (mode: ApprovalMode) => void;
+  readonly onCycleApprovalMode: (mode: SafetyMode) => void;
   readonly onListSessions?: () => ReadonlyArray<{ id: string; updatedAt: number; cost?: number }>;
   readonly model: string;
   readonly approvalMode: string;
@@ -197,14 +197,14 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     setCurrentApprovalMode(nextMode);
     setStatus((s) => ({ ...s, approvalMode: nextMode }));
     onCycleApprovalMode(nextMode);
-    addToast(`Mode: ${nextMode}`, "info");
+    addToast(`Safety: ${nextMode}`, "info");
   }, [addToast, currentApprovalMode, onCycleApprovalMode, pendingApproval, running, setStatus, showCommandPalette]);
 
-  const handleApproval = useCallback((approved: boolean, always?: boolean, reason?: string) => {
+  const handleApproval = useCallback((approved: boolean, session?: boolean, reason?: string) => {
     if (!pendingApproval) return;
     bus.emit("approval:response", {
       id: pendingApproval.id, approved,
-      feedback: always ? "always" : reason ?? undefined,
+      feedback: session ? "session" : reason ?? undefined,
     });
     setPendingApproval(null);
   }, [bus, pendingApproval]);
@@ -234,7 +234,7 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     { name: "Review local changes", description: "Insert or run the embedded /review command anywhere in a prompt", shortcut: "/review", action: () => handleSubmit("/review") },
     { name: "Simplify local changes", description: "Insert or run the embedded /simplify command anywhere in a prompt", shortcut: "/simplify", action: () => handleSubmit("/simplify") },
     { name: "Resume session", description: "List sessions to resume", shortcut: "/resume", action: () => handleSubmit("/resume") },
-    { name: "Approval mode", description: "Cycle suggest, auto-edit, and full-auto", shortcut: "Shift+Tab", action: handleCycleApprovalMode },
+    { name: "Safety mode", description: "Toggle default and autopilot", shortcut: "Shift+Tab", action: handleCycleApprovalMode },
     { name: "Exit", description: "Quit devagent", shortcut: "Ctrl+C", action: () => exit() },
   ];
 

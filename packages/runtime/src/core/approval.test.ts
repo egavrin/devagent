@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { ApprovalGate } from "./approval.js";
 import type { ApprovalRequest } from "./approval.js";
 import type { ApprovalPolicy } from "./types.js";
-import { ApprovalMode } from "./types.js";
+import { ApprovalMode, SafetyMode } from "./types.js";
 import { EventBus } from "./events.js";
 
 function makePolicy(overrides?: Partial<ApprovalPolicy>): ApprovalPolicy {
@@ -21,6 +21,21 @@ function makeRequest(overrides?: Partial<ApprovalRequest>): ApprovalRequest {
     toolCategory: "mutating",
     filePath: "/src/index.ts",
     description: "Write to /src/index.ts",
+    ...overrides,
+  };
+}
+
+function makeSafetyPolicy(
+  overrides?: Partial<ApprovalPolicy>,
+): ApprovalPolicy {
+  return {
+    mode: SafetyMode.DEFAULT,
+    approvalPolicy: "on-request",
+    sandboxMode: "workspace-write",
+    networkAccess: "off",
+    auditLog: false,
+    toolOverrides: {},
+    pathRules: [],
     ...overrides,
   };
 }
@@ -154,6 +169,120 @@ describe("ApprovalGate", () => {
       gate.setMode(ApprovalMode.FULL_AUTO);
       expect(gate.getMode()).toBe(ApprovalMode.FULL_AUTO);
       expect(gate.decide(makeRequest({ toolCategory: "external", toolName: "web_search" }))).toBe("allow");
+    });
+  });
+
+  describe("Safety modes", () => {
+    it("advanced strict policy asks for mutating, workflow, and external actions", () => {
+      const gate = new ApprovalGate(
+        makeSafetyPolicy({
+          mode: SafetyMode.DEFAULT,
+          approvalPolicy: "strict",
+          sandboxMode: "read-only",
+          networkAccess: "off",
+        }),
+      );
+
+      expect(
+        gate.decide(
+          makeRequest({ toolCategory: "mutating", repoRoot: "/repo", filePath: "/repo/src/app.ts" }),
+        ),
+      ).toBe("ask");
+      expect(
+        gate.decide(
+          makeRequest({
+            toolName: "run_command",
+            toolCategory: "workflow",
+            repoRoot: "/repo",
+            filePath: null,
+            arguments: { command: "bun test", cwd: "." },
+          }),
+        ),
+      ).toBe("ask");
+      expect(
+        gate.decide(
+          makeRequest({ toolCategory: "external", toolName: "web_search", filePath: null }),
+        ),
+      ).toBe("ask");
+    });
+
+    it("default mode allows mutating tools inside the repo", () => {
+      const gate = new ApprovalGate(makeSafetyPolicy());
+      const decision = gate.decide(
+        makeRequest({
+          repoRoot: "/repo",
+          filePath: "/repo/src/app.ts",
+          toolCategory: "mutating",
+        }),
+      );
+      expect(decision).toBe("allow");
+    });
+
+    it("default mode allows safe repo commands", () => {
+      const gate = new ApprovalGate(makeSafetyPolicy());
+      const decision = gate.decide(
+        makeRequest({
+          toolName: "run_command",
+          toolCategory: "workflow",
+          filePath: null,
+          repoRoot: "/repo",
+          arguments: { command: "bun test", cwd: "." },
+        }),
+      );
+      expect(decision).toBe("allow");
+    });
+
+    it("default mode asks for dependency installs", () => {
+      const gate = new ApprovalGate(makeSafetyPolicy());
+      const decision = gate.decide(
+        makeRequest({
+          toolName: "run_command",
+          toolCategory: "workflow",
+          filePath: null,
+          repoRoot: "/repo",
+          arguments: { command: "npm install zod", cwd: "." },
+        }),
+      );
+      expect(decision).toBe("ask");
+    });
+
+    it("default mode asks for sensitive paths", () => {
+      const gate = new ApprovalGate(makeSafetyPolicy());
+      const decision = gate.decide(
+        makeRequest({
+          repoRoot: "/repo",
+          filePath: "/Users/test/.ssh/config",
+          toolCategory: "mutating",
+        }),
+      );
+      expect(decision).toBe("ask");
+    });
+
+    it("default mode asks for writes outside the repo", () => {
+      const gate = new ApprovalGate(makeSafetyPolicy());
+      const decision = gate.decide(
+        makeRequest({
+          repoRoot: "/repo",
+          filePath: "../outside.txt",
+          toolCategory: "mutating",
+        }),
+      );
+      expect(decision).toBe("ask");
+    });
+
+    it("autopilot mode allows external actions", () => {
+      const gate = new ApprovalGate(
+        makeSafetyPolicy({
+          mode: SafetyMode.AUTOPILOT,
+          approvalPolicy: "never",
+          sandboxMode: "danger-full-access",
+          networkAccess: "on",
+        }),
+      );
+      const decision = gate.decide(
+        makeRequest({ toolCategory: "external", toolName: "web_search", filePath: null }),
+      );
+      expect(decision).toBe("allow");
     });
   });
 
@@ -310,6 +439,46 @@ describe("ApprovalGate", () => {
       await expect(
         gate.check(makeRequest({ toolCategory: "mutating" })),
       ).rejects.toThrow("No event bus available");
+    });
+
+    it("remembers session approvals for matching requests", async () => {
+      const bus = new EventBus();
+      const gate = new ApprovalGate(makeSafetyPolicy(), bus);
+      let requestCount = 0;
+
+      bus.on("approval:request", () => {
+        requestCount += 1;
+        setTimeout(() => {
+          bus.emit("approval:response", {
+            id: "test",
+            approved: true,
+            feedback: "session",
+          });
+        }, 1);
+      });
+
+      const request = makeRequest({
+        toolName: "run_command",
+        toolCategory: "workflow",
+        filePath: null,
+        repoRoot: "/repo",
+        arguments: { command: "npm install zod", cwd: "." },
+      });
+
+      const first = await gate.check(request);
+      const second = await gate.check(request);
+
+      expect(first).toMatchObject({
+        approved: true,
+        requiredUserInput: true,
+        reason: "user-approved",
+      });
+      expect(second).toMatchObject({
+        approved: true,
+        requiredUserInput: false,
+        reason: "auto-approved",
+      });
+      expect(requestCount).toBe(1);
     });
   });
 

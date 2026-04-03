@@ -1,6 +1,6 @@
 /**
  * run_command — Execute a shell command with streaming output.
- * Category: workflow (requires approval in suggest/auto-edit modes).
+ * Category: workflow (approval depends on the active safety preset or legacy mode).
  */
 
 import { resolve } from "node:path";

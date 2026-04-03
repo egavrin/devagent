@@ -49,7 +49,7 @@ export function PromptInput({
   placeholder = "Ask anything… use /review or /simplify anywhere",
   history = [],
   cwd,
-  approvalMode = "suggest",
+  approvalMode = "default",
 }: PromptInputProps): React.ReactElement {
   const [value, setValue] = useState("");
   const [cursorPos, setCursorPos] = useState(0);

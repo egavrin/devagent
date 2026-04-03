@@ -36,7 +36,7 @@ describe("assembleSystemPrompt", () => {
       repoRoot,
       skills: mockSkills([]),
       availableTools: FULL_TOOLSET,
-      approvalMode: "full-auto",
+      approvalMode: "autopilot",
       provider: "openai",
       model: "gpt-5",
     });
@@ -44,7 +44,7 @@ describe("assembleSystemPrompt", () => {
     expect(prompt).toContain("## Mode: ACT");
     expect(prompt).toContain(`Working directory: ${repoRoot}`);
     expect(prompt).toContain("Task mode: act");
-    expect(prompt).toContain("Approval mode: full-auto");
+    expect(prompt).toContain("Safety mode: autopilot");
     expect(prompt).toContain("Provider: openai / gpt-5");
     expect(prompt).toMatch(/Date: \d{4}-\d{2}-\d{2}/);
   });

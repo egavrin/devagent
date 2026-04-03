@@ -63,7 +63,7 @@ export function renderConfigureHelpText(): string {
   return `Usage:
   devagent configure
 
-Guided onboarding for global DevAgent defaults. Writes provider, model, approval,
+Guided onboarding for global DevAgent defaults. Writes provider, model, safety,
 budget, and subagent settings to ~/.config/devagent/config.toml.`;
 }
 
@@ -940,17 +940,16 @@ export async function runConfigure(args: ReadonlyArray<string> = []): Promise<vo
   const model = modelChoice.trim() || provider.defaultModel;
   console.log(`  ✓ Model: ${model}\n`);
 
-  // 4. Approval mode
-  console.log("Approval mode:");
-  console.log("  1. suggest — ask before writing files (recommended)");
-  console.log("  2. auto-edit — auto-approve file writes, ask for commands");
-  console.log("  3. full-auto — auto-approve everything");
+  // 4. Safety mode
+  console.log("Safety mode:");
+  console.log("  1. default — auto-allow workspace edits and safe repo commands (recommended)");
+  console.log("  2. autopilot — allow everything without prompts");
   console.log("");
-  const approvalChoice = await ask("> Approval mode (1-3) [1]: ");
-  const approvalModes = ["suggest", "auto-edit", "full-auto"];
+  const approvalChoice = await ask("> Safety mode (1-2) [1]: ");
+  const safetyModes = ["default", "autopilot"];
   const approvalIdx = (parseInt(approvalChoice.trim(), 10) || 1) - 1;
-  const approvalMode = approvalModes[Math.max(0, Math.min(approvalIdx, 2))]!;
-  console.log(`  ✓ Approval mode: ${approvalMode}\n`);
+  const safetyMode = safetyModes[Math.max(0, Math.min(approvalIdx, 1))]!;
+  console.log(`  ✓ Safety mode: ${safetyMode}\n`);
 
   // 5. Max iterations
   const iterChoice = await ask("> Max iterations per query [30]: ");
@@ -1030,9 +1029,9 @@ export async function runConfigure(args: ReadonlyArray<string> = []): Promise<vo
   const nextConfig = loadGlobalConfigObject();
   nextConfig["provider"] = provider.id;
   nextConfig["model"] = model;
-  nextConfig["approval"] = {
-    ...((nextConfig["approval"] as Record<string, unknown> | undefined) ?? {}),
-    mode: approvalMode,
+  nextConfig["safety"] = {
+    ...((nextConfig["safety"] as Record<string, unknown> | undefined) ?? {}),
+    mode: safetyMode,
   };
   nextConfig["budget"] = {
     ...((nextConfig["budget"] as Record<string, unknown> | undefined) ?? {}),
@@ -1166,8 +1165,7 @@ const COMMANDS = [
 ];
 const FLAGS = [
   "--help", "--version", "--provider", "--model", "--max-iterations",
-  "--reasoning", "--resume", "--continue", "--suggest", "--auto-edit",
-  "--full-auto", "--verbose", "--quiet", "--file",
+  "--reasoning", "--resume", "--continue", "--mode", "--verbose", "--quiet", "--file",
 ];
 
 export function runCompletions(args: ReadonlyArray<string> = []): void {
@@ -1260,9 +1258,7 @@ ${COMMANDS.map((c) => `    '${c}:${c} command'`).join("\n")}
     '--reasoning[Reasoning effort]:level:(low medium high)'
     '--resume[Resume session]:session_id:'
     '--continue[Resume most recent session]'
-    '--suggest[Suggest mode]'
-    '--auto-edit[Auto-edit mode]'
-    '--full-auto[Full-auto mode]'
+    '--mode[Interactive safety mode]:mode:(default autopilot)'
     '--verbose[Verbose output]'
     '--quiet[Quiet output]'
     '--file[Read query from file]:file:_files'
@@ -1307,9 +1303,7 @@ function fishCompletions(): string {
     "complete -c devagent -l reasoning -x -a 'low medium high' -d 'Reasoning effort'",
     "complete -c devagent -l resume -x -d 'Resume session by ID'",
     "complete -c devagent -l continue -d 'Resume most recent session'",
-    "complete -c devagent -l suggest -d 'Suggest mode'",
-    "complete -c devagent -l auto-edit -d 'Auto-edit mode'",
-    "complete -c devagent -l full-auto -d 'Full-auto mode'",
+    "complete -c devagent -l mode -d 'Interactive safety mode' -a 'default autopilot'",
     "complete -c devagent -l verbose -s v -d 'Verbose output'",
     "complete -c devagent -l quiet -s q -d 'Quiet output'",
     "complete -c devagent -l file -s f -r -d 'Read query from file'",

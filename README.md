@@ -82,10 +82,9 @@ devagent --provider openai --model gpt-4.1 "optimize this function"
 devagent --resume <session-id-or-unique-prefix>
 devagent --continue    # resume most recent
 
-# Approval modes
-devagent --suggest     # ask before writing files (default)
-devagent --auto-edit   # auto-approve file writes
-devagent --full-auto   # auto-approve everything
+# Interactive safety modes
+devagent --mode default       # low-noise default for daily coding
+devagent --mode autopilot     # auto-approve everything
 
 # Code review
 devagent review patch.diff --rule rules/security.md --json
@@ -119,8 +118,8 @@ Global config: `~/.config/devagent/config.toml`
 provider = "anthropic"
 model = "claude-sonnet-4-20250514"
 
-[approval]
-mode = "suggest"
+[safety]
+mode = "default"
 
 [budget]
 max_iterations = 0

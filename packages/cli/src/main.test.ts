@@ -3,10 +3,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EventBus, SessionState } from "@devagent/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Session } from "@devagent/runtime";
-import { loadQueryFromFile, parseArgs, renderHelpText, renderSessionsList, resolveAutoPromptCommandTarget } from "./main.js";
+import type { DevAgentConfig, LLMProvider, Session, SessionStore } from "@devagent/runtime";
+import {
+  loadQueryFromFile,
+  parseArgs,
+  renderHelpText,
+  renderSessionsList,
+  resolveAutoPromptCommandTarget,
+  setupSessionPersistence,
+} from "./main.js";
 
 const cliSrcDir = dirname(fileURLToPath(import.meta.url));
 const cliPackageDir = join(cliSrcDir, "..");
@@ -17,9 +25,14 @@ describe("parseArgs", () => {
       .toMatchObject({ file: "task.md", query: null });
   });
 
-  it("parses -f <path> with other flags", () => {
-    expect(parseArgs(["node", "devagent", "-f", "task.md", "--full-auto", "--provider", "openai"]))
-      .toMatchObject({ file: "task.md", provider: "openai", query: null });
+  it("parses -f <path> with --mode and other flags", () => {
+    expect(parseArgs(["node", "devagent", "-f", "task.md", "--mode", "default", "--provider", "openai"]))
+      .toMatchObject({ file: "task.md", provider: "openai", query: null, safetyMode: "default" });
+  });
+
+  it("rejects unknown --mode values", () => {
+    expect(parseArgs(["node", "devagent", "--mode", "invalid-mode"]))
+      .toMatchObject({ modeParseError: "Invalid --mode value: invalid-mode. Expected one of: default, autopilot." });
   });
 
   it("preserves structured subcommand args without flattening quoted values", () => {
@@ -122,6 +135,7 @@ describe("renderHelpText", () => {
     expect(help).toContain("Interactive TUI");
     expect(help).toContain("OPENAI_API_KEY");
     expect(help).toContain("ANTHROPIC_API_KEY");
+    expect(help).toContain("--mode <mode>        Interactive safety mode: default, autopilot");
     expect(help).toContain("--max-iterations <n>  Max tool-call iterations (default: 0 (unlimited))");
     expect(help).not.toContain("Interactive mode (REPL)");
   });
@@ -283,5 +297,186 @@ describe("renderSessionsList", () => {
 
     expect(output).toContain("12345678-aaaa-bbbb-cccc-1234567890ab");
     expect(output).toContain("--resume <full-id-or-unique-prefix>");
+  });
+});
+
+function createSessionTestConfig(): DevAgentConfig {
+  return {
+    provider: "openai",
+    model: "gpt-5",
+    context: {
+      turnIsolation: false,
+    },
+    logging: {
+      enabled: false,
+    },
+  } as unknown as DevAgentConfig;
+}
+
+describe("setupSessionPersistence", () => {
+  function createMemorySessionStore(): SessionStore {
+    const sessions = new Map<string, Session>();
+    const sessionState = new Map<string, Record<string, unknown>>();
+    let nextId = 1;
+
+    return {
+      createSession(metadata?: Record<string, unknown>): Session {
+        const now = Date.now();
+        const session = {
+          id: `session-${nextId++}`,
+          createdAt: now,
+          updatedAt: now,
+          messages: [],
+          metadata: metadata ?? {},
+        } satisfies Session;
+        sessions.set(session.id, session);
+        return session;
+      },
+      getSession(id: string): Session | null {
+        return sessions.get(id) ?? null;
+      },
+      listSessions(limit: number = 50): ReadonlyArray<Session> {
+        return [...sessions.values()]
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .slice(0, limit);
+      },
+      updateSessionMetadata(id: string, patch: Record<string, unknown>): Session | null {
+        const session = sessions.get(id);
+        if (!session) {
+          return null;
+        }
+        const updated = {
+          ...session,
+          updatedAt: Date.now(),
+          metadata: {
+            ...session.metadata,
+            ...patch,
+          },
+        } satisfies Session;
+        sessions.set(id, updated);
+        return updated;
+      },
+      addMessage(sessionId: string, message: Session["messages"][number]): void {
+        const session = sessions.get(sessionId);
+        if (!session) {
+          throw new Error(`missing session ${sessionId}`);
+        }
+        const updated = {
+          ...session,
+          updatedAt: Date.now(),
+          messages: [...session.messages, message],
+        } satisfies Session;
+        sessions.set(sessionId, updated);
+      },
+      addCostRecord(): void {},
+      saveCompactionEvent(): void {},
+      saveSessionState(id: string, state: object): void {
+        sessionState.set(id, state as Record<string, unknown>);
+      },
+      loadSessionState(id: string): Record<string, unknown> | null {
+        return sessionState.get(id) ?? null;
+      },
+      close(): void {},
+    } as unknown as SessionStore;
+  }
+
+  it("does not create a session before activation", async () => {
+    const store = createMemorySessionStore();
+    const persistence = await setupSessionPersistence(
+      createSessionTestConfig(),
+      parseArgs(["node", "devagent", "--quiet"]),
+      {} as LLMProvider,
+      new EventBus(),
+      new SessionState(),
+      {
+        sessionStore: store,
+        createCrashReporter: () => ({ printSessionId() {}, dispose() {} }),
+      },
+    );
+
+    expect(store.listSessions()).toHaveLength(0);
+    expect(persistence.hasActiveSession()).toBe(false);
+  });
+
+  it("creates one session on first activation and reuses it across turns", async () => {
+    const store = createMemorySessionStore();
+    const persistence = await setupSessionPersistence(
+      createSessionTestConfig(),
+      parseArgs(["node", "devagent", "--quiet"]),
+      {} as LLMProvider,
+      new EventBus(),
+      new SessionState(),
+      {
+        sessionStore: store,
+        createCrashReporter: () => ({ printSessionId() {}, dispose() {} }),
+      },
+    );
+
+    const first = persistence.activateSession("first prompt");
+    const second = persistence.activateSession("second prompt");
+
+    expect(first.id).toBe(second.id);
+    expect(store.listSessions()).toHaveLength(1);
+    expect(store.getSession(first.id)?.metadata).toMatchObject({
+      query: "first prompt",
+      provider: "openai",
+      model: "gpt-5",
+    });
+  });
+
+  it("restores resumed state before binding it to the new session", async () => {
+    const store = createMemorySessionStore();
+    const previous = store.createSession({ query: "earlier prompt" });
+    const restored = new SessionState();
+    restored.recordModifiedFile("packages/cli/src/main.ts");
+    store.saveSessionState(previous.id, restored.toJSON());
+
+    const persistence = await setupSessionPersistence(
+      createSessionTestConfig(),
+      parseArgs(["node", "devagent", "--quiet", "--continue"]),
+      {} as LLMProvider,
+      new EventBus(),
+      new SessionState(),
+      {
+        sessionStore: store,
+        createCrashReporter: () => ({ printSessionId() {}, dispose() {} }),
+      },
+    );
+
+    expect(persistence.sessionState.getModifiedFiles()).toEqual(["packages/cli/src/main.ts"]);
+
+    const next = persistence.activateSession("follow-up prompt");
+    persistence.sessionState.recordModifiedFile("packages/runtime/src/core/session.ts");
+
+    expect(store.listSessions()).toHaveLength(2);
+    expect((store.loadSessionState(previous.id) as { modifiedFiles?: string[] }).modifiedFiles).toEqual([
+      "packages/cli/src/main.ts",
+    ]);
+    expect((store.loadSessionState(next.id) as { modifiedFiles?: string[] }).modifiedFiles).toEqual([
+      "packages/cli/src/main.ts",
+      "packages/runtime/src/core/session.ts",
+    ]);
+  });
+
+  it("creates a fresh session only after clear-style deactivation", async () => {
+    const store = createMemorySessionStore();
+    const persistence = await setupSessionPersistence(
+      createSessionTestConfig(),
+      parseArgs(["node", "devagent", "--quiet"]),
+      {} as LLMProvider,
+      new EventBus(),
+      new SessionState(),
+      {
+        sessionStore: store,
+        createCrashReporter: () => ({ printSessionId() {}, dispose() {} }),
+      },
+    );
+
+    const first = persistence.activateSession("first prompt");
+    persistence.deactivateSession();
+    const second = persistence.activateSession("second prompt");
+
+    expect(first.id).not.toBe(second.id);
+    expect(store.listSessions()).toHaveLength(2);
   });
 });

@@ -186,14 +186,28 @@ export interface ProviderConfig {
 
 // ─── Approval Types ──────────────────────────────────────────
 
+export enum SafetyMode {
+  DEFAULT = "default",
+  AUTOPILOT = "autopilot",
+}
+
 export enum ApprovalMode {
   SUGGEST = "suggest",
   AUTO_EDIT = "auto-edit",
   FULL_AUTO = "full-auto",
 }
 
+export type ApprovalPolicyMode = "strict" | "on-request" | "never";
+
+export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+
+export type NetworkAccessMode = "off" | "on";
+
 export interface ApprovalPolicy {
-  readonly mode: ApprovalMode;
+  readonly mode: ApprovalMode | SafetyMode;
+  readonly approvalPolicy?: ApprovalPolicyMode;
+  readonly sandboxMode?: SandboxMode;
+  readonly networkAccess?: NetworkAccessMode;
   readonly auditLog: boolean;
   readonly toolOverrides: Record<string, "allow" | "deny" | "ask">;
   readonly pathRules: ReadonlyArray<PathRule>;
