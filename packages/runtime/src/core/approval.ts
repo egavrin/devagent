@@ -42,6 +42,7 @@ export class ApprovalGate {
   private readonly policy: ApprovalPolicy;
   private readonly bus: EventBus | null;
   private currentMode: ApprovalMode | SafetyMode;
+  private activePolicy: ApprovalPolicy;
   private userResponseResolver:
     | ((response: { approved: boolean; feedback?: string }) => void)
     | null = null;
@@ -51,6 +52,7 @@ export class ApprovalGate {
     this.policy = policy;
     this.bus = bus ?? null;
     this.currentMode = policy.mode;
+    this.activePolicy = policy;
 
     // Listen for user approval responses
     if (this.bus) {
@@ -122,7 +124,7 @@ export class ApprovalGate {
    */
   decide(request: ApprovalRequest): ApprovalDecision {
     // 1. Check per-tool overrides first (highest priority)
-    const toolOverride = this.policy.toolOverrides[request.toolName];
+    const toolOverride = this.activePolicy.toolOverrides[request.toolName];
     if (toolOverride) return toolOverride;
 
     if (this.sessionAllowRules.has(this.getSessionRuleKey(request))) {
@@ -140,7 +142,7 @@ export class ApprovalGate {
   }
 
   private checkPathRules(filePath: string): ApprovalDecision | null {
-    for (const rule of this.policy.pathRules) {
+    for (const rule of this.activePolicy.pathRules) {
       if (matchPath(filePath, rule.pattern)) {
         return rule.action;
       }
@@ -154,9 +156,9 @@ export class ApprovalGate {
     }
 
     const normalized = this.normalizeRequest(request);
-    const approvalPolicy = this.policy.approvalPolicy ?? "on-request";
-    const sandboxMode = this.policy.sandboxMode ?? "workspace-write";
-    const networkAccess = this.policy.networkAccess ?? "off";
+    const approvalPolicy = this.activePolicy.approvalPolicy ?? "on-request";
+    const sandboxMode = this.activePolicy.sandboxMode ?? "workspace-write";
+    const networkAccess = this.activePolicy.networkAccess ?? "off";
 
     if (request.toolCategory === "state") {
       return "allow";
@@ -309,7 +311,38 @@ export class ApprovalGate {
 
   setMode(mode: ApprovalMode | SafetyMode): void {
     this.currentMode = mode;
+    this.activePolicy = this.getPolicyForMode(mode);
     this.sessionAllowRules.clear();
+  }
+
+  private getPolicyForMode(mode: ApprovalMode | SafetyMode): ApprovalPolicy {
+    if (mode === this.policy.mode) {
+      return this.policy;
+    }
+
+    switch (mode) {
+      case SafetyMode.AUTOPILOT:
+        return {
+          ...this.policy,
+          mode,
+          approvalPolicy: "never",
+          sandboxMode: "danger-full-access",
+          networkAccess: "on",
+        };
+      case SafetyMode.DEFAULT:
+        return {
+          ...this.policy,
+          mode,
+          approvalPolicy: "on-request",
+          sandboxMode: "workspace-write",
+          networkAccess: "off",
+        };
+      default:
+        return {
+          ...this.policy,
+          mode,
+        };
+    }
   }
 
   private getSessionRuleKey(request: ApprovalRequest): string {

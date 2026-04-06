@@ -188,6 +188,32 @@ describe("ApprovalGate", () => {
       expect(gate.getMode()).toBe(ApprovalMode.FULL_AUTO);
       expect(gate.decide(makeRequest({ toolCategory: "external", toolName: "web_search" }))).toBe("allow");
     });
+
+    it("updates safety preset semantics when switching between default and autopilot", () => {
+      const gate = new ApprovalGate(
+        makeSafetyPolicy({
+          approvalPolicy: "strict",
+          sandboxMode: "read-only",
+          networkAccess: "off",
+        }),
+      );
+
+      const externalRequest = makeRequest({
+        toolCategory: "external",
+        toolName: "web_search",
+        filePath: null,
+      });
+
+      expect(gate.decide(externalRequest)).toBe("ask");
+
+      gate.setMode(SafetyMode.AUTOPILOT);
+      expect(gate.getMode()).toBe(SafetyMode.AUTOPILOT);
+      expect(gate.decide(externalRequest)).toBe("allow");
+
+      gate.setMode(SafetyMode.DEFAULT);
+      expect(gate.getMode()).toBe(SafetyMode.DEFAULT);
+      expect(gate.decide(externalRequest)).toBe("ask");
+    });
   });
 
   describe("Safety modes", () => {
