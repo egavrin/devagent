@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DevAgentConfig, LLMProvider, Session, SessionStore } from "@devagent/runtime";
 import {
+  checkForUpdates,
   loadQueryFromFile,
   parseArgs,
   renderHelpText,
@@ -72,6 +73,16 @@ describe("parseArgs", () => {
         },
       });
   });
+
+  it("preserves auth subcommand arguments for non-interactive logout", () => {
+    expect(parseArgs(["node", "devagent", "auth", "logout", "chatgpt"]))
+      .toMatchObject({
+        authCommand: {
+          subcommand: "logout",
+          args: ["chatgpt"],
+        },
+      });
+  });
 });
 
 describe("loadQueryFromFile", () => {
@@ -115,6 +126,12 @@ describe("renderHelpText", () => {
     expect(renderHelpText()).toContain("devagent-api");
   });
 
+  it("includes execute as a first-class public command", () => {
+    const help = renderHelpText();
+    expect(help).toContain("devagent execute --request <file> --artifact-dir <dir>");
+    expect(help).toContain("devagent execute");
+  });
+
   it("presents configure as the public onboarding command", () => {
     const help = renderHelpText();
     expect(help).toContain("devagent configure");
@@ -135,6 +152,10 @@ describe("renderHelpText", () => {
     expect(help).toContain("Interactive TUI");
     expect(help).toContain("OPENAI_API_KEY");
     expect(help).toContain("ANTHROPIC_API_KEY");
+    expect(help).toContain("devagent sessions");
+    expect(help).toContain("devagent auth <...>");
+    expect(help).toContain("devagent auth logout [provider|--all]");
+    expect(help).toContain("devagent install-lsp");
     expect(help).toContain("--mode <mode>        Interactive safety mode: default, autopilot");
     expect(help).toContain("--max-iterations <n>  Max tool-call iterations (default: 0 (unlimited))");
     expect(help).not.toContain("Interactive mode (REPL)");
@@ -478,5 +499,84 @@ describe("setupSessionPersistence", () => {
 
     expect(first.id).not.toBe(second.id);
     expect(store.listSessions()).toHaveLength(2);
+  });
+
+  it("marks continue with no sessions as terminal without creating a session", async () => {
+    const store = createMemorySessionStore();
+    const persistence = await setupSessionPersistence(
+      createSessionTestConfig(),
+      parseArgs(["node", "devagent", "--quiet", "--continue"]),
+      {} as LLMProvider,
+      new EventBus(),
+      new SessionState(),
+      {
+        sessionStore: store,
+        createCrashReporter: () => ({ printSessionId() {}, dispose() {} }),
+      },
+    );
+
+    expect(persistence.resumeTargetMissing).toBe(true);
+    expect(store.listSessions()).toHaveLength(0);
+  });
+});
+
+describe("review command validation", () => {
+  it("fails on missing --rule before provider setup", () => {
+    execFileSync("bun", ["run", "build"], {
+      cwd: cliPackageDir,
+      stdio: "pipe",
+    });
+
+    const home = mkdtempSync(join(tmpdir(), "devagent-review-home-"));
+    const workDir = mkdtempSync(join(tmpdir(), "devagent-review-work-"));
+    const patchPath = join(workDir, "patch.diff");
+    try {
+      mkdirSync(join(home, ".config", "devagent"), { recursive: true });
+      writeFileSync(
+        join(home, ".config", "devagent", "config.toml"),
+        'provider = "openai"\n\n[providers.openai]\napi_key = "env:OPENAI_API_KEY"\n',
+      );
+      writeFileSync(patchPath, "diff --git a/a.txt b/a.txt\n");
+
+      try {
+        execFileSync("bun", ["dist/index.js", "review", patchPath], {
+          cwd: cliPackageDir,
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            HOME: home,
+          },
+        });
+        expect.unreachable("expected review without --rule to fail");
+      } catch (error) {
+        const execError = error as Error & { stderr?: string; status?: number };
+        expect(execError.status).toBe(1);
+        expect(execError.stderr).toContain("Rule file required: devagent review <file> --rule <rule_file>");
+        expect(execError.stderr).not.toContain("OPENAI_API_KEY");
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("checkForUpdates", () => {
+  afterEach(() => {
+    delete process.env["DEVAGENT_DISABLE_UPDATE_CHECK"];
+    vi.restoreAllMocks();
+  });
+
+  it("skips the update request when disabled by env", () => {
+    process.env["DEVAGENT_DISABLE_UPDATE_CHECK"] = "1";
+    const fetchSpy = vi.fn();
+    const originalFetch = globalThis.fetch;
+    (globalThis as typeof globalThis & { fetch: typeof fetchSpy }).fetch = fetchSpy;
+
+    checkForUpdates();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    globalThis.fetch = originalFetch;
   });
 });

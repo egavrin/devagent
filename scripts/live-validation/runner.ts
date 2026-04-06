@@ -5,9 +5,14 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { PROTOCOL_VERSION, type TaskExecutionRequest } from "@devagent-sdk/types";
 import {
+  CredentialStore,
+  getProviderCredentialDescriptor,
+  type CredentialInfo,
+} from "../../packages/runtime/src/index.ts";
+import {
   captureGitOutputs,
   commitWorkspaceState,
-  createIsolationWorkspace,
+  createIsolationWorkspaceWithTimeout,
   destroyIsolationWorkspace,
   ensureGitIdentity,
   initializeTempCopyRepository,
@@ -34,6 +39,14 @@ type CommandResult = {
   readonly stderr: string;
   readonly timedOut: boolean;
 };
+
+type StoredCredentialMap = Readonly<Record<string, CredentialInfo>>;
+
+const DEFAULT_ISOLATION_TIMEOUT_MS = 180_000;
+
+function toExecutionIsolationMode(isolationMode: ValidationScenario["isolationMode"]): "git-worktree" | "temp-copy" {
+  return isolationMode === "worktree" ? "git-worktree" : "temp-copy";
+}
 
 function defaultCommand(devagentRoot: string): { executable: string; baseArgs: string[] } {
   return {
@@ -111,6 +124,24 @@ function classifyInvocationFailure(stderr: string, timedOut: boolean): FailureCl
   return "runtime";
 }
 
+function determineIsolationTimeoutMs(scenario: ValidationScenario): number {
+  return scenario.taskShape === "readonly" ? DEFAULT_ISOLATION_TIMEOUT_MS : Math.min(DEFAULT_ISOLATION_TIMEOUT_MS, scenario.timeoutMs ?? DEFAULT_ISOLATION_TIMEOUT_MS);
+}
+
+async function writeIsolationTiming(
+  outputDir: string,
+  timing: {
+    readonly stage: "isolation";
+    readonly status: "passed" | "failed";
+    readonly durationMs: number;
+    readonly mode: IsolationWorkspace["mode"];
+    readonly timeoutMs: number;
+    readonly message?: string;
+  },
+): Promise<void> {
+  await writeFile(join(outputDir, "setup-stage-timing.json"), JSON.stringify(timing, null, 2));
+}
+
 function classifySetupFailure(message: string): FailureClass {
   const lowered = message.toLowerCase();
   if (
@@ -137,25 +168,55 @@ function resolveLinterPath(sourceRoot: string): string {
   return join(sourceRoot, "ets2panda", "linter");
 }
 
+function summarizeStoredCredentials(storedCredentials: StoredCredentialMap): AuthStatusSummary {
+  const configuredProviders = Object.keys(storedCredentials).sort();
+  const expiredProviders = Object.entries(storedCredentials)
+    .filter(([, credential]) => credential.type === "oauth" && credential.expiresAt !== undefined && credential.expiresAt <= Date.now())
+    .map(([providerId]) => providerId)
+    .sort();
+  return {
+    configuredProviders,
+    ...(expiredProviders.length > 0 ? { expiredProviders } : {}),
+  };
+}
+
+function loadStoredCredentials(): StoredCredentialMap {
+  return new CredentialStore().all();
+}
+
 async function loadAuthStatus(options: RunValidationScenarioOptions): Promise<AuthStatusSummary> {
   if (options.authStatusOverride) {
     return options.authStatusOverride;
   }
-  const command = options.command ?? defaultCommand(options.devagentRoot);
-  const result = await runCommand(
-    command.executable,
-    [...command.baseArgs, "auth", "status"],
-    options.devagentRoot,
-    30_000,
-  );
-  const configuredProviders = result.stderr
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith("Credential status") && !line.startsWith("Provider"))
-    .map((line) => line.split(/\s+/)[0]!)
-    .filter((provider) => provider !== "(DEVAGENT_API_KEY)");
-  return { configuredProviders };
+  return summarizeStoredCredentials(loadStoredCredentials());
+}
+
+function requiresStoredCredential(providerId: string): boolean {
+  return getProviderCredentialDescriptor(providerId)?.credentialMode !== "none";
+}
+
+async function seedCredentialsInHome(
+  homeDir: string,
+  providerIds: ReadonlyArray<string>,
+  storedCredentials: StoredCredentialMap,
+): Promise<void> {
+  if (providerIds.length === 0) {
+    return;
+  }
+  const store = new CredentialStore({
+    filePath: join(homeDir, ".config", "devagent", "credentials.json"),
+  });
+  await mkdir(join(homeDir, ".config", "devagent"), { recursive: true });
+  for (const providerId of providerIds) {
+    const credential = storedCredentials[providerId];
+    if (!credential) {
+      continue;
+    }
+    if (credential.type === "oauth" && credential.expiresAt !== undefined && credential.expiresAt <= Date.now()) {
+      continue;
+    }
+    store.set(providerId, credential);
+  }
 }
 
 async function applyPreSetup(
@@ -329,6 +390,44 @@ function countCliToolCalls(eventsText: string): Record<string, number> {
 }
 
 function countToolBatches(eventsText: string): Record<string, ObservedToolBatch> {
+  const executeBatches = countExecuteToolBatches(eventsText);
+  if (Object.keys(executeBatches).length > 0) {
+    return executeBatches;
+  }
+  return countLegacyToolBatches(eventsText);
+}
+
+function countExecuteToolBatches(eventsText: string): Record<string, ObservedToolBatch> {
+  const groupedBatches = new Map<string, { tool: string; batchSize: number }>();
+  for (const line of eventsText.split("\n").filter(Boolean)) {
+    try {
+      const parsed = JSON.parse(line) as { type?: string; tool?: string; batchId?: string; batchSize?: number };
+      if (parsed.type !== "tool_call" || !parsed.tool || typeof parsed.batchId !== "string" || parsed.batchId.length === 0) {
+        continue;
+      }
+      const batchKey = `${parsed.tool}\u0000${parsed.batchId}`;
+      const current = groupedBatches.get(batchKey);
+      groupedBatches.set(batchKey, {
+        tool: parsed.tool,
+        batchSize: Math.max(current?.batchSize ?? 0, typeof parsed.batchSize === "number" ? parsed.batchSize : 0),
+      });
+    } catch {
+      // Ignore malformed lines.
+    }
+  }
+
+  const batches: Record<string, ObservedToolBatch> = {};
+  for (const { tool, batchSize } of groupedBatches.values()) {
+    const current = batches[tool] ?? { batchCount: 0, maxBatchSize: 0 };
+    batches[tool] = {
+      batchCount: current.batchCount + 1,
+      maxBatchSize: Math.max(current.maxBatchSize, batchSize),
+    };
+  }
+  return batches;
+}
+
+function countLegacyToolBatches(eventsText: string): Record<string, ObservedToolBatch> {
   const batches: Record<string, ObservedToolBatch> = {};
   for (const line of eventsText.split("\n").filter(Boolean)) {
     try {
@@ -500,7 +599,7 @@ function buildExecuteRequest(
         alias: "primary",
         sourceRepoPath: sourceRepoRoot,
         workBranch: `devagent/live/${scenario.id}`,
-        isolation: "temp-copy",
+        isolation: toExecutionIsolationMode(scenario.isolationMode),
       }],
     },
     targetRepositoryIds: [repositoryId],
@@ -509,6 +608,7 @@ function buildExecuteRequest(
       provider,
       model,
       approvalMode: "full-auto",
+      ...(scenario.invocation.reasoning ? { reasoning: scenario.invocation.reasoning } : {}),
     },
     constraints: {
       allowNetwork: true,
@@ -708,11 +808,20 @@ function buildVariables(
 function buildCommandEnv(
   scenario: ValidationScenario,
   variables: Record<string, string>,
+  defaultHomeDir: string,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const [key, value] of Object.entries(scenario.commandEnv ?? {})) {
-    env[key] = renderTemplate(value, variables);
-  }
+  const renderedOverrides = Object.fromEntries(
+    Object.entries(scenario.commandEnv ?? {}).map(([key, value]) => [key, renderTemplate(value, variables)]),
+  );
+  const homeDir = renderedOverrides["HOME"] ?? defaultHomeDir;
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: homeDir,
+    XDG_CONFIG_HOME: renderedOverrides["XDG_CONFIG_HOME"] ?? join(homeDir, ".config"),
+    XDG_CACHE_HOME: renderedOverrides["XDG_CACHE_HOME"] ?? join(homeDir, ".cache"),
+    DEVAGENT_DISABLE_UPDATE_CHECK: "1",
+  };
+  Object.assign(env, renderedOverrides);
   return env;
 }
 
@@ -733,11 +842,8 @@ function buildCliArgs(
     provider,
     "--model",
     model,
-    scenario.invocation.approvalMode === "suggest"
-      ? "--suggest"
-      : scenario.invocation.approvalMode === "auto-edit"
-        ? "--auto-edit"
-        : "--full-auto",
+    "--mode",
+    scenario.invocation.safetyMode ?? "autopilot",
   ];
   if (scenario.invocation.maxIterations) {
     args.push("--max-iterations", String(scenario.invocation.maxIterations));
@@ -780,8 +886,10 @@ async function createFailureReport(
   failureClass: FailureClass,
   failureMessage: string,
   isolationPath = "",
+  startedAt: string = new Date().toISOString(),
+  durationMs = 0,
 ): Promise<ValidationScenarioReport> {
-  const now = new Date().toISOString();
+  const finishedAt = new Date().toISOString();
   const report: ValidationScenarioReport = {
     scenarioId: scenario.id,
     description: scenario.description,
@@ -793,9 +901,9 @@ async function createFailureReport(
     status: "failed",
     failureClass,
     failureMessage,
-    startedAt: now,
-    finishedAt: now,
-    durationMs: 0,
+    startedAt,
+    finishedAt,
+    durationMs,
     sourceRepoPath,
     isolationPath,
     outputDir,
@@ -809,7 +917,7 @@ async function createFailureReport(
     toolCallAssertionResults: [],
     toolBatchAssertionResults: [],
     verificationResults: [],
-    timing: { durationMs: 0 },
+    timing: { durationMs },
     cost: {},
     rawOutputs: {},
   };
@@ -844,18 +952,32 @@ export async function runValidationScenario(
   const workspaceRoot = join(outputDir, "workspace");
   const artifactDir = join(outputDir, "artifacts");
   const cliLogDir = join(outputDir, "cli-logs");
+  const defaultHomeDir = join(outputDir, "home");
   let workspace: IsolationWorkspace | null = null;
   try {
-    if (scenario.requiresChatgptAuth ?? true) {
+    const requiredProvider = scenario.requiresAuth
+      ? (scenario.requiredProvider ?? options.provider)
+      : null;
+    if (requiredProvider && requiresStoredCredential(requiredProvider)) {
       const authStatus = await loadAuthStatus(options);
-      if (!authStatus.configuredProviders.includes("chatgpt")) {
+      if (!authStatus.configuredProviders.includes(requiredProvider)) {
         return await createFailureReport(
           scenario,
           options,
           sourceRepoRoot,
           outputDir,
           "provider",
-          "ChatGPT auth is not configured. Run `devagent auth login` first.",
+          `${requiredProvider} auth is not configured. Run \`devagent auth login\` first.`,
+        );
+      }
+      if ((authStatus.expiredProviders ?? []).includes(requiredProvider)) {
+        return await createFailureReport(
+          scenario,
+          options,
+          sourceRepoRoot,
+          outputDir,
+          "provider",
+          `${requiredProvider} auth is expired. Refresh it with \`devagent auth login\` first.`,
         );
       }
     }
@@ -870,10 +992,19 @@ export async function runValidationScenario(
       );
     }
 
-    workspace = await createIsolationWorkspace({
+    const isolationTimeoutMs = determineIsolationTimeoutMs(scenario);
+    const workspaceCreation = await createIsolationWorkspaceWithTimeout({
       mode: scenario.isolationMode,
       sourceRoot: sourceRepoRoot,
       targetRoot: workspaceRoot,
+    }, isolationTimeoutMs);
+    workspace = workspaceCreation.workspace;
+    await writeIsolationTiming(outputDir, {
+      stage: "isolation",
+      status: "passed",
+      durationMs: workspaceCreation.durationMs,
+      mode: workspace.mode,
+      timeoutMs: isolationTimeoutMs,
     });
 
     if (workspace.mode === "temp-copy") {
@@ -895,6 +1026,15 @@ export async function runValidationScenario(
       await hydrateArktsLinterAssets(sourceRepoRoot, workspace.path);
     }
     await applyPreSetup(scenario, workspace, variables, options.devagentRoot, linterPath);
+    const providersToSeed = [...new Set(
+      [options.provider, scenario.requiredProvider]
+        .filter((providerId): providerId is string => Boolean(providerId) && requiresStoredCredential(providerId)),
+    )];
+    if (providersToSeed.length > 0 && !options.authStatusOverride) {
+      await seedCredentialsInHome(defaultHomeDir, providersToSeed, loadStoredCredentials());
+    } else {
+      await mkdir(join(defaultHomeDir, ".config", "devagent"), { recursive: true });
+    }
     if (scenario.surface === "cli") {
       await ensureCliLoggingConfig(workspace.path, cliLogDir);
     }
@@ -903,7 +1043,7 @@ export async function runValidationScenario(
     }
 
     const command = options.command ?? defaultCommand(options.devagentRoot);
-    const commandEnv = buildCommandEnv(scenario, variables);
+    const commandEnv = buildCommandEnv(scenario, variables, defaultHomeDir);
     let invocationResult: CommandResult;
     let executedArgs: string[];
 
@@ -1075,6 +1215,16 @@ export async function runValidationScenario(
     return report;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (workspace === null) {
+      await writeIsolationTiming(outputDir, {
+        stage: "isolation",
+        status: "failed",
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+        mode: scenario.isolationMode,
+        timeoutMs: determineIsolationTimeoutMs(scenario),
+        message,
+      });
+    }
     return await createFailureReport(
       scenario,
       options,
@@ -1083,6 +1233,8 @@ export async function runValidationScenario(
       classifySetupFailure(message),
       message,
       workspace?.path ?? "",
+      startedAt,
+      Date.now() - new Date(startedAt).getTime(),
     );
   } finally {
     if (workspace && scenario.cleanupPolicy === "destroy") {

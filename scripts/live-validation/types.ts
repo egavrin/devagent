@@ -1,4 +1,5 @@
 export type ValidationSuite = "smoke" | "full";
+export type ValidationSafetyMode = "default" | "autopilot";
 export type TargetRepoId =
   | "arkcompiler_ets_frontend"
   | "arkcompiler_runtime_core"
@@ -45,13 +46,14 @@ export interface ExecuteScenarioInvocation {
   readonly issueBody?: string;
   readonly extraInstructions?: ReadonlyArray<string>;
   readonly maxIterations?: number;
+  readonly reasoning?: "low" | "medium" | "high";
 }
 
 export interface CliScenarioInvocation {
   readonly type: "cli";
   readonly query: string;
   readonly maxIterations?: number;
-  readonly approvalMode?: "suggest" | "auto-edit" | "full-auto";
+  readonly safetyMode?: ValidationSafetyMode;
   readonly reasoning?: "low" | "medium" | "high";
   readonly extraArgs?: ReadonlyArray<string>;
 }
@@ -106,7 +108,8 @@ export interface ValidationScenario {
   readonly variables?: Readonly<Record<string, string>>;
   readonly commandEnv?: Readonly<Record<string, string>>;
   readonly baselineAfterSetup?: boolean;
-  readonly requiresChatgptAuth?: boolean;
+  readonly requiresAuth?: boolean;
+  readonly requiredProvider?: string;
   readonly requiresArktsLinter?: boolean;
   readonly timeoutMs?: number;
   readonly requiredToolCalls?: ReadonlyArray<ToolCallRequirement>;
@@ -221,6 +224,7 @@ export interface AggregateValidationSummary {
 
 export interface AuthStatusSummary {
   readonly configuredProviders: ReadonlyArray<string>;
+  readonly expiredProviders?: ReadonlyArray<string>;
 }
 
 export interface IsolationWorkspace {

@@ -5,8 +5,8 @@
   "targetRepo": "arkcompiler_runtime_core",
   "surface": "execute",
   "taskShape": "readonly",
-  "isolationMode": "temp-copy",
-  "requiresChatgptAuth": true,
+  "isolationMode": "worktree",
+  "requiresAuth": true,
   "invocation": {
     "type": "execute",
     "taskType": "triage",
@@ -14,12 +14,12 @@
     "summary": "Analyze the impact area for stricter malformed ABC input validation in runtime_core.",
     "issueBody": "Ground the triage report in verifier, assembler, and related docs or tests. No code changes are allowed.",
     "extraInstructions": [
-      "Use at least one `delegate` call with `agent_type` set to `explore` to inspect either verifier or assembler before writing the report.",
-      "Do not do all repository exploration yourself; this scenario explicitly requires delegated exploration.",
+      "Your first response must include at least one `delegate` call with `agent_type` set to `explore` before any direct file reads or narrative text.",
       "Call out verifier and assembler responsibilities explicitly.",
       "Mention the next concrete follow-up area for implementation."
     ],
-    "maxIterations": 14
+    "maxIterations": 14,
+    "reasoning": "low"
   },
   "expectedArtifacts": ["triage-report.md"],
   "assertions": [

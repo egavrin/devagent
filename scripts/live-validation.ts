@@ -14,6 +14,8 @@ interface CliOptions {
   readonly scenarioId?: string;
   readonly outputRoot?: string;
   readonly listOnly: boolean;
+  readonly provider: string;
+  readonly model: string;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -21,6 +23,8 @@ function parseArgs(argv: string[]): CliOptions {
   let scenarioId: string | undefined;
   let outputRoot: string | undefined;
   let listOnly = false;
+  let provider = "chatgpt";
+  let model = "gpt-5.4";
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -35,6 +39,10 @@ function parseArgs(argv: string[]): CliOptions {
       scenarioId = argv[++i]!;
     } else if (arg === "--output-dir" && argv[i + 1]) {
       outputRoot = argv[++i]!;
+    } else if (arg === "--provider" && argv[i + 1]) {
+      provider = argv[++i]!;
+    } else if (arg === "--model" && argv[i + 1]) {
+      model = argv[++i]!;
     } else if (arg === "--list-scenarios") {
       listOnly = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -45,7 +53,7 @@ function parseArgs(argv: string[]): CliOptions {
     }
   }
 
-  return { suite, scenarioId, outputRoot, listOnly };
+  return { suite, scenarioId, outputRoot, listOnly, provider, model };
 }
 
 function printHelp(): void {
@@ -57,12 +65,15 @@ function printHelp(): void {
       "  bun run scripts/live-validation.ts --suite smoke",
       "  bun run scripts/live-validation.ts --suite full",
       "  bun run scripts/live-validation.ts --scenario <id>",
+      "  bun run scripts/live-validation.ts --suite full --provider openai --model gpt-5.4-mini",
       "  bun run scripts/live-validation.ts --list-scenarios",
       "",
       "Options:",
       "  --suite <smoke|full>   Run a predefined validation suite (default: smoke)",
       "  --scenario <id>        Run a single scenario by id",
       "  --output-dir <path>    Write reports to a specific directory",
+      "  --provider <name>      Override the provider used for scenario execution",
+      "  --model <id>           Override the model used for scenario execution",
       "  --list-scenarios       Print available scenarios and exit",
       "  -h, --help             Show this help text",
       "",
@@ -113,8 +124,8 @@ async function main(): Promise<void> {
     process.stdout.write(`Running ${scenario.id}...\n`);
     const report = await runValidationScenario(scenario, {
       devagentRoot,
-      provider: "chatgpt",
-      model: "gpt-5.4",
+      provider: options.provider,
+      model: options.model,
       outputRoot,
     });
     reports.push(report);
@@ -125,8 +136,8 @@ async function main(): Promise<void> {
   }
 
   const summary = summarizeScenarioReports(reports, {
-    provider: "chatgpt",
-    model: "gpt-5.4",
+    provider: options.provider,
+    model: options.model,
     suite: options.scenarioId ? "scenario" : options.suite,
   });
   await writeFile(join(outputRoot, "summary.json"), JSON.stringify(summary, null, 2));

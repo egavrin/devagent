@@ -98,11 +98,20 @@ devagent review patch.diff --rule rules/security.md --json
 | `devagent configure` | Guided global configuration wizard |
 | `devagent doctor` | Check environment and dependencies |
 | `devagent config get/set/path` | Inspect or edit global config directly |
+| `devagent install-lsp` | Install LSP servers for code intelligence |
 | `devagent update` | Update to latest version |
 | `devagent completions <shell>` | Generate shell completions (bash/zsh/fish) |
 | `devagent auth login/status/logout` | Manage provider credentials |
 | `devagent sessions` | List recent sessions |
+| `devagent execute --request <file> --artifact-dir <dir>` | Execute an SDK request and write artifacts |
 | `devagent version` | Show version |
+
+`devagent auth logout` also supports scriptable removal:
+
+```bash
+devagent auth logout chatgpt
+devagent auth logout --all
+```
 
 Public machine contract:
 

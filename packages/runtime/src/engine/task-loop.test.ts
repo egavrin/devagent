@@ -1195,6 +1195,68 @@ describe("TaskLoop", () => {
     expect(result.status).toBe("empty_response");
   });
 
+  it("retries once when the first response is empty and succeeds on the second response", async () => {
+    const seenMessages: Message[][] = [];
+    const provider: LLMProvider = {
+      id: "capture",
+      async *chat(messages): AsyncIterable<StreamChunk> {
+        seenMessages.push([...messages]);
+        if (seenMessages.length === 1) {
+          yield { type: "done", content: "" };
+          return;
+        }
+        yield { type: "text", content: "Recovered final artifact" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Return the artifact");
+    expect(result.status).toBe("success");
+    expect(result.lastText).toBe("Recovered final artifact");
+    expect(seenMessages).toHaveLength(2);
+    expect(seenMessages[1]?.some(
+      (message) =>
+        message.role === MessageRole.SYSTEM
+        && message.content?.includes("Your previous response was empty"),
+    )).toBe(true);
+  });
+
+  it("returns empty_response when the initial empty response repeats", async () => {
+    const provider = createMockProvider([
+      [{ type: "done", content: "" }],
+      [{ type: "done", content: "" }],
+    ]);
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Return the artifact");
+    expect(result.status).toBe("empty_response");
+    expect(result.lastText).toBeNull();
+  });
+
   it("tracks lastText across tool call iterations", async () => {
     const provider = createMockProvider([
       // First: text + tool call

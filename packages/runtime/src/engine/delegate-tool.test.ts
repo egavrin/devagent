@@ -665,14 +665,6 @@ describe("delegate tool", () => {
     expect(delegateTool.paramSchema.properties).toHaveProperty("request");
     const requestSchema = delegateTool.paramSchema.properties?.["request"] as Record<string, unknown>;
     expect(requestSchema.additionalProperties).toBe(false);
-    expect(requestSchema.required).toEqual([
-      "objective",
-      "laneLabel",
-      "scope",
-      "constraints",
-      "exclusions",
-      "successCriteria",
-      "parentContext",
-    ]);
+    expect(requestSchema.required).toEqual(["objective"]);
   });
 });

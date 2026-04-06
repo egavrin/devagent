@@ -9,6 +9,11 @@ interface CreateIsolationWorkspaceOptions {
   readonly targetRoot: string;
 }
 
+export interface TimedWorkspaceCreationResult {
+  readonly workspace: IsolationWorkspace;
+  readonly durationMs: number;
+}
+
 function execGit(
   args: ReadonlyArray<string>,
   cwd: string,
@@ -89,6 +94,28 @@ export async function createIsolationWorkspace(
     mode: options.mode,
     path: options.targetRoot,
     sourceRoot: options.sourceRoot,
+  };
+}
+
+export async function createIsolationWorkspaceWithTimeout(
+  options: CreateIsolationWorkspaceOptions,
+  timeoutMs: number,
+  createWorkspace: (options: CreateIsolationWorkspaceOptions) => Promise<IsolationWorkspace> = createIsolationWorkspace,
+): Promise<TimedWorkspaceCreationResult> {
+  const startedAt = Date.now();
+  const workspacePromise = createWorkspace(options);
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(
+        `setup failed during isolation after ${timeoutMs}ms while creating a ${options.mode} workspace from ${options.sourceRoot}`,
+      ));
+    }, timeoutMs);
+    workspacePromise.finally(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
+  });
+  const workspace = await Promise.race([workspacePromise, timeoutPromise]);
+  return {
+    workspace,
+    durationMs: Date.now() - startedAt,
   };
 }
 

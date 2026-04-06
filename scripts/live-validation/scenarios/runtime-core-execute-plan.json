@@ -5,8 +5,8 @@
   "targetRepo": "arkcompiler_runtime_core",
   "surface": "execute",
   "taskShape": "readonly",
-  "isolationMode": "temp-copy",
-  "requiresChatgptAuth": true,
+  "isolationMode": "worktree",
+  "requiresAuth": true,
   "invocation": {
     "type": "execute",
     "taskType": "plan",

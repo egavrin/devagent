@@ -44,7 +44,9 @@
     "check:oss": "node ./scripts/check-oss.mjs",
     "validate:live:smoke": "bun run scripts/live-validation.ts --suite smoke",
     "validate:live:full": "bun run scripts/live-validation.ts --suite full",
-    "validate:live:scenario": "bun run scripts/live-validation.ts --scenario"
+    "validate:live:scenario": "bun run scripts/live-validation.ts --scenario",
+    "validate:live:provider-smoke": "bun run scripts/live-validation/provider-smoke.ts",
+    "validate:live:tui": "bun run scripts/live-validation/tui-validator.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

@@ -55,8 +55,21 @@ describe("documentation parity", () => {
     expect(readme).toContain("devagent configure");
     expect(readme).toContain("| `devagent configure` | Guided global configuration wizard |");
     expect(readme).toContain("| `devagent config get/set/path` | Inspect or edit global config directly |");
+    expect(readme).toContain("| `devagent install-lsp` | Install LSP servers for code intelligence |");
+    expect(readme).toContain("| `devagent auth login/status/logout` | Manage provider credentials |");
+    expect(readme).toContain("| `devagent sessions` | List recent sessions |");
+    expect(readme).toContain("| `devagent execute --request <file> --artifact-dir <dir>` | Execute an SDK request and write artifacts |");
+    expect(readme).toContain("devagent auth logout chatgpt");
+    expect(readme).toContain("devagent auth logout --all");
     expect(readme).not.toContain("`devagent setup`");
     expect(readme).not.toContain("`devagent init`");
+  });
+
+  it("keeps workflow prose aligned with public safety-mode language", () => {
+    const workflow = readFileSync(join(repoRoot, "WORKFLOW.md"), "utf-8");
+    expect(workflow).toContain("`devagent --mode default`");
+    expect(workflow).toContain("`devagent --mode autopilot`");
+    expect(workflow).toContain("legacy approval-mode flags");
   });
 
   it("describes project instructions as optional manual files", () => {

@@ -393,6 +393,7 @@ export class TaskLoop {
 
     let hadToolCalls = false;
     let summaryRequested = false;
+    let emptyResponseRetryUsed = false;
     let budgetGraceUsed = false;
     let planNudgeUsed = false;
     let lastNonEmptyText: string | null = null;
@@ -700,6 +701,16 @@ export class TaskLoop {
         break;
       }
 
+      // Empty response on the first try — ask once for the final artifact explicitly.
+      if (!hadToolCalls && !emptyResponseRetryUsed) {
+        emptyResponseRetryUsed = true;
+        this.pushMessage({
+          role: MessageRole.SYSTEM,
+          content: "Your previous response was empty. Return the final artifact now as plain text and do not leave the reply blank.",
+        });
+        continue;
+      }
+
       // Empty response — try to get a summary if work was done
       if (hadToolCalls && !summaryRequested) {
         summaryRequested = true;
@@ -711,7 +722,7 @@ export class TaskLoop {
       }
 
       // Still empty after summary request — give up gracefully
-      status = hadToolCalls ? "empty_response" : "success";
+      status = "empty_response";
       break;
       }
     } finally {
@@ -2161,6 +2172,8 @@ export class TaskLoop {
       result,
       callId,
       durationMs,
+      batchId: batchContext.batchId,
+      batchSize: batchContext.batchSize,
       ...this.getAgentEventFields(),
     });
     this.emitSubagentUpdate({

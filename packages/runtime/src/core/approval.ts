@@ -214,9 +214,6 @@ export class ApprovalGate {
   }
 
   private shouldUseLegacyMode(): boolean {
-    if (this.policy.approvalPolicy || this.policy.sandboxMode || this.policy.networkAccess) {
-      return false;
-    }
     switch (this.currentMode) {
       case ApprovalMode.SUGGEST:
       case ApprovalMode.AUTO_EDIT:

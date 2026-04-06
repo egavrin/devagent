@@ -153,6 +153,24 @@ describe("ApprovalGate", () => {
         gate.decide(makeRequest({ toolCategory: "state" })),
       ).toBe("allow");
     });
+
+    it("keeps legacy full-auto semantics even when merged safety fields are present", () => {
+      const gate = new ApprovalGate(
+        makePolicy({
+          mode: ApprovalMode.FULL_AUTO,
+          approvalPolicy: "on-request",
+          sandboxMode: "workspace-write",
+          networkAccess: "off",
+        }),
+      );
+
+      expect(
+        gate.decide(makeRequest({ toolCategory: "workflow", toolName: "delegate", filePath: null })),
+      ).toBe("allow");
+      expect(
+        gate.decide(makeRequest({ toolCategory: "external", toolName: "web_search", filePath: null })),
+      ).toBe("allow");
+    });
   });
 
   describe("Dynamic mode changes", () => {

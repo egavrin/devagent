@@ -24,6 +24,10 @@ export interface SkillInfrastructure {
   readonly toolRegistry: ToolRegistry;
 }
 
+export interface SkillInfrastructureOptions {
+  readonly additionalDeferredToolNames?: ReadonlySet<string>;
+}
+
 /** Tools deferred by default — loaded on demand via tool_search. */
 const DEFAULT_DEFERRED_TOOLS = new Set([
   "git_status",
@@ -34,6 +38,7 @@ const DEFAULT_DEFERRED_TOOLS = new Set([
 export function createSkillInfrastructure(
   projectRoot: string,
   sessionState: SessionState,
+  options?: SkillInfrastructureOptions,
 ): SkillInfrastructure {
   const skillLoader = new SkillLoader();
   const skillMetadata = skillLoader.discover({ repoRoot: projectRoot });
@@ -52,13 +57,17 @@ export function createSkillInfrastructure(
       );
     },
   });
+  const deferredToolNames = new Set(DEFAULT_DEFERRED_TOOLS);
+  for (const toolName of options?.additionalDeferredToolNames ?? []) {
+    deferredToolNames.add(toolName);
+  }
   const toolRegistry = createDefaultToolRegistry({
     overrides: [
       createReadFileTool({ skillAccess }),
       createFindFilesTool({ skillAccess }),
       createSearchFilesTool({ skillAccess }),
     ],
-    deferredToolNames: DEFAULT_DEFERRED_TOOLS,
+    deferredToolNames,
   });
 
   // Register tool_search so the LLM can discover deferred tools on demand

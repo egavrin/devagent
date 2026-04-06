@@ -102,6 +102,24 @@ const STRICT_STRUCTURED_WORKFLOW_TASK_TYPES = new Set([
   "issue-generation",
 ]);
 
+const READONLY_WORKFLOW_TASK_TYPES = new Set([
+  "task-intake",
+  "design",
+  "breakdown",
+  "issue-generation",
+  "triage",
+  "plan",
+  "test-plan",
+  "review",
+  "completion",
+]);
+
+const EXTRA_DEFERRED_READONLY_WORKFLOW_TOOLS = new Set([
+  "write_file",
+  "replace_in_file",
+  "run_command",
+]);
+
 export function shouldEnableWorkflowPlanTool(taskType: string | undefined): boolean {
   return !taskType || !PLAN_FREE_WORKFLOW_TASK_TYPES.has(taskType);
 }
@@ -256,6 +274,9 @@ export async function setupAndRunWorkflowQuery(
   const { skills, skillResolver, skillAccess, toolRegistry } = createSkillInfrastructure(
     projectRoot,
     sessionState,
+    READONLY_WORKFLOW_TASK_TYPES.has(options.taskType ?? "")
+      ? { additionalDeferredToolNames: EXTRA_DEFERRED_READONLY_WORKFLOW_TOOLS }
+      : undefined,
   );
 
   // Prompt-only workflow stages should return an artifact directly instead of
@@ -328,6 +349,9 @@ export async function setupAndRunWorkflowQuery(
     const line = JSON.stringify({
       type: "tool_call",
       tool: event.name,
+      callId: event.callId,
+      ...(event.batchId ? { batchId: event.batchId } : {}),
+      ...(typeof event.batchSize === "number" ? { batchSize: event.batchSize } : {}),
       timestamp: new Date().toISOString(),
     }) + "\n";
     try { appendFileSync(options.eventsPath, line); } catch { /* best-effort */ }
@@ -342,7 +366,8 @@ export async function setupAndRunWorkflowQuery(
     mode: "act",
     skills,
     repoRoot: projectRoot,
-    availableTools: toolRegistry.getAll(),
+    availableTools: toolRegistry.getLoaded(),
+    deferredTools: toolRegistry.getDeferred(),
     approvalMode: options.approvalMode,
     provider: options.provider,
     model: options.model,
@@ -355,7 +380,11 @@ export async function setupAndRunWorkflowQuery(
     : "";
 
   // Append repo context after the base system prompt
-  const contextSections = [baseSystemPrompt, repoContextPrompt, requestedSkillsPrompt].filter(Boolean);
+  const contextSections = [
+    baseSystemPrompt,
+    repoContextPrompt,
+    requestedSkillsPrompt,
+  ].filter(Boolean);
   const systemPrompt = contextSections.join("\n\n");
 
   // 6. Run TaskLoop
@@ -381,6 +410,9 @@ export async function setupAndRunWorkflowQuery(
   let resultSession: ContinuationSession | undefined;
   let outcome: WorkflowQueryResult["outcome"] = "completed";
   let outcomeReason: WorkflowQueryResult["outcomeReason"] | undefined;
+  const keepalive = setInterval(() => {
+    // Keep Bun's event loop alive while the headless workflow request is pending.
+  }, 1_000);
 
   try {
     const result = await taskLoop.run(buildContinuationQuery(options.query, options.continuation));
@@ -412,6 +444,8 @@ export async function setupAndRunWorkflowQuery(
     responseText = extractErrorMessage(err);
     success = false;
     outcome = "no_progress";
+  } finally {
+    clearInterval(keepalive);
   }
 
   return { success, responseText, iterations, session: resultSession, outcome, outcomeReason };

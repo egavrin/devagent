@@ -50,6 +50,35 @@ describe("createDefaultRegistry", () => {
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("x-request-id")).toBeTruthy();
   });
+
+  it("rewrites developer messages to system for the devagent-api gateway", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("devagent-api", {
+      model: "cortex",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    for await (const _chunk of provider.chat([
+      { role: MessageRole.SYSTEM, content: "system prompt" },
+      { role: MessageRole.USER, content: "ping" },
+    ])) {
+      void _chunk;
+    }
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      messages?: Array<{ role?: string }>;
+    };
+    expect(body.messages?.map((message) => message.role)).toContain("system");
+    expect(body.messages?.map((message) => message.role)).not.toContain("developer");
+  });
 });
 
 function makeChatStreamingResponse(): Response {

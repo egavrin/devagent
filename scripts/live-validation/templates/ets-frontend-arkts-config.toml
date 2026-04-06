@@ -1,12 +1,11 @@
 provider = "chatgpt"
 model = "gpt-5.4"
 
-[approval]
-mode = "full-auto"
+[safety]
+mode = "autopilot"
 
 [arkts]
 enabled = true
 strict_mode = true
 target_version = "5.0"
 linter_path = "${linterPath}"
-

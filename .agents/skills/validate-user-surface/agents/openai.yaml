@@ -1,0 +1,4 @@
+interface:
+  display_name: "Validate User Surface"
+  short_description: "Pre-release live testing for DevAgent UX"
+  default_prompt: "Use $validate-user-surface to run comprehensive pre-release live validation across DevAgent user-facing surfaces."

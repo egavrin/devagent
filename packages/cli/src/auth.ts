@@ -71,14 +71,15 @@ export function renderAuthHelpText(): string {
   return `Usage:
   devagent auth login
   devagent auth status
-  devagent auth logout
+  devagent auth logout [provider]
+  devagent auth logout --all
 
 Manage stored provider credentials for DevAgent.`;
 }
 
 // ─── Entry Point ────────────────────────────────────────────
 
-export async function runAuthCommand(subcommand: string): Promise<void> {
+export async function runAuthCommand(subcommand: string, args: ReadonlyArray<string> = []): Promise<void> {
   if (subcommand === "--help" || subcommand === "-h") {
     process.stdout.write(renderAuthHelpText() + "\n");
     return;
@@ -92,7 +93,7 @@ export async function runAuthCommand(subcommand: string): Promise<void> {
       authStatus();
       break;
     case "logout":
-      await authLogout();
+      await authLogout(args);
       break;
     default:
       process.stderr.write(
@@ -515,7 +516,7 @@ export function collectCredentialStatusEntries(
 
 // ─── Logout ─────────────────────────────────────────────────
 
-async function authLogout(): Promise<void> {
+async function authLogout(args: ReadonlyArray<string> = []): Promise<void> {
   const store = new CredentialStore();
   const stored = store.all();
   const ids = Object.keys(stored);
@@ -523,6 +524,34 @@ async function authLogout(): Promise<void> {
   if (ids.length === 0) {
     process.stderr.write(dim("No stored credentials to remove.") + "\n");
     return;
+  }
+
+  const target = args[0];
+  if (args.length > 1) {
+    process.stderr.write(red("Usage: devagent auth logout [provider] | --all") + "\n");
+    process.exit(2);
+  }
+  if (target === "--all") {
+    for (const id of ids) {
+      store.remove(id);
+    }
+    process.stderr.write(green("\u2713 Removed all stored credentials") + "\n");
+    return;
+  }
+
+  if (target) {
+    if (!stored[target]) {
+      process.stderr.write(red(`No stored credential found for ${target}.`) + "\n");
+      process.exit(1);
+    }
+    store.remove(target);
+    process.stderr.write(green("\u2713 Removed credential for " + target) + "\n");
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    process.stderr.write(red("Usage: devagent auth logout [provider] | --all") + "\n");
+    process.exit(2);
   }
 
   const rl = createInterface({

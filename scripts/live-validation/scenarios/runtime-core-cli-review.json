@@ -6,7 +6,7 @@
   "surface": "cli",
   "taskShape": "review",
   "isolationMode": "worktree",
-  "requiresChatgptAuth": true,
+  "requiresAuth": true,
   "preSetup": [
     {
       "kind": "write-file",
@@ -23,7 +23,7 @@
   "invocation": {
     "type": "cli",
     "query": "Review the staged diff. Focus on correctness and security. Report concrete defects only.",
-    "approvalMode": "full-auto",
+    "safetyMode": "autopilot",
     "maxIterations": 14
   },
   "expectedArtifacts": [],

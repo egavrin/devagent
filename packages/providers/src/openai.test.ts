@@ -262,14 +262,6 @@ describe("stripNullArgs", () => {
 
     expect(requestSchema.type).toBe("object");
     expect(requestSchema.additionalProperties).toBe(false);
-    expect(requestSchema.required).toEqual([
-      "objective",
-      "laneLabel",
-      "scope",
-      "constraints",
-      "exclusions",
-      "successCriteria",
-      "parentContext",
-    ]);
+    expect(requestSchema.required).toEqual(["objective"]);
   });
 });

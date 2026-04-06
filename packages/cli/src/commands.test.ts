@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getGlobalConfigPath } from "./global-config.js";
+import { getGlobalConfigPath, loadGlobalConfigObject, writeGlobalConfigObject } from "./global-config.js";
 import { runConfig, runConfigure, runInit, runSetup } from "./commands.js";
 
 describe("command help", () => {
@@ -72,5 +72,55 @@ describe("command help", () => {
     expect(() => runSetup([])).toThrow("process.exit:2");
     expect(exitSpy).toHaveBeenCalledWith(2);
     expect(existsSync(getGlobalConfigPath(tempHome))).toBe(false);
+  });
+
+  it("config set provider syncs an incompatible model to the provider default", () => {
+    writeGlobalConfigObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4-20250514",
+    });
+
+    runConfig(["set", "provider", "chatgpt"]);
+
+    expect(loadGlobalConfigObject()).toMatchObject({
+      provider: "chatgpt",
+      model: "gpt-5.4",
+    });
+    expect(console.log).toHaveBeenCalledWith("provider = chatgpt");
+    expect(console.log).toHaveBeenCalledWith("model = gpt-5.4");
+  });
+
+  it("config set provider preserves a model that already belongs to that provider", () => {
+    writeGlobalConfigObject({
+      provider: "openai",
+      model: "gpt-4.1",
+    });
+
+    runConfig(["set", "provider", "openai"]);
+
+    expect(loadGlobalConfigObject()).toMatchObject({
+      provider: "openai",
+      model: "gpt-4.1",
+    });
+    expect(console.log).toHaveBeenCalledWith("provider = openai");
+  });
+
+  it("config set model rejects a model that does not belong to the configured provider", () => {
+    writeGlobalConfigObject({
+      provider: "chatgpt",
+      model: "gpt-4.1",
+    });
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit:${code ?? 0}`);
+    }) as never);
+
+    expect(() => runConfig(["set", "model", "claude-sonnet-4-20250514"])).toThrow("process.exit:2");
+    expect(exitSpy).toHaveBeenCalledWith(2);
+    expect(console.error).toHaveBeenCalled();
+    expect(loadGlobalConfigObject()).toMatchObject({
+      provider: "chatgpt",
+      model: "gpt-4.1",
+    });
   });
 });

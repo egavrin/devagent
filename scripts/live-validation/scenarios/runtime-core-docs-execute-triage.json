@@ -6,7 +6,7 @@
   "surface": "execute",
   "taskShape": "readonly",
   "isolationMode": "worktree",
-  "requiresChatgptAuth": true,
+  "requiresAuth": true,
   "invocation": {
     "type": "execute",
     "taskType": "triage",
@@ -14,14 +14,14 @@
     "summary": "Analyze the impact area for stricter malformed ABC input validation using the smaller runtime_core docs mirror repository.",
     "issueBody": "Ground the triage report in docs/bc_verification, assembler, and verifier-related tests. No code changes are allowed.",
     "extraInstructions": [
-      "Before local searching, decompose the investigation into at least two narrow `explore` delegates emitted in the same turn.",
+      "Your first response must be only two parallel `delegate` calls with `agent_type` set to `explore`.",
       "Use one `explore` delegate for docs/spec evidence such as docs/bc_verification or assembler-facing docs, and one `explore` delegate for runtime/tests evidence such as verifier-related tests.",
-      "Do not send one umbrella `explore` delegate for the whole investigation.",
-      "Do not do all repository exploration yourself; this scenario explicitly requires delegated exploration.",
+      "Do not send one umbrella `explore` delegate for the whole investigation, and do not start with direct file reads or narrative text.",
       "Call out assembler responsibilities explicitly.",
       "Reference docs/bc_verification and verifier-related tests in the report."
     ],
-    "maxIterations": 12
+    "maxIterations": 12,
+    "reasoning": "low"
   },
   "expectedArtifacts": ["triage-report.md"],
   "assertions": [

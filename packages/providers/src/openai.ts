@@ -11,7 +11,14 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { streamText } from "ai";
 import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
 import { ProviderError } from "@devagent/runtime";
-import { classifyProviderError, convertMessages, convertTools, processProviderStream, resolveCapabilities, stripNullArgs } from "./shared.js";
+import {
+  classifyProviderError,
+  convertMessages,
+  convertTools,
+  processProviderStream,
+  resolveCapabilities,
+  stripNullArgs,
+} from "./shared.js";
 
 // Re-export shared utilities so existing consumers (tests, index.ts) don't break.
 export { resolveCapabilities, stripNullArgs } from "./shared.js";
@@ -47,7 +54,11 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
   const codexOpts = config.codexOptions;
   const fieldsToStrip = config.stripFields;
   const requestIdHeaderName = config.requestIdHeaderName;
-  const needsCustomFetch = codexOpts || (fieldsToStrip && fieldsToStrip.length > 0) || requestIdHeaderName;
+  const messageRoleOverrides = config.messageRoleOverrides;
+  const needsCustomFetch = codexOpts
+    || (fieldsToStrip && fieldsToStrip.length > 0)
+    || requestIdHeaderName
+    || (messageRoleOverrides && Object.keys(messageRoleOverrides).length > 0);
   const customFetch = needsCustomFetch
     ? async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const nextHeaders = new Headers(init?.headers);
@@ -69,6 +80,17 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
               for (const field of fieldsToStrip) {
                 delete body[field];
               }
+            }
+            if (messageRoleOverrides && Array.isArray(body["messages"])) {
+              body["messages"] = (body["messages"] as unknown[]).map((entry) => {
+                if (!entry || typeof entry !== "object") return entry;
+                const message = { ...(entry as Record<string, unknown>) };
+                const currentRole = message["role"];
+                if (typeof currentRole === "string" && messageRoleOverrides[currentRole]) {
+                  message["role"] = messageRoleOverrides[currentRole];
+                }
+                return message;
+              });
             }
             init = { ...init, headers: nextHeaders, body: JSON.stringify(body) };
           } catch {

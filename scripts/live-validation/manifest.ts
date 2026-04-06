@@ -192,6 +192,7 @@ function parseExecuteInvocation(raw: Record<string, unknown>, filePath: string):
     throw new Error(`Invalid invocation.taskType in ${filePath}: ${taskType}`);
   }
   const extraInstructions = raw["extraInstructions"];
+  const reasoning = raw["reasoning"];
   return {
     type: "execute",
     taskType: taskType as ExecuteScenarioInvocation["taskType"],
@@ -202,17 +203,18 @@ function parseExecuteInvocation(raw: Record<string, unknown>, filePath: string):
       ? { extraInstructions: expectStringArray(extraInstructions, "invocation.extraInstructions", filePath) }
       : {}),
     ...(typeof raw["maxIterations"] === "number" ? { maxIterations: raw["maxIterations"] } : {}),
+    ...(typeof reasoning === "string" ? { reasoning: reasoning as ExecuteScenarioInvocation["reasoning"] } : {}),
   };
 }
 
 function parseCliInvocation(raw: Record<string, unknown>, filePath: string): CliScenarioInvocation {
-  const approvalMode = raw["approvalMode"];
+  const safetyMode = raw["safetyMode"];
   const reasoning = raw["reasoning"];
   return {
     type: "cli",
     query: expectString(raw["query"], "invocation.query", filePath),
     ...(typeof raw["maxIterations"] === "number" ? { maxIterations: raw["maxIterations"] } : {}),
-    ...(typeof approvalMode === "string" ? { approvalMode: approvalMode as CliScenarioInvocation["approvalMode"] } : {}),
+    ...(typeof safetyMode === "string" ? { safetyMode: safetyMode as CliScenarioInvocation["safetyMode"] } : {}),
     ...(typeof reasoning === "string" ? { reasoning: reasoning as CliScenarioInvocation["reasoning"] } : {}),
     ...(Array.isArray(raw["extraArgs"])
       ? { extraArgs: expectStringArray(raw["extraArgs"], "invocation.extraArgs", filePath) }
@@ -319,7 +321,8 @@ export function validateScenarioManifest(raw: unknown, filePath: string): Valida
     ...(variables ? { variables } : {}),
     ...(commandEnv ? { commandEnv } : {}),
     ...(record["baselineAfterSetup"] === true ? { baselineAfterSetup: true } : {}),
-    ...(typeof record["requiresChatgptAuth"] === "boolean" ? { requiresChatgptAuth: record["requiresChatgptAuth"] as boolean } : {}),
+    ...(typeof record["requiresAuth"] === "boolean" ? { requiresAuth: record["requiresAuth"] as boolean } : {}),
+    ...(typeof record["requiredProvider"] === "string" ? { requiredProvider: record["requiredProvider"] as string } : {}),
     ...(typeof record["requiresArktsLinter"] === "boolean" ? { requiresArktsLinter: record["requiresArktsLinter"] as boolean } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
     ...(typeof expectedExitCode === "number" ? { expectedExitCode } : {}),

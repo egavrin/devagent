@@ -2,9 +2,9 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const DIST = join(ROOT, "dist");
@@ -23,22 +23,22 @@ async function main(): Promise<void> {
 
   const nodeBin = resolveNodeBinary();
   const npmBin = resolveNpmBinary();
-
-  installPublishDependencies(npmBin);
+  const stagedDist = stagePublishRuntime();
+  installPublishDependencies(stagedDist, npmBin, nodeBin);
 
   const isolatedHome = mkdtempSync(join(tmpdir(), "devagent-bundle-smoke-"));
   try {
-    runSmokeCommand(nodeBin, ["bootstrap.js", "--help"], {
+    runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "--help"], {
       expectedExitCode: 0,
       description: "help smoke",
       homeDir: isolatedHome,
     });
-    runSmokeCommand(nodeBin, ["bootstrap.js", "sessions", "list"], {
+    runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "sessions"], {
       expectedExitCode: 0,
       description: "session database smoke",
       homeDir: isolatedHome,
     });
-    runSmokeCommand(nodeBin, ["bootstrap.js", "--provider", "devagent-api", "--model", "cortex", "hello"], {
+    runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "--provider", "devagent-api", "--model", "cortex", "hello"], {
       expectedExitCode: 1,
       expectedOutput: 'No API key configured for provider "devagent-api".',
       description: "provider startup smoke",
@@ -55,7 +55,7 @@ async function main(): Promise<void> {
     const stubGateway = await startStubGateway(nodeBin);
     try {
       writeGatewayConfig(isolatedHome, stubGateway.baseUrl);
-      runSmokeCommand(nodeBin, ["bootstrap.js", "--provider", "devagent-api", "--model", "cortex", "hello"], {
+      runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "--provider", "devagent-api", "--model", "cortex", "hello"], {
         expectedExitCode: 1,
         description: "gateway transport smoke",
         homeDir: isolatedHome,
@@ -73,7 +73,10 @@ async function main(): Promise<void> {
     } finally {
       await stubGateway.stop();
     }
+
+    verifyTarballReinstall(stagedDist, npmBin, nodeBin, isolatedHome);
   } finally {
+    rmSync(stagedDist, { recursive: true, force: true });
     rmSync(isolatedHome, { recursive: true, force: true });
   }
 }
@@ -159,7 +162,7 @@ function resolveNpmBinary(): string {
 function validateRealNodeBinary(candidate: string, throwOnFailure: boolean = true): boolean {
   const releaseName = spawnSync(
     candidate,
-    ["-p", "process.release?.name ?? ''"],
+    ["-p", "process.versions?.bun ? 'bun' : (process.release?.name ?? '')"],
     { encoding: "utf-8" },
   );
   if (releaseName.status !== 0 || releaseName.stdout.trim() !== "node") {
@@ -211,25 +214,41 @@ function uniquePathCandidates(commandName: string): string[] {
   return [...new Set(candidates)];
 }
 
-function installPublishDependencies(npmBin: string): void {
-  const betterSqlite3Path = join(DIST, "node_modules", "better-sqlite3");
-  if (existsSync(betterSqlite3Path)) {
-    return;
+function stagePublishRuntime(): string {
+  const stagedDist = mkdtempSync(join(tmpdir(), "devagent-publish-runtime-"));
+  for (const name of ["bootstrap.js", "devagent.js", "package.json", "README.md", "LICENSE"]) {
+    const sourcePath = join(DIST, name);
+    if (existsSync(sourcePath)) {
+      cpSync(sourcePath, join(stagedDist, name));
+    }
   }
+  return stagedDist;
+}
 
+function installPublishDependencies(stagedDist: string, npmBin: string, nodeBin: string): void {
   const install = spawnSync(
     npmBin,
     ["install", "--no-fund", "--no-audit"],
     {
-      cwd: DIST,
+      cwd: stagedDist,
+      env: buildNodePreferredEnv(nodeBin),
       encoding: "utf-8",
       stdio: "pipe",
     },
   );
   if (install.status !== 0) {
     const output = `${install.stdout}${install.stderr}`.trim();
-    throw new Error(`Failed to install publish-bundle dependencies in dist/: ${output}`);
+    throw new Error(`Failed to install publish-bundle dependencies in staged dist/: ${output}`);
   }
+}
+
+function buildNodePreferredEnv(nodeBin: string): NodeJS.ProcessEnv {
+  const nodeDir = dirname(nodeBin);
+  const pathSeparator = process.platform === "win32" ? ";" : ":";
+  return {
+    ...process.env,
+    PATH: [nodeDir, process.env["PATH"] ?? ""].filter(Boolean).join(pathSeparator),
+  };
 }
 
 interface SmokeCommandOptions {
@@ -242,6 +261,7 @@ interface SmokeCommandOptions {
 }
 
 function runSmokeCommand(
+  stagedDist: string,
   nodeBin: string,
   args: string[],
   options: SmokeCommandOptions,
@@ -253,6 +273,7 @@ function runSmokeCommand(
     XDG_CACHE_HOME: join(options.homeDir, ".cache"),
     NO_COLOR: "1",
     FORCE_COLOR: "0",
+    DEVAGENT_DISABLE_UPDATE_CHECK: "1",
   };
   for (const envKey of options.clearedEnvKeys ?? []) {
     delete env[envKey];
@@ -260,7 +281,7 @@ function runSmokeCommand(
   Object.assign(env, options.envOverrides ?? {});
 
   const result = spawnSync(nodeBin, args, {
-    cwd: DIST,
+    cwd: stagedDist,
     env,
     encoding: "utf-8",
     stdio: "pipe",
@@ -282,6 +303,109 @@ function runSmokeCommand(
   if (options.expectedOutput && !output.includes(options.expectedOutput)) {
     throw new Error(
       `${options.description} did not include expected output: ${options.expectedOutput}\n${output.trim()}`,
+    );
+  }
+}
+
+function verifyTarballReinstall(
+  stagedDist: string,
+  npmBin: string,
+  nodeBin: string,
+  homeDir: string,
+): void {
+  const packDir = mkdtempSync(join(tmpdir(), "devagent-pack-smoke-"));
+  const prefixDir = mkdtempSync(join(tmpdir(), "devagent-prefix-smoke-"));
+  try {
+    const pack = spawnSync(
+      npmBin,
+      ["pack", "--pack-destination", packDir],
+      {
+        cwd: stagedDist,
+        env: buildNodePreferredEnv(nodeBin),
+        encoding: "utf-8",
+        stdio: "pipe",
+      },
+    );
+    if (pack.status !== 0) {
+      throw new Error(`Failed to pack staged publish bundle: ${`${pack.stdout}${pack.stderr}`.trim()}`);
+    }
+    const tarball = pack.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .at(-1);
+    if (!tarball) {
+      throw new Error("npm pack did not produce a tarball name.");
+    }
+    const tarballPath = join(packDir, tarball);
+    installTarballIntoPrefix(npmBin, prefixDir, tarballPath, nodeBin);
+    runInstalledBinarySmokeCommand(prefixDir, ["help"], homeDir, 0, "installed help smoke");
+    runInstalledBinarySmokeCommand(prefixDir, ["version"], homeDir, 0, "installed version smoke");
+    uninstallTarballFromPrefix(npmBin, prefixDir, nodeBin);
+    installTarballIntoPrefix(npmBin, prefixDir, tarballPath, nodeBin);
+    runInstalledBinarySmokeCommand(prefixDir, ["help"], homeDir, 0, "reinstalled help smoke");
+  } finally {
+    rmSync(packDir, { recursive: true, force: true });
+    rmSync(prefixDir, { recursive: true, force: true });
+  }
+}
+
+function installTarballIntoPrefix(npmBin: string, prefixDir: string, tarballPath: string, nodeBin: string): void {
+  const install = spawnSync(
+    npmBin,
+    ["install", "-g", "--prefix", prefixDir, tarballPath],
+    {
+      env: buildNodePreferredEnv(nodeBin),
+      encoding: "utf-8",
+      stdio: "pipe",
+    },
+  );
+  if (install.status !== 0) {
+    throw new Error(`Failed to install tarball smoke bundle: ${`${install.stdout}${install.stderr}`.trim()}`);
+  }
+}
+
+function uninstallTarballFromPrefix(npmBin: string, prefixDir: string, nodeBin: string): void {
+  const uninstall = spawnSync(
+    npmBin,
+    ["uninstall", "-g", "--prefix", prefixDir, "@egavrin/devagent"],
+    {
+      env: buildNodePreferredEnv(nodeBin),
+      encoding: "utf-8",
+      stdio: "pipe",
+    },
+  );
+  if (uninstall.status !== 0) {
+    throw new Error(`Failed to uninstall tarball smoke bundle: ${`${uninstall.stdout}${uninstall.stderr}`.trim()}`);
+  }
+}
+
+function runInstalledBinarySmokeCommand(
+  prefixDir: string,
+  args: string[],
+  homeDir: string,
+  expectedExitCode: number,
+  description: string,
+): void {
+  const executable = join(prefixDir, "bin", process.platform === "win32" ? "devagent.cmd" : "devagent");
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    XDG_CONFIG_HOME: join(homeDir, ".config"),
+    XDG_CACHE_HOME: join(homeDir, ".cache"),
+    NO_COLOR: "1",
+    FORCE_COLOR: "0",
+    DEVAGENT_DISABLE_UPDATE_CHECK: "1",
+  };
+  const result = spawnSync(executable, args, {
+    env,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const output = `${result.stdout}${result.stderr}`;
+  if (result.status !== expectedExitCode) {
+    throw new Error(
+      `${description} exited with ${result.status}, expected ${expectedExitCode}.\n${output.trim()}`,
     );
   }
 }

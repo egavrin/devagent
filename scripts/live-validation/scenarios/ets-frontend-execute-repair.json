@@ -6,7 +6,7 @@
   "surface": "execute",
   "taskShape": "repair",
   "isolationMode": "temp-copy",
-  "requiresChatgptAuth": true,
+  "requiresAuth": true,
   "requiresArktsLinter": true,
   "baselineAfterSetup": true,
   "variables": {

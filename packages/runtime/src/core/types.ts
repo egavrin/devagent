@@ -180,6 +180,8 @@ export interface ProviderConfig {
   readonly customHeaders?: Record<string, string>;
   /** Fields to strip from request bodies (Copilot rejects store, metadata, etc.). */
   readonly stripFields?: ReadonlyArray<string>;
+  /** Rewrite AI SDK-emitted OpenAI message roles before sending the request. */
+  readonly messageRoleOverrides?: Readonly<Record<string, string>>;
   /** Fallback model to use when the primary model exhausts retries. */
   readonly fallbackModel?: string;
 }

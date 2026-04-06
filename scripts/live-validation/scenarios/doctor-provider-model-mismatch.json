@@ -71,5 +71,5 @@
   ],
   "verificationCommands": [],
   "cleanupPolicy": "destroy",
-  "requiresChatgptAuth": false
+  "requiresAuth": false
 }

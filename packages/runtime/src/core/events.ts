@@ -78,6 +78,8 @@ export interface ToolAfterEvent {
   readonly result: ToolResult;
   readonly callId: string;
   readonly durationMs: number;
+  readonly batchId?: string;
+  readonly batchSize?: number;
   readonly agentId?: string;
   readonly parentAgentId?: string | null;
   readonly depth?: number;

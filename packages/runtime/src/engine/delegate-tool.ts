@@ -135,7 +135,7 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
               description: "Optional parent context explaining why delegation is needed.",
             },
           },
-          required: ["objective", "laneLabel", "scope", "constraints", "exclusions", "successCriteria", "parentContext"],
+          required: ["objective"],
           additionalProperties: false,
         },
       },

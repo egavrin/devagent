@@ -132,6 +132,10 @@ function createDevagentApiProvider(config: ProviderConfig): LLMProvider {
     ...config,
     baseUrl: config.baseUrl ?? "https://internal-llm-gateway.157.245.27.88.nip.io/v1",
     requestIdHeaderName: config.requestIdHeaderName ?? "x-request-id",
+    messageRoleOverrides: {
+      ...(config.messageRoleOverrides ?? {}),
+      developer: "system",
+    },
     capabilities: {
       ...config.capabilities,
       useResponsesApi: false,

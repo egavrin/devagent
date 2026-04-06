@@ -58,7 +58,10 @@ function semverNewer(a: string, b: string): boolean {
  * Non-blocking update check. Queries npm registry at most once per 24h.
  * Prints a hint to stderr if a newer version is available.
  */
-function checkForUpdates(): void {
+export function checkForUpdates(): void {
+  if ((process.env["DEVAGENT_DISABLE_UPDATE_CHECK"] ?? "") === "1") {
+    return;
+  }
   const PACKAGE = "@egavrin/devagent";
   const cacheDir = join(homedir(), ".cache", "devagent");
   const cachePath = join(cacheDir, "update-check.json");
@@ -223,7 +226,7 @@ interface CliArgs {
   reasoning: "low" | "medium" | "high" | null;
   verbosity: Verbosity;
   verboseCategories: string | undefined;
-  authCommand: string | null;
+  authCommand: { subcommand: string; args: string[] } | null;
   sessionsCommand: boolean;
   resume: string | null;
   continue_: boolean;
@@ -284,10 +287,35 @@ interface CrashSessionReporter {
 }
 
 interface CrashSessionReporterProcess {
-  stderr: { write: (chunk: string) => boolean };
+  stderr: {
+    write: (chunk: string) => boolean;
+    destroyed?: boolean;
+    writableEnded?: boolean;
+    writableFinished?: boolean;
+  };
   once: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => void;
   off: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => void;
   exit: (code?: number) => never;
+}
+
+function safeWriteStderr(
+  proc: CrashSessionReporterProcess,
+  chunk: string,
+): void {
+  if (proc.stderr.destroyed || proc.stderr.writableEnded || proc.stderr.writableFinished) {
+    return;
+  }
+  try {
+    proc.stderr.write(chunk);
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : "";
+    if (code === "ERR_STREAM_DESTROYED" || code === "EPIPE") {
+      return;
+    }
+    throw error;
+  }
 }
 
 export function createCrashSessionReporter(
@@ -299,7 +327,7 @@ export function createCrashSessionReporter(
 
   const printSessionId = (): void => {
     if (printed || verbosity === "quiet") return;
-    proc.stderr.write(dim(`[session] ${sessionId}`) + "\n");
+    safeWriteStderr(proc, dim(`[session] ${sessionId}`) + "\n");
     printed = true;
   };
 
@@ -309,13 +337,13 @@ export function createCrashSessionReporter(
   };
 
   const onUncaughtException = (err: unknown): void => {
-    proc.stderr.write(formatError(`Uncaught exception: ${extractErrorMessage(err)}`) + "\n");
+    safeWriteStderr(proc, formatError(`Uncaught exception: ${extractErrorMessage(err)}`) + "\n");
     printSessionId();
     proc.exit(1);
   };
 
   const onUnhandledRejection = (reason: unknown): void => {
-    proc.stderr.write(formatError(`Unhandled rejection: ${extractErrorMessage(reason)}`) + "\n");
+    safeWriteStderr(proc, formatError(`Unhandled rejection: ${extractErrorMessage(reason)}`) + "\n");
     printSessionId();
     proc.exit(1);
   };
@@ -400,8 +428,11 @@ export function parseArgs(argv: string[]): CliArgs {
       result.review = reviewArgs;
       return result;
     } else if (arg === "auth") {
-      result.authCommand = args[i + 1] ?? "login";
-      i++;
+      const subcommand = args[i + 1] ?? "login";
+      result.authCommand = {
+        subcommand,
+        args: args.slice(i + 2),
+      };
       return result; // auth is handled before anything else
     } else if (arg === "--mode" && i + 1 < args.length) {
       const value = args[++i]!;
@@ -470,13 +501,18 @@ Usage:
   devagent sessions                List recent sessions
   devagent review <file> --rule <rule_file> [--json]
                                   Rule-based patch review
+  devagent execute --request <file> --artifact-dir <dir>
+                                  Public machine execution contract
 
 Commands:
   devagent help                   Show top-level help
   devagent configure              Guided global configuration wizard
   devagent doctor                 Check environment and dependencies
   devagent config <...>           Inspect or edit global config directly
-  devagent install-lsp             Install LSP servers for code intelligence
+  devagent sessions               List recent sessions
+  devagent auth <...>             Manage provider credentials
+  devagent install-lsp            Install LSP servers for code intelligence
+  devagent execute                Execute an SDK request and write artifacts
   devagent update                 Update to latest version
   devagent completions <shell>    Generate shell completions (bash/zsh/fish)
   devagent version                Show version and runtime info
@@ -484,7 +520,8 @@ Commands:
 Auth:
   devagent auth login             Store API key for a provider
   devagent auth status            Show configured credentials
-  devagent auth logout            Remove stored credentials
+  devagent auth logout [provider|--all]
+                                  Remove stored credentials
 
 Options:
   -f, --file <path>    Read query from file
@@ -1081,6 +1118,7 @@ interface SessionPersistenceResult {
   readonly sessionStore: SessionStore;
   readonly initialMessages: Message[] | undefined;
   readonly resumeBriefing: TurnBriefing | undefined;
+  readonly resumeTargetMissing: boolean;
   /** Possibly updated sessionState (swapped on resume). */
   sessionState: SessionState;
   readonly activateSession: (query?: string) => import("@devagent/runtime").Session;
@@ -1158,6 +1196,7 @@ export async function setupSessionPersistence(
   let initialMessages: Message[] | undefined;
   let resumeBriefing: TurnBriefing | undefined;
   let prevSession: import("@devagent/runtime").Session | null = null;
+  let resumeTargetMissing = false;
   if (cliArgs.resume || cliArgs.continue_) {
     if (cliArgs.resume) {
       prevSession = resolveResumeTarget(sessionStore, cliArgs.resume);
@@ -1203,6 +1242,7 @@ export async function setupSessionPersistence(
       process.stderr.write(
         yellow(`[session] No session found: ${searchId}`) + "\n",
       );
+      resumeTargetMissing = true;
     }
   }
 
@@ -1346,6 +1386,7 @@ export async function setupSessionPersistence(
     sessionStore,
     initialMessages,
     resumeBriefing,
+    resumeTargetMissing,
     sessionState: effectiveSessionState,
     activateSession,
     deactivateSession,
@@ -1404,6 +1445,22 @@ export async function main(): Promise<void> {
 
   const cliArgs = parseArgs(process.argv);
 
+  if (cliArgs.review) {
+    const reviewArgs = cliArgs.review;
+    if (reviewArgs.help) {
+      process.stdout.write(renderReviewHelpText() + "\n");
+      return;
+    }
+    if (!reviewArgs.patchFile) {
+      process.stderr.write(formatError(renderReviewHelpText()) + "\n");
+      process.exit(1);
+    }
+    if (!reviewArgs.ruleFile) {
+      process.stderr.write(formatError("Rule file required: devagent review <file> --rule <rule_file>") + "\n");
+      process.exit(1);
+    }
+  }
+
   if (cliArgs.modeParseError) {
     process.stderr.write(formatError(cliArgs.modeParseError) + "\n");
     process.exit(2);
@@ -1443,7 +1500,7 @@ export async function main(): Promise<void> {
   // Auth commands — handle before config loading (doesn't need provider setup)
   if (cliArgs.authCommand) {
     const { runAuthCommand } = await import("./auth.js");
-    await runAuthCommand(cliArgs.authCommand);
+    await runAuthCommand(cliArgs.authCommand.subcommand, cliArgs.authCommand.args);
     return;
   }
 
@@ -1458,25 +1515,10 @@ export async function main(): Promise<void> {
     const { runReviewPipeline } = await import("@devagent/runtime");
     const reviewArgs = cliArgs.review;
 
-    if (reviewArgs.help) {
-      process.stdout.write(renderReviewHelpText() + "\n");
-      return;
-    }
-
-    if (!reviewArgs.patchFile) {
-      process.stderr.write(formatError(renderReviewHelpText()) + "\n");
-      process.exit(1);
-    }
-
-    if (!reviewArgs.ruleFile) {
-      process.stderr.write(formatError("Rule file required: devagent review <file> --rule <rule_file>") + "\n");
-      process.exit(1);
-    }
-
     try {
       const result = await runReviewPipeline(
         { provider, workspaceRoot: projectRoot },
-        { patchFile: reviewArgs.patchFile, ruleFile: reviewArgs.ruleFile },
+        { patchFile: reviewArgs.patchFile, ruleFile: reviewArgs.ruleFile! },
       );
 
       if (reviewArgs.jsonOutput) {
@@ -1537,6 +1579,9 @@ export async function main(): Promise<void> {
   );
   // If session state was swapped on resume, propagate back so closures see it
   tools.sessionState = persistence.sessionState;
+  if (persistence.resumeTargetMissing && !cliArgs.query && !cliArgs.file) {
+    process.exit(1);
+  }
   try {
     const buildRunOptions = () => ({
       provider,

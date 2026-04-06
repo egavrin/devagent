@@ -6,7 +6,7 @@
   "surface": "cli",
   "taskShape": "implement",
   "isolationMode": "worktree",
-  "requiresChatgptAuth": true,
+  "requiresAuth": true,
   "requiresArktsLinter": true,
   "baselineAfterSetup": true,
   "variables": {
@@ -27,7 +27,7 @@
   "invocation": {
     "type": "cli",
     "query": "Fix the ArkTS validation errors in ${targetFile}. Keep the change minimal, do not touch unrelated files, and stop once validation passes. For targeted validation, run `node dist/tslinter.js --ide-interactive --arkts-2 ${repoRoot}/${targetFile}` from `ets2panda/linter`. Do not rediscover the linter entrypoint or inspect unrelated linter internals.",
-    "approvalMode": "full-auto",
+    "safetyMode": "autopilot",
     "maxIterations": 18
   },
   "expectedArtifacts": [],

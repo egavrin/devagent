@@ -833,8 +833,10 @@ export function runConfig(args: string[]): void {
       console.error("Usage: devagent config set <key> <value>");
       process.exit(2);
     }
-    setGlobalConfigValue(key, value);
-    console.log(`${key} = ${value}`);
+    const updates = setValidatedGlobalConfigValue(key, value);
+    for (const [updatedKey, updatedValue] of updates) {
+      console.log(`${updatedKey} = ${updatedValue}`);
+    }
     return;
   }
 
@@ -877,9 +879,62 @@ const SETUP_PROVIDERS = [
   { id: "deepseek", name: "DeepSeek", envVar: "DEEPSEEK_API_KEY", defaultModel: "deepseek-chat", hint: "Get key at https://platform.deepseek.com/api_keys" },
   { id: "openrouter", name: "OpenRouter", envVar: "OPENROUTER_API_KEY", defaultModel: "anthropic/claude-sonnet-4-20250514", hint: "Get key at https://openrouter.ai/keys" },
   { id: "ollama", name: "Ollama (local)", envVar: "", defaultModel: "qwen3:32b", hint: "No API key needed — ollama must be running locally" },
-  { id: "chatgpt", name: "ChatGPT (Pro/Plus)", envVar: "", defaultModel: "gpt-4.1", hint: "Use 'devagent auth login' after configuration" },
-  { id: "github-copilot", name: "GitHub Copilot", envVar: "", defaultModel: "gpt-4.1", hint: "Use 'devagent auth login' after configuration" },
+  { id: "chatgpt", name: "ChatGPT (Pro/Plus)", envVar: "", defaultModel: "gpt-5.4", hint: "Use 'devagent auth login' after configuration" },
+  { id: "github-copilot", name: "GitHub Copilot", envVar: "", defaultModel: "gpt-4o", hint: "Use 'devagent auth login' after configuration" },
 ];
+
+function getSetupProvider(providerId: string): (typeof SETUP_PROVIDERS)[number] | undefined {
+  return SETUP_PROVIDERS.find((provider) => provider.id === providerId);
+}
+
+function getDefaultModelForProvider(providerId: string): string | undefined {
+  return getSetupProvider(providerId)?.defaultModel;
+}
+
+function setValidatedGlobalConfigValue(path: string, rawValue: string): Array<[string, string]> {
+  const canonicalPath = path.trim().toLowerCase();
+  const config = loadGlobalConfigObject();
+
+  if (canonicalPath === "provider") {
+    const provider = rawValue.trim();
+    const currentModel = typeof config["model"] === "string" ? config["model"] : undefined;
+    loadModelRegistry();
+    const currentModelOwner = currentModel ? lookupModelEntry(currentModel)?.provider : undefined;
+    const defaultModel = getDefaultModelForProvider(provider);
+
+    setGlobalConfigValue("provider", provider);
+
+    if (!currentModel || (currentModelOwner && currentModelOwner !== provider)) {
+      if (defaultModel) {
+        setGlobalConfigValue("model", defaultModel);
+        return [["provider", provider], ["model", defaultModel]];
+      }
+    }
+
+    return [["provider", provider]];
+  }
+
+  if (canonicalPath === "model") {
+    const provider = typeof config["provider"] === "string" ? config["provider"] : undefined;
+    if (provider) {
+      loadModelRegistry();
+      const providerModelIssue = getProviderModelCompatibilityIssue(provider, rawValue);
+      if (providerModelIssue) {
+        console.error(formatProviderModelCompatibilityError(providerModelIssue));
+        const hint = formatProviderModelCompatibilityHint(providerModelIssue);
+        if (hint) {
+          console.error(hint);
+        }
+        process.exit(2);
+      }
+    }
+    setGlobalConfigValue("model", rawValue);
+    return [["model", rawValue]];
+  }
+
+  setGlobalConfigValue(path, rawValue);
+  return [[path, rawValue]];
+}
 
 export async function runConfigure(args: ReadonlyArray<string> = []): Promise<void> {
   if (hasHelpFlag(args)) {

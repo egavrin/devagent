@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   createIsolationWorkspace,
+  createIsolationWorkspaceWithTimeout,
   destroyIsolationWorkspace,
 } from "./isolation";
 import { loadValidationScenarios } from "./manifest";
+import { classifyProviderFailure } from "./provider-smoke";
 import {
   evaluateAssertions,
   summarizeScenarioReports,
@@ -119,6 +121,8 @@ describe("validateScenarioManifest", () => {
       { tool: "delegate", minBatches: 1, minBatchSize: 2 },
     ]);
     expect(scenarios.find((scenario) => scenario.id === "runtime-core-docs-execute-triage")?.isolationMode).toBe("worktree");
+    expect(scenarios.find((scenario) => scenario.id === "runtime-core-execute-plan")?.isolationMode).toBe("worktree");
+    expect(scenarios.find((scenario) => scenario.id === "runtime-core-execute-triage")?.isolationMode).toBe("worktree");
     expect(scenarios.find((scenario) => scenario.id === "runtime-core-execute-triage")?.suites).toEqual(["full"]);
   });
 });
@@ -161,6 +165,21 @@ describe("createIsolationWorkspace", () => {
     expect(existsSync(join(workspace.path, ".git"))).toBe(true);
     await destroyIsolationWorkspace(workspace);
     expect(existsSync(workspace.path)).toBe(false);
+  });
+
+  it("times out isolation steps with an explicit setup error", async () => {
+    await expect(createIsolationWorkspaceWithTimeout({
+      mode: "temp-copy",
+      sourceRoot: "/tmp/source",
+      targetRoot: "/tmp/target",
+    }, 10, async () => {
+      await Bun.sleep(50);
+      return {
+        mode: "temp-copy",
+        path: "/tmp/target",
+        sourceRoot: "/tmp/source",
+      };
+    })).rejects.toThrow(/setup failed during isolation/i);
   });
 
   it("materializes tracked submodules as isolated directories instead of source-linked symlinks", async () => {
@@ -326,15 +345,20 @@ if (args[0] === "auth" && args[1] === "status") {
   process.exit(0);
 }
 if (args[0] === "execute") {
+  const requestPath = args[args.indexOf("--request") + 1];
+  const request = JSON.parse(readFileSync(requestPath, "utf-8"));
+  if (request.executor?.reasoning !== "low") {
+    process.stderr.write("missing execute reasoning override\\n");
+    process.exit(1);
+  }
   const artifactDir = args[args.indexOf("--artifact-dir") + 1];
   mkdirSync(artifactDir, { recursive: true });
   writeFileSync(join(artifactDir, "triage-report.md"), "verifier and assembler impact\\n");
   writeFileSync(join(artifactDir, "result.json"), JSON.stringify({ status: "success", metrics: { durationMs: 10 } }, null, 2));
   writeFileSync(
     join(artifactDir, "engine-events.jsonl"),
-    JSON.stringify({ event: "message:assistant", data: { toolCalls: [{ name: "delegate" }, { name: "delegate" }] } }) + "\\n" +
-    JSON.stringify({ type: "tool_call", tool: "delegate" }) + "\\n" +
-    JSON.stringify({ type: "tool_call", tool: "delegate" }) + "\\n",
+    JSON.stringify({ type: "tool_call", tool: "delegate", callId: "call-1", batchId: "delegate-batch-1", batchSize: 2 }) + "\\n" +
+    JSON.stringify({ type: "tool_call", tool: "delegate", callId: "call-2", batchId: "delegate-batch-1", batchSize: 2 }) + "\\n",
   );
   process.stdout.write(JSON.stringify({ type: "started" }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "artifact" }) + "\\n");
@@ -354,12 +378,13 @@ process.exit(0);
       targetRepo: "arkcompiler_runtime_core_docs",
       surface: "execute",
       taskShape: "readonly",
-      isolationMode: "temp-copy",
+      isolationMode: "worktree",
       invocation: {
         type: "execute",
         taskType: "triage",
         workItemTitle: "Triage malformed ABC issue",
         summary: "Inspect verifier and assembler impact.",
+        reasoning: "low",
       },
       expectedArtifacts: ["triage-report.md"],
       assertions: [
@@ -402,6 +427,8 @@ process.exit(0);
     expect(report.toolBatchAssertionResults).toEqual([
       expect.objectContaining({ tool: "delegate", minBatches: 1, minBatchSize: 2, observedBatches: 1, observedMaxBatchSize: 2, passed: true }),
     ]);
+    const request = JSON.parse(await readFile(join(outputRoot, "runtime-core-execute-triage", "request.json"), "utf-8")) as { execution: { repositories: Array<{ isolation: string }> } };
+    expect(request.execution.repositories[0]?.isolation).toBe("git-worktree");
   });
 
   it("renders assertion templates before evaluating CLI repo diffs", async () => {
@@ -458,7 +485,7 @@ process.exit(0);
       invocation: {
         type: "cli",
         query: "Fix ${targetFile}",
-        approvalMode: "full-auto",
+        safetyMode: "autopilot",
       },
       expectedArtifacts: [],
       assertions: [
@@ -575,7 +602,7 @@ process.exit(1);
       ],
       verificationCommands: [],
       cleanupPolicy: "destroy",
-      requiresChatgptAuth: false,
+      requiresAuth: false,
     }, "inline");
 
     const outputRoot = await makeTempDir("devagent-live-output-");
@@ -787,8 +814,8 @@ if (args[0] === "execute") {
   writeFileSync(join(artifactDir, "result.json"), JSON.stringify({ status: "success" }, null, 2));
   writeFileSync(
     join(artifactDir, "engine-events.jsonl"),
-    JSON.stringify({ event: "message:assistant", data: { toolCalls: [{ name: "delegate" }] } }) + "\\n" +
-    JSON.stringify({ type: "tool_call", tool: "delegate" }) + "\\n",
+    JSON.stringify({ type: "tool_call", tool: "delegate", callId: "call-1", batchId: "delegate-batch-1", batchSize: 1 }) + "\\n" +
+    JSON.stringify({ type: "tool_call", tool: "delegate", callId: "call-2", batchId: "delegate-batch-2", batchSize: 1 }) + "\\n",
   );
   process.stdout.write(JSON.stringify({ type: "started" }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "completed" }) + "\\n");
@@ -841,8 +868,88 @@ process.exit(1);
     expect(report.status).toBe("failed");
     expect(report.failureClass).toBe("assertion");
     expect(report.toolBatchAssertionResults).toEqual([
-      expect.objectContaining({ tool: "delegate", passed: false, observedBatches: 0, observedMaxBatchSize: 0 }),
+      expect.objectContaining({ tool: "delegate", passed: false, observedBatches: 2, observedMaxBatchSize: 1 }),
     ]);
+  });
+
+  it("prefers batch-aware execute tool_call entries over legacy assistant grouping", async () => {
+    const harnessRoot = await makeTempDir("devagent-live-harness-");
+    const sourceRoot = await makeTempDir("devagent-live-execute-mixed-batch-src-");
+    await writeFile(join(sourceRoot, "README.md"), "# Source\n");
+    await initGitRepo(sourceRoot);
+    await commitAll(sourceRoot, "initial");
+
+    const fakeCli = join(harnessRoot, "fake-devagent-mixed-batch.mjs");
+    await writeFile(fakeCli, `
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "auth" && args[1] === "status") {
+  process.stderr.write("Provider  Source  Key\\nchatgpt  oauth   tok***\\n");
+  process.exit(0);
+}
+if (args[0] === "execute") {
+  const artifactDir = args[args.indexOf("--artifact-dir") + 1];
+  mkdirSync(artifactDir, { recursive: true });
+  writeFileSync(join(artifactDir, "triage-report.md"), "verifier and assembler\\n");
+  writeFileSync(join(artifactDir, "result.json"), JSON.stringify({ status: "success" }, null, 2));
+  writeFileSync(
+    join(artifactDir, "engine-events.jsonl"),
+    JSON.stringify({ event: "message:assistant", data: { toolCalls: [{ name: "delegate" }] } }) + "\\n" +
+    JSON.stringify({ type: "tool_call", tool: "delegate", callId: "call-1", batchId: "delegate-batch-1", batchSize: 2 }) + "\\n" +
+    JSON.stringify({ type: "tool_call", tool: "delegate", callId: "call-2", batchId: "delegate-batch-1", batchSize: 2 }) + "\\n",
+  );
+  process.stdout.write(JSON.stringify({ type: "started" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "completed" }) + "\\n");
+  process.exit(0);
+}
+process.exit(1);
+`);
+    chmodSync(fakeCli, 0o755);
+
+    const scenario = validateScenarioManifest({
+      id: "runtime-core-execute-triage",
+      description: "Mixed execute batch observation",
+      suites: ["smoke"],
+      targetRepo: "arkcompiler_runtime_core_docs",
+      surface: "execute",
+      taskShape: "readonly",
+      isolationMode: "temp-copy",
+      invocation: {
+        type: "execute",
+        taskType: "triage",
+        workItemTitle: "Triage",
+        summary: "Inspect verifier impact.",
+      },
+      expectedArtifacts: ["triage-report.md"],
+      assertions: [
+        { type: "contains", source: "artifact", path: "triage-report.md", value: "verifier" },
+      ],
+      verificationCommands: [],
+      cleanupPolicy: "destroy",
+      requiredToolCalls: [{ tool: "delegate", minCalls: 2 }],
+      requiredToolBatches: [{ tool: "delegate", minBatches: 1, minBatchSize: 2 }],
+    }, "inline");
+
+    const outputRoot = await makeTempDir("devagent-live-output-");
+    const report = await runValidationScenario(scenario, {
+      devagentRoot: dirname(dirname(harnessRoot)),
+      sourceRepoRoots: {
+        arkcompiler_runtime_core_docs: sourceRoot,
+      },
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      outputRoot,
+      command: {
+        executable: "node",
+        baseArgs: [fakeCli],
+      },
+      authStatusOverride: { configuredProviders: ["chatgpt"] },
+    });
+
+    expect(report.status).toBe("passed");
+    expect(report.observedToolCalls).toMatchObject({ delegate: 2 });
+    expect(report.observedToolBatches).toMatchObject({ delegate: { batchCount: 1, maxBatchSize: 2 } });
   });
 
   it("writes a setup failure report when pre-setup throws", async () => {
@@ -877,7 +984,7 @@ process.exit(1);
       invocation: {
         type: "cli",
         query: "Review the repo",
-        approvalMode: "full-auto",
+        safetyMode: "autopilot",
       },
       expectedArtifacts: [],
       assertions: [],
@@ -904,5 +1011,124 @@ process.exit(1);
     expect(report.status).toBe("failed");
     expect(report.failureClass).toBe("setup");
     expect(existsSync(join(outputRoot, "setup-failure", "report.json"))).toBe(true);
+  });
+
+  it("fails fast with provider classification when a required provider auth is missing", async () => {
+    const sourceRoot = await makeTempDir("devagent-live-provider-block-src-");
+    await writeFile(join(sourceRoot, "README.md"), "# Source\n");
+    await initGitRepo(sourceRoot);
+    await commitAll(sourceRoot, "initial");
+
+    const scenario = validateScenarioManifest({
+      id: "provider-auth-missing",
+      description: "Provider auth missing",
+      suites: ["smoke"],
+      targetRepo: "arkcompiler_runtime_core",
+      surface: "cli",
+      taskShape: "readonly",
+      isolationMode: "temp-copy",
+      invocation: {
+        type: "cli",
+        query: "Hello",
+        safetyMode: "default",
+      },
+      expectedArtifacts: [],
+      assertions: [],
+      verificationCommands: [],
+      cleanupPolicy: "destroy",
+      requiresAuth: true,
+      requiredProvider: "openai",
+    }, "inline");
+
+    const outputRoot = await makeTempDir("devagent-live-output-");
+    const report = await runValidationScenario(scenario, {
+      devagentRoot: dirname(sourceRoot),
+      sourceRepoRoots: {
+        arkcompiler_runtime_core: sourceRoot,
+      },
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      outputRoot,
+      authStatusOverride: { configuredProviders: ["chatgpt"] },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.failureClass).toBe("provider");
+    expect(report.failureMessage).toContain("openai auth is not configured");
+  });
+
+  it("fails fast with provider classification when required provider auth is expired", async () => {
+    const sourceRoot = await makeTempDir("devagent-live-provider-expired-src-");
+    await writeFile(join(sourceRoot, "README.md"), "# Source\n");
+    await initGitRepo(sourceRoot);
+    await commitAll(sourceRoot, "initial");
+
+    const scenario = validateScenarioManifest({
+      id: "provider-auth-expired",
+      description: "Provider auth expired",
+      suites: ["smoke"],
+      targetRepo: "arkcompiler_runtime_core",
+      surface: "cli",
+      taskShape: "readonly",
+      isolationMode: "temp-copy",
+      invocation: {
+        type: "cli",
+        query: "Hello",
+        safetyMode: "default",
+      },
+      expectedArtifacts: [],
+      assertions: [],
+      verificationCommands: [],
+      cleanupPolicy: "destroy",
+      requiresAuth: true,
+      requiredProvider: "chatgpt",
+    }, "inline");
+
+    const outputRoot = await makeTempDir("devagent-live-output-");
+    const report = await runValidationScenario(scenario, {
+      devagentRoot: dirname(sourceRoot),
+      sourceRepoRoots: {
+        arkcompiler_runtime_core: sourceRoot,
+      },
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      outputRoot,
+      authStatusOverride: {
+        configuredProviders: ["chatgpt"],
+        expiredProviders: ["chatgpt"],
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.failureClass).toBe("provider");
+    expect(report.failureMessage).toContain("chatgpt auth is expired");
+  });
+});
+
+describe("classifyProviderFailure", () => {
+  it("classifies invalid credentials as blocked", () => {
+    expect(classifyProviderFailure({
+      exitCode: 1,
+      stdout: "",
+      stderr: "statusCode: 401\nurl: 'https://api.deepseek.com/v1/chat/completions'\nAuthentication Fails, Your api key: ****1234 is invalid\n",
+      timedOut: false,
+      durationMs: 100,
+    })).toEqual({
+      status: "blocked",
+      blockedReason: "invalid stored credential",
+    });
+  });
+
+  it("classifies upstream 5xx outages as blocked service failures", () => {
+    expect(classifyProviderFailure({
+      exitCode: 1,
+      stdout: "",
+      stderr: "statusCode: 503\nurl: 'https://internal-llm-gateway.example/v1/chat/completions'\nService Temporarily Unavailable\n",
+      timedOut: false,
+      durationMs: 100,
+    })).toEqual({
+      status: "blocked",
+      blockedReason: "provider service unavailable (503) at https://internal-llm-gateway.example/v1/chat/completions",
+    });
   });
 });
