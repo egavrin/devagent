@@ -55,6 +55,7 @@ bun run install-cli
 - Repo-local skills live under `.agents/skills/` and are discovered by the runtime skill loader. The similarly named `packages/runtime/src/core/skills/` directory is product source code for skill loading, not a repo-maintenance skill directory.
 - `.devagent/workspaces/` contains runner-managed worktrees and stale documentation mirrors. Do not update guidance there unless the task is specifically about the worktree generation flow.
 - Opt-in live runtime validation is driven by `scripts/live-validation.ts` and the `validate:live:*` root scripts. It exercises the real CLI and `devagent execute` surfaces against sibling `arkcompiler_*` repos and is not part of the default `bun run test` path.
+- When adding or removing public commands or live-validation scenarios, update `.agents/skills/validate-user-surface/references/release-matrix.md` so the release checklist stays aligned with the supported user surface.
 
 ## Conventions and Pitfalls
 
