@@ -12,6 +12,7 @@ describe("PromptInput slash completions", () => {
     expect(SLASH_COMMANDS).toContain("/review");
     expect(SLASH_COMMANDS).toContain("/simplify");
     expect(SLASH_COMMANDS).toContain("/continue");
+    expect(SLASH_COMMANDS).not.toContain("/rename");
   });
 
   it("completes embedded review commands without breaking control commands", () => {

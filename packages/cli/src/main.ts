@@ -6,7 +6,7 @@
 import { execSync } from "node:child_process";
 import { readFileSync as nodeReadFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
@@ -31,6 +31,12 @@ import type { DevAgentConfig, LLMProvider, Message, Session, VerbosityConfig } f
 import { AgentType, SafetyMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
 import { migrateLegacyGlobalConfigIfNeeded } from "./global-config.js";
+import {
+  buildSessionPreview,
+  deriveSessionTitle,
+  formatResumeCandidate,
+  renderSessionPreview,
+} from "./session-preview.js";
 
 /** Package version — embedded at build time or read from package.json. */
 function getVersion(): string {
@@ -551,20 +557,14 @@ Installation:
 `;
 }
 
-export function renderSessionsList(sessions: ReadonlyArray<Session>): string {
+export function renderSessionsList(sessions: ReadonlyArray<Session>, now: number = Date.now()): string {
   if (sessions.length === 0) {
     return `${dim("No sessions found.")}\n`;
   }
 
   const lines = [bold("Recent sessions:"), ""];
   for (const session of sessions) {
-    const date = new Date(session.updatedAt).toLocaleDateString();
-    const time = new Date(session.updatedAt).toLocaleTimeString();
-    const meta = session.metadata as Record<string, unknown> | undefined;
-    const cost = typeof meta?.["totalCost"] === "number"
-      ? green(` $${(meta["totalCost"] as number).toFixed(4)}`)
-      : "";
-    lines.push(`  ${dim(session.id)} ${dim(date)} ${dim(time)}${cost}`);
+    lines.push(renderSessionPreview(buildSessionPreview(session), now));
   }
   lines.push("", dim("Use --resume <full-id-or-unique-prefix> to continue a session."));
   return lines.join("\n") + "\n";
@@ -1166,8 +1166,8 @@ function resolveResumeTarget(
     return matches[0]!;
   }
   if (matches.length > 1) {
-    throw new Error(
-      `Ambiguous session prefix "${resumeIdOrPrefix}". Matching sessions:\n${matches.map((session) => `- ${session.id}`).join("\n")}`,
+      throw new Error(
+      `Ambiguous session prefix "${resumeIdOrPrefix}". Matching sessions:\n${matches.map((session) => `- ${formatResumeCandidate(session)}`).join("\n")}`,
     );
   }
 
@@ -1181,6 +1181,7 @@ function resolveResumeTarget(
 export async function setupSessionPersistence(
   config: DevAgentConfig,
   cliArgs: CliArgs,
+  projectRoot: string,
   provider: LLMProvider,
   bus: EventBus,
   sessionState: SessionState,
@@ -1286,8 +1287,12 @@ export async function setupSessionPersistence(
       return activeSession;
     }
 
+    const initialQuery = query ?? cliArgs.query ?? "(interactive query)";
     const session = sessionStore.createSession({
-      query: query ?? cliArgs.query ?? "(interactive query)",
+      query: initialQuery,
+      title: deriveSessionTitle(initialQuery),
+      repoLabel: basename(projectRoot) || projectRoot || "unknown repo",
+      repoRoot: projectRoot,
       provider: config.provider,
       model: config.model,
       mode: "act",
@@ -1575,7 +1580,7 @@ export async function main(): Promise<void> {
 
   // ─── 5. Session persistence ────────────────────────────────
   const persistence = await setupSessionPersistence(
-    config, cliArgs, provider, tools.bus, tools.sessionState,
+    config, cliArgs, projectRoot, provider, tools.bus, tools.sessionState,
   );
   // If session state was swapped on resume, propagate back so closures see it
   tools.sessionState = persistence.sessionState;
@@ -1635,12 +1640,7 @@ export async function main(): Promise<void> {
         version: "0.1.0",
         onListSessions: () => {
           try {
-            const sessions = persistence.sessionStore.listSessions(15);
-            return sessions.map((s) => ({
-              id: s.id,
-              updatedAt: s.updatedAt,
-              cost: (s.metadata as Record<string, unknown> | undefined)?.["totalCost"] as number | undefined,
-            }));
+            return persistence.sessionStore.listSessions(15).map((s) => buildSessionPreview(s));
           } catch { return []; }
         },
         onQuery: async (q): Promise<InteractiveQueryResult> => {

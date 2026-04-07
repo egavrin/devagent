@@ -27,7 +27,6 @@ export const SLASH_COMMANDS = [
   "/continue",
   "/sessions",
   "/resume",
-  "/rename",
   "/review",
   "/simplify",
   "/exit",

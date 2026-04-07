@@ -18,6 +18,7 @@ import { useAgentLog } from "./useAgentLog.js";
 import { cycleApprovalMode, getApprovalModeColor, type InteractiveQueryResult, tokenProgressBar } from "./shared.js";
 import type { LogEntry } from "./shared.js";
 import type { EventBus } from "@devagent/runtime";
+import { renderSessionPreview, type SessionPreview } from "../session-preview.js";
 
 export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline │ Shift+Tab toggles safety mode";
 export const ITERATION_LIMIT_NOTICE = "Iteration limit exhausted. Type /continue to proceed.";
@@ -29,7 +30,7 @@ export interface AppProps {
   readonly onQuery: (query: string) => Promise<InteractiveQueryResult>;
   readonly onClear: () => void;
   readonly onCycleApprovalMode: (mode: SafetyMode) => void;
-  readonly onListSessions?: () => ReadonlyArray<{ id: string; updatedAt: number; cost?: number }>;
+  readonly onListSessions?: () => ReadonlyArray<SessionPreview>;
   readonly model: string;
   readonly approvalMode: string;
   readonly cwd?: string;
@@ -52,6 +53,24 @@ export function TranscriptView({ showWelcome, log, model, version }: TranscriptV
       </Static>
     </>
   );
+}
+
+export function renderSessionsCommandOutput(sessions: ReadonlyArray<SessionPreview>): string {
+  if (sessions.length === 0) {
+    return "No sessions found.";
+  }
+
+  const lines = sessions.slice(0, 15).map((s) => renderSessionPreview(s));
+  return `Recent sessions:\n${lines.join("\n")}`;
+}
+
+export function renderResumeCommandOutput(sessions: ReadonlyArray<SessionPreview>): string {
+  if (sessions.length === 0) {
+    return "No sessions to resume.";
+  }
+
+  const lines = sessions.slice(0, 10).map((s) => renderSessionPreview(s));
+  return `Sessions (use --resume <id> to continue):\n${lines.join("\n")}`;
 }
 
 // ─── App Component ──────────────────────────────────────────
@@ -103,18 +122,7 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     }
     if (trimmed === "/sessions" || trimmed === "/s") {
       if (onListSessions) {
-        const sessions = onListSessions();
-        if (sessions.length === 0) {
-          addLog({ id: nextId("sessions"), type: "info", data: "No sessions found." });
-        } else {
-          const lines = sessions.slice(0, 15).map((s) => {
-            const date = new Date(s.updatedAt).toLocaleDateString();
-            const time = new Date(s.updatedAt).toLocaleTimeString();
-            const cost = s.cost !== undefined ? ` $${s.cost.toFixed(4)}` : "";
-            return `  ${s.id.slice(0, 8)} ${date} ${time}${cost}`;
-          });
-          addLog({ id: nextId("sessions"), type: "info", data: `Recent sessions:\n${lines.join("\n")}` });
-        }
+        addLog({ id: nextId("sessions"), type: "info", data: renderSessionsCommandOutput(onListSessions()) });
       } else {
         addLog({ id: nextId("sessions"), type: "info", data: "Session listing not available." });
       }
@@ -122,25 +130,7 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     }
     if (trimmed === "/resume" || trimmed === "/r") {
       if (onListSessions) {
-        const sessions = onListSessions();
-        if (sessions.length > 0) {
-          const lines = sessions.slice(0, 10).map((s) => {
-            const date = new Date(s.updatedAt).toLocaleDateString();
-            const cost = s.cost !== undefined ? ` $${s.cost.toFixed(4)}` : "";
-            return `  ${s.id.slice(0, 8)} ${date}${cost}`;
-          });
-          addLog({ id: nextId("resume"), type: "info", data: `Sessions (use --resume <id> to continue):\n${lines.join("\n")}` });
-        } else {
-          addLog({ id: nextId("resume"), type: "info", data: "No sessions to resume." });
-        }
-      }
-      return;
-    }
-    if (trimmed.startsWith("/rename ")) {
-      const name = trimmed.slice(8).trim();
-      if (name) {
-        addLog({ id: nextId("rename"), type: "info", data: `Session renamed to: ${name}` });
-        addToast(`Session renamed: ${name}`, "success");
+        addLog({ id: nextId("resume"), type: "info", data: renderResumeCommandOutput(onListSessions()) });
       }
       return;
     }
@@ -230,7 +220,6 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     { name: "Continue", description: "Continue the current session after a pause or budget limit", shortcut: "/continue", action: () => handleSubmit("/continue") },
     { name: "Session list", description: "Show recent sessions", shortcut: "/sessions", action: () => handleSubmit("/sessions") },
     { name: "Help", description: "Show available commands", shortcut: "/help", action: () => handleSubmit("/help") },
-    { name: "Rename session", description: "Set a name for the current session", shortcut: "/rename", action: () => handleSubmit("/rename") },
     { name: "Review local changes", description: "Insert or run the embedded /review command anywhere in a prompt", shortcut: "/review", action: () => handleSubmit("/review") },
     { name: "Simplify local changes", description: "Insert or run the embedded /simplify command anywhere in a prompt", shortcut: "/simplify", action: () => handleSubmit("/simplify") },
     { name: "Resume session", description: "List sessions to resume", shortcut: "/resume", action: () => handleSubmit("/resume") },

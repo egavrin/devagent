@@ -4,7 +4,12 @@ import { render, Static, Text } from "ink";
 import { EventBus } from "@devagent/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ITERATION_LIMIT_NOTICE, TranscriptView } from "./App.js";
+import {
+  ITERATION_LIMIT_NOTICE,
+  TranscriptView,
+  renderResumeCommandOutput,
+  renderSessionsCommandOutput,
+} from "./App.js";
 import { useAgentLog } from "./useAgentLog.js";
 import type { LogEntry } from "./shared.js";
 
@@ -12,6 +17,14 @@ class TestInput extends PassThrough {
   readonly isTTY = true;
 
   setRawMode(_value: boolean): void {}
+
+  ref(): this {
+    return this;
+  }
+
+  unref(): this {
+    return this;
+  }
 }
 
 class TestOutput extends Writable {
@@ -42,6 +55,7 @@ async function settle(): Promise<void> {
 
 function renderForTest(node: React.ReactElement): {
   readonly stdout: TestOutput;
+  readonly stdin: TestInput;
   readonly rerender: (tree: React.ReactElement) => void;
   readonly unmount: () => void;
   readonly cleanup: () => void;
@@ -60,6 +74,7 @@ function renderForTest(node: React.ReactElement): {
   instances.push(instance);
   return {
     stdout,
+    stdin,
     rerender: instance.rerender,
     unmount: instance.unmount,
     cleanup: instance.cleanup,
@@ -147,5 +162,32 @@ describe("interactive completion notices", () => {
     await settle();
 
     expect(view.stdout.readAll()).toContain("entry-52");
+  });
+
+  it("renders titled session rows for /sessions", () => {
+    const text = renderSessionsCommandOutput([{
+      id: "12345678-aaaa-bbbb-cccc-1234567890ab",
+      updatedAt: 60_000,
+      title: "Fix auth retry loop",
+      repoLabel: "devagent",
+      cost: 0.125,
+    }]);
+
+    expect(text).toContain("Recent sessions:");
+    expect(text).toContain("Fix auth retry loop");
+    expect(text).toContain("12345678  devagent");
+  });
+
+  it("renders titled session rows for /resume", () => {
+    const text = renderResumeCommandOutput([{
+      id: "87654321-aaaa-bbbb-cccc-1234567890ab",
+      updatedAt: 60_000,
+      title: "Review provider config",
+      repoLabel: "providers",
+    }]);
+
+    expect(text).toContain("Sessions (use --resume <id> to continue):");
+    expect(text).toContain("Review provider config");
+    expect(text).toContain("87654321  providers");
   });
 });

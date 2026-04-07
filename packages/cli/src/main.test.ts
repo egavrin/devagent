@@ -305,19 +305,42 @@ describe("resolveAutoPromptCommandTarget", () => {
 });
 
 describe("renderSessionsList", () => {
-  it("prints full session ids and the reusable resume hint", () => {
+  it("renders titled session previews with repo context and recency", () => {
     const sessions: Session[] = [{
       id: "12345678-aaaa-bbbb-cccc-1234567890ab",
       createdAt: 1,
-      updatedAt: 1,
+      updatedAt: 60_000,
       messages: [],
-      metadata: { totalCost: 0.125 },
+      metadata: {
+        title: "Fix auth retry loop",
+        repoLabel: "devagent",
+        totalCost: 0.125,
+      },
     }];
 
-    const output = renderSessionsList(sessions);
+    const output = renderSessionsList(sessions, 2 * 60_000);
 
-    expect(output).toContain("12345678-aaaa-bbbb-cccc-1234567890ab");
+    expect(output).toContain("Fix auth retry loop");
+    expect(output).toContain("12345678  devagent  1m ago  $0.1250");
     expect(output).toContain("--resume <full-id-or-unique-prefix>");
+  });
+
+  it("derives a readable title and repo fallback for legacy sessions", () => {
+    const sessions: Session[] = [{
+      id: "87654321-aaaa-bbbb-cccc-1234567890ab",
+      createdAt: 1,
+      updatedAt: 10_000,
+      messages: [],
+      metadata: {
+        query: "\"Fix\n failing tests in auth module???\"",
+        repoRoot: "/Users/egavrin/Documents/devagent",
+      },
+    }];
+
+    const output = renderSessionsList(sessions, 90_000);
+
+    expect(output).toContain("Fix failing tests in auth module");
+    expect(output).toContain("87654321  devagent  1m ago");
   });
 });
 
@@ -406,6 +429,7 @@ describe("setupSessionPersistence", () => {
     const persistence = await setupSessionPersistence(
       createSessionTestConfig(),
       parseArgs(["node", "devagent", "--quiet"]),
+      "/Users/egavrin/Documents/devagent",
       {} as LLMProvider,
       new EventBus(),
       new SessionState(),
@@ -424,6 +448,7 @@ describe("setupSessionPersistence", () => {
     const persistence = await setupSessionPersistence(
       createSessionTestConfig(),
       parseArgs(["node", "devagent", "--quiet"]),
+      "/Users/egavrin/Documents/devagent",
       {} as LLMProvider,
       new EventBus(),
       new SessionState(),
@@ -440,6 +465,9 @@ describe("setupSessionPersistence", () => {
     expect(store.listSessions()).toHaveLength(1);
     expect(store.getSession(first.id)?.metadata).toMatchObject({
       query: "first prompt",
+      title: "first prompt",
+      repoLabel: "devagent",
+      repoRoot: "/Users/egavrin/Documents/devagent",
       provider: "openai",
       model: "gpt-5",
     });
@@ -455,6 +483,7 @@ describe("setupSessionPersistence", () => {
     const persistence = await setupSessionPersistence(
       createSessionTestConfig(),
       parseArgs(["node", "devagent", "--quiet", "--continue"]),
+      "/Users/egavrin/Documents/devagent",
       {} as LLMProvider,
       new EventBus(),
       new SessionState(),
@@ -484,6 +513,7 @@ describe("setupSessionPersistence", () => {
     const persistence = await setupSessionPersistence(
       createSessionTestConfig(),
       parseArgs(["node", "devagent", "--quiet"]),
+      "/Users/egavrin/Documents/devagent",
       {} as LLMProvider,
       new EventBus(),
       new SessionState(),
@@ -506,6 +536,7 @@ describe("setupSessionPersistence", () => {
     const persistence = await setupSessionPersistence(
       createSessionTestConfig(),
       parseArgs(["node", "devagent", "--quiet", "--continue"]),
+      "/Users/egavrin/Documents/devagent",
       {} as LLMProvider,
       new EventBus(),
       new SessionState(),
@@ -517,6 +548,35 @@ describe("setupSessionPersistence", () => {
 
     expect(persistence.resumeTargetMissing).toBe(true);
     expect(store.listSessions()).toHaveLength(0);
+  });
+
+  it("includes title and repo context in ambiguous resume errors", async () => {
+    const store = createMemorySessionStore();
+    store.createSession({
+      title: "Fix parser tests",
+      repoLabel: "devagent",
+    });
+    store.createSession({
+      title: "Review provider config",
+      repoLabel: "providers",
+    });
+
+    await expect(setupSessionPersistence(
+      createSessionTestConfig(),
+      parseArgs(["node", "devagent", "--quiet", "--resume", "session-"]),
+      "/Users/egavrin/Documents/devagent",
+      {} as LLMProvider,
+      new EventBus(),
+      new SessionState(),
+      {
+        sessionStore: store,
+        createCrashReporter: () => ({ printSessionId() {}, dispose() {} }),
+      },
+    )).rejects.toThrow([
+      'Ambiguous session prefix "session-". Matching sessions:',
+      "- session-  Fix parser tests  devagent",
+      "- session-  Review provider config  providers",
+    ].join("\n"));
   });
 });
 
