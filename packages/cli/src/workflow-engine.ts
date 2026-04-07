@@ -86,6 +86,12 @@ type HeadlessSessionPayload = {
   sessionState?: SessionStateJSON;
 };
 
+export interface ResolvedWorkflowContinuation {
+  readonly query: string;
+  readonly initialMessages: Message[] | undefined;
+  readonly sessionState: SessionStateJSON | undefined;
+}
+
 const PLAN_FREE_WORKFLOW_TASK_TYPES = new Set([
   "task-intake",
   "design",
@@ -191,17 +197,24 @@ function loadContinuationPayload(session: ContinuationSession | undefined): Head
   };
 }
 
-function buildContinuationQuery(query: string, options: WorkflowQueryOptions["continuation"]): string {
-  if (!options || options.mode !== "resume") {
-    return query;
-  }
+export function resolveWorkflowContinuation(
+  query: string,
+  options: WorkflowQueryOptions["continuation"],
+): ResolvedWorkflowContinuation {
+  const previousSession = loadContinuationPayload(options?.session);
+  const isResume = options?.mode === "resume";
   const parts = [
-    "Continue the prior session using the preserved context below.",
-    options.reason ? `Continuation reason: ${options.reason}` : "",
-    options.instructions ? `Continuation instructions:\n${options.instructions}` : "",
+    isResume ? "Continue the prior session using the preserved context below." : "",
+    options?.reason ? `Continuation reason: ${options.reason}` : "",
+    options?.instructions ? `Continuation instructions:\n${options.instructions}` : "",
     query,
-  ];
-  return parts.filter(Boolean).join("\n\n");
+  ].filter(Boolean);
+
+  return {
+    query: parts.length === 1 ? query : parts.join("\n\n"),
+    initialMessages: isResume ? previousSession?.messages : undefined,
+    sessionState: isResume ? previousSession?.sessionState : undefined,
+  };
 }
 
 export async function setupAndRunWorkflowQuery(
@@ -265,9 +278,9 @@ export async function setupAndRunWorkflowQuery(
   const bus = new EventBus();
   const gate = new ApprovalGate(config.approval, bus);
 
-  const previousSession = loadContinuationPayload(options.continuation?.session);
-  const sessionState = previousSession?.sessionState
-    ? SessionState.fromJSON(previousSession.sessionState, config.sessionState)
+  const continuation = resolveWorkflowContinuation(options.query, options.continuation);
+  const sessionState = continuation.sessionState
+    ? SessionState.fromJSON(continuation.sessionState, config.sessionState)
     : new SessionState(config.sessionState);
 
   // Skills
@@ -400,7 +413,7 @@ export async function setupAndRunWorkflowQuery(
     contextManager,
     doubleCheck,
     sessionState,
-    initialMessages: options.continuation?.mode === "resume" ? previousSession?.messages : undefined,
+    initialMessages: continuation.initialMessages,
     finalTextValidator: createWorkflowFinalTextValidator(options.taskType),
   });
 
@@ -415,7 +428,7 @@ export async function setupAndRunWorkflowQuery(
   }, 1_000);
 
   try {
-    const result = await taskLoop.run(buildContinuationQuery(options.query, options.continuation));
+    const result = await taskLoop.run(continuation.query);
     responseText = result.lastText ?? "";
     iterations = result.iterations;
     success = !result.aborted;

@@ -410,6 +410,44 @@ describe.skipIf(!BUN_SQLITE_AVAILABLE)("SessionStore", () => {
       ]);
     });
 
+    it("saveSessionState updates the parent session timestamp", async () => {
+      const session = store.createSession({ query: "test" });
+      const before = store.getSession(session.id);
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      store.saveSessionState(session.id, {
+        version: 1,
+        plan: null,
+        modifiedFiles: [],
+        envFacts: [],
+        toolSummaries: [],
+      });
+
+      const after = store.getSession(session.id);
+      expect(before).not.toBeNull();
+      expect(after).not.toBeNull();
+      expect(after!.updatedAt).toBeGreaterThan(before!.updatedAt);
+    });
+
+    it("listSessions reflects recency changes from state-only updates", async () => {
+      const first = store.createSession({ query: "first" });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const second = store.createSession({ query: "second" });
+
+      expect(store.listSessions()[0]!.id).toBe(second.id);
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      store.saveSessionState(first.id, {
+        version: 1,
+        plan: [{ description: "Keep going", status: "in_progress" }],
+        modifiedFiles: [],
+        envFacts: [],
+        toolSummaries: [],
+      });
+
+      expect(store.listSessions()[0]!.id).toBe(first.id);
+    });
+
     it("deleteSession cascades to session_state", () => {
       const session = store.createSession({ query: "test" });
       store.saveSessionState(session.id, {

@@ -346,6 +346,9 @@ export class SessionStore {
          ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`,
       )
       .run(sessionId, json, now);
+    this.db
+      .prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")
+      .run(now, sessionId);
   }
 
   /**
