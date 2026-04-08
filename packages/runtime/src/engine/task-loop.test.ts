@@ -1783,6 +1783,10 @@ describe("TaskLoop", () => {
     const registry = new ToolRegistry();
     registry.register(writeTool);
     const gate = new ApprovalGate(config.approval, bus);
+    const toolAfterEvents: Array<{ readonly result: { readonly metadata?: Record<string, unknown> } }> = [];
+    bus.on("tool:after", (event) => {
+      toolAfterEvents.push(event);
+    });
 
     const loop = new TaskLoop({
       provider,
@@ -1806,6 +1810,14 @@ describe("TaskLoop", () => {
     expect(toolMessages[0]!.content).toContain("Written");
     expect(toolMessages[0]!.content).toContain("VALIDATION ERRORS");
     expect(toolMessages[0]!.content).toContain("Unexpected token");
+    expect(toolAfterEvents).toHaveLength(1);
+    expect(toolAfterEvents[0]!.result.metadata?.["validationResult"]).toEqual(
+      expect.objectContaining({
+        passed: false,
+        diagnosticErrors: ["/tmp/test.ts: Unexpected token"],
+        testPassed: null,
+      }),
+    );
 
     // No separate SYSTEM validation message should exist
     const systemValidationMessages = result.messages.filter(
@@ -3638,6 +3650,120 @@ describe("TaskLoop", () => {
       expect(toolEvents[0]!.role).toBe("tool");
       expect(toolEvents[0]!.toolCallId).toBe("call_0");
       expect(toolEvents[0]!.content).toContain("hello");
+    });
+
+    it("emits typed file edit previews on tool:after when a tool returns metadata.fileEdits", async () => {
+      const provider = createMockProvider([
+        [
+          {
+            type: "tool_call",
+            content: '{"path":"src/new.ts","content":"export const x = 1;\\n"}',
+            toolCallId: "call_0",
+            toolName: "write_file",
+          },
+          { type: "done", content: "" },
+        ],
+        [
+          { type: "text", content: "Done." },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "write_file",
+        description: "Mock write file",
+        category: "mutating",
+        paramSchema: { type: "object", properties: {}, required: [] },
+        resultSchema: { type: "object" },
+        handler: async () => ({
+          success: true,
+          output: "Wrote file",
+          error: null,
+          artifacts: ["src/new.ts"],
+          metadata: {
+            fileEdits: [
+              {
+                path: "src/new.ts",
+                kind: "create",
+                additions: 1,
+                deletions: 0,
+                unifiedDiff: "--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,1 @@\n+export const x = 1;",
+                truncated: false,
+                before: "",
+                after: "export const x = 1;\n",
+              },
+              {
+                path: "src/extra-1.ts",
+                kind: "create",
+                additions: 1,
+                deletions: 0,
+                unifiedDiff: "--- /dev/null\n+++ b/src/extra-1.ts\n@@ -0,0 +1,1 @@\n+1",
+                truncated: false,
+              },
+              {
+                path: "src/extra-2.ts",
+                kind: "create",
+                additions: 1,
+                deletions: 0,
+                unifiedDiff: "--- /dev/null\n+++ b/src/extra-2.ts\n@@ -0,0 +1,1 @@\n+2",
+                truncated: false,
+              },
+              {
+                path: "src/extra-3.ts",
+                kind: "create",
+                additions: 1,
+                deletions: 0,
+                unifiedDiff: "--- /dev/null\n+++ b/src/extra-3.ts\n@@ -0,0 +1,1 @@\n+3",
+                truncated: false,
+              },
+            ],
+          },
+        }),
+      });
+      const gate = new ApprovalGate(config.approval, bus);
+
+      const toolAfterEvents: Array<{
+        readonly name: string;
+        readonly fileEdits?: ReadonlyArray<{
+          readonly path: string;
+          readonly additions: number;
+          readonly before?: string;
+          readonly after?: string;
+          readonly structuredDiff?: { readonly hunks: ReadonlyArray<unknown> };
+        }>;
+        readonly fileEditHiddenCount?: number;
+      }> = [];
+      bus.on("tool:after", (event) => {
+        toolAfterEvents.push(event);
+      });
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config,
+        systemPrompt: "Test",
+        repoRoot: "/repo",
+      });
+
+      await loop.run("Create a file");
+
+      expect(toolAfterEvents).toHaveLength(1);
+      expect(toolAfterEvents[0]?.fileEdits).toHaveLength(3);
+      expect(toolAfterEvents[0]?.fileEdits?.[0]).toEqual(
+        expect.objectContaining({
+          path: "src/new.ts",
+          additions: 1,
+          before: "",
+          after: "export const x = 1;\n",
+          structuredDiff: expect.objectContaining({
+            hunks: expect.any(Array),
+          }),
+        }),
+      );
+      expect(toolAfterEvents[0]?.fileEditHiddenCount).toBe(1);
     });
 
     it("emits summary-only delegate tool messages while keeping full delegate output in loop history", async () => {

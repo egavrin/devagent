@@ -5,11 +5,14 @@
 
 import { resolve } from "node:path";
 import type { ToolSpec } from "../../core/index.js";
+import type { ToolCommandResultMetadata } from "../../core/index.js";
 import { spawnAndCapture } from "./spawn-capture.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000; // 2 minutes
 const MAX_COMMAND_TIMEOUT_MS = 600_000; // 10 minutes — hard cap for LLM-provided values
 const MAX_OUTPUT_BYTES = 100_000;
+const MAX_PREVIEW_CHARS = 1_200;
+const MAX_PREVIEW_LINES = 12;
 
 function withTruncationMarker(
   streamName: "stdout" | "stderr",
@@ -22,6 +25,61 @@ function withTruncationMarker(
 
   const marker = `[output truncated: ${streamName} capped at ${maxBytes} bytes]`;
   return text.length > 0 ? `${text}\n${marker}` : marker;
+}
+
+function buildPreview(
+  text: string,
+): {
+  readonly preview: string;
+  readonly truncated: boolean;
+} {
+  if (!text) {
+    return { preview: "", truncated: false };
+  }
+
+  const lines = text.split("\n");
+  const clippedByLines = lines.length > MAX_PREVIEW_LINES;
+  const visibleLines = clippedByLines ? lines.slice(0, MAX_PREVIEW_LINES) : lines;
+  let preview = visibleLines.join("\n");
+  const clippedByChars = preview.length > MAX_PREVIEW_CHARS;
+  if (clippedByChars) {
+    preview = preview.slice(0, MAX_PREVIEW_CHARS);
+  }
+  if (clippedByLines || clippedByChars) {
+    preview = `${preview}\n[preview truncated]`;
+  }
+  return {
+    preview,
+    truncated: clippedByLines || clippedByChars,
+  };
+}
+
+function buildCommandResultMetadata(
+  command: string,
+  cwd: string,
+  exitCode: number | null,
+  stdout: string,
+  stderr: string,
+  options?: {
+    readonly timedOut?: boolean;
+    readonly warningOnly?: boolean;
+    readonly stdoutWasCapped?: boolean;
+    readonly stderrWasCapped?: boolean;
+  },
+): ToolCommandResultMetadata {
+  const stdoutPreview = buildPreview(stdout);
+  const stderrPreview = buildPreview(stderr);
+  return {
+    command,
+    cwd,
+    exitCode,
+    timedOut: options?.timedOut === true,
+    warningOnly: options?.warningOnly === true,
+    stdoutPreview: stdoutPreview.preview,
+    stderrPreview: stderrPreview.preview,
+    stdoutTruncated: (options?.stdoutWasCapped ?? false) || stdoutPreview.truncated,
+    stderrTruncated: (options?.stderrWasCapped ?? false) || stderrPreview.truncated,
+  };
 }
 
 export const runCommandTool: ToolSpec = {
@@ -72,9 +130,10 @@ export const runCommandTool: ToolSpec = {
   },
   handler: async (params, context) => {
     const command = params["command"] as string;
+    const cwdParam = (params["cwd"] as string | undefined) ?? ".";
     const cwd = resolve(
       context.repoRoot,
-      (params["cwd"] as string | undefined) ?? ".",
+      cwdParam,
     );
     const timeoutMs = Math.min(
       (params["timeout_ms"] as number | undefined) ?? DEFAULT_TIMEOUT_MS,
@@ -91,6 +150,9 @@ export const runCommandTool: ToolSpec = {
           output: "",
           error: `Invalid env JSON: ${envParam}`,
           artifacts: [],
+          metadata: {
+            commandResult: buildCommandResultMetadata(command, cwdParam, null, "", "", {}),
+          },
         };
       }
     } else if (typeof envParam === "object" && envParam !== null) {
@@ -107,6 +169,8 @@ export const runCommandTool: ToolSpec = {
 
     const safeStdout = withTruncationMarker("stdout", result.stdout, MAX_OUTPUT_BYTES);
     const safeStderr = withTruncationMarker("stderr", result.stderr, MAX_OUTPUT_BYTES);
+    const stdoutWasCapped = result.stdout.length >= MAX_OUTPUT_BYTES;
+    const stderrWasCapped = result.stderr.length >= MAX_OUTPUT_BYTES;
 
     if (result.timedOut) {
       // Detect large-repo search patterns and provide targeted guidance
@@ -116,6 +180,13 @@ export const runCommandTool: ToolSpec = {
         output: safeStdout,
         error: `Command timed out after ${timeoutMs}ms\n${safeStderr}${scopingHint ? `\n[Hint] ${scopingHint}` : ""}`,
         artifacts: [],
+        metadata: {
+          commandResult: buildCommandResultMetadata(command, cwdParam, null, safeStdout, safeStderr, {
+            timedOut: true,
+            stdoutWasCapped,
+            stderrWasCapped,
+          }),
+        },
       };
     }
 
@@ -130,6 +201,13 @@ export const runCommandTool: ToolSpec = {
           output: `${safeStdout}\n\n[Warning: exit code ${result.exitCode}. Some errors during execution:]\n${safeStderr}`,
           error: null,
           artifacts: [],
+          metadata: {
+            commandResult: buildCommandResultMetadata(command, cwdParam, result.exitCode, safeStdout, safeStderr, {
+              warningOnly: true,
+              stdoutWasCapped,
+              stderrWasCapped,
+            }),
+          },
         };
       }
 
@@ -138,6 +216,12 @@ export const runCommandTool: ToolSpec = {
         output: `Exit code: ${result.exitCode}\nstdout: ${safeStdout}\nstderr: ${safeStderr}`,
         error: `Command exited with code ${result.exitCode}`,
         artifacts: [],
+        metadata: {
+          commandResult: buildCommandResultMetadata(command, cwdParam, result.exitCode, safeStdout, safeStderr, {
+            stdoutWasCapped,
+            stderrWasCapped,
+          }),
+        },
       };
     }
 
@@ -146,6 +230,12 @@ export const runCommandTool: ToolSpec = {
       output: safeStdout || "(no output)",
       error: null,
       artifacts: [],
+      metadata: {
+        commandResult: buildCommandResultMetadata(command, cwdParam, result.exitCode, safeStdout || "(no output)", safeStderr, {
+          stdoutWasCapped,
+          stderrWasCapped,
+        }),
+      },
     };
   },
 };

@@ -11,6 +11,7 @@ import type {
   AgentType,
   CostRecord,
   ReasoningEffort,
+  ToolFileChangePreview,
 } from "./types.js";
 import { extractErrorMessage } from "./errors.js";
 
@@ -76,6 +77,8 @@ export interface ToolBeforeEvent {
 export interface ToolAfterEvent {
   readonly name: string;
   readonly result: ToolResult;
+  readonly fileEdits?: ReadonlyArray<ToolFileChangePreview>;
+  readonly fileEditHiddenCount?: number;
   readonly callId: string;
   readonly durationMs: number;
   readonly batchId?: string;

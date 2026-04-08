@@ -62,6 +62,65 @@ export interface ToolContext {
   readonly batchSize?: number;
 }
 
+export interface ToolFileChangeLine {
+  readonly type: "context" | "add" | "delete";
+  readonly text: string;
+  readonly oldLine: number | null;
+  readonly newLine: number | null;
+}
+
+export interface ToolFileChangeHunk {
+  readonly oldStart: number;
+  readonly oldLines: number;
+  readonly newStart: number;
+  readonly newLines: number;
+  readonly lines: ReadonlyArray<ToolFileChangeLine>;
+}
+
+export interface ToolFileStructuredDiff {
+  readonly hunks: ReadonlyArray<ToolFileChangeHunk>;
+}
+
+export interface ToolFileChangePreview {
+  readonly path: string;
+  readonly kind: "create" | "update" | "delete" | "move";
+  readonly additions: number;
+  readonly deletions: number;
+  readonly unifiedDiff: string;
+  readonly truncated: boolean;
+  readonly structuredDiff?: ToolFileStructuredDiff;
+  readonly before?: string;
+  readonly after?: string;
+}
+
+export interface ToolCommandResultMetadata {
+  readonly command: string;
+  readonly cwd: string;
+  readonly exitCode: number | null;
+  readonly timedOut: boolean;
+  readonly warningOnly: boolean;
+  readonly stdoutPreview: string;
+  readonly stderrPreview: string;
+  readonly stdoutTruncated: boolean;
+  readonly stderrTruncated: boolean;
+}
+
+export interface ToolValidationTestSummary {
+  readonly framework: string;
+  readonly passed: number;
+  readonly failed: number;
+  readonly failureMessages: ReadonlyArray<string>;
+}
+
+export interface ToolValidationResultMetadata {
+  readonly passed: boolean;
+  readonly diagnosticErrors: ReadonlyArray<string>;
+  readonly testPassed: boolean | null;
+  readonly testSummary?: ToolValidationTestSummary;
+  readonly testOutputPreview?: string | null;
+  readonly baselineFiltered?: number;
+}
+
 export interface ToolResult {
   readonly success: boolean;
   readonly output: string;

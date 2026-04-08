@@ -61,6 +61,12 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
+function getFileEdits(result: { readonly metadata?: Record<string, unknown> }): ReadonlyArray<Record<string, unknown>> {
+  const fileEdits = result.metadata?.["fileEdits"];
+  expect(Array.isArray(fileEdits)).toBe(true);
+  return fileEdits as ReadonlyArray<Record<string, unknown>>;
+}
+
 function setupUnlockedSkill(name: string = "modernize-arkts"): {
   readonly access: SkillAccessManager;
   readonly uri: (relativePath: string) => string;
@@ -311,10 +317,64 @@ describe("write_file", () => {
     );
     expect(result.success).toBe(true);
     expect(result.artifacts.length).toBe(1);
+    const fileEdits = getFileEdits(result);
+    expect(fileEdits).toHaveLength(1);
+    expect(fileEdits[0]).toMatchObject({
+      path: "new-file.ts",
+      kind: "create",
+      additions: 1,
+      deletions: 0,
+      truncated: false,
+      before: "",
+      after: "const z = 3;\n",
+      structuredDiff: {
+        hunks: [{
+          oldStart: 0,
+          oldLines: 0,
+          newStart: 1,
+          newLines: 1,
+          lines: [{
+            type: "add",
+            text: "const z = 3;",
+            oldLine: null,
+            newLine: 1,
+          }],
+        }],
+      },
+    });
+    expect(fileEdits[0]?.["unifiedDiff"]).toContain("+++ b/new-file.ts");
 
     // Verify by reading back
     const read = await readFileTool.handler({ path: "new-file.ts" }, ctx);
     expect(read.output).toContain("const z = 3;");
+  });
+
+  it("truncates long write diff previews", async () => {
+    const longContent = Array.from({ length: 80 }, (_, index) => `line-${index + 1}`).join("\n") + "\n";
+
+    const result = await writeFileTool.handler(
+      { path: "long-file.ts", content: longContent },
+      ctx,
+    );
+
+    const fileEdits = getFileEdits(result);
+    expect(fileEdits[0]?.["truncated"]).toBe(true);
+    expect(String(fileEdits[0]?.["unifiedDiff"]).split("\n").length).toBeLessThanOrEqual(40);
+  });
+
+  it("omits write snapshots when content exceeds the snapshot size limit", async () => {
+    const hugeContent = `${"a".repeat(70 * 1024)}\n`;
+
+    const result = await writeFileTool.handler(
+      { path: "huge-file.txt", content: hugeContent },
+      ctx,
+    );
+
+    const fileEdits = getFileEdits(result);
+    expect(fileEdits[0]?.["before"]).toBeUndefined();
+    expect(fileEdits[0]?.["after"]).toBeUndefined();
+    expect(fileEdits[0]?.["structuredDiff"]).toBeUndefined();
+    expect(fileEdits[0]?.["unifiedDiff"]).toContain("+++ b/huge-file.txt");
   });
 
   it("creates parent directories", async () => {
@@ -382,6 +442,22 @@ describe("replace_in_file", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output).toContain("1 occurrence");
+    const fileEdits = getFileEdits(result);
+    expect(fileEdits).toHaveLength(1);
+    expect(fileEdits[0]).toMatchObject({
+      path: "src/index.ts",
+      kind: "update",
+      additions: 1,
+      deletions: 1,
+      truncated: false,
+      before: expect.stringContaining("export const x = 1;"),
+      after: expect.stringContaining("export const x = 42;"),
+      structuredDiff: expect.objectContaining({
+        hunks: expect.any(Array),
+      }),
+    });
+    expect(fileEdits[0]?.["unifiedDiff"]).toContain("-export const x = 1;");
+    expect(fileEdits[0]?.["unifiedDiff"]).toContain("+export const x = 42;");
 
     const read = await readFileTool.handler({ path: "src/index.ts" }, ctx);
     expect(read.output).toContain("const x = 42");
@@ -516,6 +592,23 @@ describe("replace_in_file", () => {
       rmSync(outsidePath, { force: true });
     }
   });
+
+  it("omits replace snapshots when the file exceeds the snapshot size limit", async () => {
+    const hugeContent = `prefix-${"a".repeat(70 * 1024)}\n`;
+    writeFileSync(join(tmpDir, "src", "huge.ts"), hugeContent, "utf-8");
+    await readFileTool.handler({ path: "src/huge.ts" }, ctx);
+
+    const result = await replaceInFileTool.handler(
+      { path: "src/huge.ts", search: "prefix-", replace: "updated-" },
+      ctx,
+    );
+
+    const fileEdits = getFileEdits(result);
+    expect(fileEdits[0]?.["before"]).toBeUndefined();
+    expect(fileEdits[0]?.["after"]).toBeUndefined();
+    expect(fileEdits[0]?.["structuredDiff"]).toBeUndefined();
+    expect(fileEdits[0]?.["unifiedDiff"]).toContain("--- a/src/huge.ts");
+  });
   // ─── Batch mode (replacements array) ──────────────────────
 
   it("batch mode: applies multiple replacements to a single file", async () => {
@@ -595,6 +688,7 @@ describe("replace_in_file", () => {
     expect(result.success).toBe(false);
     expect(result.output).toContain("foo:bar");
     expect(result.output).toContain("nonexistent.pattern");
+    expect(result.metadata?.["fileEdits"]).toBeUndefined();
 
     const content = readFileSync(join(tmpDir, "src", "partial.cpp"), "utf-8");
     expect(content).toContain("foo:bar");
@@ -818,6 +912,13 @@ describe("search_files", () => {
 });
 
 describe("run_command", () => {
+  function getCommandMetadata(result: { readonly metadata?: Record<string, unknown> }): Record<string, unknown> {
+    const commandResult = result.metadata?.["commandResult"];
+    expect(commandResult).toBeTruthy();
+    expect(typeof commandResult).toBe("object");
+    return commandResult as Record<string, unknown>;
+  }
+
   it("applies env overrides from JSON string", async () => {
     const result = await runCommandTool.handler(
       {
@@ -828,6 +929,13 @@ describe("run_command", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output.trim()).toBe("custom_value_42");
+    expect(getCommandMetadata(result)).toMatchObject({
+      command: "echo $DEVAGENT_TEST_CUSTOM_VAR",
+      cwd: ".",
+      exitCode: 0,
+      timedOut: false,
+      warningOnly: false,
+    });
   });
 
   it("applies env overrides from direct object", async () => {
@@ -852,6 +960,12 @@ describe("run_command", () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain("Invalid env JSON");
+    expect(getCommandMetadata(result)).toMatchObject({
+      command: "echo hello",
+      exitCode: null,
+      timedOut: false,
+      warningOnly: false,
+    });
   });
 
   it("works without env parameter (backward compatible)", async () => {
@@ -870,6 +984,22 @@ describe("run_command", () => {
     );
     expect(result.success).toBe(true);
     expect(result.output).toContain("[output truncated");
+    const metadata = getCommandMetadata(result);
+    expect(metadata["stdoutTruncated"]).toBe(true);
+    expect(String(metadata["stdoutPreview"])).toContain("[preview truncated]");
+  });
+
+  it("records warning-only partial success metadata", async () => {
+    const result = await runCommandTool.handler(
+      { command: "node -e \"for(let i=0;i<60;i++) console.log('line-' + i); process.stderr.write('warning: partial issue\\n'); process.exit(2)\"" },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("[Warning: exit code 2");
+    expect(getCommandMetadata(result)).toMatchObject({
+      exitCode: 2,
+      warningOnly: true,
+    });
   });
 
   it("clamps timeout_ms to MAX_COMMAND_TIMEOUT_MS (600_000)", async () => {

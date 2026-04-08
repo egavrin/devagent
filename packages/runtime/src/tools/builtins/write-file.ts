@@ -6,6 +6,7 @@
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ToolSpec } from "../../core/types.js";
+import { buildToolFileChangePreview } from "../../core/tool-file-change.js";
 import { ToolError } from "../../core/errors.js";
 import { FileTime } from "./file-time.js";
 import { resolvePathInRepo } from "./path-guard.js";
@@ -63,6 +64,16 @@ export const writeFileTool: ToolSpec = {
       output: `Wrote ${content.length} bytes to ${params["path"] as string}`,
       error: null,
       artifacts: [filePath],
+      metadata: {
+        fileEdits: [
+          buildToolFileChangePreview({
+            path: params["path"] as string,
+            kind: "create",
+            before: "",
+            after: content,
+          }),
+        ],
+      },
     };
   },
 };

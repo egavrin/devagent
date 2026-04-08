@@ -7,6 +7,13 @@ export type {
   ToolSpec,
   ToolErrorGuidance,
   ToolContext,
+  ToolFileChangeLine,
+  ToolFileChangeHunk,
+  ToolFileStructuredDiff,
+  ToolFileChangePreview,
+  ToolCommandResultMetadata,
+  ToolValidationResultMetadata,
+  ToolValidationTestSummary,
   ToolResult,
   ToolHandler,
   ToolCallRecord,
@@ -74,6 +81,15 @@ export type {
   TaskCompletedEvent,
   ErrorEvent,
 } from "./events.js";
+export {
+  buildToolFileUnifiedDiff,
+  buildToolFileStructuredDiff,
+  buildToolFileStructuredDiffFromUnifiedDiff,
+  buildToolFileChangePreview,
+  extractToolFileChangePreviewSummary,
+  extractToolFileChangePreviews,
+  stripToolFileChangePresentationData,
+} from "./tool-file-change.js";
 
 // Config
 export { loadConfig, findProjectRoot, resolveProviderCredentials, DEFAULT_BUDGET, DEFAULT_CONTEXT } from "./config.js";

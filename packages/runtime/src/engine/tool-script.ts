@@ -12,7 +12,7 @@
 
 import type { ToolSpec, ToolResult, ToolContext } from "../core/index.js";
 import type { EventBus } from "../core/index.js";
-import { extractErrorMessage } from "../core/index.js";
+import { extractErrorMessage, extractToolFileChangePreviewSummary } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -264,9 +264,12 @@ export class ToolScriptEngine {
     const durationMs = Date.now() - stepStart;
 
     // Emit tool:after
+    const fileEditSummary = extractToolFileChangePreviewSummary(toolResult.metadata);
     this.bus.emit("tool:after", {
       name: step.tool,
       result: toolResult,
+      fileEdits: fileEditSummary.fileEdits,
+      fileEditHiddenCount: fileEditSummary.hiddenFileCount > 0 ? fileEditSummary.hiddenFileCount : undefined,
       callId,
       durationMs,
     });

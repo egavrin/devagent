@@ -140,4 +140,66 @@ describe("EventBus", () => {
       }),
     );
   });
+
+  it("preserves typed file edit previews on tool:after events", () => {
+    const bus = new EventBus();
+    const handler = vi.fn();
+
+    bus.on("tool:after", handler);
+    bus.emit("tool:after", {
+      name: "write_file",
+      callId: "call-edit-1",
+      durationMs: 15,
+      fileEditHiddenCount: 1,
+      fileEdits: [{
+        path: "src/new-file.ts",
+        kind: "create",
+        additions: 3,
+        deletions: 0,
+        unifiedDiff: "--- /dev/null\n+++ b/src/new-file.ts\n@@ -0,0 +1,3 @@\n+export const x = 1;",
+        truncated: false,
+        structuredDiff: {
+          hunks: [{
+            oldStart: 0,
+            oldLines: 0,
+            newStart: 1,
+            newLines: 1,
+            lines: [{
+              type: "add",
+              text: "export const x = 1;",
+              oldLine: null,
+              newLine: 1,
+            }],
+          }],
+        },
+        before: "",
+        after: "export const x = 1;\n",
+      }],
+      result: {
+        success: true,
+        output: "Wrote 18 bytes to src/new-file.ts",
+        error: null,
+        artifacts: ["src/new-file.ts"],
+      },
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "write_file",
+        fileEdits: [
+          expect.objectContaining({
+            path: "src/new-file.ts",
+            kind: "create",
+            additions: 3,
+            before: "",
+            after: "export const x = 1;\n",
+            structuredDiff: expect.objectContaining({
+              hunks: expect.any(Array),
+            }),
+          }),
+        ],
+        fileEditHiddenCount: 1,
+      }),
+    );
+  });
 });

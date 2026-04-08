@@ -17,6 +17,7 @@
 
 import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import type { ToolSpec } from "../../core/types.js";
+import { buildToolFileChangePreview } from "../../core/tool-file-change.js";
 import { ToolError, extractErrorMessage } from "../../core/errors.js";
 import { FileTime } from "./file-time.js";
 import { resolvePathInRepo } from "./path-guard.js";
@@ -575,7 +576,8 @@ export const replaceInFileTool: ToolSpec = {
         );
       }
 
-      let content = readFileSync(filePath, "utf-8");
+      const originalContent = readFileSync(filePath, "utf-8");
+      let content = originalContent;
       const results: ReplacementResult[] = [];
       let totalCount = 0;
       let hasFailure = false;
@@ -623,6 +625,7 @@ export const replaceInFileTool: ToolSpec = {
       }
 
       const summary = `Applied ${totalCount} replacement(s) in ${params["path"] as string}:\n${lines.join("\n")}`;
+      const nextContent = readFileSync(filePath, "utf-8");
 
       if (hasFailure) {
         return {
@@ -638,6 +641,16 @@ export const replaceInFileTool: ToolSpec = {
         output: summary,
         error: null,
         artifacts: [filePath],
+        metadata: {
+          fileEdits: [
+            buildToolFileChangePreview({
+              path: params["path"] as string,
+              kind: "update",
+              before: originalContent,
+              after: nextContent,
+            }),
+          ],
+        },
       };
     }
 
@@ -692,6 +705,16 @@ export const replaceInFileTool: ToolSpec = {
         output: `Replaced ${result.count} occurrence(s) in ${params["path"] as string}`,
         error: null,
         artifacts: [filePath],
+        metadata: {
+          fileEdits: [
+            buildToolFileChangePreview({
+              path: params["path"] as string,
+              kind: "update",
+              before: content,
+              after: result.newContent,
+            }),
+          ],
+        },
       };
     } catch (err) {
       if (err instanceof ToolError) throw err;

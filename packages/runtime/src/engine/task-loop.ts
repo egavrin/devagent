@@ -17,6 +17,7 @@ import type {
   ToolResult,
   CostRecord,
   DevAgentConfig,
+  ToolValidationResultMetadata,
 } from "../core/index.js";
 import {
   AgentType,
@@ -29,10 +30,11 @@ import {
   estimateTokens,
   lookupModelPricing,
   extractErrorMessage,
+  extractToolFileChangePreviewSummary,
   formatDuration,
 } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
-import type { DoubleCheck } from "./double-check.js";
+import type { DoubleCheck, DoubleCheckResult } from "./double-check.js";
 import { SessionState, extractEnvFact, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX } from "./session-state.js";
 import { formatToolSummary } from "./tool-summary-formatter.js";
 
@@ -2048,9 +2050,12 @@ export class TaskLoop {
     const tool = this.tools.get(toolCall.name);
     const normalizedCall = this.normalizeToolCall(toolCall, tool.category);
     if (normalizedCall.bypassResult) {
+      const fileEditSummary = extractToolFileChangePreviewSummary(normalizedCall.bypassResult.metadata);
       this.bus.emit("tool:after", {
         name: toolCall.name,
         result: normalizedCall.bypassResult,
+        fileEdits: fileEditSummary.fileEdits,
+        fileEditHiddenCount: fileEditSummary.hiddenFileCount > 0 ? fileEditSummary.hiddenFileCount : undefined,
         callId,
         durationMs: 0,
         ...this.getAgentEventFields(),
@@ -2101,9 +2106,12 @@ export class TaskLoop {
         error: `Tool execution denied: ${approvalResult.reason}`,
         artifacts: [],
       };
+      const fileEditSummary = extractToolFileChangePreviewSummary(result.metadata);
       this.bus.emit("tool:after", {
         name: effectiveCall.name,
         result,
+        fileEdits: fileEditSummary.fileEdits,
+        fileEditHiddenCount: fileEditSummary.hiddenFileCount > 0 ? fileEditSummary.hiddenFileCount : undefined,
         callId,
         durationMs: 0,
         ...this.getAgentEventFields(),
@@ -2166,27 +2174,6 @@ export class TaskLoop {
     // Track recent tool calls for doom loop + tool fatigue detection
     this.stagnationDetector.recordToolResult(effectiveCall.name, effectiveCall.arguments, result.success);
 
-    // Fire tool:after event
-    this.bus.emit("tool:after", {
-      name: effectiveCall.name,
-      result,
-      callId,
-      durationMs,
-      batchId: batchContext.batchId,
-      batchSize: batchContext.batchSize,
-      ...this.getAgentEventFields(),
-    });
-    this.emitSubagentUpdate({
-      milestone: "tool:after",
-      toolName: effectiveCall.name,
-      toolCallId: callId,
-      toolSuccess: result.success,
-      durationMs,
-      summary: result.success
-        ? `Completed ${effectiveCall.name}`
-        : `Failed ${effectiveCall.name}`,
-    });
-
     // Double-check for successful mutating tools
     // Save original output before DoubleCheck may append validation noise.
     const originalOutput = result.output;
@@ -2203,6 +2190,13 @@ export class TaskLoop {
           .filter((a): a is string => typeof a === "string");
         if (modifiedFiles.length > 0) {
           const checkResult = await this.doubleCheck.check(modifiedFiles, preEditBaseline);
+          result = {
+            ...result,
+            metadata: {
+              ...(result.metadata ?? {}),
+              validationResult: buildValidationResultMetadata(checkResult),
+            },
+          };
           if (!checkResult.passed) {
             this.unresolvedDoubleCheckFailure = true;
             const feedback = this.doubleCheck.formatResults(checkResult);
@@ -2217,6 +2211,30 @@ export class TaskLoop {
         }
       }
     }
+
+    // Fire tool:after after validation metadata has been attached.
+    const fileEditSummary = extractToolFileChangePreviewSummary(result.metadata);
+    this.bus.emit("tool:after", {
+      name: effectiveCall.name,
+      result,
+      fileEdits: fileEditSummary.fileEdits,
+      fileEditHiddenCount: fileEditSummary.hiddenFileCount > 0 ? fileEditSummary.hiddenFileCount : undefined,
+      callId,
+      durationMs,
+      batchId: batchContext.batchId,
+      batchSize: batchContext.batchSize,
+      ...this.getAgentEventFields(),
+    });
+    this.emitSubagentUpdate({
+      milestone: "tool:after",
+      toolName: effectiveCall.name,
+      toolCallId: callId,
+      toolSuccess: result.success,
+      durationMs,
+      summary: result.success
+        ? `Completed ${effectiveCall.name}`
+        : `Failed ${effectiveCall.name}`,
+    });
 
     // Record modified files, tool summary, and environment facts in session state.
     // Use originalOutput (before DoubleCheck noise) for the summary
@@ -2504,4 +2522,37 @@ function parseToolScriptOutputSections(
     });
   }
   return sections;
+}
+
+function buildValidationResultMetadata(
+  result: DoubleCheckResult,
+): ToolValidationResultMetadata {
+  return {
+    passed: result.passed,
+    diagnosticErrors: [...result.diagnosticErrors],
+    testPassed: result.testPassed,
+    ...(result.testSummary
+      ? {
+        testSummary: {
+          framework: result.testSummary.framework,
+          passed: result.testSummary.passed,
+          failed: result.testSummary.failed,
+          failureMessages: [...result.testSummary.failureMessages],
+        },
+      }
+      : {}),
+    ...(typeof result.testOutput === "string" && result.testOutput.length > 0
+      ? { testOutputPreview: buildValidationTestOutputPreview(result.testOutput) }
+      : {}),
+    ...(result.baselineFiltered !== undefined ? { baselineFiltered: result.baselineFiltered } : {}),
+  };
+}
+
+function buildValidationTestOutputPreview(output: string): string {
+  const lines = output.split("\n").filter((line) => line.trim().length > 0);
+  const preview = lines.slice(0, 12).join("\n");
+  if (lines.length > 12 || preview.length > 1_200) {
+    return `${preview.slice(0, 1_200)}\n[preview truncated]`;
+  }
+  return preview;
 }

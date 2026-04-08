@@ -13,6 +13,8 @@ import type {
   SubagentEndEvent,
   SubagentErrorEvent,
 } from "./events.js";
+import type { ToolFileChangePreview } from "./types.js";
+import { stripToolFileChangePresentationData } from "./tool-file-change.js";
 import {
   aggregateDelegatedWork,
   formatDuration,
@@ -95,8 +97,8 @@ export class EventLogger {
 
   private sanitizeEventData(eventType: keyof EventMap, data: unknown): unknown {
     if (eventType !== "tool:after") return data;
-    const event = data as EventMap["tool:after"];
-    if (event.name !== "delegate") return data;
+    const event = sanitizeToolAfterEvent(data as EventMap["tool:after"]);
+    if (event.name !== "delegate") return event;
 
     const summary = event.result.metadata?.["delegateSummary"];
     if (!summary || typeof summary !== "object") return data;
@@ -270,4 +272,94 @@ export class EventLogger {
 
     return aggregateDelegatedWork([...runs.values()]);
   }
+}
+
+function sanitizeToolAfterEvent(event: EventMap["tool:after"]): EventMap["tool:after"] {
+  const metadata = event.result.metadata;
+  const sanitizedMetadata = metadata && typeof metadata === "object"
+    ? sanitizeToolResultMetadata(metadata)
+    : metadata;
+
+  return {
+    ...event,
+    ...(Array.isArray(event.fileEdits) ? { fileEdits: sanitizePersistedFileEdits(event.fileEdits) } : {}),
+    result: {
+      ...event.result,
+      ...(sanitizedMetadata !== undefined ? { metadata: sanitizedMetadata } : {}),
+    },
+  };
+}
+
+function sanitizeToolResultMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  let next: Record<string, unknown> = metadata;
+
+  if (Array.isArray(metadata["fileEdits"])) {
+    next = {
+      ...next,
+      fileEdits: sanitizePersistedFileEdits(metadata["fileEdits"]),
+    };
+  }
+
+  const commandResult = metadata["commandResult"];
+  if (commandResult && typeof commandResult === "object") {
+    const command = commandResult as Record<string, unknown>;
+    next = {
+      ...next,
+      commandResult: {
+        command: command["command"],
+        cwd: command["cwd"],
+        exitCode: command["exitCode"],
+        timedOut: command["timedOut"],
+        warningOnly: command["warningOnly"],
+        stdoutTruncated: command["stdoutTruncated"],
+        stderrTruncated: command["stderrTruncated"],
+      },
+    };
+  }
+
+  const validationResult = metadata["validationResult"];
+  if (validationResult && typeof validationResult === "object") {
+    const validation = validationResult as Record<string, unknown>;
+    const testSummary = validation["testSummary"];
+    next = {
+      ...next,
+      validationResult: {
+        passed: validation["passed"],
+        diagnosticCount: Array.isArray(validation["diagnosticErrors"]) ? validation["diagnosticErrors"].length : 0,
+        testPassed: validation["testPassed"],
+        baselineFiltered: validation["baselineFiltered"],
+        ...(testSummary && typeof testSummary === "object"
+          ? {
+            testSummary: {
+              framework: (testSummary as Record<string, unknown>)["framework"],
+              passed: (testSummary as Record<string, unknown>)["passed"],
+              failed: (testSummary as Record<string, unknown>)["failed"],
+            },
+          }
+          : {}),
+      },
+    };
+  }
+
+  return next;
+}
+
+function sanitizePersistedFileEdits(fileEdits: ReadonlyArray<unknown>): ReadonlyArray<ToolFileChangePreview> {
+  return fileEdits
+    .filter(isToolFileChangePreviewLike)
+    .map((fileEdit) => stripToolFileChangePresentationData(fileEdit));
+}
+
+function isToolFileChangePreviewLike(fileEdit: unknown): fileEdit is ToolFileChangePreview {
+  return !!fileEdit
+    && typeof fileEdit === "object"
+    && typeof (fileEdit as ToolFileChangePreview).path === "string"
+    && ((fileEdit as ToolFileChangePreview).kind === "create"
+      || (fileEdit as ToolFileChangePreview).kind === "update"
+      || (fileEdit as ToolFileChangePreview).kind === "delete"
+      || (fileEdit as ToolFileChangePreview).kind === "move")
+    && typeof (fileEdit as ToolFileChangePreview).additions === "number"
+    && typeof (fileEdit as ToolFileChangePreview).deletions === "number"
+    && typeof (fileEdit as ToolFileChangePreview).unifiedDiff === "string"
+    && typeof (fileEdit as ToolFileChangePreview).truncated === "boolean";
 }

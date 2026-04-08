@@ -289,4 +289,162 @@ describe("EventLogger", () => {
     expect(data.result.metadata).not.toHaveProperty("childSessionState");
     expect(entries.some((entry) => entry.event === "message:assistant" && String((entry.data as { content?: string }).content).includes("root final text"))).toBe(true);
   });
+
+  it("strips before/after snapshots from persisted tool:after file edits", () => {
+    const dir = makeTempDir();
+    const logger = new EventLogger("sess-file-edits", dir);
+    const bus = new EventBus();
+
+    logger.attach(bus);
+
+    bus.emit("tool:after", {
+      name: "write_file",
+      callId: "call-file-1",
+      durationMs: 12,
+      fileEdits: [{
+        path: "src/new.ts",
+        kind: "create",
+        additions: 1,
+        deletions: 0,
+        unifiedDiff: "--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,1 @@\n+export const x = 1;",
+        truncated: false,
+        structuredDiff: {
+          hunks: [{
+            oldStart: 0,
+            oldLines: 0,
+            newStart: 1,
+            newLines: 1,
+            lines: [{
+              type: "add",
+              text: "export const x = 1;",
+              oldLine: null,
+              newLine: 1,
+            }],
+          }],
+        },
+        before: "",
+        after: "export const x = 1;\n",
+      }],
+      result: {
+        success: true,
+        output: "Wrote file",
+        error: null,
+        artifacts: ["src/new.ts"],
+        metadata: {
+          fileEdits: [{
+            path: "src/new.ts",
+            kind: "create",
+            additions: 1,
+            deletions: 0,
+            unifiedDiff: "--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,1 @@\n+export const x = 1;",
+            truncated: false,
+            structuredDiff: {
+              hunks: [{
+                oldStart: 0,
+                oldLines: 0,
+                newStart: 1,
+                newLines: 1,
+                lines: [{
+                  type: "add",
+                  text: "export const x = 1;",
+                  oldLine: null,
+                  newLine: 1,
+                }],
+              }],
+            },
+            before: "",
+            after: "export const x = 1;\n",
+          }],
+        },
+      },
+    } as never);
+
+    logger.close();
+
+    const entries = EventLogger.readLog("sess-file-edits", dir);
+    const toolAfter = entries.find((entry) => entry.event === "tool:after");
+    expect(toolAfter).toBeTruthy();
+    const data = toolAfter!.data as {
+      fileEdits: Array<Record<string, unknown>>;
+      result: { metadata?: Record<string, unknown> };
+    };
+    expect(data.fileEdits[0]).not.toHaveProperty("before");
+    expect(data.fileEdits[0]).not.toHaveProperty("after");
+    expect(data.fileEdits[0]).not.toHaveProperty("structuredDiff");
+    const persistedMetadataEdits = data.result.metadata?.["fileEdits"] as Array<Record<string, unknown>>;
+    expect(persistedMetadataEdits[0]).not.toHaveProperty("before");
+    expect(persistedMetadataEdits[0]).not.toHaveProperty("after");
+    expect(persistedMetadataEdits[0]).not.toHaveProperty("structuredDiff");
+  });
+
+  it("strips bulky command and validation previews from persisted tool:after metadata", () => {
+    const dir = makeTempDir();
+    const logger = new EventLogger("sess-tool-metadata", dir);
+    const bus = new EventBus();
+
+    logger.attach(bus);
+
+    bus.emit("tool:after", {
+      name: "run_command",
+      callId: "call-cmd-1",
+      durationMs: 25,
+      result: {
+        success: false,
+        output: "Exit code: 1",
+        error: "Command exited with code 1",
+        artifacts: [],
+        metadata: {
+          commandResult: {
+            command: "npm test",
+            cwd: ".",
+            exitCode: 1,
+            timedOut: false,
+            warningOnly: false,
+            stdoutPreview: "lots of stdout",
+            stderrPreview: "lots of stderr",
+            stdoutTruncated: true,
+            stderrTruncated: true,
+          },
+          validationResult: {
+            passed: false,
+            diagnosticErrors: ["src/a.ts: boom", "src/b.ts: bang"],
+            testPassed: false,
+            testOutputPreview: "full stack trace",
+            testSummary: {
+              framework: "vitest",
+              passed: 10,
+              failed: 2,
+              failureMessages: ["first failure"],
+            },
+          },
+        },
+      },
+    } as never);
+
+    logger.close();
+
+    const entries = EventLogger.readLog("sess-tool-metadata", dir);
+    const toolAfter = entries.find((entry) => entry.event === "tool:after");
+    expect(toolAfter).toBeTruthy();
+    const metadata = (toolAfter!.data as { result: { metadata?: Record<string, unknown> } }).result.metadata!;
+    expect(metadata["commandResult"]).toEqual({
+      command: "npm test",
+      cwd: ".",
+      exitCode: 1,
+      timedOut: false,
+      warningOnly: false,
+      stdoutTruncated: true,
+      stderrTruncated: true,
+    });
+    expect(metadata["validationResult"]).toEqual({
+      passed: false,
+      diagnosticCount: 2,
+      testPassed: false,
+      testSummary: {
+        framework: "vitest",
+        passed: 10,
+        failed: 2,
+      },
+    });
+  });
 });
