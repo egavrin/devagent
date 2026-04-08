@@ -80,6 +80,17 @@ describe("command help", () => {
     expect(console.log).toHaveBeenCalledWith("model = gpt-5.4");
   });
 
+  it("config set provider writes provider and default model for an empty config", () => {
+    runConfig(["set", "provider", "openai"]);
+
+    expect(loadGlobalConfigObject()).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    expect(console.log).toHaveBeenCalledWith("provider = openai");
+    expect(console.log).toHaveBeenCalledWith("model = gpt-5.4");
+  });
+
   it("config set provider preserves a shared model that is already valid for that provider", () => {
     writeGlobalConfigObject({
       provider: "github-copilot",
@@ -93,6 +104,15 @@ describe("command help", () => {
       model: "gpt-4.1",
     });
     expect(console.log).toHaveBeenCalledWith("provider = openai");
+  });
+
+  it("config get provider returns the new provider immediately after config set provider", () => {
+    runConfig(["set", "provider", "openai"]);
+    (console.log as ReturnType<typeof vi.fn>).mockClear();
+
+    runConfig(["get", "provider"]);
+
+    expect(console.log).toHaveBeenCalledWith("openai");
   });
 
   it("config set model rejects a model that is not registered for the configured provider", () => {

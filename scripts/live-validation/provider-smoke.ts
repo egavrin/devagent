@@ -53,6 +53,11 @@ interface CommandResult {
   readonly durationMs: number;
 }
 
+interface OllamaModelSelection {
+  readonly model: string | null;
+  readonly blockedReason?: string;
+}
+
 function extractStatusCode(output: string): number | null {
   const match = output.match(/statusCode:\s*(\d{3})/);
   return match ? Number.parseInt(match[1]!, 10) : null;
@@ -232,7 +237,27 @@ function providerBlockedReason(provider: ProviderId, credential: CredentialInfo 
   return null;
 }
 
-async function selectOllamaModel(): Promise<string | null> {
+const PREFERRED_OLLAMA_MODEL = "qwen3.5:9b";
+
+export function selectPreferredOllamaModel(ollamaListOutput: string): OllamaModelSelection {
+  const candidates = ollamaListOutput
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(1)
+    .map((line) => line.split(/\s+/)[0] ?? "")
+    .filter(Boolean);
+  const hasPreferredModel = candidates.includes(PREFERRED_OLLAMA_MODEL);
+  if (hasPreferredModel) {
+    return { model: PREFERRED_OLLAMA_MODEL };
+  }
+  return {
+    model: null,
+    blockedReason: `Required Ollama model "${PREFERRED_OLLAMA_MODEL}" is not installed locally.`,
+  };
+}
+
+async function selectOllamaModel(): Promise<OllamaModelSelection> {
   const result = await runCommand(
     process.env["SHELL"] ?? "/bin/sh",
     ["-lc", "ollama list"],
@@ -241,22 +266,12 @@ async function selectOllamaModel(): Promise<string | null> {
     10_000,
   );
   if (result.exitCode !== 0) {
-    return null;
+    return {
+      model: null,
+      blockedReason: "Failed to run `ollama list`.",
+    };
   }
-  const candidates = result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(1)
-    .map((line) => line.split(/\s+/)[0] ?? "")
-    .filter(Boolean);
-  for (const preferred of ["glm-4.7-flash:latest", "glm-4.7-flash", "qwen3-coder:30b", "qwen3-coder"]) {
-    const match = candidates.find((entry) => entry === preferred || entry.startsWith(`${preferred}:`));
-    if (match) {
-      return match;
-    }
-  }
-  return candidates[0] ?? null;
+  return selectPreferredOllamaModel(result.stdout);
 }
 
 async function writeSmokeArtifacts(
@@ -443,7 +458,7 @@ async function main(): Promise<void> {
     : await mkdtemp(join(tmpdir(), "devagent-provider-smoke-"));
   await mkdir(outputRoot, { recursive: true });
 
-  const ollamaModel = await selectOllamaModel();
+  const ollamaSelection = await selectOllamaModel();
   const matrix: Array<{ provider: ProviderId; model: string | null }> = [
     { provider: "devagent-api", model: DEFAULT_MODELS["devagent-api"] },
     { provider: "openai", model: DEFAULT_MODELS.openai },
@@ -451,7 +466,7 @@ async function main(): Promise<void> {
     { provider: "deepseek", model: DEFAULT_MODELS.deepseek },
     { provider: "chatgpt", model: DEFAULT_MODELS.chatgpt },
     { provider: "github-copilot", model: DEFAULT_MODELS["github-copilot"] },
-    { provider: "ollama", model: ollamaModel },
+    { provider: "ollama", model: ollamaSelection.model },
   ];
 
   const reports: ProviderSmokeReport[] = [];
@@ -466,7 +481,7 @@ async function main(): Promise<void> {
           command: "ollama list",
           durationMs: 0,
           status: "blocked",
-          blockedReason: "No Ollama model is available locally.",
+          blockedReason: ollamaSelection.blockedReason ?? `Required Ollama model "${PREFERRED_OLLAMA_MODEL}" is not installed locally.`,
         }],
       });
       continue;

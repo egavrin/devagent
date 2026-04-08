@@ -105,6 +105,10 @@ function createDeepSeekProvider(config: ProviderConfig): LLMProvider {
   return createOpenAIProvider({
     ...config,
     baseUrl: config.baseUrl ?? "https://api.deepseek.com/v1",
+    messageRoleOverrides: {
+      ...(config.messageRoleOverrides ?? {}),
+      developer: "system",
+    },
   });
 }
 

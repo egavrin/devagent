@@ -123,6 +123,100 @@ describe("createDefaultRegistry", () => {
     expect(body.messages?.map((message) => message.role)).toContain("system");
     expect(body.messages?.map((message) => message.role)).not.toContain("developer");
   });
+
+  it("forces DeepSeek through chat completions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("deepseek", {
+      model: "deepseek-chat",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    let output = "";
+    for await (const chunk of provider.chat([
+      { role: MessageRole.USER, content: "ping" },
+    ])) {
+      if (chunk.type === "text") {
+        output += chunk.content;
+      }
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = String(fetchMock.mock.calls[0]?.[0] ?? "");
+    expect(url).toContain("/v1/chat/completions");
+    expect(url).not.toContain("/v1/responses");
+    expect(output).toBe("pong");
+  });
+
+  it("rewrites developer messages to system for DeepSeek", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("deepseek", {
+      model: "deepseek-chat",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    for await (const _chunk of provider.chat([
+      { role: MessageRole.SYSTEM, content: "system prompt" },
+      { role: MessageRole.USER, content: "ping" },
+    ])) {
+      void _chunk;
+    }
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      messages?: Array<{ role?: string }>;
+    };
+    expect(body.messages?.map((message) => message.role)).toContain("system");
+    expect(body.messages?.map((message) => message.role)).not.toContain("developer");
+  });
+
+  it("keeps DeepSeek request rewriting when proxy env vars are configured", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    setProxyEnv(originalProxyEnv, {
+      HTTPS_PROXY: "https://proxy.example.com:8443",
+    });
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("deepseek", {
+      model: "deepseek-chat",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    for await (const _chunk of provider.chat([
+      { role: MessageRole.SYSTEM, content: "system prompt" },
+      { role: MessageRole.USER, content: "ping" },
+    ])) {
+      void _chunk;
+    }
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown };
+    const body = JSON.parse(String(init.body ?? "{}")) as {
+      messages?: Array<{ role?: string }>;
+    };
+    expect(init.dispatcher).toBeTruthy();
+    expect(body.messages?.map((message) => message.role)).toContain("system");
+    expect(body.messages?.map((message) => message.role)).not.toContain("developer");
+  });
 });
 
 function makeChatStreamingResponse(): Response {

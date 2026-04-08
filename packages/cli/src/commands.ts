@@ -903,16 +903,17 @@ function setValidatedGlobalConfigValue(path: string, rawValue: string): Array<[s
     loadModelRegistry();
     const currentModelSupported = currentModel ? isModelRegisteredForProvider(provider, currentModel) : false;
     const defaultModel = getDefaultModelForProvider(provider);
-
-    setGlobalConfigValue("provider", provider);
+    config["provider"] = provider;
 
     if (!currentModel || !currentModelSupported) {
       if (defaultModel) {
-        setGlobalConfigValue("model", defaultModel);
+        config["model"] = defaultModel;
+        writeGlobalConfigObject(config);
         return [["provider", provider], ["model", defaultModel]];
       }
     }
 
+    writeGlobalConfigObject(config);
     return [["provider", provider]];
   }
 

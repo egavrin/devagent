@@ -9,7 +9,7 @@ import {
   destroyIsolationWorkspace,
 } from "./isolation";
 import { loadValidationScenarios } from "./manifest";
-import { classifyProviderFailure } from "./provider-smoke";
+import { classifyProviderFailure, selectPreferredOllamaModel } from "./provider-smoke";
 import {
   evaluateAssertions,
   summarizeScenarioReports,
@@ -1129,6 +1129,29 @@ describe("classifyProviderFailure", () => {
     })).toEqual({
       status: "blocked",
       blockedReason: "provider service unavailable (503) at https://internal-llm-gateway.example/v1/chat/completions",
+    });
+  });
+});
+
+describe("selectPreferredOllamaModel", () => {
+  it("picks qwen3.5:9b when it is installed locally", () => {
+    expect(selectPreferredOllamaModel([
+      "NAME                    ID              SIZE      MODIFIED",
+      "qwen3.5:9b              abc             6.6 GB    43 minutes ago",
+      "glm-4.7-flash:latest    def             19 GB     7 weeks ago",
+    ].join("\n"))).toEqual({
+      model: "qwen3.5:9b",
+    });
+  });
+
+  it("blocks Ollama smoke when qwen3.5:9b is unavailable", () => {
+    expect(selectPreferredOllamaModel([
+      "NAME                    ID              SIZE      MODIFIED",
+      "glm-4.7-flash:latest    def             19 GB     7 weeks ago",
+      "qwen3-coder:30b         ghi             18 GB     7 weeks ago",
+    ].join("\n"))).toEqual({
+      model: null,
+      blockedReason: 'Required Ollama model "qwen3.5:9b" is not installed locally.',
     });
   });
 });
