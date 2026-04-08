@@ -10,10 +10,14 @@ import {
   formatEnrichedError,
   inferErrorSuggestion,
   formatTurnSummary,
+  formatTurnStart,
+  formatTurnEnd,
   formatSessionSummary,
   formatCompactionResult,
   formatReasoning,
   Spinner,
+  formatFileEditPreview,
+  formatTranscriptPart,
   formatToolStart,
   formatToolEnd,
   formatToolGroupStart,
@@ -26,6 +30,15 @@ import {
 } from "./format.js";
 import { AgentType } from "@devagent/runtime";
 import type { VerbosityConfig } from "@devagent/runtime";
+import {
+  presentApprovalRequestEvent,
+  presentContextCompactingEvent,
+  presentToolAfterEvent,
+} from "./transcript-presenter.js";
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
 
 // ─── Improvement 5: Categorical Verbosity ─────────────────────
 
@@ -157,6 +170,188 @@ describe("formatContextGauge", () => {
   });
 });
 
+describe("formatFileEditPreview", () => {
+  it("renders a typed preview for a single file edit", () => {
+    const result = formatFileEditPreview([{
+      path: "src/new-file.ts",
+      kind: "create",
+      additions: 2,
+      deletions: 0,
+      unifiedDiff: "--- /dev/null\n+++ b/src/new-file.ts\n@@ -0,0 +1,2 @@\n+export const x = 1;\n+export const y = 2;",
+      truncated: false,
+      structuredDiff: {
+        hunks: [{
+          oldStart: 0,
+          oldLines: 0,
+          newStart: 1,
+          newLines: 2,
+          lines: [
+            { type: "add", text: "export const x = 1;", oldLine: null, newLine: 1 },
+            { type: "add", text: "export const y = 2;", oldLine: null, newLine: 2 },
+          ],
+        }],
+      },
+    }]);
+
+    expect(result).toContain("src/new-file.ts");
+    expect(result).toContain("Added 2 lines");
+    expect(result).toContain("+2");
+    expect(result).toContain("-0");
+    expect(stripAnsi(result)).toContain("export const x = 1;");
+  });
+
+  it("limits visible diff lines and reports overflow", () => {
+    const result = formatFileEditPreview([{
+      path: "src/overflow.ts",
+      kind: "update",
+      additions: 10,
+      deletions: 10,
+      unifiedDiff: Array.from({ length: 12 }, (_, index) => `+line-${index + 1}`).join("\n"),
+      truncated: true,
+    }], 0, 8);
+
+    expect(result).toContain("(truncated)");
+    expect(result).toContain("... +4 more diff lines");
+  });
+
+  it("renders hidden-file overflow for multi-file previews", () => {
+    const result = formatFileEditPreview([{
+      path: "src/a.ts",
+      kind: "update",
+      additions: 1,
+      deletions: 1,
+      unifiedDiff: "@@ -1,1 +1,1 @@\n-a\n+b",
+      truncated: false,
+    }], 2);
+
+    expect(result).toContain("... +2 more files");
+  });
+});
+
+describe("formatTranscriptPart", () => {
+  it("renders approval parts with typed approval semantics", () => {
+    const result = formatTranscriptPart(presentApprovalRequestEvent({
+      id: "approval-1",
+      action: "edit",
+      toolName: "write_file",
+      details: "Write src/new.ts",
+    }));
+    expect(result).toContain("[approval]");
+    expect(result).toContain("write_file");
+    expect(result).toContain("Write src/new.ts");
+  });
+
+  it("renders progress parts for context compaction", () => {
+    const result = formatTranscriptPart(presentContextCompactingEvent({
+      estimatedTokens: 96000,
+      maxTokens: 128000,
+    }));
+    expect(result).toContain("compacting context");
+    expect(result).toContain("96k / 128k");
+  });
+
+  it("renders command-result parts from typed run_command metadata", () => {
+    const parts = presentToolAfterEvent({
+      name: "run_command",
+      callId: "call-cmd-1",
+      durationMs: 45,
+      result: {
+        success: false,
+        output: "Exit code: 1",
+        error: "Command exited with code 1",
+        artifacts: [],
+        metadata: {
+          commandResult: {
+            command: "npm test",
+            cwd: ".",
+            exitCode: 1,
+            timedOut: false,
+            warningOnly: false,
+            stdoutPreview: "stdout line",
+            stderrPreview: "stderr line",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          },
+        },
+      },
+    }, 2, 10);
+    const rendered = formatTranscriptPart(parts[1]!);
+    expect(rendered).toContain("[command]");
+    expect(rendered).toContain("npm test");
+    expect(rendered).toContain("Exited with code 1");
+    expect(rendered).toContain("stderr");
+  });
+
+  it("renders validation and diagnostic parts from typed validation metadata", () => {
+    const parts = presentToolAfterEvent({
+      name: "write_file",
+      callId: "call-validate-1",
+      durationMs: 12,
+      result: {
+        success: true,
+        output: "Wrote file",
+        error: null,
+        artifacts: ["src/new.ts"],
+        metadata: {
+          validationResult: {
+            passed: false,
+            diagnosticErrors: ["src/new.ts: Unexpected token"],
+            testPassed: false,
+            testOutputPreview: "1 failed",
+            testSummary: {
+              framework: "vitest",
+              passed: 3,
+              failed: 1,
+              failureMessages: ["fails"],
+            },
+          },
+        },
+      },
+    }, 2, 10);
+
+    expect(formatTranscriptPart(parts[1]!)).toContain("Validation failed");
+    expect(formatTranscriptPart(parts[2]!)).toContain("src/new.ts: Unexpected token");
+  });
+});
+
+describe("formatFileEditPreview highlighting", () => {
+  const originalNoColor = process.env["NO_COLOR"];
+
+  afterEach(() => {
+    if (originalNoColor === undefined) {
+      delete process.env["NO_COLOR"];
+    } else {
+      process.env["NO_COLOR"] = originalNoColor;
+    }
+  });
+
+  it("uses ANSI syntax highlighting when colors are enabled", async () => {
+    delete process.env["NO_COLOR"];
+    const { formatFileEditPreview } = await import("./format.js");
+
+    const result = formatFileEditPreview([{
+      path: "src/new-file.ts",
+      kind: "create",
+      additions: 1,
+      deletions: 0,
+      unifiedDiff: "--- /dev/null\n+++ b/src/new-file.ts\n@@ -0,0 +1,1 @@\n+const value = 1;",
+      truncated: false,
+      after: "const value = 1;\n",
+      structuredDiff: {
+        hunks: [{
+          oldStart: 0,
+          oldLines: 0,
+          newStart: 1,
+          newLines: 1,
+          lines: [{ type: "add", text: "const value = 1;", oldLine: null, newLine: 1 }],
+        }],
+      },
+    }]);
+
+    expect(result).toContain("\x1b[");
+  });
+});
+
 // ─── Improvement 9: Error Enrichment ──────────────────────────
 
 describe("inferErrorSuggestion", () => {
@@ -244,11 +439,51 @@ describe("formatTurnSummary", () => {
       costDelta: 0,
       elapsedMs: 500,
     });
-    expect(result).toContain("1 iterations");
+    expect(result).toContain("1 iteration");
     expect(result).not.toContain("tool calls");
     expect(result).not.toContain("input tokens");
     expect(result).not.toContain("$");
     expect(result).toContain("500ms");
+  });
+});
+
+describe("turn boundaries", () => {
+  it("formats a compact turn start header", () => {
+    const result = formatTurnStart("Refactor the auth flow");
+    expect(result).toContain("turn");
+    expect(result).toContain("Refactor the auth flow");
+  });
+
+  it("formats a completed turn footer from composed metrics", () => {
+    const result = formatTurnEnd({
+      id: "turn-1",
+      userText: "Refactor the auth flow",
+      startedAt: 1_000,
+      finishedAt: 1_500,
+      status: "completed",
+      entries: [],
+      summary: {
+        iterations: 3,
+        toolCalls: 2,
+        cost: 0.01,
+        elapsedMs: 500,
+      },
+      metrics: {
+        toolCalls: 2,
+        filesChanged: 1,
+        validationFailed: true,
+        iterations: 3,
+        cost: 0.01,
+        elapsedMs: 500,
+      },
+    });
+
+    expect(result).toContain("Done");
+    expect(result).toContain("3 iterations");
+    expect(result).toContain("2 tool calls");
+    expect(result).toContain("1 file changed");
+    expect(result).toContain("validation failed");
+    expect(result).toContain("$0.0100");
   });
 });
 

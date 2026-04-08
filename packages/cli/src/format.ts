@@ -11,15 +11,25 @@ import type {
   SubagentEndEvent,
   SubagentErrorEvent,
   DelegatedWorkSummary,
+  ToolFileChangePreview,
 } from "@devagent/runtime";
 import { formatDuration } from "@devagent/runtime";
+import type {
+  TranscriptPart,
+  PresentedToolEvent,
+  PresentedToolGroup,
+} from "./transcript-presenter.js";
+import type { PresentedTurn } from "./transcript-composer.js";
+import {
+  buildHighlightedFileEdit,
+  getPresentedDiffGutterWidth,
+  takeVisibleHighlightedDiffItems,
+} from "./file-edit-presentation.js";
 
 // ─── Color Helpers ──────────────────────────────────────────
 
-const useColor = !process.env["NO_COLOR"];
-
 function wrap(code: string, s: string): string {
-  return useColor ? `\x1b[${code}m${s}\x1b[0m` : s;
+  return isColorEnabled() ? `\x1b[${code}m${s}\x1b[0m` : s;
 }
 
 export function dim(s: string): string { return wrap("90", s); }
@@ -28,7 +38,11 @@ export function green(s: string): string { return wrap("32", s); }
 export function yellow(s: string): string { return wrap("33", s); }
 export function cyan(s: string): string { return wrap("36", s); }
 export function bold(s: string): string { return wrap("1", s); }
-function dimBold(s: string): string { return useColor ? `\x1b[90;1m${s}\x1b[0m` : s; }
+function dimBold(s: string): string { return isColorEnabled() ? `\x1b[90;1m${s}\x1b[0m` : s; }
+
+function isColorEnabled(): boolean {
+  return !process.env["NO_COLOR"];
+}
 
 // ─── Categorical Verbosity ──────────────────────────────────
 
@@ -65,28 +79,180 @@ export function buildVerbosityConfig(
 
 // ─── Diff Preview ──────────────────────────────────────────
 
-/**
- * Format a mini diff preview for file edit results.
- * Shows up to maxLines of additions/deletions from tool output.
- * Returns null if no meaningful diff found.
- */
-export function formatDiffPreview(toolName: string, output: string, maxLines: number = 5): string | null {
-  if (!output || toolName === "write_file") {
-    // write_file doesn't produce diff output — just show bytes written
-    const bytesMatch = output?.match(/(\d+)\s*bytes?\s*written/i);
-    if (bytesMatch) return null; // already shown in tool end line
-    return null;
+export function formatFileEditPreview(
+  fileEdits: ReadonlyArray<ToolFileChangePreview> | undefined,
+  hiddenCount: number = 0,
+  maxDiffLines: number = 8,
+): string | null {
+  if (!fileEdits || fileEdits.length === 0) return null;
+
+  const blocks = fileEdits.map((fileEdit) => {
+    const highlighted = buildHighlightedFileEdit(fileEdit);
+    const visible = takeVisibleHighlightedDiffItems(highlighted.hunks, maxDiffLines);
+    const gutterWidth = getPresentedDiffGutterWidth(highlighted.hunks);
+    const overflow = visible.hiddenLines;
+    const heading = `    ${dim(fileEdit.path)} ${green(`+${fileEdit.additions}`)} ${red(`-${fileEdit.deletions}`)}${fileEdit.truncated ? ` ${dim("(truncated)")}` : ""}`;
+    const summary = `    ${dim(highlighted.summary)}`;
+    const body = visible.items
+      .map((item) => {
+        if (item.type === "separator") {
+          return `    ${dim("...")}`;
+        }
+        return `    ${formatStructuredDiffLine(item.line, gutterWidth)}`;
+      })
+      .join("\n");
+    const footer = overflow > 0 ? `\n${dim(`    ... +${overflow} more diff lines`)}` : "";
+    return `${heading}\n${summary}${body ? `\n${body}` : ""}${footer}`;
+  });
+
+  if (hiddenCount > 0) {
+    blocks.push(dim(`    ... +${hiddenCount} more files`));
   }
 
-  if (toolName !== "replace_in_file") return null;
+  return blocks.join("\n");
+}
 
-  // For replace_in_file, extract the replacement summary
-  const lines = output.split("\n").filter((l) => l.trim());
-  if (lines.length === 0) return null;
+export function formatTranscriptPart(
+  part: TranscriptPart,
+  options?: { readonly maxDiffLines?: number },
+): string | null {
+  switch (part.kind) {
+    case "tool":
+      return formatPresentedToolEvent(part.event);
+    case "tool-group":
+      return formatPresentedToolGroup(part.event);
+    case "file-edit":
+      return formatFileEditPreview([part.data.fileEdit], 0, options?.maxDiffLines);
+    case "file-edit-overflow":
+      return dim(`    ... +${part.data.hiddenCount} more files`);
+    case "command-result":
+      return formatPresentedCommandResult(part.data);
+    case "validation-result":
+      return formatPresentedValidationResult(part.data);
+    case "diagnostic-list":
+      return formatPresentedDiagnosticList(part.data);
+    case "status":
+      return formatPresentedStatus(part.data.title, part.data.lines);
+    case "progress":
+      return dim(`[${part.data.title.toLowerCase()}] ${part.data.detail ?? "Working…"}`);
+    case "approval":
+      return yellow(`[approval] ${part.data.toolName}: ${part.data.details}`);
+    case "error":
+      return formatError(part.data.message);
+    case "user":
+      return `> ${part.data.text}`;
+    case "info":
+      return formatPresentedStatus(part.data.title, part.data.lines);
+    case "reasoning":
+      return dim(`ℹ ${part.data.text}`);
+    case "final-output":
+    case "turn-summary":
+    case "plan":
+      return null;
+    default:
+      return null;
+  }
+}
 
-  // Show first few lines of the result as a dim preview
-  const preview = lines.slice(0, maxLines);
-  return preview.map((l) => dim(`    ${l}`)).join("\n");
+function formatPresentedToolEvent(event: PresentedToolEvent): string {
+  const detail = event.summary ? ` ${dim(event.summary)}` : "";
+  if (event.status === "running") {
+    return `${dim("  ")}${cyan("● ")}${bold(event.name)}${detail}`;
+  }
+  const icon = event.status === "success" ? green("✓ ") : red("✗ ");
+  const duration = event.durationMs !== undefined ? dim(` (${event.durationMs}ms)`) : "";
+  const error = event.error ? dim(`: ${event.error.split("\n")[0]}`) : "";
+  const preview = event.preview ? `\n${dim("    → ")}${cyan(event.preview)}` : "";
+  return `${dim("  ")}${icon}${dim(event.name)}${duration}${error}${preview}`;
+}
+
+function formatPresentedToolGroup(event: PresentedToolGroup): string {
+  const files = event.summaries.slice(0, 3).map((summary) => summary.split("/").pop() ?? summary);
+  if (event.status === "running") {
+    return `${dim("  ")}${cyan("● ")}${bold(event.name)}${dim(` ${event.count} calls (${event.summaries.slice(0, 3).join(", ")}${event.count > 3 ? ` +${event.count - 3} more` : ""})`)}`;
+  }
+  return `${dim("  ")}${event.status === "success" ? green("✓ ") : red("✗ ")}${dim(event.name)}${dim(` ×${event.count}`)}${files.length > 0 ? ` ${cyan(files.join(", "))}` : ""}${event.totalDurationMs !== undefined ? dim(` (${event.totalDurationMs}ms)`) : ""}`;
+}
+
+function formatPresentedStatus(title: string, lines: ReadonlyArray<string>): string {
+  if (lines.length === 0) return dim(`[${title}]`);
+  if (lines.length === 1) return dim(`[${title}] ${lines[0]}`);
+  return [dim(`[${title}]`), ...lines.map((line) => dim(`  ${line}`))].join("\n");
+}
+
+function formatPresentedCommandResult(
+  data: Extract<TranscriptPart, { readonly kind: "command-result" }>["data"],
+): string {
+  const tone = data.status === "success" ? green : data.status === "warning" ? yellow : red;
+  const lines = [
+    `${dim("[command]")} ${bold(data.command)}`,
+    `${dim("  cwd")} ${data.cwd}`,
+    `${dim("  status")} ${tone(data.statusLine)}`,
+  ];
+  if (data.stdoutPreview) {
+    lines.push(`${dim("  stdout")} ${data.stdoutPreview.replace(/\n/g, " ↵ ")}${data.stdoutTruncated ? dim(" …") : ""}`);
+  }
+  if (data.stderrPreview) {
+    lines.push(`${dim("  stderr")} ${tone(data.stderrPreview.replace(/\n/g, " ↵ "))}${data.stderrTruncated ? dim(" …") : ""}`);
+  }
+  return lines.join("\n");
+}
+
+function formatPresentedValidationResult(
+  data: Extract<TranscriptPart, { readonly kind: "validation-result" }>["data"],
+): string {
+  const head = `${dim("[validation]")} ${data.passed ? green(data.summary) : yellow(data.summary)}`;
+  const rest: string[] = [];
+  if (data.testSummaryLine) {
+    rest.push(`${dim("  tests")} ${data.testSummaryLine}`);
+  }
+  if (data.testOutputPreview) {
+    rest.push(`${dim("  output")} ${data.testOutputPreview.replace(/\n/g, " ↵ ")}`);
+  }
+  return [head, ...rest].join("\n");
+}
+
+function formatPresentedDiagnosticList(
+  data: Extract<TranscriptPart, { readonly kind: "diagnostic-list" }>["data"],
+): string {
+  const lines = [`${yellow(`[${data.title}]`)}`];
+  for (const diagnostic of data.diagnostics) {
+    lines.push(`${dim("  •")} ${diagnostic}`);
+  }
+  if (data.hiddenCount > 0) {
+    lines.push(dim(`  ... +${data.hiddenCount} more diagnostics`));
+  }
+  return lines.join("\n");
+}
+
+function formatStructuredDiffLine(
+  line: {
+    readonly type: "context" | "add" | "delete";
+    readonly oldLine: number | null;
+    readonly newLine: number | null;
+    readonly text: string;
+    readonly renderedText?: string;
+    readonly syntaxHighlighted?: boolean;
+  },
+  gutterWidth: number,
+): string {
+  const oldLine = formatLineNumber(line.oldLine, gutterWidth);
+  const newLine = formatLineNumber(line.newLine, gutterWidth);
+  const marker = line.type === "add" ? green("+") : line.type === "delete" ? red("-") : dim(" ");
+  const renderedText = line.renderedText ?? line.text;
+  const text = line.text.length > 0 ? renderedText : dim("<blank>");
+  const code = line.syntaxHighlighted
+    ? text
+    : line.type === "add"
+      ? green(text)
+      : line.type === "delete"
+        ? red(text)
+        : text;
+  return `${dim(oldLine)} ${dim(newLine)} ${marker} ${code}`;
+}
+
+function formatLineNumber(line: number | null, width: number): string {
+  return line === null ? "".padStart(width, " ") : String(line).padStart(width, " ");
 }
 
 // ─── Terminal Title & Bell ──────────────────────────────────
@@ -394,26 +560,55 @@ export function formatPlan(
 interface TurnStats {
   readonly toolCallCount: number;
   readonly iterationCount: number;
-  readonly inputTokens: number;
+  readonly inputTokens?: number;
   readonly costDelta: number;
   readonly elapsedMs: number;
+  readonly filesChanged?: number;
+  readonly validationFailed?: boolean;
+  readonly status?: "running" | "completed" | "error" | "budget_exceeded";
 }
 
 export function formatTurnSummary(stats: TurnStats): string {
   const parts: string[] = [];
-  parts.push(`${stats.iterationCount} iterations`);
+  parts.push(`${stats.iterationCount} ${stats.iterationCount === 1 ? "iteration" : "iterations"}`);
   if (stats.toolCallCount > 0) {
-    parts.push(`${stats.toolCallCount} tool calls`);
+    parts.push(`${stats.toolCallCount} ${stats.toolCallCount === 1 ? "tool call" : "tool calls"}`);
   }
-  if (stats.inputTokens > 0) {
-    const kIn = Math.round(stats.inputTokens / 1000);
+  if ((stats.filesChanged ?? 0) > 0) {
+    const filesChanged = stats.filesChanged ?? 0;
+    parts.push(`${filesChanged} ${filesChanged === 1 ? "file" : "files"} changed`);
+  }
+  if (stats.validationFailed) {
+    parts.push("validation failed");
+  }
+  if ((stats.inputTokens ?? 0) > 0) {
+    const kIn = Math.round((stats.inputTokens ?? 0) / 1000);
     parts.push(`${kIn}k input tokens`);
   }
   if (stats.costDelta > 0) {
     parts.push(`$${stats.costDelta.toFixed(4)}`);
   }
   parts.push(formatDuration(stats.elapsedMs));
-  return `${green("✓")} ${bold("Done")} ${dim(`(${parts.join(", ")})`)}`;
+  const status = stats.status ?? "completed";
+  const icon = status === "error" ? red("✗") : status === "budget_exceeded" ? yellow("!") : green("✓");
+  const label = status === "error" ? "Finished with errors" : status === "budget_exceeded" ? "Budget exhausted" : "Done";
+  return `${icon} ${bold(label)} ${dim(`(${parts.join(", ")})`)}`;
+}
+
+export function formatTurnStart(userText: string): string {
+  return `${dim("╭─")} ${cyan("turn")} ${bold(userText)}`;
+}
+
+export function formatTurnEnd(turn: PresentedTurn): string {
+  return `${dim("╰─")} ${formatTurnSummary({
+    iterationCount: turn.metrics.iterations,
+    toolCallCount: turn.metrics.toolCalls,
+    filesChanged: turn.metrics.filesChanged,
+    validationFailed: turn.metrics.validationFailed,
+    costDelta: turn.metrics.cost,
+    elapsedMs: turn.metrics.elapsedMs,
+    status: turn.status,
+  })}`;
 }
 
 export function formatError(message: string): string {

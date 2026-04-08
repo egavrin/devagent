@@ -42,6 +42,7 @@
         "@devagent/providers": "workspace:*",
         "@devagent/runtime": "workspace:*",
         "@types/react": "^19.2.14",
+        "cli-highlight": "^2.1.11",
         "ink": "^6.8.0",
         "ink-text-input": "^6.0.0",
         "react": "^19.2.4",
@@ -76,6 +77,7 @@
         "@ai-sdk/openai": "^2.0.102",
         "@devagent/runtime": "workspace:*",
         "ai": "^5.0.52",
+        "undici": "^7.16.0",
       },
       "devDependencies": {
         "eslint": "^9.0.0",
@@ -632,6 +634,8 @@
 
     "typescript": ["typescript@5.9.3", "https://repo.huaweicloud.com/repository/npm/typescript/-/typescript-5.9.3.tgz", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
+    "undici": ["undici@7.24.7", "https://repo.huaweicloud.com/repository/npm/undici/-/undici-7.24.7.tgz", {}, "sha512-H/nlJ/h0ggGC+uRL3ovD+G0i4bqhvsDOpbDv7At5eFLlj2b41L8QliGbnl2H7SnDiYhENphh1tQFJZf+MyfLsQ=="],
+
     "undici-types": ["undici-types@7.16.0", "https://repo.huaweicloud.com/repository/npm/undici-types/-/undici-types-7.16.0.tgz", {}, "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="],
 
     "uri-js": ["uri-js@4.4.1", "https://repo.huaweicloud.com/repository/npm/uri-js/-/uri-js-4.4.1.tgz", { "dependencies": { "punycode": "^2.1.0" } }, "sha512-7rKUyy33Q1yc98pQ1DAmLtwX109F7TIfWlW1Ydo8Wl1ii1SeHieeh0HHfPeL2fMXK6z0s8ecKs9frCuLJvndBg=="],
@@ -674,7 +678,7 @@
 
     "@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
-    "@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", { "dependencies": { "@devagent-sdk/types": "file:../types" } }],
+    "@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", {}],
 
     "@devagent-sdk/validation/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
@@ -718,11 +722,9 @@
 
     "yargs/string-width": ["string-width@4.2.3", "https://repo.huaweicloud.com/repository/npm/string-width/-/string-width-4.2.3.tgz", { "dependencies": { "emoji-regex": "^8.0.0", "is-fullwidth-code-point": "^3.0.0", "strip-ansi": "^6.0.1" } }, "sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g=="],
 
-    "@devagent-sdk/validation/@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
-
     "@devagent/executor/@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
-    "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", { "dependencies": { "@devagent-sdk/types": "file:../types" } }],
+    "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/schema": ["@devagent-sdk/schema@file:../devagent-sdk/packages/schema", {}],
 
     "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
@@ -743,8 +745,6 @@
     "yargs/string-width/is-fullwidth-code-point": ["is-fullwidth-code-point@3.0.0", "https://repo.huaweicloud.com/repository/npm/is-fullwidth-code-point/-/is-fullwidth-code-point-3.0.0.tgz", {}, "sha512-zymm5+u+sCsSWyD9qNaejV3DFvhCKclKdizYaJUuHA83RLjb7nSuGnddCHGv0hk+KY7BMAlsWeK4Ueg6EV6XQg=="],
 
     "yargs/string-width/strip-ansi": ["strip-ansi@6.0.1", "https://repo.huaweicloud.com/repository/npm/strip-ansi/-/strip-ansi-6.0.1.tgz", { "dependencies": { "ansi-regex": "^5.0.1" } }, "sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A=="],
-
-    "@devagent/executor/@devagent-sdk/validation/@devagent-sdk/schema/@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
 
     "@typescript-eslint/typescript-estree/minimatch/brace-expansion/balanced-match": ["balanced-match@4.0.4", "https://repo.huaweicloud.com/repository/npm/balanced-match/-/balanced-match-4.0.4.tgz", {}, "sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA=="],
 

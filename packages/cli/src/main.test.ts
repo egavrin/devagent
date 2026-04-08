@@ -152,6 +152,10 @@ describe("renderHelpText", () => {
     expect(help).toContain("Interactive TUI");
     expect(help).toContain("OPENAI_API_KEY");
     expect(help).toContain("ANTHROPIC_API_KEY");
+    expect(help).toContain("HTTPS_PROXY");
+    expect(help).toContain("HTTP_PROXY");
+    expect(help).toContain("NO_PROXY");
+    expect(help).toContain("NODE_EXTRA_CA_CERTS");
     expect(help).toContain("devagent sessions");
     expect(help).toContain("devagent auth <...>");
     expect(help).toContain("devagent auth logout [provider|--all]");

@@ -144,7 +144,6 @@ import {
   Spinner,
   dim, red, cyan, green, yellow, bold,
   formatToolStart,
-  formatToolEnd,
   formatToolGroupStart,
   formatToolGroupEnd,
   formatSubagentBatchLaunch,
@@ -161,12 +160,13 @@ import {
   formatEnrichedError,
   inferErrorSuggestion,
   formatTurnSummary,
+  formatTurnStart,
+  formatTurnEnd,
   formatSessionSummary,
-  formatCompactionResult,
   formatReasoning,
   setTerminalTitle,
   terminalBell,
-  formatDiffPreview,
+  formatTranscriptPart,
 } from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { OutputState } from "./output-state.js";
@@ -180,6 +180,19 @@ import {
   preparePromptCommandQuery,
   type ResolvedPromptCommandTarget,
 } from "./prompt-commands.js";
+import {
+  presentApprovalRequestEvent,
+  presentApprovalResponseEvent,
+  presentContextCompactedEvent,
+  presentContextCompactingEvent,
+  presentSummaryToolMessage,
+  presentToolAfterEvent,
+  presentToolBeforeEvent,
+  makeFinalOutputPart,
+  makeInfoPart,
+  makeTurnSummaryPart,
+} from "./transcript-presenter.js";
+import { TranscriptComposer } from "./transcript-composer.js";
 
 // ─── Argument Parsing ────────────────────────────────────────
 
@@ -551,6 +564,10 @@ Environment:
   DEVAGENT_API_KEY      Devagent API gateway key
   DEEPSEEK_API_KEY      DeepSeek API key
   OPENROUTER_API_KEY    OpenRouter API key
+  HTTPS_PROXY           HTTPS proxy for outbound provider traffic
+  HTTP_PROXY            HTTP proxy for outbound provider traffic
+  NO_PROXY              Hosts that should bypass the outbound proxy
+  NODE_EXTRA_CA_CERTS   Extra CA bundle for enterprise TLS interception
 
 Installation:
   bun run build && bun run install-cli    Install as 'devagent' command
@@ -1688,7 +1705,6 @@ export async function main(): Promise<void> {
         bus: tools.bus,
         query,
         model: config.model,
-        approvalMode: initialSafetyMode,
         onQuery: async (q): Promise<InteractiveQueryResult> => {
           persistence.activateSession(q);
           const result = await runSingleQuery({ ...buildRunOptions(), query: q });
@@ -1774,37 +1790,14 @@ export async function main(): Promise<void> {
 /** Shared spinner instance — started during LLM thinking, stopped on tool/text events. */
 const spinner = new Spinner();
 
-/** Extract a 1-line preview from tool output for key tools. */
-function extractToolPreview(toolName: string, output: string): string | null {
-  if (!output || output.length < 10) return null;
-
-  if (toolName === "search_files") {
-    const match = output.match(/^(\d+) match/);
-    if (match) return output.split("\n")[0]!.slice(0, 80);
-    return null;
-  }
-
-  if (toolName === "run_command") {
-    // Show first non-empty line of stdout, truncated
-    const lines = output.split("\n").filter((l) => l.trim() && !l.startsWith("Exit code:"));
-    if (lines.length > 0) {
-      const first = lines[0]!.trim();
-      return first.length > 80 ? first.slice(0, 77) + "..." : first;
-    }
-    return null;
-  }
-
-  if (toolName === "find_files") {
-    const lines = output.split("\n").filter((l) => l.trim());
-    if (lines.length > 0) return `${lines.length} file(s) found`;
-    return null;
-  }
-
-  return null;
-}
-
 /** Centralized mutable output state — replaces former module-level `let` declarations. */
 const outputState = new OutputState();
+const transcriptComposer = new TranscriptComposer();
+let transcriptIdCounter = 0;
+
+function nextTranscriptId(prefix: string): string {
+  return `${prefix}-${++transcriptIdCounter}`;
+}
 
 function setupEventHandlers(
   bus: EventBus,
@@ -1824,6 +1817,7 @@ function setupEventHandlers(
   const subagentRenderer = new SubagentPanelRenderer(
     verbosity !== "quiet" || isCategoryEnabled("tools", vc),
   );
+  const ungroupedToolNames = new Set(["write_file", "replace_in_file"]);
 
   function hasRunningSubagents(): boolean {
     for (const panel of os.subagentDisplay.values()) {
@@ -1882,6 +1876,10 @@ function setupEventHandlers(
       spinner.log(formatToolGroupStart(group.name, group.count, group.params, group.iteration, group.maxIter));
       spinner.log(formatToolGroupEnd(group.name, group.count, group.lastSuccess, group.totalDurationMs, group.lastError));
     });
+  }
+
+  function shouldGroupTool(name: string): boolean {
+    return !ungroupedToolNames.has(name);
   }
 
   // ─── Iteration tracking ─────────────────────────────────────
@@ -1964,6 +1962,7 @@ function setupEventHandlers(
     if (isCategoryEnabled("tools", vc)) {
       flushToolGroup();
       const line = formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge);
+      transcriptComposer.appendPart(nextTranscriptId("tool"), presentToolBeforeEvent(event, os.currentIteration, maxIter));
       writeUiLine(line);
       writeUiLine(dim(`  params: ${JSON.stringify(event.params, null, 2)}`));
       return;
@@ -1974,7 +1973,7 @@ function setupEventHandlers(
     const summary = summarizeToolParams(event.name, event.params);
 
     // Grouping: check if same tool as pending group
-    if (os.pendingToolGroup && os.pendingToolGroup.name === event.name) {
+    if (shouldGroupTool(event.name) && os.pendingToolGroup && os.pendingToolGroup.name === event.name) {
       os.pendingToolGroup.count++;
       if (summary) os.pendingToolGroup.params.push(summary);
       return;  // Don't print individual start line
@@ -1982,20 +1981,22 @@ function setupEventHandlers(
 
     // Different tool or no group — flush previous group and start new one
     flushToolGroup();
-    os.pendingToolGroup = {
-      name: event.name,
-      count: 1,
-      params: summary ? [summary] : [],
-      totalDurationMs: 0,
-      lastSuccess: true,
-      lastError: undefined,
-      iteration: os.currentIteration,
-      maxIter,
-    };
+    if (shouldGroupTool(event.name)) {
+      os.pendingToolGroup = {
+        name: event.name,
+        count: 1,
+        params: summary ? [summary] : [],
+        totalDurationMs: 0,
+        lastSuccess: true,
+        lastError: undefined,
+        iteration: os.currentIteration,
+        maxIter,
+      };
+    }
     // Show the first call immediately (it might end up being a single call)
-    writeUiLine(
-      formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge),
-    );
+    const presented = presentToolBeforeEvent(event, os.currentIteration, maxIter);
+    transcriptComposer.appendPart(nextTranscriptId("tool"), presented);
+    writeUiLine(formatTranscriptPart(presented) ?? formatToolStart(event.name, event.params, os.currentIteration, maxIter, gauge));
   });
 
   bus.on("tool:after", (event) => {
@@ -2022,7 +2023,7 @@ function setupEventHandlers(
     if (verbosity === "quiet" && !isCategoryEnabled("tools", vc) && event.result.success) return;
 
     // Accumulate into group if applicable
-    if (os.pendingToolGroup && os.pendingToolGroup.name === event.name && !isCategoryEnabled("tools", vc)) {
+    if (shouldGroupTool(event.name) && os.pendingToolGroup && os.pendingToolGroup.name === event.name && !isCategoryEnabled("tools", vc)) {
       os.pendingToolGroup.totalDurationMs += event.durationMs;
       if (!event.result.success) {
         os.pendingToolGroup.lastSuccess = false;
@@ -2030,25 +2031,29 @@ function setupEventHandlers(
       }
 
       if (os.pendingToolGroup.count === 1) {
-        // Single call so far — show individual end line
-        writeUiLine(formatToolEnd(
-          event.name,
-          event.result.success,
-          event.durationMs,
-          event.result.error ?? undefined,
-          cachedParams,
-        ));
+        const presentedParts = presentToolAfterEvent(event, os.currentIteration, maxIter);
+        for (const part of presentedParts) {
+          transcriptComposer.appendPart(nextTranscriptId("tool"), part);
+        }
+        const toolLine = formatTranscriptPart(presentedParts[0]!);
+        if (toolLine) writeUiLine(toolLine);
+        for (const part of presentedParts.slice(1)) {
+          const rendered = formatTranscriptPart(part);
+          if (rendered) writeUiLine(rendered);
+        }
       }
       // If count > 1, end line will be shown when group flushes
     } else {
-      // Not in a group (or verbose mode) — show individual end line
-      writeUiLine(formatToolEnd(
-        event.name,
-        event.result.success,
-        event.durationMs,
-        event.result.error ?? undefined,
-        cachedParams,
-      ));
+      const presentedParts = presentToolAfterEvent(event, os.currentIteration, maxIter);
+      for (const part of presentedParts) {
+        transcriptComposer.appendPart(nextTranscriptId("tool"), part);
+      }
+      const toolLine = formatTranscriptPart(presentedParts[0]!);
+      if (toolLine) writeUiLine(toolLine);
+      for (const part of presentedParts.slice(1)) {
+        const rendered = formatTranscriptPart(part);
+        if (rendered) writeUiLine(rendered);
+      }
     }
 
     if (isCategoryEnabled("tools", vc) && event.result.output) {
@@ -2056,18 +2061,6 @@ function setupEventHandlers(
         ? event.result.output.substring(0, 500) + "…"
         : event.result.output;
       writeUiLine(dim(`  output: ${output}`));
-    } else if (verbosity !== "quiet" && event.result.success) {
-      // Diff preview for file edits
-      const diffPreview = formatDiffPreview(event.name, event.result.output);
-      if (diffPreview) {
-        writeUi(diffPreview + "\n");
-      }
-
-      // Tool output preview: show 1-line summary for key tools
-      const preview = extractToolPreview(event.name, event.result.output);
-      if (preview) {
-        writeUiLine(dim(`    → ${preview}`));
-      }
     }
 
     // Restart spinner after tool completes
@@ -2092,6 +2085,7 @@ function setupEventHandlers(
     if (verbosity === "quiet" && !isCategoryEnabled("plan", vc)) return;
 
     spinner.stop();
+    transcriptComposer.appendPart(nextTranscriptId("plan"), { kind: "plan", data: event.steps as Array<{ description: string; status: string }> });
     writeUi("\n" + dim("── Plan ──") + "\n");
     writeUi(formatPlan(event.steps) + "\n\n");
   });
@@ -2211,7 +2205,10 @@ function setupEventHandlers(
     if (event.agentId) return;
     if (event.toolName !== "delegate" || event.summaryOnly !== true) return;
     if (verbosity === "quiet" && !isCategoryEnabled("tools", vc)) return;
-    writeUiLine(`  ${green("✓")} ${dim(event.content)}`);
+    const part = presentSummaryToolMessage(event);
+    transcriptComposer.appendPart(nextTranscriptId("delegate"), part);
+    const rendered = formatTranscriptPart(part);
+    if (rendered) writeUiLine(rendered);
   });
 
   // ─── Message events (spinner management) ───────────────────
@@ -2220,6 +2217,13 @@ function setupEventHandlers(
     // Start spinner when user query is sent (waiting for LLM)
     if (verbosity !== "quiet") {
       spinner.start();
+    }
+  });
+
+  bus.on("message:user", (event) => {
+    if (verbosity !== "quiet") {
+      transcriptComposer.startTurn(nextTranscriptId("turn"), event.content, Date.now());
+      writeUiLine(formatTurnStart(event.content));
     }
   });
 
@@ -2245,9 +2249,10 @@ function setupEventHandlers(
   bus.on("context:compacting", (event) => {
     spinner.stop();
     if (verbosity !== "quiet" || isCategoryEnabled("context", vc)) {
-      writeUiLine(
-        dim(`[context] Compacting… (~${event.estimatedTokens} tokens, limit ${event.maxTokens})`),
-      );
+      const part = presentContextCompactingEvent(event);
+      transcriptComposer.appendPart(nextTranscriptId("context"), part);
+      const rendered = formatTranscriptPart(part);
+      if (rendered) writeUiLine(rendered);
       spinner.start("Compacting context…");
     }
   });
@@ -2255,14 +2260,10 @@ function setupEventHandlers(
   bus.on("context:compacted", (event) => {
     spinner.stop();
     if (verbosity !== "quiet" || isCategoryEnabled("context", vc)) {
-      writeUiLine(
-        formatCompactionResult({
-          tokensBefore: event.tokensBefore,
-          estimatedTokens: event.estimatedTokens,
-          removedCount: event.removedCount,
-          prunedCount: event.prunedCount,
-        }),
-      );
+      const part = presentContextCompactedEvent(event);
+      transcriptComposer.appendPart(nextTranscriptId("context"), part);
+      const rendered = formatTranscriptPart(part);
+      if (rendered) writeUiLine(rendered);
     }
   });
 
@@ -2317,6 +2318,7 @@ function setupEventHandlers(
 
   bus.on("error", (event) => {
     spinner.stop();
+    transcriptComposer.appendPart(nextTranscriptId("error"), { kind: "error", data: { message: event.message, code: event.code } });
     if (recentToolResults.length > 0) {
       const suggestion = inferErrorSuggestion(event.message, recentToolResults);
       writeUiLine(formatEnrichedError({
@@ -2334,11 +2336,14 @@ function setupEventHandlers(
   bus.on("approval:request", (event) => {
     spinner.stop();
     statusLine?.suspend();
+    const approvalPart = presentApprovalRequestEvent(event);
+    if (approvalPart.kind !== "approval") return;
+    transcriptComposer.appendPart(nextTranscriptId("approval"), approvalPart);
 
     // Bordered approval box
     const border = yellow("─".repeat(60));
-    const toolLine = `  ${bold(event.toolName)}`;
-    const detailLine = `  ${dim(event.details.length > 56 ? event.details.slice(0, 53) + "..." : event.details)}`;
+    const toolLine = `  ${bold(approvalPart.data.toolName)}`;
+    const detailLine = `  ${dim(approvalPart.data.details.length > 56 ? approvalPart.data.details.slice(0, 53) + "..." : approvalPart.data.details)}`;
     process.stderr.write(`\n${border}\n${toolLine}\n${detailLine}\n${border}\n`);
 
     const rl = createInterface({
@@ -2359,6 +2364,13 @@ function setupEventHandlers(
         statusLine?.resume();
       },
     );
+  });
+
+  bus.on("approval:response", (event) => {
+    const part = presentApprovalResponseEvent(event);
+    transcriptComposer.appendPart(nextTranscriptId("approval"), part);
+    const rendered = formatTranscriptPart(part);
+    if (rendered) writeUiLine(rendered);
   });
 
   // Clear status line when session ends
@@ -2718,38 +2730,50 @@ async function runSingleQuery(options: RunSingleQueryOptions): Promise<TaskLoopR
   // Flush buffered final response to stdout
   flushOutput(result, verbosity);
 
+  if (result.lastText) {
+    transcriptComposer.appendPart(nextTranscriptId("final"), makeFinalOutputPart(result.lastText));
+  }
+
+  if (result.status === "budget_exceeded") {
+    const budgetPart = makeInfoPart("status", ["Iteration limit exhausted. Type /continue to proceed."]);
+    transcriptComposer.appendPart(nextTranscriptId("budget"), budgetPart);
+    if (verbosity !== "quiet") {
+      const rendered = formatTranscriptPart(budgetPart);
+      if (rendered) {
+        process.stderr.write(rendered + "\n");
+      }
+    }
+  }
+
+  const turnSummaryPart = makeTurnSummaryPart({
+    iterations: result.iterations,
+    toolCalls: outputState.turnToolCallCount,
+    cost: outputState.turnCostDelta,
+    elapsedMs: Date.now() - startTime,
+  });
+  transcriptComposer.completeTurn(nextTranscriptId("summary"), turnSummaryPart, {
+    status: result.status === "budget_exceeded" ? "budget_exceeded" : "completed",
+    finishedAt: Date.now(),
+  });
+  const completedTurnNode = transcriptComposer.getNodes().at(-1);
+
   if (verbosity !== "quiet") {
-    // File change summary — show created/modified files before turn summary
-    const modifiedFiles = result.messages
-      .filter((m) => m.role === "tool" && m.content)
-      .flatMap((m) => {
-        // Extract file paths from tool result artifacts
-        const toolMsg = result.messages.find(
-          (am) => am.role === "assistant" && am.toolCalls?.some((tc) => tc.callId === m.toolCallId),
-        );
-        if (!toolMsg?.toolCalls) return [];
-        const tc = toolMsg.toolCalls.find((c) => c.callId === m.toolCallId);
-        if (!tc || (tc.name !== "write_file" && tc.name !== "replace_in_file")) return [];
-        const path = tc.arguments["path"];
-        return typeof path === "string" ? [path] : [];
-      });
-    const uniqueFiles = [...new Set(modifiedFiles)];
-    if (uniqueFiles.length > 0) {
-      const fileList = uniqueFiles.slice(0, 5).join(", ");
-      const overflow = uniqueFiles.length > 5 ? ` (+${uniqueFiles.length - 5} more)` : "";
-      process.stderr.write(dim(`[files] ${uniqueFiles.length} modified: ${fileList}${overflow}`) + "\n");
+    const completedTurn = completedTurnNode?.kind === "turn" ? completedTurnNode.turn : null;
+    if (completedTurn) {
+      process.stderr.write(formatTurnEnd(completedTurn) + "\n");
+    } else {
+      const elapsed = Date.now() - startTime;
+      process.stderr.write(formatTurnSummary({
+        iterationCount: result.iterations,
+        toolCallCount: outputState.turnToolCallCount,
+        inputTokens: outputState.turnInputTokens,
+        costDelta: outputState.turnCostDelta,
+        elapsedMs: elapsed,
+      }) + "\n");
     }
 
-    const elapsed = Date.now() - startTime;
-    process.stderr.write(formatTurnSummary({
-      iterationCount: result.iterations,
-      toolCallCount: outputState.turnToolCallCount,
-      inputTokens: outputState.turnInputTokens,
-      costDelta: outputState.turnCostDelta,
-      elapsedMs: elapsed,
-    }) + "\n");
-
     // Ring bell on long runs so the user knows it finished
+    const elapsed = Date.now() - startTime;
     if (elapsed > 30_000) {
       terminalBell();
     }

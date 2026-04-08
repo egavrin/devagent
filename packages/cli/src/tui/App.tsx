@@ -15,10 +15,17 @@ import { ToastContainer, type ToastMessage } from "./Toast.js";
 import { Welcome } from "./Welcome.js";
 import { LogEntryView } from "./LogEntryView.js";
 import { useAgentLog } from "./useAgentLog.js";
-import { cycleApprovalMode, getApprovalModeColor, type InteractiveQueryResult, tokenProgressBar } from "./shared.js";
-import type { LogEntry } from "./shared.js";
+import { cycleApprovalMode, getApprovalModeColor, type InteractiveQueryResult } from "./shared.js";
+import type { TranscriptNode } from "./shared.js";
 import type { EventBus } from "@devagent/runtime";
 import { renderSessionPreview, type SessionPreview } from "../session-preview.js";
+import type { PresentedTurn } from "../transcript-composer.js";
+import {
+  makeFinalOutputPart,
+  makeInfoPart,
+  makeTurnSummaryPart,
+  makeErrorPart,
+} from "../transcript-presenter.js";
 
 export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline │ Shift+Tab toggles safety mode";
 export const ITERATION_LIMIT_NOTICE = "Iteration limit exhausted. Type /continue to proceed.";
@@ -39,19 +46,64 @@ export interface AppProps {
 
 export interface TranscriptViewProps {
   readonly showWelcome: boolean;
-  readonly log: ReadonlyArray<LogEntry>;
+  readonly transcriptNodes: ReadonlyArray<TranscriptNode>;
   readonly model: string;
   readonly version?: string;
 }
 
-export function TranscriptView({ showWelcome, log, model, version }: TranscriptViewProps): React.ReactElement {
+function isRunningTurnNode(node: TranscriptNode | undefined): node is Extract<TranscriptNode, { readonly kind: "turn" }> {
+  return node?.kind === "turn" && node.turn.status === "running";
+}
+
+export function TranscriptView({ showWelcome, transcriptNodes, model, version }: TranscriptViewProps): React.ReactElement {
+  const lastNode = transcriptNodes.at(-1);
+  const activeTurnNode = isRunningTurnNode(lastNode) ? lastNode : null;
+  const staticNodes = activeTurnNode ? transcriptNodes.slice(0, -1) : transcriptNodes;
+
   return (
     <>
       {showWelcome && <Welcome model={model} version={version} />}
-      <Static items={[...log]}>
-        {(entry) => <LogEntryView key={entry.id} entry={entry} />}
+      <Static items={[...staticNodes]}>
+        {(node) => <TranscriptNodeView key={node.id} node={node} />}
       </Static>
+      {activeTurnNode ? <TranscriptNodeView node={activeTurnNode} /> : null}
     </>
+  );
+}
+
+function TranscriptNodeView({ node }: { readonly node: TranscriptNode }): React.ReactElement {
+  if (node.kind === "part") {
+    return <LogEntryView entry={{ id: node.id, part: node.part }} />;
+  }
+  return <TurnView turn={node.turn} />;
+}
+
+function TurnView({ turn }: { readonly turn: PresentedTurn }): React.ReactElement {
+  const statusColor = turn.status === "error"
+    ? "red"
+    : turn.status === "budget_exceeded"
+      ? "yellow"
+      : turn.status === "running"
+        ? "cyan"
+        : "green";
+  const statusLabel = turn.status === "running"
+    ? "running"
+    : turn.status === "budget_exceeded"
+      ? "budget"
+      : turn.status;
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text>
+        <Text dimColor>  ╭─ </Text>
+        <Text color={statusColor}>{statusLabel}</Text>
+        <Text> </Text>
+        <Text bold>{turn.userText}</Text>
+      </Text>
+      {turn.entries.map((entry) => (
+        <LogEntryView key={entry.id} entry={{ id: entry.id, part: entry.part }} />
+      ))}
+    </Box>
   );
 }
 
@@ -86,12 +138,12 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
   const [currentApprovalMode, setCurrentApprovalMode] = useState(approvalMode);
 
   const {
-    log, status, subagents, spinnerMessage,
-    addLog, flushThinking, flushGroup, nextId,
+    transcriptNodes, status, subagents, spinnerMessage,
+    appendStandalonePart, startTurn, appendTurnPart, completeTurn, flushThinking, flushGroup, nextId,
     setStatus, setSubagents, setSpinnerMessage,
     refs,
   } = useAgentLog({
-    bus, model, approvalMode: currentApprovalMode,
+    bus, model,
     collapseFailures: true,
     compactPlanProgress: true,
     onApproval: (e) => setPendingApproval({ id: e.id, toolName: e.toolName, details: e.details }),
@@ -110,27 +162,27 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     if (trimmed === "/clear" || trimmed === "/c") {
       onClear(); setSubagents(new Map());
       setStatus((s) => ({ ...s, cost: 0, iteration: 0, inputTokens: 0 }));
-      addLog({ id: nextId("clear"), type: "info", data: "Context cleared." });
+      appendStandalonePart(nextId("clear"), makeInfoPart("info", ["Context cleared."]));
       return;
     }
     if (trimmed === "/continue") {
       return handleSubmit("continue");
     }
     if (trimmed === "/help" || trimmed === "/h" || trimmed === "/?") {
-      addLog({ id: nextId("help"), type: "info", data: TUI_HELP_MESSAGE });
+      appendStandalonePart(nextId("help"), makeInfoPart("info", [TUI_HELP_MESSAGE]));
       return;
     }
     if (trimmed === "/sessions" || trimmed === "/s") {
       if (onListSessions) {
-        addLog({ id: nextId("sessions"), type: "info", data: renderSessionsCommandOutput(onListSessions()) });
+        appendStandalonePart(nextId("sessions"), makeInfoPart("sessions", renderSessionsCommandOutput(onListSessions()).split("\n")));
       } else {
-        addLog({ id: nextId("sessions"), type: "info", data: "Session listing not available." });
+        appendStandalonePart(nextId("sessions"), makeInfoPart("sessions", ["Session listing not available."]));
       }
       return;
     }
     if (trimmed === "/resume" || trimmed === "/r") {
       if (onListSessions) {
-        addLog({ id: nextId("resume"), type: "info", data: renderResumeCommandOutput(onListSessions()) });
+        appendStandalonePart(nextId("resume"), makeInfoPart("sessions", renderResumeCommandOutput(onListSessions()).split("\n")));
       }
       return;
     }
@@ -138,7 +190,6 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     // Add to history and show in log
     setShowWelcome(false);
     setQueryHistory((prev) => [...prev, trimmed]);
-    addLog({ id: nextId("user"), type: "info", data: `> ${trimmed}` });
 
     setRunning(true);
     refs.textBuffer.current = "";
@@ -146,6 +197,7 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     refs.turnStart.current = Date.now();
     refs.turnToolCount.current = 0;
     refs.costAccum.current = 0;
+    startTurn(nextId("turn"), trimmed, refs.turnStart.current);
 
     let result: InteractiveQueryResult = { iterations: 0, toolCalls: 0, lastText: null, status: "success" };
     try {
@@ -154,30 +206,39 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
       flushGroup();
       const finalText = result.lastText;
       if (finalText) {
-        addLog({ id: nextId("final"), type: "final-output", data: { text: finalText } });
+        appendTurnPart(nextId("final"), makeFinalOutputPart(finalText));
       }
-
-      addLog({
-        id: nextId("summary"), type: "turn-summary",
-        data: {
-          iterations: result.iterations, toolCalls: result.toolCalls,
-          cost: refs.costAccum.current, elapsedMs: Date.now() - refs.turnStart.current,
-        },
-      });
 
       if (result.status === "budget_exceeded") {
-        addLog({ id: nextId("budget"), type: "info", data: ITERATION_LIMIT_NOTICE });
+        appendTurnPart(nextId("budget"), makeInfoPart("status", [ITERATION_LIMIT_NOTICE]));
         addToast(ITERATION_LIMIT_NOTICE, "warning");
       }
+
+      completeTurn(
+        nextId("summary"),
+        makeTurnSummaryPart({
+          iterations: result.iterations, toolCalls: result.toolCalls,
+          cost: refs.costAccum.current, elapsedMs: Date.now() - refs.turnStart.current,
+        }),
+        { status: result.status === "budget_exceeded" ? "budget_exceeded" : "completed", finishedAt: Date.now() },
+      );
     } catch (err) {
-      addLog({ id: nextId("error"), type: "error", data: { message: err instanceof Error ? err.message : String(err), code: "QUERY_ERROR" } });
+      appendTurnPart(nextId("error"), makeErrorPart({ message: err instanceof Error ? err.message : String(err), code: "QUERY_ERROR" }));
+      completeTurn(
+        nextId("summary"),
+        makeTurnSummaryPart({
+          iterations: 0, toolCalls: refs.turnToolCount.current,
+          cost: refs.costAccum.current, elapsedMs: Date.now() - refs.turnStart.current,
+        }),
+        { status: "error", finishedAt: Date.now() },
+      );
     } finally {
       setRunning(false);
       setSubagents(new Map());
       setSpinnerMessage(undefined);
       refs.textBuffer.current = "";
     }
-  }, [onQuery, onClear, exit, addLog, addToast, flushThinking, flushGroup, nextId, refs, setStatus, setSubagents, setSpinnerMessage, currentApprovalMode]);
+  }, [onQuery, onClear, exit, appendStandalonePart, startTurn, appendTurnPart, completeTurn, addToast, flushThinking, flushGroup, nextId, refs, setStatus, setSubagents, setSpinnerMessage, currentApprovalMode]);
 
   const handleCycleApprovalMode = useCallback(() => {
     if (running || pendingApproval || showCommandPalette) {
@@ -185,7 +246,6 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     }
     const nextMode = cycleApprovalMode(currentApprovalMode);
     setCurrentApprovalMode(nextMode);
-    setStatus((s) => ({ ...s, approvalMode: nextMode }));
     onCycleApprovalMode(nextMode);
     addToast(`Safety: ${nextMode}`, "info");
   }, [addToast, currentApprovalMode, onCycleApprovalMode, pendingApproval, running, setStatus, showCommandPalette]);
@@ -203,7 +263,7 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     if (key.ctrl && input === "c") {
       if (showCommandPalette) { setShowCommandPalette(false); return; }
       if (pendingApproval) handleApproval(false);
-      else if (running) { addLog({ id: nextId("cancel"), type: "info", data: "Cancelled." }); setRunning(false); }
+      else if (running) { appendStandalonePart(nextId("cancel"), makeInfoPart("status", ["Cancelled."])); setRunning(false); }
       else exit();
     }
     if (key.ctrl && input === "k" && !running) {
@@ -232,17 +292,11 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
 
   return (
     <>
-      <TranscriptView showWelcome={showWelcome} log={log} model={model} version={version} />
+      <TranscriptView showWelcome={showWelcome} transcriptNodes={transcriptNodes} model={model} version={version} />
       {hasActiveSubagents && <SubagentPanel agents={subagents} />}
       {pendingApproval && <ApprovalDialog request={pendingApproval} onResponse={handleApproval} />}
       {showCommandPalette && <CommandPalette commands={commands} onClose={() => setShowCommandPalette(false)} />}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-
-      {running && status.maxContextTokens > 0 && (
-        <Text dimColor>
-          {tokenProgressBar(status.inputTokens, status.maxContextTokens)}
-        </Text>
-      )}
 
       {running && !pendingApproval && (
         <Box borderStyle="round" borderColor={getApprovalModeColor(currentApprovalMode)} paddingLeft={1} paddingRight={1}>

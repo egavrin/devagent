@@ -4,6 +4,8 @@
 
 import { SafetyMode } from "@devagent/runtime";
 import type { TaskCompletionStatus } from "@devagent/runtime";
+import type { TranscriptPart } from "../transcript-presenter.js";
+import type { TranscriptNode } from "../transcript-composer.js";
 
 // ─── Spinner Constants ──────────────────────────────────────
 
@@ -15,15 +17,12 @@ export const SPINNER_VERBS = [
   "Deliberating", "Exploring", "Weighing", "Pondering", "Reviewing",
 ];
 
-// ─── Log Entry Types ────────────────────────────────────────
-
-export type LogEntryType = "tool" | "tool-group" | "reasoning" | "thinking-duration" | "plan" | "error" | "info" | "compaction" | "final-output" | "turn-summary";
-
 export interface LogEntry {
   readonly id: string;
-  readonly type: LogEntryType;
-  readonly data: unknown;
+  readonly part: TranscriptPart;
 }
+
+export type { TranscriptNode };
 
 export interface InteractiveQueryResult {
   readonly iterations: number;
@@ -33,8 +32,8 @@ export interface InteractiveQueryResult {
 }
 
 export const APPROVAL_MODE_ORDER = [
-  SafetyMode.DEFAULT,
   SafetyMode.AUTOPILOT,
+  SafetyMode.DEFAULT,
 ] as const;
 
 export type PromptTabAction = "cycle-mode" | "complete" | "none";
@@ -59,41 +58,6 @@ export function getApprovalModeColor(mode: string): "cyan" | "green" {
 export function resolvePromptTabAction(key: { readonly tab?: boolean; readonly shift?: boolean }): PromptTabAction {
   if (!key.tab) return "none";
   return key.shift ? "cycle-mode" : "complete";
-}
-
-// ─── Tool Helpers ───────────────────────────────────────────
-
-export function extractToolPreview(toolName: string, output: string): string | undefined {
-  if (!output || output.length < 10) return undefined;
-  if (toolName === "search_files") {
-    const match = output.match(/^(\d+) match/);
-    if (match) return output.split("\n")[0]!.slice(0, 80);
-  }
-  if (toolName === "run_command") {
-    const lines = output.split("\n").filter((l) => l.trim() && !l.startsWith("Exit code:"));
-    if (lines.length > 0) return lines[0]!.trim().slice(0, 80);
-  }
-  if (toolName === "find_files") {
-    const lines = output.split("\n").filter((l) => l.trim());
-    if (lines.length > 0) return `${lines.length} file(s) found`;
-  }
-  return undefined;
-}
-
-export function extractEditDiff(toolName: string, output: string): string | undefined {
-  if (toolName !== "replace_in_file" && toolName !== "write_file") return undefined;
-  if (!output || output.length < 20) return undefined;
-  return output.split("\n").filter((l) => l.trim()).slice(0, 8).join("\n");
-}
-
-export function summarizeParams(name: string, params: Record<string, unknown>): string {
-  const path = params["path"] as string | undefined;
-  if (path) return path;
-  const command = params["command"] as string | undefined;
-  if (command) return command.slice(0, 80);
-  const pattern = params["pattern"] as string | undefined;
-  if (pattern) return `"${pattern}"`;
-  return "";
 }
 
 // ─── Text Helpers ───────────────────────────────────────────

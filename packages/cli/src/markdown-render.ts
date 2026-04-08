@@ -27,13 +27,13 @@ const NO_COLOR = !!process.env["NO_COLOR"];
 
 // ─── ANSI Codes ─────────────────────────────────────────────
 
-const BOLD = "\x1b[1m";
-const DIM = "\x1b[2m";
-const ITALIC = "\x1b[3m";
-const RESET = "\x1b[0m";
-const CYAN = "\x1b[36m";
-const GREEN = "\x1b[32m";
-const RED = "\x1b[31m";
+const BOLD = NO_COLOR ? "" : "\x1b[1m";
+const DIM = NO_COLOR ? "" : "\x1b[2m";
+const ITALIC = NO_COLOR ? "" : "\x1b[3m";
+const RESET = NO_COLOR ? "" : "\x1b[0m";
+const CYAN = NO_COLOR ? "" : "\x1b[36m";
+const GREEN = NO_COLOR ? "" : "\x1b[32m";
+const RED = NO_COLOR ? "" : "\x1b[31m";
 
 // ─── Public API ─────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ const RED = "\x1b[31m";
  * Returns raw markdown when NO_COLOR is set or formatting is disabled.
  */
 export function renderMarkdown(text: string, enabled: boolean = true): string {
-  if (!enabled || NO_COLOR) return text;
+  if (!enabled) return text;
 
   const lines = text.split("\n");
   const output: string[] = [];
@@ -50,7 +50,8 @@ export function renderMarkdown(text: string, enabled: boolean = true): string {
   let codeLang = "";
   let codeLines: string[] = [];
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex]!;
     // Code fence start/end
     if (line.trimStart().startsWith("```")) {
       if (!inCodeBlock) {
@@ -97,15 +98,12 @@ export function renderMarkdown(text: string, enabled: boolean = true): string {
 
     // Table rows (pipe-delimited)
     if (line.includes("|") && line.trim().startsWith("|")) {
-      // Render table rows with aligned columns
-      const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-      if (cells.every((c) => /^[-:]+$/.test(c))) {
-        // Separator row — skip (alignment markers)
-        output.push(`${DIM}${"─".repeat(40)}${RESET}`);
-        continue;
+      const tableLines = [line];
+      while (lineIndex + 1 < lines.length && lines[lineIndex + 1]!.trim().startsWith("|")) {
+        lineIndex++;
+        tableLines.push(lines[lineIndex]!);
       }
-      const formatted = cells.map((c) => formatInline(c)).join(`${DIM} │ ${RESET}`);
-      output.push(`${DIM}│ ${RESET}${formatted}${DIM} │${RESET}`);
+      output.push(...renderTableBlock(tableLines));
       continue;
     }
 
@@ -141,6 +139,47 @@ export function renderMarkdown(text: string, enabled: boolean = true): string {
   }
 
   return output.join("\n");
+}
+
+function renderTableBlock(lines: ReadonlyArray<string>): ReadonlyArray<string> {
+  const rows = lines.map(parseTableRow);
+  const contentRows = rows.filter((row) => !row.isSeparator);
+  if (contentRows.length === 0) {
+    return [];
+  }
+
+  const columnCount = Math.max(...contentRows.map((row) => row.cells.length));
+  const widths = Array.from({ length: columnCount }, (_, columnIndex) =>
+    Math.max(...contentRows.map((row) => row.cells[columnIndex]?.length ?? 0)));
+
+  return rows.map((row) => {
+    if (row.isSeparator) {
+      return renderTableSeparator(widths);
+    }
+    return renderTableContentRow(row.cells, widths);
+  });
+}
+
+function parseTableRow(line: string): { readonly cells: ReadonlyArray<string>; readonly isSeparator: boolean } {
+  const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+  return {
+    cells,
+    isSeparator: cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell)),
+  };
+}
+
+function renderTableContentRow(cells: ReadonlyArray<string>, widths: ReadonlyArray<number>): string {
+  const formattedCells = widths.map((width, index) => {
+    const cell = cells[index] ?? "";
+    return formatInline(cell.padEnd(width, " "));
+  });
+  return formattedCells.join(`${DIM} │ ${RESET}`);
+}
+
+function renderTableSeparator(widths: ReadonlyArray<number>): string {
+  return widths
+    .map((width) => `${DIM}${"─".repeat(Math.max(3, width))}${RESET}`)
+    .join(`${DIM}─┼─${RESET}`);
 }
 
 /**

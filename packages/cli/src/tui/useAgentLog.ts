@@ -7,22 +7,34 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { StatusBarProps } from "./StatusBar.js";
-import type { ToolEvent, ToolGroupEvent } from "./ToolDisplay.js";
 import type { SubagentState } from "./SubagentPanel.js";
 import type { EventBus } from "@devagent/runtime";
 import {
   type LogEntry,
-  extractToolPreview,
-  extractEditDiff,
-  summarizeParams,
+  type TranscriptNode,
 } from "./shared.js";
+import { TranscriptComposer } from "../transcript-composer.js";
+import {
+  type PresentedToolGroup,
+  makeErrorPart,
+  makePlanPart,
+  makeStatusPart,
+  presentApprovalRequestEvent,
+  presentApprovalResponseEvent,
+  presentContextCompactedEvent,
+  presentContextCompactingEvent,
+  presentSummaryToolMessage,
+  presentToolAfterEvent,
+  presentToolBeforeEvent,
+  presentToolGroupEvent,
+  summarizeToolParamsForTranscript,
+} from "../transcript-presenter.js";
 
 // ─── Hook Options ──────────────────────────────────────────
 
 export interface UseAgentLogOptions {
   readonly bus: EventBus;
   readonly model: string;
-  readonly approvalMode: string;
   /** Called on each streaming text chunk (App uses this for live preview). */
   readonly onStreamingText?: (content: string) => void;
   /** Called when a tool starts (App uses this to clear streaming text). */
@@ -38,11 +50,18 @@ export interface UseAgentLogOptions {
 // ─── Hook Result ───────────────────────────────────────────
 
 export interface UseAgentLogResult {
-  readonly log: LogEntry[];
+  readonly transcriptNodes: ReadonlyArray<TranscriptNode>;
   readonly status: StatusBarProps;
   readonly subagents: Map<string, SubagentState>;
   readonly spinnerMessage: string | undefined;
-  readonly addLog: (entry: LogEntry) => void;
+  readonly appendStandalonePart: (id: string, part: LogEntry["part"]) => void;
+  readonly startTurn: (id: string, userText: string, startedAt: number) => void;
+  readonly appendTurnPart: (id: string, part: LogEntry["part"]) => void;
+  readonly completeTurn: (
+    id: string,
+    summaryPart: Extract<LogEntry["part"], { readonly kind: "turn-summary" }>,
+    options?: { readonly status?: "completed" | "error" | "budget_exceeded"; readonly finishedAt?: number },
+  ) => void;
   readonly flushThinking: () => void;
   readonly flushGroup: () => void;
   readonly nextId: (prefix: string) => string;
@@ -61,15 +80,16 @@ export interface UseAgentLogResult {
 
 export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
   const {
-    bus, model, approvalMode,
+    bus, model,
     onStreamingText, onToolStart, onApproval,
     collapseFailures = false, compactPlanProgress = false,
   } = options;
 
-  const [log, setLog] = useState<LogEntry[]>([]);
+  const composerRef = useRef(new TranscriptComposer());
+  const [transcriptNodes, setTranscriptNodes] = useState<ReadonlyArray<TranscriptNode>>([]);
   const [status, setStatus] = useState<StatusBarProps>({
     model, cost: 0, inputTokens: 0, maxContextTokens: 0,
-    iteration: 0, maxIterations: 0, approvalMode,
+    iteration: 0, maxIterations: 0,
   });
   const [spinnerMessage, setSpinnerMessage] = useState<string | undefined>();
   const [subagents, setSubagents] = useState<Map<string, SubagentState>>(new Map());
@@ -86,32 +106,65 @@ export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
   const turnToolCountRef = useRef(0);
   const costAccumRef = useRef(0);
   const pendingGroupRef = useRef<{ name: string; count: number; summaries: string[]; totalMs: number; lastSuccess: boolean } | null>(null);
+  const ungroupedToolNamesRef = useRef(new Set(["write_file", "replace_in_file"]));
 
-  const addLog = useCallback((entry: LogEntry) => {
-    setLog((prev) => [...prev, entry]);
+  const refreshTranscript = useCallback(() => {
+    setTranscriptNodes(composerRef.current.getNodes());
   }, []);
+
+  const appendStandalonePart = useCallback((id: string, part: LogEntry["part"]) => {
+    composerRef.current.appendStandalone(id, part);
+    refreshTranscript();
+  }, [refreshTranscript]);
+
+  const startTurn = useCallback((id: string, userText: string, startedAt: number) => {
+    composerRef.current.startTurn(id, userText, startedAt);
+    refreshTranscript();
+  }, [refreshTranscript]);
+
+  const appendTurnPart = useCallback((id: string, part: LogEntry["part"]) => {
+    composerRef.current.appendPart(id, part);
+    refreshTranscript();
+  }, [refreshTranscript]);
+
+  const completeTurn = useCallback((
+    id: string,
+    summaryPart: Extract<LogEntry["part"], { readonly kind: "turn-summary" }>,
+    options?: { readonly status?: "completed" | "error" | "budget_exceeded"; readonly finishedAt?: number },
+  ) => {
+    composerRef.current.completeTurn(id, summaryPart, options);
+    refreshTranscript();
+  }, [refreshTranscript]);
+
+  const addParts = useCallback((prefix: string, parts: ReadonlyArray<LogEntry["part"]>) => {
+    for (const [index, part] of parts.entries()) {
+      composerRef.current.appendPart(`${prefix}-${index + 1}`, part);
+    }
+    refreshTranscript();
+  }, [refreshTranscript]);
 
   const flushGroup = useCallback(() => {
     const group = pendingGroupRef.current;
     if (!group || group.count <= 1) { pendingGroupRef.current = null; return; }
-    addLog({
-      id: nextId("group"), type: "tool-group",
-      data: {
+    appendTurnPart(nextId("group"), presentToolGroupEvent({
         name: group.name, count: group.count, summaries: group.summaries,
         iteration: statusRef.current.iteration, maxIterations: statusRef.current.maxIterations,
         status: group.lastSuccess ? "success" : "error", totalDurationMs: group.totalMs,
-      } satisfies ToolGroupEvent,
-    });
+      } satisfies PresentedToolGroup));
     pendingGroupRef.current = null;
-  }, [addLog]);
+  }, [appendTurnPart, nextId]);
 
   const flushThinking = useCallback(() => {
     if (thinkingStartRef.current !== null) {
       const duration = Date.now() - thinkingStartRef.current;
-      if (duration > 500) addLog({ id: nextId("think-dur"), type: "thinking-duration", data: { durationMs: duration } });
+      if (duration > 500) appendTurnPart(nextId("think-dur"), { kind: "info", data: { title: "thinking", lines: [`thought for ${(duration / 1000).toFixed(1)}s`] } });
       thinkingStartRef.current = null;
     }
-  }, [addLog]);
+  }, [appendTurnPart, nextId]);
+
+  const shouldGroupTool = useCallback((name: string): boolean => {
+    return !ungroupedToolNamesRef.current.has(name);
+  }, []);
 
   // Wire bus events
   useEffect(() => {
@@ -147,30 +200,25 @@ export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
 
       // Flush buffered failures
       if (collapseFailures && failureBuffer.count > 0) {
-        addLog({ id: nextId("fail-batch"), type: "info", data: `✗ ${failureBuffer.count} calls failed` });
+        appendTurnPart(nextId("fail-batch"), makeStatusPart({ title: "tools", lines: [`${failureBuffer.count} calls failed`], tone: "warning" }));
         failureBuffer.count = 0;
       }
 
-      const summary = summarizeParams(e.name, e.params);
+      const summary = summarizeToolParamsForTranscript(e.name, e.params);
       setSpinnerMessage(`${e.name} ${summary}`.trim());
 
       // Tool grouping
-      if (pendingGroupRef.current?.name === e.name) {
+      if (shouldGroupTool(e.name) && pendingGroupRef.current?.name === e.name) {
         pendingGroupRef.current.count++;
         if (summary) pendingGroupRef.current.summaries.push(summary);
         return;
       }
       flushGroup();
-      pendingGroupRef.current = { name: e.name, count: 1, summaries: summary ? [summary] : [], totalMs: 0, lastSuccess: true };
+      if (shouldGroupTool(e.name)) {
+        pendingGroupRef.current = { name: e.name, count: 1, summaries: summary ? [summary] : [], totalMs: 0, lastSuccess: true };
+      }
 
-      addLog({
-        id: e.callId, type: "tool",
-        data: {
-          id: e.callId, name: e.name, summary,
-          iteration: statusRef.current.iteration, maxIterations: statusRef.current.maxIterations,
-          status: "running",
-        } satisfies ToolEvent,
-      });
+      appendTurnPart(e.callId, presentToolBeforeEvent(e, statusRef.current.iteration, statusRef.current.maxIterations));
     }));
 
     unsubs.push(bus.on("tool:after", (e) => {
@@ -182,49 +230,33 @@ export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
         return;
       }
       if (collapseFailures && failureBuffer.count > 0) {
-        addLog({ id: nextId("fail-batch"), type: "info", data: `✗ ${failureBuffer.count} calls failed` });
+        appendTurnPart(nextId("fail-batch"), makeStatusPart({ title: "tools", lines: [`${failureBuffer.count} calls failed`], tone: "warning" }));
         failureBuffer.count = 0;
       }
 
       // Accumulate into group
-      if (pendingGroupRef.current?.name === e.name) {
+      if (shouldGroupTool(e.name) && pendingGroupRef.current?.name === e.name) {
         pendingGroupRef.current.totalMs += e.durationMs;
         if (!e.result.success) pendingGroupRef.current.lastSuccess = false;
         if (pendingGroupRef.current.count === 1) {
-          const preview = e.result.success ? extractToolPreview(e.name, e.result.output) : undefined;
-          const diff = e.result.success ? extractEditDiff(e.name, e.result.output) : undefined;
-          addLog({
-            id: `${e.callId}-done`, type: "tool",
-            data: {
-              id: e.callId, name: e.name, summary: "",
-              iteration: statusRef.current.iteration, maxIterations: statusRef.current.maxIterations,
-              status: e.result.success ? "success" : "error",
-              durationMs: e.durationMs, error: e.result.error ?? undefined, preview, diff,
-            } satisfies ToolEvent,
-          });
+          addParts(
+            `${e.callId}-done`,
+            presentToolAfterEvent(e, statusRef.current.iteration, statusRef.current.maxIterations),
+          );
         }
         return;
       }
 
-      const preview = e.result.success ? extractToolPreview(e.name, e.result.output) : undefined;
-      const diff = e.result.success ? extractEditDiff(e.name, e.result.output) : undefined;
-      addLog({
-        id: `${e.callId}-done`, type: "tool",
-        data: {
-          id: e.callId, name: e.name, summary: "",
-          iteration: statusRef.current.iteration, maxIterations: statusRef.current.maxIterations,
-          status: e.result.success ? "success" : "error",
-          durationMs: e.durationMs, error: e.result.error ?? undefined, preview, diff,
-        } satisfies ToolEvent,
-      });
+      addParts(
+        `${e.callId}-done`,
+        presentToolAfterEvent(e, statusRef.current.iteration, statusRef.current.maxIterations),
+      );
     }));
 
     unsubs.push(bus.on("message:tool", (e) => {
       if (e.agentId) return;
       if (e.summaryOnly) {
-        let content = e.content;
-        content = content.replace(/Subagent \S+ /, "");
-        addLog({ id: nextId("tool-msg"), type: "info", data: `  ✓ ${content}` });
+        appendTurnPart(nextId("tool-msg"), presentSummaryToolMessage(e));
       }
     }));
 
@@ -232,7 +264,7 @@ export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
     unsubs.push(bus.on("plan:updated", (e) => {
       const steps = e.steps as Array<{ description: string; status: string }>;
       if (steps.length !== lastPlanStepCount) {
-        addLog({ id: nextId("plan"), type: "plan", data: steps });
+        appendTurnPart(nextId("plan"), makePlanPart(steps));
         lastPlanStepCount = steps.length;
       } else {
         const active = steps.find((s) => s.status === "in_progress");
@@ -242,22 +274,30 @@ export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
           const bar = "█".repeat(completed) + "░".repeat(total - completed);
           const costStr = costAccumRef.current > 0 ? ` $${costAccumRef.current.toFixed(4)}` : "";
           const label = active ? active.description : `All completed${costStr}`;
-          addLog({ id: nextId("plan-status"), type: "info", data: `[${bar}] ${completed}/${total} ${label}` });
+          appendTurnPart(nextId("plan-status"), makeStatusPart({ title: "plan", lines: [`[${bar}] ${completed}/${total} ${label}`], tone: "info" }));
         } else {
-          addLog({ id: nextId("plan-status"), type: "info", data: `── Plan ${completed}/${total} ── ${active?.description ?? "All completed"}` });
+          appendTurnPart(nextId("plan-status"), makeStatusPart({ title: "plan", lines: [`${completed}/${total} ${active?.description ?? "All completed"}`], tone: "info" }));
         }
       }
     }));
 
-    unsubs.push(bus.on("context:compacting", () => { setSpinnerMessage("Compacting context…"); }));
-    unsubs.push(bus.on("context:compacted", (e) => { setSpinnerMessage(undefined); addLog({ id: nextId("compact"), type: "compaction", data: e }); }));
-    unsubs.push(bus.on("error", (e) => { addLog({ id: nextId("error"), type: "error", data: e }); }));
+    unsubs.push(bus.on("context:compacting", (e) => {
+      setSpinnerMessage("Compacting context…");
+      appendTurnPart(nextId("progress"), presentContextCompactingEvent(e));
+    }));
+    unsubs.push(bus.on("context:compacted", (e) => {
+      setSpinnerMessage(undefined);
+      appendTurnPart(nextId("compact"), presentContextCompactedEvent(e));
+    }));
+    unsubs.push(bus.on("error", (e) => { appendTurnPart(nextId("error"), makeErrorPart(e)); }));
 
-    if (onApproval) {
-      unsubs.push(bus.on("approval:request", (e) => {
-        onApproval({ id: e.id, toolName: e.toolName, details: e.details });
-      }));
-    }
+    unsubs.push(bus.on("approval:request", (e) => {
+      appendTurnPart(nextId("approval"), presentApprovalRequestEvent(e));
+      onApproval?.({ id: e.id, toolName: e.toolName, details: e.details });
+    }));
+    unsubs.push(bus.on("approval:response", (e) => {
+      appendTurnPart(nextId("approval-response"), presentApprovalResponseEvent(e));
+    }));
 
     // Subagents
     unsubs.push(bus.on("subagent:start", (e) => {
@@ -296,17 +336,17 @@ export function useAgentLog(options: UseAgentLogOptions): UseAgentLogResult {
         next.set(e.agentId, { ...existing, status: "error", error: e.error });
         return next;
       });
-      addLog({ id: nextId("sa-err"), type: "error", data: { message: `Subagent ${e.agentType} failed: ${e.error}`, code: "SUBAGENT_ERROR" } });
+      appendTurnPart(nextId("sa-err"), makeErrorPart({ message: `Subagent ${e.agentType} failed: ${e.error}`, code: "SUBAGENT_ERROR" }));
     }));
 
     unsubs.push(bus.on("session:end", () => { setSubagents(new Map()); }));
 
     return () => { for (const unsub of unsubs) unsub(); };
-  }, [bus, addLog, flushThinking, flushGroup, nextId, collapseFailures, compactPlanProgress, onStreamingText, onToolStart, onApproval]);
+  }, [bus, appendTurnPart, addParts, flushThinking, flushGroup, nextId, collapseFailures, compactPlanProgress, onStreamingText, onToolStart, onApproval, shouldGroupTool]);
 
   return {
-    log, status, subagents, spinnerMessage,
-    addLog, flushThinking, flushGroup, nextId,
+    transcriptNodes, status, subagents, spinnerMessage,
+    appendStandalonePart, startTurn, appendTurnPart, completeTurn, flushThinking, flushGroup, nextId,
     setStatus, setSubagents, setSpinnerMessage,
     refs: {
       textBuffer: textBufferRef,

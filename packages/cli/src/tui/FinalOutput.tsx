@@ -1,6 +1,5 @@
 /**
- * FinalOutput — renders the agent's final response with markdown formatting.
- * No border — just renders the markdown directly to avoid overflow issues.
+ * FinalOutput — renders the agent's final response inside the transcript card system.
  */
 
 import React from "react";
@@ -13,10 +12,21 @@ export interface FinalOutputProps {
 
 export function FinalOutput({ text }: FinalOutputProps): React.ReactElement {
   const rendered = renderMarkdown(text);
+  const lines = rendered.split("\n");
 
   return (
-    <Box flexDirection="column" marginTop={1} borderLeft borderColor="green" paddingLeft={1}>
-      <Text>{rendered}</Text>
+    <Box flexDirection="column" marginTop={1}>
+      <Text>
+        <Text dimColor>  ╭─ </Text>
+        <Text color="green">devagent</Text>
+      </Text>
+      {lines.map((line, index) => (
+        <Text key={`devagent-line-${index}`}>
+          <Text dimColor>  │ </Text>
+          <Text>{line}</Text>
+        </Text>
+      ))}
+      <Text dimColor>  ╰─</Text>
     </Box>
   );
 }
