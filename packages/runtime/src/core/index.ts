@@ -113,6 +113,8 @@ export {
   lookupModelEntry,
   lookupModelPricing,
   getRegisteredModels,
+  getProvidersForModel,
+  isModelRegisteredForProvider,
 } from "./model-registry.js";
 export type { ModelRegistryEntry, ModelPricing } from "./model-registry.js";
 
@@ -136,6 +138,8 @@ export {
   SkillAccessManager,
   INVOKED_SKILL_KNOWLEDGE_PREFIX,
   isValidSkillName,
+  formatSkillMatchLine,
+  formatSkillPromptGuidance,
 } from "./skills/index.js";
 export type {
   SkillFrontmatter,

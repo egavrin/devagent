@@ -12,6 +12,7 @@ Use this file when planning coverage or writing the final report.
 - Pass `bun run test:bundle-smoke`.
 - Pass `bun run test:live-validation`.
 - Pass `bun run validate:live:full`.
+- Pass `bun run validate:live:provider-smoke` when local provider credentials or services are available.
 - Explain every remaining failure or blocked surface explicitly.
 
 ## Environment Matrix
@@ -48,7 +49,7 @@ Use this file when planning coverage or writing the final report.
 - `devagent help`
 - `devagent version`
 - `devagent doctor`
-- `devagent configure`
+- `devagent setup`
 - `devagent config path`
 - `devagent config get provider`
 - `devagent config set provider <value>` in an isolated home

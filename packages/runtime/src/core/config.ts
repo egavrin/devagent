@@ -130,20 +130,8 @@ const DEVAGENT_API_SUBAGENT_REASONING_DEFAULTS: Partial<Record<AgentType, Reason
  * Search paths for config files, in priority order (first found wins per level).
  */
 function getConfigPaths(projectRoot?: string): ReadonlyArray<string> {
-  const paths: string[] = [];
-
-  // Project-level (highest file priority)
-  if (projectRoot) {
-    paths.push(join(projectRoot, ".devagent.toml"));
-    paths.push(join(projectRoot, "devagent.toml"));
-  }
-
-  // Global config
   const home = process.env["HOME"] ?? homedir();
-  paths.push(join(home, ".config", "devagent", "config.toml"));
-  paths.push(join(home, ".devagent.toml"));
-
-  return paths;
+  return [join(home, ".config", "devagent", "config.toml")];
 }
 
 function readTomlFile(filePath: string): Record<string, unknown> {
@@ -821,10 +809,9 @@ function stripUndefined<T extends Record<string, unknown>>(
 /**
  * Resolve the project root by walking upward once, checking ALL markers at
  * each directory level. Priority order (highest first):
- *   1. .devagent.toml / devagent.toml  — immediate return
- *   2. .agents/skills                 — immediate return
- *   3. package.json (start dir only)  — remembered as fallback
- *   4. .git                           — first match remembered as fallback
+ *   1. .agents/skills                 — immediate return
+ *   2. package.json (start dir only)  — remembered as fallback
+ *   3. .git                           — first match remembered as fallback
  */
 export function findProjectRoot(startDir?: string): string | null {
   const start = resolve(startDir ?? process.cwd());
@@ -835,14 +822,6 @@ export function findProjectRoot(startDir?: string): string | null {
   let dir = start;
 
   while (dir !== root) {
-    // Highest priority: devagent config — return immediately
-    if (
-      existsSync(join(dir, ".devagent.toml")) ||
-      existsSync(join(dir, "devagent.toml"))
-    ) {
-      return dir;
-    }
-
     // Standalone agent workspaces should not float up to a parent git root.
     if (existsSync(join(dir, ".agents", "skills"))) {
       return dir;

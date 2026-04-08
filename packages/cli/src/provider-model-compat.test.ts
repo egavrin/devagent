@@ -16,10 +16,10 @@ describe("provider/model compatibility", () => {
     expect(issue).toEqual({
       model: "cortex",
       configuredProvider: "openai",
-      expectedProvider: "devagent-api",
+      supportedProviders: ["devagent-api"],
     });
     expect(formatProviderModelCompatibilityError(issue!)).toContain(
-      'Configured model "cortex" belongs to provider "devagent-api"; current provider is "openai".',
+      'Configured model "cortex" is not registered for provider "openai".',
     );
     expect(formatProviderModelCompatibilityHint(issue!)).toBe(
       'Try "--provider devagent-api --model cortex" for the deployed Devagent API gateway.',
@@ -28,5 +28,10 @@ describe("provider/model compatibility", () => {
 
   it("returns no issue for a valid devagent-api and cortex pairing", () => {
     expect(getProviderModelCompatibilityIssue("devagent-api", "cortex")).toBeUndefined();
+  });
+
+  it("allows shared model names across providers", () => {
+    expect(getProviderModelCompatibilityIssue("openai", "gpt-4.1")).toBeUndefined();
+    expect(getProviderModelCompatibilityIssue("github-copilot", "gpt-4.1")).toBeUndefined();
   });
 });

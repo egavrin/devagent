@@ -4,6 +4,14 @@ import { writeFileSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+function writeHomeConfig(home: string, contents: string): string {
+  const configDir = join(home, ".config", "devagent");
+  mkdirSync(configDir, { recursive: true });
+  const configPath = join(configDir, "config.toml");
+  writeFileSync(configPath, contents);
+  return configPath;
+}
+
 describe("loadConfig", () => {
   let originalHome: string | undefined;
   let tempHome: string;
@@ -39,11 +47,8 @@ describe("loadConfig", () => {
   });
 
   it("loads config from TOML file", () => {
-    const dir = join(tmpdir(), `devagent-test-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    writeHomeConfig(
+      tempHome,
       `
 provider = "openai"
 model = "gpt-4o"
@@ -58,44 +63,30 @@ strict_mode = true
 `,
     );
 
-    try {
-      const config = loadConfig(dir);
-      expect(config.provider).toBe("openai");
-      expect(config.model).toBe("gpt-4o");
-      expect(config.budget.maxIterations).toBe(50);
-      expect(config.budget.costWarningThreshold).toBe(5.0);
-      expect(config.arkts.enabled).toBe(true);
-      expect(config.arkts.strictMode).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = loadConfig("/nonexistent/path");
+    expect(config.provider).toBe("openai");
+    expect(config.model).toBe("gpt-4o");
+    expect(config.budget.maxIterations).toBe(50);
+    expect(config.budget.costWarningThreshold).toBe(5.0);
+    expect(config.arkts.enabled).toBe(true);
+    expect(config.arkts.strictMode).toBe(true);
   });
 
   it("fails fast on legacy [approval] config", () => {
-    const dir = join(tmpdir(), `devagent-test-legacy-approval-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    writeHomeConfig(
+      tempHome,
       `
 [approval]
 mode = "suggest"
 `,
     );
 
-    try {
-      expect(() => loadConfig(dir)).toThrow("The [approval] section has been removed");
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    expect(() => loadConfig("/nonexistent/path")).toThrow("The [approval] section has been removed");
   });
 
   it("parses context settings from TOML", () => {
-    const dir = join(tmpdir(), `devagent-test-context-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    writeHomeConfig(
+      tempHome,
       `
 [context]
 pruning_strategy = "summarize"
@@ -107,44 +98,30 @@ briefing_strategy = "llm"
 `,
     );
 
-    try {
-      const config = loadConfig(dir);
-      expect(config.context.pruningStrategy).toBe("summarize");
-      expect(config.context.triggerRatio).toBe(0.65);
-      expect(config.context.keepRecentMessages).toBe(22);
-      expect(config.context.turnIsolation).toBe(false);
-      expect(config.context.midpointBriefingInterval).toBe(4);
-      expect(config.context.briefingStrategy).toBe("llm");
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = loadConfig("/nonexistent/path");
+    expect(config.context.pruningStrategy).toBe("summarize");
+    expect(config.context.triggerRatio).toBe(0.65);
+    expect(config.context.keepRecentMessages).toBe(22);
+    expect(config.context.turnIsolation).toBe(false);
+    expect(config.context.midpointBriefingInterval).toBe(4);
+    expect(config.context.briefingStrategy).toBe("llm");
   });
 
   it("fails fast on invalid context.trigger_ratio", () => {
-    const dir = join(tmpdir(), `devagent-test-invalid-trigger-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    writeHomeConfig(
+      tempHome,
       `
 [context]
 trigger_ratio = 1.5
 `,
     );
 
-    try {
-      expect(() => loadConfig(dir)).toThrow("context.triggerRatio");
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    expect(() => loadConfig("/nonexistent/path")).toThrow("context.triggerRatio");
   });
 
   it("fails fast when budget.response_headroom >= budget.max_context_tokens", () => {
-    const dir = join(tmpdir(), `devagent-test-invalid-headroom-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    writeHomeConfig(
+      tempHome,
       `
 [budget]
 max_context_tokens = 1000
@@ -152,19 +129,12 @@ response_headroom = 1000
 `,
     );
 
-    try {
-      expect(() => loadConfig(dir)).toThrow("budget.responseHeadroom");
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    expect(() => loadConfig("/nonexistent/path")).toThrow("budget.responseHeadroom");
   });
 
   it("parses model capabilities from TOML provider config", () => {
-    const dir = join(tmpdir(), `devagent-test-caps-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    writeHomeConfig(
+      tempHome,
       `
 provider = "openai"
 model = "gpt-5-codex"
@@ -180,27 +150,20 @@ reasoning_effort = "medium"
 `,
     );
 
-    try {
-      const config = loadConfig(dir);
-      const openaiCfg = config.providers["openai"];
-      expect(openaiCfg).toBeDefined();
-      expect(openaiCfg!.capabilities).toBeDefined();
-      expect(openaiCfg!.capabilities!.useResponsesApi).toBe(true);
-      expect(openaiCfg!.capabilities!.reasoning).toBe(true);
-      expect(openaiCfg!.capabilities!.supportsTemperature).toBe(false);
-      expect(openaiCfg!.capabilities!.defaultMaxTokens).toBe(16384);
-      expect(openaiCfg!.reasoningEffort).toBe("medium");
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = loadConfig("/nonexistent/path");
+    const openaiCfg = config.providers["openai"];
+    expect(openaiCfg).toBeDefined();
+    expect(openaiCfg!.capabilities).toBeDefined();
+    expect(openaiCfg!.capabilities!.useResponsesApi).toBe(true);
+    expect(openaiCfg!.capabilities!.reasoning).toBe(true);
+    expect(openaiCfg!.capabilities!.supportsTemperature).toBe(false);
+    expect(openaiCfg!.capabilities!.defaultMaxTokens).toBe(16384);
+    expect(openaiCfg!.reasoningEffort).toBe("medium");
   });
 
   it("omits capabilities when none specified in TOML", () => {
-    const dir = join(tmpdir(), `devagent-test-nocaps-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    writeHomeConfig(
+      tempHome,
       `
 provider = "openai"
 
@@ -210,14 +173,10 @@ api_key = "test-key"
 `,
     );
 
-    try {
-      const config = loadConfig(dir);
-      const openaiCfg = config.providers["openai"];
-      expect(openaiCfg).toBeDefined();
-      expect(openaiCfg!.capabilities).toBeUndefined();
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = loadConfig("/nonexistent/path");
+    const openaiCfg = config.providers["openai"];
+    expect(openaiCfg).toBeDefined();
+    expect(openaiCfg!.capabilities).toBeUndefined();
   });
 
   it("respects environment variable overrides", () => {
@@ -282,11 +241,8 @@ api_key = "test-key"
   });
 
   it("injects resolved top-level api_key into existing provider blocks", () => {
-    const dir = join(tmpdir(), `devagent-test-provider-key-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    writeHomeConfig(
+      tempHome,
       `
 provider = "custom_provider_for_test"
 model = "test-model"
@@ -298,20 +254,16 @@ base_url = "https://example.test/v1"
 `,
     );
 
-    try {
-      const config = loadConfig(dir);
-      expect(config.providers["custom_provider_for_test"]?.model).toBe(
-        "test-model-v2",
-      );
-      expect(config.providers["custom_provider_for_test"]?.baseUrl).toBe(
-        "https://example.test/v1",
-      );
-      expect(config.providers["custom_provider_for_test"]?.apiKey).toBe(
-        "top-level-key",
-      );
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = loadConfig("/nonexistent/path");
+    expect(config.providers["custom_provider_for_test"]?.model).toBe(
+      "test-model-v2",
+    );
+    expect(config.providers["custom_provider_for_test"]?.baseUrl).toBe(
+      "https://example.test/v1",
+    );
+    expect(config.providers["custom_provider_for_test"]?.apiKey).toBe(
+      "top-level-key",
+    );
   });
 
   it("respects override parameter", () => {
@@ -325,10 +277,8 @@ base_url = "https://example.test/v1"
   });
 
   it("does not fail on inactive provider env refs when overrides select a different provider", () => {
-    const dir = join(tmpdir(), `devagent-test-inactive-env-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, ".devagent.toml"),
+    writeHomeConfig(
+      tempHome,
       `
 provider = "openai"
 model = "gpt-4.1"
@@ -339,51 +289,39 @@ model = "gpt-4.1"
 `,
     );
 
-    try {
-      const config = loadConfig(dir, {
-        provider: "devagent-api",
-        model: "cortex",
-      });
+    const config = loadConfig("/nonexistent/path", {
+      provider: "devagent-api",
+      model: "cortex",
+    });
 
-      expect(config.provider).toBe("devagent-api");
-      expect(config.model).toBe("cortex");
-      expect(config.providers["openai"]?.apiKey).toBeUndefined();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(config.provider).toBe("devagent-api");
+    expect(config.model).toBe("cortex");
+    expect(config.providers["openai"]?.apiKey).toBeUndefined();
   });
 
   it("applies OpenAI-family default subagent model and reasoning profiles", () => {
-    const dir = join(tmpdir(), `devagent-test-subagent-defaults-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, ".devagent.toml"),
+    writeHomeConfig(
+      tempHome,
       `
 provider = "openai"
 model = "gpt-5.4"
 `,
     );
 
-    try {
-      const config = loadConfig(dir);
-      expect(config.agentModelOverrides?.explore).toBe("gpt-5.4-mini");
-      expect(config.agentModelOverrides?.reviewer).toBe("gpt-5.4");
-      expect(config.agentModelOverrides?.architect).toBe("gpt-5.4");
-      expect(config.agentReasoningOverrides?.explore).toBe("low");
-      expect(config.agentReasoningOverrides?.reviewer).toBe("high");
-      expect(config.agentReasoningOverrides?.architect).toBe("high");
-      expect(config.agentModelOverrides?.general).toBeUndefined();
-      expect(config.agentReasoningOverrides?.general).toBeUndefined();
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = loadConfig("/nonexistent/path");
+    expect(config.agentModelOverrides?.explore).toBe("gpt-5.4-mini");
+    expect(config.agentModelOverrides?.reviewer).toBe("gpt-5.4");
+    expect(config.agentModelOverrides?.architect).toBe("gpt-5.4");
+    expect(config.agentReasoningOverrides?.explore).toBe("low");
+    expect(config.agentReasoningOverrides?.reviewer).toBe("high");
+    expect(config.agentReasoningOverrides?.architect).toBe("high");
+    expect(config.agentModelOverrides?.general).toBeUndefined();
+    expect(config.agentReasoningOverrides?.general).toBeUndefined();
   });
 
   it("allows explicit subagent overrides to replace defaults while keeping unspecified defaults", () => {
-    const dir = join(tmpdir(), `devagent-test-subagent-overrides-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, ".devagent.toml"),
+    writeHomeConfig(
+      tempHome,
       `
 provider = "openai"
 model = "gpt-5.4"
@@ -397,57 +335,39 @@ architect = "invalid"
 `,
     );
 
-    try {
-      const config = loadConfig(dir);
-      expect(config.agentModelOverrides?.explore).toBe("gpt-5.4");
-      expect(config.agentModelOverrides?.reviewer).toBe("gpt-5.4");
-      expect(config.agentReasoningOverrides?.explore).toBe("low");
-      expect(config.agentReasoningOverrides?.reviewer).toBe("medium");
-      expect(config.agentReasoningOverrides?.architect).toBe("high");
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = loadConfig("/nonexistent/path");
+    expect(config.agentModelOverrides?.explore).toBe("gpt-5.4");
+    expect(config.agentModelOverrides?.reviewer).toBe("gpt-5.4");
+    expect(config.agentReasoningOverrides?.explore).toBe("low");
+    expect(config.agentReasoningOverrides?.reviewer).toBe("medium");
+    expect(config.agentReasoningOverrides?.architect).toBe("high");
   });
 
   it("applies devagent-api default subagent reasoning without forcing model overrides", () => {
-    const dir = join(tmpdir(), `devagent-test-devagent-api-defaults-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, ".devagent.toml"),
+    writeHomeConfig(
+      tempHome,
       `
 provider = "devagent-api"
 model = "cortex"
 `,
     );
 
-    try {
-      const config = loadConfig(dir);
-      expect(config.agentReasoningOverrides?.explore).toBe("low");
-      expect(config.agentReasoningOverrides?.reviewer).toBe("high");
-      expect(config.agentReasoningOverrides?.architect).toBe("high");
-      expect(config.agentModelOverrides).toBeUndefined();
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = loadConfig("/nonexistent/path");
+    expect(config.agentReasoningOverrides?.explore).toBe("low");
+    expect(config.agentReasoningOverrides?.reviewer).toBe("high");
+    expect(config.agentReasoningOverrides?.architect).toBe("high");
+    expect(config.agentModelOverrides).toBeUndefined();
   });
 
   it("fails fast on invalid TOML", () => {
-    const dir = join(tmpdir(), `devagent-test-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, ".devagent.toml"), "this is not valid [[[ toml");
+    writeHomeConfig(tempHome, "this is not valid [[[ toml");
 
-    try {
-      expect(() => loadConfig(dir)).toThrow("Failed to parse config file");
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    expect(() => loadConfig("/nonexistent/path")).toThrow("Failed to parse config file");
   });
 
   it("resolves env: references in api_key", () => {
-    const dir = join(tmpdir(), `devagent-test-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, ".devagent.toml"),
+    writeHomeConfig(
+      tempHome,
       `
 provider = "anthropic"
 api_key = "env:TEST_DEVAGENT_KEY"
@@ -457,32 +377,25 @@ api_key = "env:TEST_DEVAGENT_KEY"
     process.env["TEST_DEVAGENT_KEY"] = "sk-test-123";
 
     try {
-      const config = loadConfig(dir);
+      const config = loadConfig("/nonexistent/path");
       expect(config.providers["anthropic"]?.apiKey).toBe("sk-test-123");
     } finally {
       delete process.env["TEST_DEVAGENT_KEY"];
-      rmSync(dir, { recursive: true });
     }
   });
 
   it("fails fast on missing env reference", () => {
-    const dir = join(tmpdir(), `devagent-test-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, ".devagent.toml"),
+    writeHomeConfig(
+      tempHome,
       `
 provider = "anthropic"
 api_key = "env:NONEXISTENT_VAR_12345"
 `,
     );
 
-    try {
-      expect(() => loadConfig(dir)).toThrow(
-        'Environment variable "NONEXISTENT_VAR_12345" referenced in config but not set',
-      );
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    expect(() => loadConfig("/nonexistent/path")).toThrow(
+      'Environment variable "NONEXISTENT_VAR_12345" referenced in config but not set',
+    );
   });
 });
 
@@ -536,11 +449,12 @@ describe("findProjectRoot", () => {
   });
 
   it("parses session_state settings including trackFindings, maxFindings, maxEnvFacts from TOML", () => {
-    const dir = join(tmpdir(), `devagent-test-ss-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    const home = mkdtempSync(join(tmpdir(), "devagent-config-session-home-"));
+    const originalHome = process.env["HOME"];
+    process.env["HOME"] = home;
+
+    writeHomeConfig(
+      home,
       `
 [session_state]
 persist = false
@@ -557,7 +471,7 @@ max_findings = 8
     );
 
     try {
-      const config = loadConfig(dir);
+      const config = loadConfig("/nonexistent/path");
       expect(config.sessionState).toBeDefined();
       expect(config.sessionState!.persist).toBe(false);
       expect(config.sessionState!.trackPlan).toBe(true);
@@ -570,16 +484,22 @@ max_findings = 8
       expect(config.sessionState!.maxToolSummaries).toBe(15);
       expect(config.sessionState!.maxFindings).toBe(8);
     } finally {
-      rmSync(dir, { recursive: true });
+      if (originalHome === undefined) {
+        delete process.env["HOME"];
+      } else {
+        process.env["HOME"] = originalHome;
+      }
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
   it("parses pruneProtectTokens from TOML context config", () => {
-    const dir = join(tmpdir(), `devagent-test-ppt-${Date.now()}`);
-    mkdirSync(dir, { recursive: true });
-    const configPath = join(dir, ".devagent.toml");
-    writeFileSync(
-      configPath,
+    const home = mkdtempSync(join(tmpdir(), "devagent-config-context-home-"));
+    const originalHome = process.env["HOME"];
+    process.env["HOME"] = home;
+
+    writeHomeConfig(
+      home,
       `
 [context]
 prune_protect_tokens = 90000
@@ -587,18 +507,23 @@ prune_protect_tokens = 90000
     );
 
     try {
-      const config = loadConfig(dir);
+      const config = loadConfig("/nonexistent/path");
       expect(config.context.pruneProtectTokens).toBe(90000);
     } finally {
-      rmSync(dir, { recursive: true });
+      if (originalHome === undefined) {
+        delete process.env["HOME"];
+      } else {
+        process.env["HOME"] = originalHome;
+      }
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it("finds directory with .devagent.toml", () => {
+  it("falls back to the nearest git root when no workspace markers are present", () => {
     const dir = join(tmpdir(), `devagent-root-test-${Date.now()}`);
     const subdir = join(dir, "a", "b", "c");
+    mkdirSync(join(dir, ".git"), { recursive: true });
     mkdirSync(subdir, { recursive: true });
-    writeFileSync(join(dir, ".devagent.toml"), "provider = 'test'");
 
     try {
       const result = findProjectRoot(subdir);

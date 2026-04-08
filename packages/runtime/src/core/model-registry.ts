@@ -37,12 +37,14 @@ export interface ModelRegistryEntry {
 
 // ─── Registry ───────────────────────────────────────────────
 
-const registry = new Map<string, ModelRegistryEntry>();
+const registry = new Map<string, ModelRegistryEntry[]>();
+const registryByProvider = new Map<string, Map<string, ModelRegistryEntry>>();
 let loaded = false;
 
 /** Reset registry state. Test-only — not exported from package barrel. */
 export function _resetRegistryForTesting(): void {
   registry.clear();
+  registryByProvider.clear();
   loaded = false;
 }
 
@@ -96,8 +98,9 @@ export function loadModelRegistry(
  */
 export function lookupModelCapabilities(
   modelName: string,
+  provider?: string,
 ): ModelCapabilities | undefined {
-  const entry = registry.get(modelName);
+  const entry = lookupModelEntry(modelName, provider);
   return entry?.capabilities;
 }
 
@@ -106,15 +109,39 @@ export function lookupModelCapabilities(
  */
 export function lookupModelEntry(
   modelName: string,
+  provider?: string,
 ): ModelRegistryEntry | undefined {
-  return registry.get(modelName);
+  if (provider) {
+    return registryByProvider.get(provider)?.get(modelName);
+  }
+  return registry.get(modelName)?.[0];
 }
 
 /**
  * Get all registered model names.
  */
-export function getRegisteredModels(): ReadonlyArray<string> {
+export function getRegisteredModels(provider?: string): ReadonlyArray<string> {
+  if (provider) {
+    return Array.from(registryByProvider.get(provider)?.keys() ?? []);
+  }
   return Array.from(registry.keys());
+}
+
+/**
+ * Return every provider that registers the given model name.
+ */
+export function getProvidersForModel(modelName: string): ReadonlyArray<string> {
+  return (registry.get(modelName) ?? []).map((entry) => entry.provider);
+}
+
+/**
+ * Return whether a model is registered for a provider.
+ */
+export function isModelRegisteredForProvider(
+  provider: string,
+  modelName: string,
+): boolean {
+  return registryByProvider.get(provider)?.has(modelName) ?? false;
 }
 
 /**
@@ -123,8 +150,9 @@ export function getRegisteredModels(): ReadonlyArray<string> {
  */
 export function lookupModelPricing(
   modelName: string,
+  provider?: string,
 ): ModelPricing | undefined {
-  return registry.get(modelName)?.pricing;
+  return lookupModelEntry(modelName, provider)?.pricing;
 }
 
 // ─── Internal ───────────────────────────────────────────────
@@ -170,8 +198,9 @@ function parseModelToml(content: string): void {
 
     const modelDef = value as Record<string, unknown>;
 
-    // Skip if already registered (first-found wins)
-    if (registry.has(key)) continue;
+    const providerRegistry = registryByProvider.get(provider) ?? new Map<string, ModelRegistryEntry>();
+    registryByProvider.set(provider, providerRegistry);
+    if (providerRegistry.has(key)) continue;
 
     const defaultMaxTokens =
       (modelDef["default_max_tokens"] as number | undefined) ??
@@ -192,14 +221,19 @@ function parseModelToml(content: string): void {
         ? { inputPricePerMillion: inputPrice, outputPricePerMillion: outputPrice }
         : undefined;
 
-    registry.set(key, {
+    const entry: ModelRegistryEntry = {
       provider,
       baseUrl,
       contextWindow: (modelDef["context_window"] as number | undefined) ?? 128000,
       responseHeadroom: (modelDef["response_headroom"] as number | undefined) ?? 4096,
       capabilities,
       pricing,
-    });
+    };
+
+    providerRegistry.set(key, entry);
+
+    const entries = registry.get(key) ?? [];
+    registry.set(key, [...entries, entry]);
   }
 }
 

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DevAgentConfig, LLMProvider, Session, SessionStore } from "@devagent/runtime";
 import {
   checkForUpdates,
+  getVersion,
   loadQueryFromFile,
   parseArgs,
   renderHelpText,
@@ -46,7 +47,7 @@ describe("parseArgs", () => {
       });
   });
 
-  it("recognizes configure and keeps setup as a retired command", () => {
+  it("recognizes setup and keeps configure as a compatibility alias", () => {
     expect(parseArgs(["node", "devagent", "configure"]))
       .toMatchObject({
         subcommand: {
@@ -122,6 +123,11 @@ describe("renderHelpText", () => {
     expect(renderHelpText()).toContain("-f, --file <path>    Read query from file");
   });
 
+  it("reads the published CLI version from package metadata", () => {
+    const expectedVersion = JSON.parse(readFileSync(join(cliPackageDir, "..", "..", "package.json"), "utf-8")).version;
+    expect(getVersion()).toBe(expectedVersion);
+  });
+
   it("includes devagent-api in the provider list", () => {
     expect(renderHelpText()).toContain("devagent-api");
   });
@@ -132,11 +138,10 @@ describe("renderHelpText", () => {
     expect(help).toContain("devagent execute");
   });
 
-  it("presents configure as the public onboarding command", () => {
+  it("presents setup as the public onboarding command", () => {
     const help = renderHelpText();
-    expect(help).toContain("devagent configure");
+    expect(help).toContain("devagent setup");
     expect(help).toContain("Inspect or edit global config directly");
-    expect(help).not.toContain("devagent setup");
     expect(help).not.toContain("devagent init");
   });
 
@@ -284,6 +289,52 @@ describe("renderHelpText", () => {
         expect(execError.stderr).toContain('No API key configured for provider "devagent-api".');
         expect(execError.stderr).not.toContain('Environment variable "OPENAI_API_KEY" referenced in config but not set');
       }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a missing recent session before provider auth on --continue", () => {
+    const home = mkdtempSync(join(tmpdir(), "devagent-continue-home-"));
+    try {
+      const result = execFileSync("bun", ["packages/cli/src/index.ts", "--continue"], {
+        cwd: join(cliPackageDir, "..", ".."),
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          HOME: home,
+          DEVAGENT_DISABLE_UPDATE_CHECK: "1",
+        },
+      });
+      expect.unreachable(`expected command to fail, got: ${result}`);
+    } catch (error: any) {
+      expect(error.status).toBe(1);
+      expect(error.stderr).toContain("[session] No session found: most recent");
+      expect(error.stderr).not.toContain('No API key configured for provider "openai"');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a missing named session before provider auth on --resume", () => {
+    const home = mkdtempSync(join(tmpdir(), "devagent-resume-home-"));
+    try {
+      const result = execFileSync("bun", ["packages/cli/src/index.ts", "--resume", "bogus-session"], {
+        cwd: join(cliPackageDir, "..", ".."),
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          HOME: home,
+          DEVAGENT_DISABLE_UPDATE_CHECK: "1",
+        },
+      });
+      expect.unreachable(`expected command to fail, got: ${result}`);
+    } catch (error: any) {
+      expect(error.status).toBe(1);
+      expect(error.stderr).toContain('No session found for "bogus-session".');
+      expect(error.stderr).not.toContain('No API key configured for provider "openai"');
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

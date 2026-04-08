@@ -3982,7 +3982,10 @@ describe("TaskLoop", () => {
 
       const registry = new ToolRegistry();
       // Use a known model with defined pricing (unique to anthropic.toml)
-      const pricedConfig = makeConfig({ model: "claude-sonnet-4-20250514" });
+      const pricedConfig = makeConfig({
+        provider: "anthropic",
+        model: "claude-sonnet-4-20250514",
+      });
       const gate = new ApprovalGate(pricedConfig.approval, bus);
 
       const costEvents: Array<{ totalCost: number }> = [];

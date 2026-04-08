@@ -448,7 +448,7 @@ if (args[0] === "auth" && args[1] === "status") {
   process.stderr.write("Provider  Source  Key\\nchatgpt  oauth   tok***\\n");
   process.exit(0);
 }
-const configText = readFileSync(join(process.cwd(), ".devagent.toml"), "utf-8");
+const configText = readFileSync(join(process.env["HOME"], ".config", "devagent", "config.toml"), "utf-8");
 const match = configText.match(/log_dir\\s*=\\s*\"([^\"]+)\"/);
 if (match) {
   mkdirSync(match[1], { recursive: true });
@@ -538,7 +538,7 @@ if (args[0] === "doctor") {
     "",
     "Blocking issues:",
     "",
-    "  - Provider/model pairing: Configured model \\"cortex\\" belongs to provider \\"devagent-api\\"; current provider is \\"openai\\". Switch provider or choose a model registered for \\"openai\\".",
+    "  - Provider/model pairing: Configured model \\"cortex\\" is not registered for provider \\"openai\\". It is registered for \\"devagent-api\\". Switch provider or choose a model registered for \\"openai\\".",
     "",
     "What to do next:",
     "",
@@ -555,13 +555,13 @@ if (args[0] === "doctor") {
     "  Provider: openai (config)",
     "  Model: cortex (config)",
     "  Credential: missing",
-    "  Model owner: devagent-api",
+    "  Registered providers: devagent-api",
     "",
     "Checks:",
     "",
     "  ! Provider: openai: no API key (set OPENAI_API_KEY or run devagent auth login). Secondary until provider/model pairing is fixed.",
     "",
-    "Some checks failed.",
+    "Blocking issues found.",
   ].join("\\n"));
   process.exit(1);
 }
@@ -580,7 +580,7 @@ process.exit(1);
       preSetup: [
         {
           kind: "write-file",
-          path: ".devagent.toml",
+          path: "${homeDir}/.config/devagent/config.toml",
           content: 'provider = "openai"\\nmodel = "cortex"\\n',
         },
       ],
@@ -597,7 +597,7 @@ process.exit(1);
         { type: "contains", source: "stdout", value: 'model = "cortex"' },
         { type: "contains", source: "stdout", value: "export DEVAGENT_API_KEY=ilg_..." },
         { type: "contains", source: "stdout", value: "Credential: missing" },
-        { type: "contains", source: "stdout", value: "Model owner: devagent-api" },
+        { type: "contains", source: "stdout", value: "Registered providers: devagent-api" },
         { type: "contains", source: "stdout", value: "! Provider: openai:" },
       ],
       verificationCommands: [],

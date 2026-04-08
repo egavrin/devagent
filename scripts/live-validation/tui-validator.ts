@@ -42,12 +42,6 @@ const DEFAULT_MODELS: Readonly<Record<SupportedProvider, string>> = {
   "github-copilot": "gpt-4o",
 };
 
-void main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(message);
-  process.exit(1);
-});
-
 function parseArgs(argv: string[]): CliOptions {
   let outputRoot: string | undefined;
   let provider: SupportedProvider | undefined;
@@ -287,6 +281,67 @@ function normalizeTranscript(text: string): string {
     .replace(/\r/g, "");
 }
 
+function countOccurrences(text: string, needle: string): number {
+  if (needle.length === 0) return 0;
+  let count = 0;
+  let index = text.indexOf(needle);
+  while (index !== -1) {
+    count++;
+    index = text.indexOf(needle, index + needle.length);
+  }
+  return count;
+}
+
+export function extractSettledFrame(text: string): string {
+  const normalized = normalizeTranscript(text).trim();
+  if (normalized.length === 0) {
+    return normalized;
+  }
+
+  const welcomeAnchor = "╔══════════════════╗";
+  const promptAnchor = "╭────────────────";
+  const welcomeIndex = normalized.lastIndexOf(welcomeAnchor);
+  const promptIndex = normalized.lastIndexOf(promptAnchor);
+  const startIndex = welcomeIndex !== -1 ? welcomeIndex : promptIndex;
+  if (startIndex === -1) {
+    return normalized;
+  }
+  return normalized.slice(startIndex).trim();
+}
+
+export function assertTuiFrame(
+  frame: string,
+  options: {
+    readonly expectedVersion: string;
+    readonly requiredText: string;
+  },
+): void {
+  if (!frame.includes("devagent")) {
+    throw new Error("TUI frame did not include the devagent banner.");
+  }
+  if (!frame.includes(`v${options.expectedVersion}`)) {
+    throw new Error(`TUI frame did not include expected version v${options.expectedVersion}.`);
+  }
+  if (!frame.includes(options.requiredText)) {
+    throw new Error(`TUI frame did not include expected text: ${options.requiredText}`);
+  }
+  if (!(frame.includes("Type /help for commands") || frame.includes("Type /help for all commands"))) {
+    throw new Error("TUI frame did not include help guidance.");
+  }
+  if (!frame.includes("Shift+Tab")) {
+    throw new Error("TUI frame did not include Shift+Tab safety guidance.");
+  }
+  if (countOccurrences(frame, "║    devagent") !== 1) {
+    throw new Error("TUI frame contained duplicate welcome/header blocks.");
+  }
+  if (/workspace-[^\n]*╔/.test(frame)) {
+    throw new Error("TUI frame contained a status-bar/banner collision.");
+  }
+  if (!/╭[─]+╮[\s\S]*❯[\s\S]*╰[─]+╯/.test(frame)) {
+    throw new Error("TUI frame did not contain an intact prompt box.");
+  }
+}
+
 async function runTuiTranscript(
   outputRoot: string,
   executable: string,
@@ -343,12 +398,6 @@ async function runTuiTranscript(
   }
 }
 
-function assertTranscriptContains(transcript: string, expected: string): void {
-  if (!transcript.includes(expected)) {
-    throw new Error(`TUI transcript did not include expected text: ${expected}`);
-  }
-}
-
 async function main(): Promise<void> {
   const options = parseArgs(process.argv);
   ensureBundleExists();
@@ -369,10 +418,14 @@ async function main(): Promise<void> {
   const sessionsTranscriptPath = join(outputRoot, "tui-sessions.raw.txt");
   const clearTranscriptPath = join(outputRoot, "tui-clear.raw.txt");
   const normalizedTranscriptPath = join(outputRoot, "tui-transcript.txt");
+  const helpFramePath = join(outputRoot, "tui-help.frame.txt");
+  const sessionsFramePath = join(outputRoot, "tui-sessions.frame.txt");
+  const clearFramePath = join(outputRoot, "tui-clear.frame.txt");
 
   try {
     installTarballIntoPrefix(npmBin, prefixDir, tarballPath, nodeBin);
     await seedCredential(homeDir, selection.provider, selection.credential);
+    const expectedVersion = JSON.parse(readFileSync(join(DIST, "package.json"), "utf-8")).version as string;
 
     const executable = nodeBin;
     const installedBootstrap = join(
@@ -424,21 +477,30 @@ async function main(): Promise<void> {
       "/clear",
     );
 
-    const transcript = [
-      normalizeTranscript(readFileSync(transcriptPath, "utf-8")),
-      normalizeTranscript(readFileSync(sessionsTranscriptPath, "utf-8")),
-      normalizeTranscript(readFileSync(clearTranscriptPath, "utf-8")),
-    ].join("\n");
-    await writeFile(normalizedTranscriptPath, transcript);
+    const helpFrame = extractSettledFrame(readFileSync(transcriptPath, "utf-8"));
+    const sessionsFrame = extractSettledFrame(readFileSync(sessionsTranscriptPath, "utf-8"));
+    const clearFrame = extractSettledFrame(readFileSync(clearTranscriptPath, "utf-8"));
 
-    assertTranscriptContains(transcript, "devagent");
-    assertTranscriptContains(transcript, "Type /help for all commands");
-    assertTranscriptContains(transcript, "Shift+Tab toggles default and autopilot");
-    assertTranscriptContains(transcript, "Type /continue after an iteration-limit pause");
-    assertTranscriptContains(transcript, "Shift+Tab safety");
-    assertTranscriptContains(transcript, "/help");
-    assertTranscriptContains(transcript, "/sessions");
-    assertTranscriptContains(transcript, "/clear");
+    await writeFile(helpFramePath, helpFrame);
+    await writeFile(sessionsFramePath, sessionsFrame);
+    await writeFile(clearFramePath, clearFrame);
+    await writeFile(
+      normalizedTranscriptPath,
+      [
+        "=== /help ===",
+        helpFrame,
+        "",
+        "=== /sessions ===",
+        sessionsFrame,
+        "",
+        "=== /clear ===",
+        clearFrame,
+      ].join("\n"),
+    );
+
+    assertTuiFrame(helpFrame, { expectedVersion, requiredText: "/help" });
+    assertTuiFrame(sessionsFrame, { expectedVersion, requiredText: "/sessions" });
+    assertTuiFrame(clearFrame, { expectedVersion, requiredText: "/clear" });
 
     process.stdout.write(
       `Validated tarball TUI with provider ${selection.provider}. Transcript: ${normalizedTranscriptPath}\n`,
@@ -448,4 +510,12 @@ async function main(): Promise<void> {
     rmSync(homeDir, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
   }
+}
+
+if (import.meta.main) {
+  void main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(message);
+    process.exit(1);
+  });
 }

@@ -255,7 +255,7 @@ export async function setupAndRunWorkflowQuery(
   }
 
   // Auto-size context budget from model registry
-  const registryEntry = lookupModelEntry(config.model);
+  const registryEntry = lookupModelEntry(config.model, config.provider);
   if (registryEntry && config.budget.maxContextTokens === DEFAULT_BUDGET.maxContextTokens) {
     config = {
       ...config,

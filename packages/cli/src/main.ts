@@ -30,7 +30,11 @@ import {
 import type { DevAgentConfig, LLMProvider, Message, Session, VerbosityConfig } from "@devagent/runtime";
 import { AgentType, SafetyMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
-import { migrateLegacyGlobalConfigIfNeeded } from "./global-config.js";
+import {
+  migrateLegacyGlobalConfigIfNeeded,
+  migrateLegacyGlobalTomlIfNeeded,
+  normalizeGlobalConfigIfNeeded,
+} from "./global-config.js";
 import {
   buildSessionPreview,
   deriveSessionTitle,
@@ -39,13 +43,44 @@ import {
 } from "./session-preview.js";
 
 /** Package version — embedded at build time or read from package.json. */
-function getVersion(): string {
+export function getVersion(): string {
   try {
-    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "package.json");
-    const pkg = JSON.parse(nodeReadFileSync(pkgPath, "utf-8"));
-    return pkg.version ?? "0.1.0";
+    const moduleDir = dirname(fileURLToPath(import.meta.url));
+    for (const pkgPath of [
+      join(moduleDir, "package.json"),
+      join(moduleDir, "..", "..", "..", "package.json"),
+      join(moduleDir, "..", "package.json"),
+    ]) {
+      if (!existsSync(pkgPath)) {
+        continue;
+      }
+      const pkg = JSON.parse(nodeReadFileSync(pkgPath, "utf-8"));
+      if (typeof pkg.version === "string" && pkg.version.length > 0) {
+        return pkg.version;
+      }
+    }
   } catch {
-    return "0.1.0";
+    // Fall through to the hard-coded minimum fallback below.
+  }
+  return "0.1.0";
+}
+
+function preflightResumeRequest(cliArgs: CliArgs): void {
+  if ((!cliArgs.resume && !cliArgs.continue_) || cliArgs.query || cliArgs.file) {
+    return;
+  }
+
+  const sessionStore = new SessionStore();
+  if (cliArgs.resume) {
+    resolveResumeTarget(sessionStore, cliArgs.resume);
+    return;
+  }
+
+  if ((sessionStore.listSessions(1)[0] ?? null) === null) {
+    process.stderr.write(
+      yellow("[session] No session found: most recent") + "\n",
+    );
+    process.exit(1);
   }
 }
 
@@ -525,7 +560,7 @@ Usage:
 
 Commands:
   devagent help                   Show top-level help
-  devagent configure              Guided global configuration wizard
+  devagent setup                  Guided global configuration wizard
   devagent doctor                 Check environment and dependencies
   devagent config <...>           Inspect or edit global config directly
   devagent sessions               List recent sessions
@@ -656,6 +691,11 @@ async function setupConfig(cliArgs: CliArgs): Promise<ConfigSetupResult> {
   if (migration.migrated) {
     process.stderr.write(dim("[config] Migrated legacy config.json to config.toml") + "\n");
   }
+  const tomlMigration = migrateLegacyGlobalTomlIfNeeded();
+  if (tomlMigration.migrated) {
+    process.stderr.write(dim("[config] Migrated legacy ~/.devagent.toml to config.toml") + "\n");
+  }
+  normalizeGlobalConfigIfNeeded();
   const projectRoot = findProjectRoot() ?? process.cwd();
 
   // Load config with CLI overrides
@@ -714,7 +754,7 @@ async function setupConfig(cliArgs: CliArgs): Promise<ConfigSetupResult> {
 
   // Auto-size context budget from model registry when user hasn't overridden it.
   // Without this, a model with 192K context gets the default 100K budget.
-  const registryEntry = lookupModelEntry(config.model);
+  const registryEntry = lookupModelEntry(config.model, config.provider);
   if (registryEntry && config.budget.maxContextTokens === DEFAULT_BUDGET.maxContextTokens) {
     config = {
       ...config,
@@ -1488,7 +1528,7 @@ export async function main(): Promise<void> {
     process.exit(2);
   }
 
-  // Subcommands: doctor, config, configure
+  // Subcommands: doctor, config, setup
   if (cliArgs.subcommand) {
     const cmd = cliArgs.subcommand.name;
     const cmdArgs = cliArgs.subcommand.args;
@@ -1501,7 +1541,7 @@ export async function main(): Promise<void> {
     }
     else if (cmd === "doctor") { await runDoctor(getVersion(), cmdArgs); }
     else if (cmd === "config") { runConfig(cmdArgs); }
-    else if (cmd === "setup") { runSetup(cmdArgs); }
+    else if (cmd === "setup") { await runSetup(cmdArgs); }
     else if (cmd === "init") { runInit(cmdArgs); }
     else if (cmd === "configure") { await runConfigure(cmdArgs); }
     else if (cmd === "update") { await runUpdate(cmdArgs); }
@@ -1528,6 +1568,8 @@ export async function main(): Promise<void> {
 
   // ─── 1. Config ─────────────────────────────────────────────
   const { config, projectRoot } = await setupConfig(cliArgs);
+
+  preflightResumeRequest(cliArgs);
 
   // ─── 2. Provider ───────────────────────────────────────────
   const { provider, providerRegistry } = setupProvider(config, cliArgs);
@@ -1654,7 +1696,7 @@ export async function main(): Promise<void> {
         model: config.model,
         approvalMode: initialSafetyMode,
         cwd: projectRoot,
-        version: "0.1.0",
+        version: getVersion(),
         onListSessions: () => {
           try {
             return persistence.sessionStore.listSessions(15).map((s) => buildSessionPreview(s));

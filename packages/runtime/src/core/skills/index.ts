@@ -26,6 +26,11 @@ export { SkillResolver } from "./resolver.js";
 export type { ResolveContext, SkillResolverOptions } from "./resolver.js";
 
 export {
+  formatSkillMatchLine,
+  formatSkillPromptGuidance,
+} from "./prompt-format.js";
+
+export {
   SkillAccessManager,
   INVOKED_SKILL_KNOWLEDGE_PREFIX,
 } from "./access.js";

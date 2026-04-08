@@ -15,7 +15,7 @@
   "preSetup": [
     {
       "kind": "write-file",
-      "path": ".devagent.toml",
+      "path": "${homeDir}/.config/devagent/config.toml",
       "templateFile": "ets-frontend-arkts-config.toml"
     },
     {

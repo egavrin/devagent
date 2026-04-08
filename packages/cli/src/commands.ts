@@ -1,5 +1,5 @@
 /**
- * CLI subcommands: doctor, config, configure.
+ * CLI subcommands: doctor, config, setup.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -11,12 +11,13 @@ import {
   CredentialStore,
   formatResolvedCredentialSource,
   findProjectRoot,
+  getProvidersForModel,
   getProviderCredentialDescriptor,
   loadConfig,
   loadModelRegistry,
   getRegisteredModels,
+  isModelRegisteredForProvider,
   listProviderCredentialDescriptors,
-  lookupModelEntry,
   resolveProviderCredentialStatus,
 } from "@devagent/runtime";
 import type { CredentialInfo, DevAgentConfig, ProviderCredentialDescriptor as ProviderDescriptor } from "@devagent/runtime";
@@ -32,6 +33,8 @@ import {
   listGlobalConfigEntries,
   loadGlobalConfigObject,
   migrateLegacyGlobalConfigIfNeeded,
+  migrateLegacyGlobalTomlIfNeeded,
+  normalizeGlobalConfigIfNeeded,
   setGlobalConfigValue,
   writeGlobalConfigObject,
 } from "./global-config.js";
@@ -63,16 +66,15 @@ export function renderConfigureHelpText(): string {
   return `Usage:
   devagent configure
 
-Guided onboarding for global DevAgent defaults. Writes provider, model, safety,
-budget, and subagent settings to ~/.config/devagent/config.toml.`;
+Alias for "devagent setup".`;
 }
 
 export function renderSetupHelpText(): string {
   return `Usage:
   devagent setup
 
-This command has been removed from the public CLI.
-Use devagent configure for guided global configuration.`;
+Guided onboarding for global DevAgent defaults. Writes provider, model, safety,
+budget, and subagent settings to ~/.config/devagent/config.toml.`;
 }
 
 export function renderInitHelpText(): string {
@@ -148,7 +150,7 @@ export interface DoctorReportInput {
   readonly modelRegistryError?: string;
   readonly modelRegistryCount?: number;
   readonly modelRegistered: boolean;
-  readonly modelOwner?: string;
+  readonly modelProviders?: ReadonlyArray<string>;
   readonly providerModelIssue?: ProviderModelCompatibilityIssue;
   readonly lspStatuses: ReadonlyArray<DoctorLspStatus>;
   readonly platformLabel: string;
@@ -174,11 +176,12 @@ export interface DoctorReport {
     readonly model: string;
     readonly modelSource: "cli" | "env" | "config" | "default";
     readonly credentialSource: string;
-    readonly modelOwner?: string;
+    readonly modelProviders?: ReadonlyArray<string>;
   };
   readonly lspStatuses: ReadonlyArray<DoctorLspStatus>;
   readonly platformCheck: DoctorCheck;
   readonly ok: boolean;
+  readonly summaryStatus: "pass" | "advisory" | "blocking";
 }
 
 interface DoctorConfigFile {
@@ -338,7 +341,7 @@ function buildProviderCredentialIssue(
 function buildProviderModelIssueSteps(
   issue: ProviderModelCompatibilityIssue,
 ): string[] {
-  if (issue.model === "cortex" || issue.expectedProvider === "devagent-api") {
+  if (issue.model === "cortex" || issue.supportedProviders.includes("devagent-api")) {
     return [
       'Run now: devagent --provider devagent-api --model cortex "<your prompt>"',
       "Set in ~/.config/devagent/config.toml:",
@@ -350,7 +353,7 @@ function buildProviderModelIssueSteps(
   }
 
   return [
-    `Run now: devagent --provider ${issue.expectedProvider} --model ${issue.model} "<your prompt>"`,
+    `Run now: devagent --provider ${issue.supportedProviders[0]} --model ${issue.model} "<your prompt>"`,
     `Or switch to a model registered for "${issue.configuredProvider}".`,
   ];
 }
@@ -411,7 +414,7 @@ function buildBlockingIssues(
       title: "Config file",
       detail: checks.configCheck.detail ?? "config file not found",
       nextSteps: [
-        "Run: devagent configure",
+        "Run: devagent setup",
         "Or create ~/.config/devagent/config.toml with your provider and model.",
       ],
     });
@@ -445,18 +448,9 @@ function buildBlockingIssues(
       title: "Model",
       detail: checks.modelCheck.detail ?? `model "${input.config.model}" is not registered`,
       nextSteps: [
-        "Run: devagent configure",
+        "Run: devagent setup",
         `Or choose a registered model for provider "${input.config.provider}".`,
       ],
-    });
-  }
-
-  const foundLsp = input.lspStatuses.some((lsp) => lsp.found);
-  if (!foundLsp) {
-    issues.push({
-      title: "LSP servers",
-      detail: "none found",
-      nextSteps: ["Run: devagent install-lsp"],
     });
   }
 
@@ -521,7 +515,13 @@ export function buildDoctorReport(input: DoctorReportInput): DoctorReport {
   });
 
   const foundLsp = input.lspStatuses.some((lsp) => lsp.found);
-  const ok = blockingIssues.length === 0 && foundLsp;
+  const hasAdvisories =
+    providerCheck.status === "advisory" ||
+    modelCheck.status === "advisory" ||
+    providerModelCheck.status === "advisory" ||
+    !foundLsp;
+  const ok = blockingIssues.length === 0;
+  const summaryStatus = ok ? (hasAdvisories ? "advisory" : "pass") : "blocking";
 
   return {
     version: input.version,
@@ -540,11 +540,12 @@ export function buildDoctorReport(input: DoctorReportInput): DoctorReport {
       model: input.config.model,
       modelSource: input.modelSource,
       credentialSource: input.credentialSource,
-      ...(input.modelOwner ? { modelOwner: input.modelOwner } : {}),
+      ...(input.modelProviders && input.modelProviders.length > 0 ? { modelProviders: input.modelProviders } : {}),
     },
     lspStatuses: input.lspStatuses,
     platformCheck,
     ok,
+    summaryStatus,
   };
 }
 
@@ -570,8 +571,8 @@ export function renderDoctorReport(report: DoctorReport): string {
   lines.push(`  Provider: ${report.effectiveConfig.provider} (${report.effectiveConfig.providerSource})`);
   lines.push(`  Model: ${report.effectiveConfig.model} (${report.effectiveConfig.modelSource})`);
   lines.push(`  Credential: ${report.effectiveConfig.credentialSource}`);
-  if (report.effectiveConfig.modelOwner) {
-    lines.push(`  Model owner: ${report.effectiveConfig.modelOwner}`);
+  if (report.effectiveConfig.modelProviders && report.effectiveConfig.modelProviders.length > 0) {
+    lines.push(`  Registered providers: ${report.effectiveConfig.modelProviders.join(", ")}`);
   }
   lines.push("");
 
@@ -603,7 +604,13 @@ export function renderDoctorReport(report: DoctorReport): string {
   lines.push("");
   lines.push(formatCheck(report.platformCheck));
   lines.push("");
-  lines.push(report.ok ? "All checks passed." : "Some checks failed.");
+  lines.push(
+    report.summaryStatus === "blocking"
+      ? "Blocking issues found."
+      : report.summaryStatus === "advisory"
+        ? "Checks passed with advisories."
+        : "All checks passed.",
+  );
 
   return lines.join("\n");
 }
@@ -617,6 +624,8 @@ export async function runDoctor(version: string, args: ReadonlyArray<string> = [
   }
 
   migrateLegacyGlobalConfigIfNeeded();
+  migrateLegacyGlobalTomlIfNeeded();
+  normalizeGlobalConfigIfNeeded();
   const runtime = typeof Bun !== "undefined" ? `Bun ${Bun.version}` : `Node ${process.version}`;
   const runtimeMajor = parseInt(process.version.replace("v", ""), 10);
   const runtimeError =
@@ -632,12 +641,7 @@ export async function runDoctor(version: string, args: ReadonlyArray<string> = [
 
   const projectRoot = findProjectRoot() ?? process.cwd();
   const globalHome = process.env["HOME"] ?? homedir();
-  const configPaths = [
-    join(projectRoot, ".devagent.toml"),
-    join(projectRoot, "devagent.toml"),
-    getGlobalConfigPath(globalHome),
-    join(globalHome, ".devagent.toml"),
-  ];
+  const configPaths = [getGlobalConfigPath(globalHome)];
   const foundConfig = configPaths.find((p) => existsSync(p));
   const fileConfig = loadDoctorConfigFile(foundConfig);
   const config = loadConfig(projectRoot);
@@ -648,11 +652,13 @@ export async function runDoctor(version: string, args: ReadonlyArray<string> = [
   let modelRegistryError: string | undefined;
   let modelRegistryCount = 0;
   let modelRegistered = false;
+  let modelProviders: ReadonlyArray<string> | undefined;
   try {
     loadModelRegistry();
     const models = getRegisteredModels();
     modelRegistryCount = models.length;
     modelRegistered = models.includes(config.model);
+    modelProviders = modelRegistered ? getProvidersForModel(config.model) : undefined;
   } catch (err) {
     modelRegistryError = String(err);
   }
@@ -661,10 +667,6 @@ export async function runDoctor(version: string, args: ReadonlyArray<string> = [
     modelRegistryError || !modelRegistered
       ? undefined
       : getProviderModelCompatibilityIssue(config.provider, config.model);
-  const modelOwner =
-    modelRegistryError || !modelRegistered
-      ? undefined
-      : lookupModelEntry(config.model)?.provider;
   const activeProviderHasCredential = hasProviderCredential(
     config.provider,
     config,
@@ -690,7 +692,7 @@ export async function runDoctor(version: string, args: ReadonlyArray<string> = [
     ...(modelRegistryError ? { modelRegistryError } : {}),
     modelRegistryCount,
     modelRegistered,
-    ...(modelOwner ? { modelOwner } : {}),
+    ...(modelProviders ? { modelProviders } : {}),
     ...(providerModelIssue ? { providerModelIssue } : {}),
     lspStatuses,
     platformLabel: `${process.platform} ${process.arch}`,
@@ -797,6 +799,8 @@ export function runConfig(args: string[]): void {
   }
 
   migrateLegacyGlobalConfigIfNeeded();
+  migrateLegacyGlobalTomlIfNeeded();
+  normalizeGlobalConfigIfNeeded();
   const sub = args[0];
 
   if (!sub || sub === "path") {
@@ -859,22 +863,20 @@ export function runInit(args: ReadonlyArray<string> = []): void {
   process.exit(2);
 }
 
-export function runSetup(args: ReadonlyArray<string> = []): void {
+export async function runSetup(args: ReadonlyArray<string> = []): Promise<void> {
   if (hasHelpFlag(args)) {
     console.log(renderSetupHelpText());
     return;
   }
 
-  console.error("devagent setup has been removed from the public CLI.");
-  console.error("Use devagent configure for guided global configuration.");
-  process.exit(2);
+  await runConfigure(args);
 }
 
 // ─── configure ──────────────────────────────────────────────
 
 const SETUP_PROVIDERS = [
   { id: "anthropic", name: "Anthropic", envVar: "ANTHROPIC_API_KEY", defaultModel: "claude-sonnet-4-20250514", hint: "Get key at https://console.anthropic.com/settings/keys" },
-  { id: "openai", name: "OpenAI", envVar: "OPENAI_API_KEY", defaultModel: "gpt-4.1", hint: "Get key at https://platform.openai.com/api-keys" },
+  { id: "openai", name: "OpenAI", envVar: "OPENAI_API_KEY", defaultModel: "gpt-5.4", hint: "Get key at https://platform.openai.com/api-keys" },
   { id: "devagent-api", name: "Devagent API", envVar: "DEVAGENT_API_KEY", defaultModel: "cortex", hint: "Use a gateway virtual key starting with ilg_" },
   { id: "deepseek", name: "DeepSeek", envVar: "DEEPSEEK_API_KEY", defaultModel: "deepseek-chat", hint: "Get key at https://platform.deepseek.com/api_keys" },
   { id: "openrouter", name: "OpenRouter", envVar: "OPENROUTER_API_KEY", defaultModel: "anthropic/claude-sonnet-4-20250514", hint: "Get key at https://openrouter.ai/keys" },
@@ -899,12 +901,12 @@ function setValidatedGlobalConfigValue(path: string, rawValue: string): Array<[s
     const provider = rawValue.trim();
     const currentModel = typeof config["model"] === "string" ? config["model"] : undefined;
     loadModelRegistry();
-    const currentModelOwner = currentModel ? lookupModelEntry(currentModel)?.provider : undefined;
+    const currentModelSupported = currentModel ? isModelRegisteredForProvider(provider, currentModel) : false;
     const defaultModel = getDefaultModelForProvider(provider);
 
     setGlobalConfigValue("provider", provider);
 
-    if (!currentModel || (currentModelOwner && currentModelOwner !== provider)) {
+    if (!currentModel || !currentModelSupported) {
       if (defaultModel) {
         setGlobalConfigValue("model", defaultModel);
         return [["provider", provider], ["model", defaultModel]];
@@ -932,17 +934,24 @@ function setValidatedGlobalConfigValue(path: string, rawValue: string): Array<[s
     return [["model", rawValue]];
   }
 
+  if (canonicalPath === "safety.mode" || canonicalPath === "approval.mode") {
+    setGlobalConfigValue(path, rawValue);
+    return [["safety.mode", getGlobalConfigValue("safety.mode") ?? rawValue]];
+  }
+
   setGlobalConfigValue(path, rawValue);
   return [[path, rawValue]];
 }
 
 export async function runConfigure(args: ReadonlyArray<string> = []): Promise<void> {
   if (hasHelpFlag(args)) {
-    console.log(renderConfigureHelpText());
+    console.log(renderSetupHelpText());
     return;
   }
 
   migrateLegacyGlobalConfigIfNeeded();
+  migrateLegacyGlobalTomlIfNeeded();
+  normalizeGlobalConfigIfNeeded();
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   const ask = (prompt: string): Promise<string> =>
     new Promise((resolve) => rl.question(prompt, resolve));
@@ -950,7 +959,7 @@ export async function runConfigure(args: ReadonlyArray<string> = []): Promise<vo
   const configPath = getGlobalConfigPath();
   const isUpdate = existsSync(configPath);
 
-  console.log("DevAgent Configure\n");
+  console.log("DevAgent Setup\n");
   if (isUpdate) console.log(`(Existing config at ${configPath} will be updated)\n`);
 
   // 1. Provider selection
@@ -1007,8 +1016,9 @@ export async function runConfigure(args: ReadonlyArray<string> = []): Promise<vo
   console.log(`  ✓ Safety mode: ${safetyMode}\n`);
 
   // 5. Max iterations
-  const iterChoice = await ask("> Max iterations per query [30]: ");
-  const maxIterations = parseInt(iterChoice.trim(), 10) || 30;
+  const iterChoice = await ask("> Max iterations per query [0]: ");
+  const parsedMaxIterations = Number.parseInt(iterChoice.trim(), 10);
+  const maxIterations = Number.isNaN(parsedMaxIterations) ? 0 : parsedMaxIterations;
   console.log(`  ✓ Max iterations: ${maxIterations}\n`);
 
   // 6. Subagent configuration
@@ -1215,7 +1225,7 @@ function getCurrentVersion(): string {
 // ─── completions ────────────────────────────────────────────
 
 const COMMANDS = [
-  "configure", "doctor", "config", "update", "completions",
+  "setup", "doctor", "config", "update", "completions",
   "version", "sessions", "review", "auth", "execute",
 ];
 const FLAGS = [

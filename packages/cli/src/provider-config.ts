@@ -15,7 +15,7 @@ export function buildProviderConfig(
   const baseProviderConfig = config.providers[config.provider] ?? {
     model: config.model,
   };
-  const registryCaps = lookupModelCapabilities(config.model);
+  const registryCaps = lookupModelCapabilities(config.model, config.provider);
   const resolvedReasoningEffort = agentType
     ? config.agentReasoningOverrides?.[agentType] ?? reasoningEffort
     : reasoningEffort;

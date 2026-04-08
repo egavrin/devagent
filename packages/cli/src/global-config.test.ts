@@ -7,7 +7,10 @@ import {
   getGlobalConfigPath,
   getGlobalConfigValue,
   migrateLegacyGlobalConfigIfNeeded,
+  migrateLegacyGlobalTomlIfNeeded,
+  loadGlobalConfigObject,
   setGlobalConfigValue,
+  writeGlobalConfigObject,
 } from "./global-config.js";
 
 let homeDir: string;
@@ -73,6 +76,20 @@ describe("global config", () => {
     expect(existsSync(join(configDir, "config.json"))).toBe(true);
   });
 
+  it("migrates legacy global TOML approval settings into safety mode", () => {
+    const legacyPath = join(homeDir, ".devagent.toml");
+    writeFileSync(legacyPath, 'provider = "openai"\n\n[approval]\nmode = "full-auto"\n');
+
+    const result = migrateLegacyGlobalTomlIfNeeded();
+
+    expect(result.migrated).toBe(true);
+    expect(getGlobalConfigValue("safety.mode")).toBe("autopilot");
+
+    const configToml = readFileSync(getGlobalConfigPath(), "utf-8");
+    expect(configToml).toContain("[safety]");
+    expect(configToml).not.toContain("[approval]");
+  });
+
   it("round-trips canonical values through TOML", () => {
     setGlobalConfigValue("provider", "openai");
     setGlobalConfigValue("budget.maxIterations", "33");
@@ -86,6 +103,48 @@ describe("global config", () => {
     expect(configToml).toContain('provider = "openai"');
     expect(configToml).toContain("max_iterations = 33");
     expect(configToml).toContain('api_key = "env:OPENAI_API_KEY"');
+  });
+
+  it("rewrites legacy approval config to safety when loading an existing canonical config", () => {
+    const configDir = join(homeDir, ".config", "devagent");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "config.toml"),
+      'provider = "openai"\n\n[approval]\nmode = "suggest"\n',
+    );
+
+    expect(loadGlobalConfigObject()).toMatchObject({
+      provider: "openai",
+      safety: { mode: "default" },
+    });
+
+    const configToml = readFileSync(getGlobalConfigPath(), "utf-8");
+    expect(configToml).toContain('[safety]\nmode = "default"');
+    expect(configToml).not.toContain("[approval]");
+  });
+
+  it("drops legacy approval config when writing canonical safety settings", () => {
+    writeGlobalConfigObject({
+      provider: "openai",
+      approval: { mode: "auto-edit", audit_log: true },
+      safety: { mode: "autopilot" },
+    });
+
+    const configToml = readFileSync(getGlobalConfigPath(), "utf-8");
+    expect(configToml).toContain('[safety]\nmode = "autopilot"');
+    expect(configToml).not.toContain("[approval]");
+  });
+
+  it("fails fast on an unknown legacy approval mode when no safety mode is set", () => {
+    const configDir = join(homeDir, ".config", "devagent");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "config.toml"),
+      'provider = "openai"\n\n[approval]\nmode = "mystery"\n',
+    );
+
+    expect(() => loadGlobalConfigObject())
+      .toThrow('Unsupported legacy approval.mode: "mystery"');
   });
 
   it("fails fast on unsupported config keys", () => {

@@ -29,7 +29,7 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "test:bundle-smoke": "bun run scripts/smoke-publish-bundle.ts",
-    "test:live-validation": "bun test scripts/live-validation/live-validation.test.ts",
+    "test:live-validation": "bun test scripts/live-validation/*.test.ts",
     "lint": "turbo run lint",
     "lint:arkts": "turbo run lint:arkts",
     "typecheck": "turbo run typecheck",

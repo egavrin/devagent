@@ -55,7 +55,7 @@ function makeInput(overrides: Partial<DoctorReportInput> = {}): DoctorReportInpu
     ],
     modelRegistryCount: 110,
     modelRegistered: true,
-    modelOwner: "openai",
+    modelProviders: ["openai", "github-copilot"],
     lspStatuses: [
       { label: "TypeScript/JavaScript", found: true, install: "npm i -g typescript-language-server typescript" },
       { label: "Python (Pyright)", found: true, install: "npm i -g pyright" },
@@ -85,7 +85,7 @@ describe("doctor report", () => {
     expect(output).toContain("nvm install 20 && nvm use 20");
     expect(output).toContain("Bun >= 1.3");
     expect(output).toContain("  ✗ Runtime: Node v18.19.0: Node.js >= 20 required");
-    expect(output).toContain("Some checks failed.");
+    expect(output).toContain("Blocking issues found.");
   });
 
   it("prioritizes provider/model mismatch and shows gateway next steps", () => {
@@ -100,11 +100,11 @@ describe("doctor report", () => {
         status: "advisory",
         detail: "no API key (set OPENAI_API_KEY or run devagent auth login). Secondary until provider/model pairing is fixed.",
       },
-      modelOwner: "devagent-api",
+      modelProviders: ["devagent-api"],
       providerModelIssue: {
         model: "cortex",
         configuredProvider: "openai",
-        expectedProvider: "devagent-api",
+        supportedProviders: ["devagent-api"],
       },
     }));
 
@@ -114,7 +114,7 @@ describe("doctor report", () => {
 
 Blocking issues:
 
-  - Provider/model pairing: Configured model "cortex" belongs to provider "devagent-api"; current provider is "openai". Switch provider or choose a model registered for "openai".
+  - Provider/model pairing: Configured model "cortex" is not registered for provider "openai". It is registered for "devagent-api". Switch provider or choose a model registered for "openai".
 
 What to do next:
 
@@ -131,7 +131,7 @@ Effective config:
   Provider: openai (config)
   Model: cortex (config)
   Credential: missing
-  Model owner: devagent-api
+  Registered providers: devagent-api
 
 Checks:
 
@@ -147,7 +147,7 @@ Checks:
 
   ✓ Model registry: 110 models loaded
   ✓ Model: cortex
-  ✗ Provider/model pairing: Configured model "cortex" belongs to provider "devagent-api"; current provider is "openai". Switch provider or choose a model registered for "openai". Try "--provider devagent-api --model cortex" for the deployed Devagent API gateway.
+  ✗ Provider/model pairing: Configured model "cortex" is not registered for provider "openai". It is registered for "devagent-api". Switch provider or choose a model registered for "openai". Try "--provider devagent-api --model cortex" for the deployed Devagent API gateway.
   LSP servers:
     ✓ TypeScript/JavaScript
     ✓ Python (Pyright)
@@ -157,7 +157,7 @@ Checks:
 
   ✓ Platform: darwin arm64
 
-Some checks failed.`);
+Blocking issues found.`);
   });
 
   it("omits remediation block when doctor passes", () => {
@@ -168,7 +168,7 @@ Some checks failed.`);
         { id: "devagent-api", hint: "set DEVAGENT_API_KEY or devagent auth login", active: true, hasCredential: true },
         { id: "ollama", hint: "local — no API key needed (ollama must be running)", active: false, hasCredential: true },
       ],
-      modelOwner: "devagent-api",
+      modelProviders: ["devagent-api"],
       credentialSource: "env (DEVAGENT_API_KEY)",
     }));
 
@@ -182,7 +182,7 @@ Effective config:
   Provider: devagent-api (config)
   Model: cortex (config)
   Credential: env (DEVAGENT_API_KEY)
-  Model owner: devagent-api
+  Registered providers: devagent-api
 
 Checks:
 
@@ -232,11 +232,27 @@ All checks passed.`);
     expect(output).toContain("  Provider: openai (config)");
     expect(output).toContain("  Model: gpt-4.1 (config)");
     expect(output).toContain("  Credential: missing");
-    expect(output).toContain("  Model owner: openai");
+    expect(output).toContain("  Registered providers: openai, github-copilot");
     expect(output).toContain('Provider credentials: no API key (set OPENAI_API_KEY or run devagent auth login)');
     expect(output).toContain("Export credentials: export OPENAI_API_KEY=<your_api_key>");
     expect(output).toContain("Or store credentials: devagent auth login");
     expect(output).toContain('Then retry: devagent "<your prompt>"');
-    expect(output).toContain("Some checks failed.");
+    expect(output).toContain("Blocking issues found.");
+  });
+
+  it("reports advisories instead of failure when only LSP servers are missing", () => {
+    const report = buildDoctorReport(makeInput({
+      lspStatuses: [
+        { label: "TypeScript/JavaScript", found: false, install: "npm i -g typescript-language-server typescript" },
+        { label: "Python (Pyright)", found: false, install: "npm i -g pyright" },
+      ],
+      credentialSource: "env (OPENAI_API_KEY)",
+    }));
+
+    const output = renderDoctorReport(report);
+
+    expect(report.ok).toBe(true);
+    expect(output).toContain("Checks passed with advisories.");
+    expect(output).not.toContain("Blocking issues:");
   });
 });

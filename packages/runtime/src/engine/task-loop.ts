@@ -308,7 +308,7 @@ export class TaskLoop {
     this.injectSessionStateOnFirstTurn = options.injectSessionStateOnFirstTurn ?? false;
     this.finalTextValidator = options.finalTextValidator ?? null;
     this.agentContext = options.agentContext ?? null;
-    this.cachedPricing = lookupModelPricing(this.config.model);
+    this.cachedPricing = lookupModelPricing(this.config.model, this.config.provider);
     this.stagnationDetector = new StagnationDetector({
       bus: this.bus,
       sessionState: this.sessionState,

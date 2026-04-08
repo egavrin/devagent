@@ -48,12 +48,12 @@ describe("documentation parity", () => {
     expect(readme).not.toContain("REPL");
   });
 
-  it("documents configure as the public onboarding command", () => {
+  it("documents setup as the public onboarding command", () => {
     const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
     expect(readme).toContain("devagent help");
     expect(readme).toContain("| `devagent help` | Show top-level help |");
-    expect(readme).toContain("devagent configure");
-    expect(readme).toContain("| `devagent configure` | Guided global configuration wizard |");
+    expect(readme).toContain("devagent setup");
+    expect(readme).toContain("| `devagent setup` | Guided global configuration wizard |");
     expect(readme).toContain("| `devagent config get/set/path` | Inspect or edit global config directly |");
     expect(readme).toContain("| `devagent install-lsp` | Install LSP servers for code intelligence |");
     expect(readme).toContain("| `devagent auth login/status/logout` | Manage provider credentials |");
@@ -61,7 +61,6 @@ describe("documentation parity", () => {
     expect(readme).toContain("| `devagent execute --request <file> --artifact-dir <dir>` | Execute an SDK request and write artifacts |");
     expect(readme).toContain("devagent auth logout chatgpt");
     expect(readme).toContain("devagent auth logout --all");
-    expect(readme).not.toContain("`devagent setup`");
     expect(readme).not.toContain("`devagent init`");
   });
 

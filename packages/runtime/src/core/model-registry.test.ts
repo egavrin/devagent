@@ -2,7 +2,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, beforeEach } from "vitest";
-import { loadModelRegistry, lookupModelCapabilities, lookupModelPricing, _resetRegistryForTesting } from "./model-registry.js";
+import {
+  loadModelRegistry,
+  lookupModelCapabilities,
+  lookupModelEntry,
+  lookupModelPricing,
+  getProvidersForModel,
+  isModelRegisteredForProvider,
+  _resetRegistryForTesting,
+} from "./model-registry.js";
 
 describe("model registry", () => {
   beforeEach(() => {
@@ -81,6 +89,47 @@ supports_temperature = true
 
       const noPricing = lookupModelPricing(modelNoPricing);
       expect(noPricing).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("tracks the same model name across multiple providers", () => {
+    const modelName = "zz-shared-model";
+    const dir = mkdtempSync(join(tmpdir(), "devagent-model-shared-"));
+
+    try {
+      writeFileSync(
+        join(dir, "openai.toml"),
+        `provider = "openai"
+
+["${modelName}"]
+context_window = 1000
+response_headroom = 2000
+supports_temperature = false
+`,
+        "utf-8",
+      );
+      writeFileSync(
+        join(dir, "chatgpt.toml"),
+        `provider = "chatgpt"
+
+["${modelName}"]
+context_window = 3000
+response_headroom = 4000
+supports_temperature = false
+`,
+        "utf-8",
+      );
+
+      loadModelRegistry(undefined, [dir]);
+
+      expect(getProvidersForModel(modelName)).toEqual(["chatgpt", "openai"]);
+      expect(isModelRegisteredForProvider("openai", modelName)).toBe(true);
+      expect(isModelRegisteredForProvider("chatgpt", modelName)).toBe(true);
+      expect(lookupModelEntry(modelName, "openai")?.contextWindow).toBe(1000);
+      expect(lookupModelEntry(modelName, "chatgpt")?.contextWindow).toBe(3000);
+      expect(lookupModelCapabilities(modelName, "chatgpt")?.defaultMaxTokens).toBe(4000);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

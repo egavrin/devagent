@@ -32,7 +32,7 @@ bunx @egavrin/devagent "fix failing tests"
 
 ```bash
 # First-time setup (provider, model, API key, subagents)
-devagent configure
+devagent setup
 
 # Check your environment
 devagent doctor
@@ -76,7 +76,7 @@ devagent -f prompt.md
 devagent help
 
 # Provider/model override
-devagent --provider openai --model gpt-4.1 "optimize this function"
+devagent --provider openai --model gpt-5.4 "optimize this function"
 
 # Resume a session
 devagent --resume <session-id-or-unique-prefix>
@@ -95,7 +95,7 @@ devagent review patch.diff --rule rules/security.md --json
 | Command | Description |
 |---------|-------------|
 | `devagent help` | Show top-level help |
-| `devagent configure` | Guided global configuration wizard |
+| `devagent setup` | Guided global configuration wizard |
 | `devagent doctor` | Check environment and dependencies |
 | `devagent config get/set/path` | Inspect or edit global config directly |
 | `devagent install-lsp` | Install LSP servers for code intelligence |

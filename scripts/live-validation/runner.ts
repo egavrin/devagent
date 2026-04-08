@@ -232,7 +232,7 @@ async function applyPreSetup(
         ? await readTemplate(devagentRoot, step.templateFile)
         : step.content ?? "";
       const rendered = renderTemplate(content, variables);
-      const absolutePath = join(workspace.path, renderTemplate(step.path, variables));
+      const absolutePath = resolve(workspace.path, renderTemplate(step.path, variables));
       await mkdir(join(absolutePath, ".."), { recursive: true });
       await writeFile(absolutePath, rendered);
       if (step.executable) {
@@ -323,24 +323,18 @@ async function ensureIgnoredFile(repoRoot: string, relativePath: string): Promis
 }
 
 async function ensureCliLoggingConfig(
-  workspaceRoot: string,
+  homeDir: string,
   logDir: string,
 ): Promise<void> {
-  const configPath = existsSync(join(workspaceRoot, ".devagent.toml"))
-    ? join(workspaceRoot, ".devagent.toml")
-    : existsSync(join(workspaceRoot, "devagent.toml"))
-      ? join(workspaceRoot, "devagent.toml")
-      : join(workspaceRoot, ".devagent.toml");
+  const configPath = join(homeDir, ".config", "devagent", "config.toml");
   const current = existsSync(configPath) ? await readFile(configPath, "utf-8") : "";
   const updated = upsertTomlSection(current, "logging", {
     enabled: "true",
     log_dir: JSON.stringify(logDir),
     retention_days: "1",
   });
+  await mkdir(dirname(configPath), { recursive: true });
   await writeFile(configPath, updated);
-  await ensureIgnoredFile(workspaceRoot, configPath.endsWith("devagent.toml") && !configPath.endsWith(".devagent.toml")
-    ? "devagent.toml"
-    : ".devagent.toml");
 }
 
 type ToolCallObservation = {
@@ -793,6 +787,7 @@ function buildVariables(
   workspaceRoot: string,
   outputDir: string,
   artifactDir: string,
+  homeDir: string,
   linterPath: string | null,
 ): Record<string, string> {
   return {
@@ -800,6 +795,7 @@ function buildVariables(
     repoRoot: workspaceRoot,
     outputDir,
     artifactDir,
+    homeDir,
     ...(linterPath ? { linterPath } : {}),
     ...(scenario.variables ? scenario.variables : {}),
   };
@@ -1020,6 +1016,7 @@ export async function runValidationScenario(
       workspace.path,
       outputDir,
       artifactDir,
+      defaultHomeDir,
       linterPath,
     );
     if (scenario.surface === "execute" && scenario.requiresArktsLinter && linterPath) {
@@ -1036,7 +1033,7 @@ export async function runValidationScenario(
       await mkdir(join(defaultHomeDir, ".config", "devagent"), { recursive: true });
     }
     if (scenario.surface === "cli") {
-      await ensureCliLoggingConfig(workspace.path, cliLogDir);
+      await ensureCliLoggingConfig(defaultHomeDir, cliLogDir);
     }
     if (scenario.baselineAfterSetup) {
       await commitWorkspaceState(workspace.path, "seed live validation scenario");

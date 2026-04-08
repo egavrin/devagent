@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getGlobalConfigPath, loadGlobalConfigObject, writeGlobalConfigObject } from "./global-config.js";
-import { runConfig, runConfigure, runInit, runSetup } from "./commands.js";
+import { runCompletions, runConfig, runConfigure, runInit, runSetup } from "./commands.js";
 
 describe("command help", () => {
   let tempHome: string;
@@ -42,7 +42,7 @@ describe("command help", () => {
     await runConfigure(["--help"]);
     expect(existsSync(getGlobalConfigPath(tempHome))).toBe(false);
 
-    runSetup(["--help"]);
+    await runSetup(["--help"]);
     expect(existsSync(getGlobalConfigPath(tempHome))).toBe(false);
   });
 
@@ -64,16 +64,6 @@ describe("command help", () => {
     expect(existsSync(join(tempRepo, ".devagent"))).toBe(false);
   });
 
-  it("retired setup exits with guidance instead of launching the wizard", () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`process.exit:${code ?? 0}`);
-    }) as never);
-
-    expect(() => runSetup([])).toThrow("process.exit:2");
-    expect(exitSpy).toHaveBeenCalledWith(2);
-    expect(existsSync(getGlobalConfigPath(tempHome))).toBe(false);
-  });
-
   it("config set provider syncs an incompatible model to the provider default", () => {
     writeGlobalConfigObject({
       provider: "anthropic",
@@ -90,9 +80,9 @@ describe("command help", () => {
     expect(console.log).toHaveBeenCalledWith("model = gpt-5.4");
   });
 
-  it("config set provider preserves a model that already belongs to that provider", () => {
+  it("config set provider preserves a shared model that is already valid for that provider", () => {
     writeGlobalConfigObject({
-      provider: "openai",
+      provider: "github-copilot",
       model: "gpt-4.1",
     });
 
@@ -105,7 +95,7 @@ describe("command help", () => {
     expect(console.log).toHaveBeenCalledWith("provider = openai");
   });
 
-  it("config set model rejects a model that does not belong to the configured provider", () => {
+  it("config set model rejects a model that is not registered for the configured provider", () => {
     writeGlobalConfigObject({
       provider: "chatgpt",
       model: "gpt-4.1",
@@ -122,5 +112,31 @@ describe("command help", () => {
       provider: "chatgpt",
       model: "gpt-4.1",
     });
+  });
+
+  it("config set safety.mode writes the canonical safety section", () => {
+    runConfig(["set", "safety.mode", "default"]);
+
+    expect(loadGlobalConfigObject()).toMatchObject({
+      safety: { mode: "default" },
+    });
+    expect(console.log).toHaveBeenCalledWith("safety.mode = default");
+  });
+
+  it("config set approval.mode rewrites the legacy alias to safety.mode", () => {
+    runConfig(["set", "approval.mode", "full-auto"]);
+
+    expect(loadGlobalConfigObject()).toMatchObject({
+      safety: { mode: "autopilot" },
+    });
+    expect(console.log).toHaveBeenCalledWith("safety.mode = autopilot");
+  });
+
+  it("bash completions advertise setup and not configure", () => {
+    runCompletions(["bash"]);
+
+    const emitted = (console.log as ReturnType<typeof vi.fn>).mock.calls.map(([line]) => String(line)).join("\n");
+    expect(emitted).toContain("setup");
+    expect(emitted).not.toContain("configure");
   });
 });

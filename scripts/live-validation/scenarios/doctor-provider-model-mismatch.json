@@ -9,7 +9,7 @@
   "preSetup": [
     {
       "kind": "write-file",
-      "path": ".devagent.toml",
+      "path": "${homeDir}/.config/devagent/config.toml",
       "content": "provider = \"openai\"\nmodel = \"cortex\"\n"
     }
   ],
@@ -31,7 +31,7 @@
     {
       "type": "contains",
       "source": "stdout",
-      "value": "Configured model \"cortex\" belongs to provider \"devagent-api\"; current provider is \"openai\"."
+      "value": "Configured model \"cortex\" is not registered for provider \"openai\"."
     },
     {
       "type": "contains",
@@ -61,7 +61,7 @@
     {
       "type": "contains",
       "source": "stdout",
-      "value": "Model owner: devagent-api"
+      "value": "Registered providers: devagent-api"
     },
     {
       "type": "contains",
