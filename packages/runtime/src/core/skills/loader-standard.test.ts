@@ -58,6 +58,59 @@ describe("SkillLoader — .agents/skills/ discovery", () => {
     );
   });
 
+  it("parses optional trigger metadata from comma-separated and list frontmatter", () => {
+    const agentsSkillsDir = join(TEST_DIR, ".agents", "skills");
+    const dir = join(agentsSkillsDir, "surface-change-e2e");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      [
+        "---",
+        "name: surface-change-e2e",
+        "description: Coordinate CLI and runtime surface changes.",
+        "triggers: update CLI behavior, help text drift, command help",
+        "paths:",
+        "  - packages/cli",
+        "  - packages/runtime",
+        "examples:",
+        "  - update CLI behavior",
+        "  - fix docs drift after a command change",
+        "---",
+        "Instructions",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const skills = loader.discover({ repoRoot: TEST_DIR, globalPaths: [] });
+
+    expect(skills).toHaveLength(1);
+    expect(skills[0].triggers).toEqual([
+      "update CLI behavior",
+      "help text drift",
+      "command help",
+    ]);
+    expect(skills[0].paths).toEqual([
+      "packages/cli",
+      "packages/runtime",
+    ]);
+    expect(skills[0].examples).toEqual([
+      "update CLI behavior",
+      "fix docs drift after a command change",
+    ]);
+  });
+
+  it("keeps old skills discoverable when optional trigger metadata is absent", () => {
+    const agentsSkillsDir = join(TEST_DIR, ".agents", "skills");
+    writeSkillMd(agentsSkillsDir, "testing", "Focused verification guidance");
+
+    const skills = loader.discover({ repoRoot: TEST_DIR, globalPaths: [] });
+
+    expect(skills).toHaveLength(1);
+    expect(skills[0].triggers).toBeUndefined();
+    expect(skills[0].paths).toBeUndefined();
+    expect(skills[0].examples).toBeUndefined();
+  });
+
   it(".agents/skills/ overrides global paths for the same skill name", () => {
     const globalSkillsDir = join(TEST_DIR, "global-skills");
     const agentsSkillsDir = join(TEST_DIR, ".agents", "skills");

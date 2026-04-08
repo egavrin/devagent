@@ -41,6 +41,46 @@ export interface AssemblePromptOptions {
   readonly briefing?: TurnBriefing;
 }
 
+function formatOptionalSkillList(
+  label: string,
+  values: ReadonlyArray<string> | undefined,
+  formatter: (value: string) => string = (value) => `"${value}"`,
+): string | null {
+  if (!values || values.length === 0) {
+    return null;
+  }
+  return `${label}: ${values.map(formatter).join(", ")}`;
+}
+
+function formatSkillMatchLine(skill: {
+  readonly name: string;
+  readonly description: string;
+  readonly source?: string;
+  readonly triggers?: ReadonlyArray<string>;
+  readonly paths?: ReadonlyArray<string>;
+  readonly examples?: ReadonlyArray<string>;
+}): string {
+  const details = [
+    formatOptionalSkillList("triggers", skill.triggers),
+    formatOptionalSkillList("paths", skill.paths, (value) => `\`${value}\``),
+    formatOptionalSkillList("examples", skill.examples),
+  ].filter((detail): detail is string => Boolean(detail));
+
+  const source = skill.source ?? "project";
+  if (details.length === 0) {
+    return `- \`${skill.name}\`: ${skill.description} (${source})`;
+  }
+  return `- \`${skill.name}\`: ${skill.description} (${source}; ${details.join("; ")})`;
+}
+
+function formatSkillPromptGuidance(): string {
+  return [
+    "Match skills using user intent, touched paths, and expected output shape.",
+    "Invoke the broadest relevant workflow skill first, then specialist follow-up skills only when the task clearly enters that area.",
+    "Precedence examples: `surface-change-e2e` before `live-validation-authoring`; `provider-adapter-change` before `security-checklist`; `release-train` before `validate-user-surface`.",
+  ].join(" ");
+}
+
 /**
  * Assemble the full system prompt from static markdown sections plus
  * capability-aware/task-shape fragments.
@@ -101,12 +141,12 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
   const skillList = opts.skills.list();
   if (skillList.length > 0) {
     const skillLines = skillList
-      .map((s) => `- ${s.name}: ${s.description} (${s.source})`)
+      .map((s) => formatSkillMatchLine(s))
       .join("\n");
     sections.push(
       `## Available Skills\n\n${skillLines}\n\n` +
       `Use the \`invoke_skill\` tool to load a skill's full instructions when the ` +
-      `user's task matches a skill description. Always invoke a relevant skill before starting work.`,
+      `user's task matches an available skill. ${formatSkillPromptGuidance()}`,
     );
   }
 

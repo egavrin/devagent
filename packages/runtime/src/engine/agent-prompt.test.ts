@@ -36,6 +36,8 @@ describe("assembleAgentSystemPrompt", () => {
     const metadata: SkillMetadata = {
       name: "review",
       description: "Review code changes for regressions.",
+      triggers: ["review local changes", "look for regressions"],
+      paths: ["packages/runtime", "packages/cli"],
       source: "project",
       dirPath: join(repoRoot, ".agents", "skills", "review"),
       skillFilePath: join(repoRoot, ".agents", "skills", "review", "SKILL.md"),
@@ -65,7 +67,10 @@ describe("assembleAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Use existing patterns.");
-    expect(prompt).toContain("- review: Review code changes for regressions. (project)");
+    expect(prompt).toContain("`review`");
+    expect(prompt).toContain('triggers: "review local changes", "look for regressions"');
+    expect(prompt).toContain("paths: `packages/runtime`, `packages/cli`");
+    expect(prompt).toContain("Invoke the broadest relevant workflow skill first");
     expect(prompt).toContain("Safety mode: autopilot");
     expect(prompt).toContain("Provider: openai / gpt-5");
     expect(prompt).toContain("Investigated delegation bugs.");

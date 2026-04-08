@@ -19,7 +19,7 @@ export interface DiscoverOptions {
 // ─── Frontmatter Parser ─────────────────────────────────────
 
 interface ParsedFrontmatter {
-  readonly fields: Record<string, string>;
+  readonly fields: Record<string, string | ReadonlyArray<string>>;
   readonly body: string;
 }
 
@@ -47,18 +47,83 @@ function parseFrontmatter(content: string): ParsedFrontmatter {
 
   const frontmatter = trimmed.substring(3, endIndex).trim();
   const body = trimmed.substring(endIndex + 3).trim();
-  const fields: Record<string, string> = {};
+  const fields: Record<string, string | ReadonlyArray<string>> = {};
+  let activeListKey: string | null = null;
 
-  for (const line of frontmatter.split("\n")) {
-    const colonIdx = line.indexOf(":");
-    if (colonIdx > 0) {
-      const key = line.substring(0, colonIdx).trim();
-      const value = line.substring(colonIdx + 1).trim();
-      fields[key] = value.replace(/^["']|["']$/g, "");
+  for (const rawLine of frontmatter.split("\n")) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith("#")) {
+      continue;
     }
+
+    if (activeListKey && trimmed.startsWith("- ")) {
+      const nextValue = trimmed.slice(2).trim().replace(/^["']|["']$/g, "");
+      const existing = fields[activeListKey];
+      if (Array.isArray(existing)) {
+        fields[activeListKey] = [...existing, nextValue];
+      } else if (typeof existing === "string" && existing.length > 0) {
+        fields[activeListKey] = [existing, nextValue];
+      } else {
+        fields[activeListKey] = [nextValue];
+      }
+      continue;
+    }
+
+    const colonIdx = trimmed.indexOf(":");
+    if (colonIdx <= 0) {
+      activeListKey = null;
+      continue;
+    }
+
+    const key = trimmed.substring(0, colonIdx).trim();
+    const value = trimmed.substring(colonIdx + 1).trim();
+    if (value.length === 0) {
+      fields[key] = [];
+      activeListKey = key;
+      continue;
+    }
+
+    fields[key] = value.replace(/^["']|["']$/g, "");
+    activeListKey = null;
   }
 
   return { fields, body };
+}
+
+function normalizeStringArray(
+  value: string | ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  let items: ReadonlyArray<string>;
+  if (Array.isArray(value)) {
+    items = value;
+  } else if (typeof value === "string") {
+    items = value.split(",").map((entry: string) => entry.trim());
+  } else {
+    return undefined;
+  }
+  const normalized = items
+    .map((entry: string) => entry.trim())
+    .filter((entry: string) => entry.length > 0);
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeOptionalString(
+  value: string | ReadonlyArray<string> | unknown,
+): string | undefined {
+  if (Array.isArray(value)) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function parseSkillSupportRoots(skillDirPath: string): ParsedSkillSupportRoots {
@@ -90,14 +155,6 @@ function parseSkillSupportRoots(skillDirPath: string): ParsedSkillSupportRoots {
     sourceRepoPath,
     sourceSkillDirPath,
   };
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 // ─── SkillLoader Class ──────────────────────────────────────
@@ -195,8 +252,8 @@ export class SkillLoader {
       }
 
       const { fields } = parseFrontmatter(content);
-      const name = fields["name"];
-      const description = fields["description"];
+      const name = normalizeOptionalString(fields["name"]);
+      const description = normalizeOptionalString(fields["description"]);
 
       if (!name || !description) {
         process.stderr.write(
@@ -225,16 +282,17 @@ export class SkillLoader {
       const metadata: SkillMetadata = {
         name,
         description,
+        triggers: normalizeStringArray(fields["triggers"]),
+        paths: normalizeStringArray(fields["paths"]),
+        examples: normalizeStringArray(fields["examples"]),
         source,
         dirPath: entryPath,
         skillFilePath,
         supportRootPath: supportRoots.supportRootPath,
         sourceRepoPath: supportRoots.sourceRepoPath,
         sourceSkillDirPath: supportRoots.sourceSkillDirPath,
-        license: fields["license"],
-        compatibility: fields["compatibility"]
-          ? fields["compatibility"].split(",").map((s) => s.trim())
-          : undefined,
+        license: normalizeOptionalString(fields["license"]),
+        compatibility: normalizeStringArray(fields["compatibility"]),
         metadata: undefined,
       };
 

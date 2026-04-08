@@ -77,6 +77,11 @@ bun run install-cli
 - `.agents/skills/debug-test-failure`: use when diagnosing failing test suites in this monorepo.
 - `.agents/skills/security-checklist`: use when a change touches command execution, credentials, artifacts, or provider/auth flows.
 - `.agents/skills/simplify`: use when removing unnecessary abstraction or dead code.
+- `.agents/skills/surface-change-e2e`: use when the task says things like “update CLI behavior”, “fix help text drift”, or “keep runtime, docs, and validation aligned” for a user-visible change.
+- `.agents/skills/provider-adapter-change`: use when the task says things like “provider proxy”, “auth mismatch”, “model registry drift”, or “streaming regression”.
+- `.agents/skills/live-validation-authoring`: use when the task says things like “add a scenario”, “prove this command works end to end”, or “update release validation”.
+- `.agents/skills/ci-triage-devagent`: use when the task says things like “CI failure”, “why did this check fail”, or “reproduce the failing job locally”.
+- `.agents/skills/release-train`: use when the task says things like “bundle smoke”, “release checks”, “verify packaging”, or “check install-flow drift”.
 - `.agents/skills/execute-contract`: use when touching `packages/executor`, executor-facing docs, or any behavior that affects artifact/event/result expectations.
 - `.agents/skills/oss-surface-guard`: use when editing public docs, contributor workflow, or package metadata that must stay within the supported OSS surface.
 - `.agents/skills/verification-checklist`: use before finalizing substantial changes to run the repo’s verification gate.

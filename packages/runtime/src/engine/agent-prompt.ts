@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import { join } from "node:path";
 import type { AgentType, SkillRegistry, ToolSpec } from "../core/index.js";
 import { AgentType as AgentTypeEnum, LRUCache } from "../core/index.js";
+import {
+  formatSkillMatchLine,
+  formatSkillPromptGuidance,
+} from "../core/skills/prompt-format.js";
 import { formatBriefing } from "./briefing.js";
 import type { TurnBriefing } from "./briefing.js";
 import type { DeferredToolStub } from "../tools/index.js";
@@ -327,7 +331,9 @@ export function assembleAgentSystemPrompt(
   if (skillList.length > 0) {
     sections.push(
       "## Available Skills\n\n" +
-      skillList.map((skill) => `- ${skill.name}: ${skill.description} (${skill.source})`).join("\n"),
+      skillList.map((skill) => formatSkillMatchLine(skill)).join("\n") +
+      "\n\n" +
+      formatSkillPromptGuidance(),
     );
   }
 
@@ -355,7 +361,19 @@ function buildPromptCacheKey(options: AssembleAgentSystemPromptOptions): string 
     ? options.deferredTools.map((t) => t.name).sort().join(",")
     : "";
   const skillNames = options.skills
-    ? options.skills.list().map((s) => s.name).sort().join(",")
+    ? options.skills
+      .list()
+      .map((s) =>
+        JSON.stringify({
+          name: s.name,
+          description: s.description,
+          triggers: s.triggers ?? [],
+          paths: s.paths ?? [],
+          examples: s.examples ?? [],
+          source: s.source,
+        }))
+      .sort()
+      .join(",")
     : "";
   // Hash project instructions content for stability
   const instrHash = options.projectInstructions

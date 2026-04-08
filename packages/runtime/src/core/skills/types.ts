@@ -24,6 +24,9 @@ export function isValidSkillName(name: string): boolean {
 export interface SkillFrontmatter {
   readonly name: string;
   readonly description: string;
+  readonly triggers?: ReadonlyArray<string>;
+  readonly paths?: ReadonlyArray<string>;
+  readonly examples?: ReadonlyArray<string>;
   readonly license?: string;
   readonly compatibility?: ReadonlyArray<string>;
   readonly metadata?: Readonly<Record<string, string>>;

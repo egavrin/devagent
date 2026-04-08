@@ -12,6 +12,7 @@ When a task changes behavior, update or add the smallest relevant test coverage.
 - Use repository-native commands such as `bun run test`, `bun run typecheck`, and `bun run build`.
 - Prefer updating an existing nearby test before creating a brand new suite.
 - If the task is documentation-only, do not force code or test edits. State that no test changes were needed.
+- Use `references/path-check-matrix.md` to choose the smallest acceptable verification set from the changed paths.
 
 ## Package hints
 

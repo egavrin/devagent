@@ -21,10 +21,20 @@ function createTempRepo(): string {
 }
 
 function mockSkills(
-  list: ReadonlyArray<{ name: string; description: string }>,
+  list: ReadonlyArray<{
+    name: string;
+    description: string;
+    source?: string;
+    triggers?: ReadonlyArray<string>;
+    paths?: ReadonlyArray<string>;
+    examples?: ReadonlyArray<string>;
+  }>,
 ): SkillRegistry {
   return {
-    list: () => list,
+    list: () => list.map((skill) => ({
+      source: "project",
+      ...skill,
+    })),
   } as unknown as SkillRegistry;
 }
 
@@ -78,13 +88,22 @@ describe("assembleSystemPrompt", () => {
     const prompt = assembleSystemPrompt({
       mode: "act",
       repoRoot,
-      skills: mockSkills([{ name: "reviewer", description: "Review code quality." }]),
+      skills: mockSkills([{
+        name: "surface-change-e2e",
+        description: "Coordinate CLI and runtime surface changes.",
+        triggers: ["update CLI behavior", "help text drift"],
+        paths: ["packages/cli", "packages/runtime"],
+      }]),
       availableTools: FULL_TOOLSET,
     });
 
     expect(prompt).toContain("Source: `AGENTS.md`");
     expect(prompt).toContain("## Available Skills");
-    expect(prompt).toContain("- reviewer: Review code quality.");
+    expect(prompt).toContain("`surface-change-e2e`");
+    expect(prompt).toContain('triggers: "update CLI behavior", "help text drift"');
+    expect(prompt).toContain("paths: `packages/cli`, `packages/runtime`");
+    expect(prompt).toContain("Invoke the broadest relevant workflow skill first");
+    expect(prompt).toContain("`surface-change-e2e` before `live-validation-authoring`");
   });
 
   it("makes scenario-mandated delegation and investigation playbooks explicit in the parent prompt", () => {

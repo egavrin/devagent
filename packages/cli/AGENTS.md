@@ -47,4 +47,4 @@ bun run test
 
 ## Local Skills
 
-- No component-local skill directory exists here. Use the shared repo skills from `.agents/skills`, especially `testing`, `review`, `tdd-workflow`, and `verification-checklist`.
+- No component-local skill directory exists here. Use the shared repo skills from `.agents/skills`, especially `surface-change-e2e` when the task says “update CLI behavior” or “fix help text drift”, `live-validation-authoring` when a command flow needs scenario coverage, `release-train` for bundle or install-flow checks, plus `testing` and `verification-checklist`.

@@ -44,4 +44,4 @@ bun run test
 
 ## Local Skills
 
-- No component-local skill directory exists here. Use the shared repo skills from `.agents/skills`, especially `security-checklist`, `testing`, and `review`.
+- No component-local skill directory exists here. Use the shared repo skills from `.agents/skills`, especially `provider-adapter-change` when the task mentions provider proxy, auth mismatch, model registry drift, or streaming behavior, plus `security-checklist`, `testing`, and `review`.

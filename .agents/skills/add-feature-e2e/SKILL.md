@@ -1,6 +1,6 @@
 ---
 name: add-feature-e2e
-description: End-to-end guide for adding a feature to DevAgent — types, tests, implement, wire, verify.
+description: End-to-end guide for adding a feature to DevAgent, including cross-package surface changes, docs and validation updates, and final verification.
 ---
 
 # Add Feature End-to-End
@@ -16,7 +16,12 @@ Step-by-step guide for adding a feature to DevAgent, from understanding the code
    - **CLI/prompt** → `packages/cli/`
    - **Machine execution contract** → `packages/executor/`
    - **ArkTS integration** → `packages/arkts/`
-3. Read existing similar features to understand the pattern
+3. Decide whether this is also a public surface change:
+   - **CLI/runtime/docs/help/prompt/session UX change** → pair with `surface-change-e2e`
+   - **Provider or model-registry change** → pair with `provider-adapter-change`
+   - **Live validation coverage change** → pair with `live-validation-authoring`
+   - **Executor contract change** → pair with `execute-contract`
+4. Read existing similar features to understand the pattern
 
 ## Phase 2: Design
 
@@ -26,6 +31,7 @@ Draft the approach before writing code:
 - Which modules need modification?
 - What's the wiring path (how does the feature connect to the rest)?
 - What tests will verify it works?
+- Which docs, help text, prompt assets, or live-validation scenarios need updating?
 
 ## Phase 3: Types First
 
@@ -106,7 +112,15 @@ Write minimal code to make tests pass. Follow these patterns per package:
 3. If CLI-visible, update `packages/cli/src/main.ts`
 4. If prompt-relevant, update `packages/cli/src/prompts/`
 
-## Phase 7: Integration Test
+## Phase 7: Public Surface Pass
+
+If the feature changes human-facing behavior, do this before calling the work done:
+
+1. Reconcile README, `WORKFLOW.md`, command help, prompt assets, and nearby documentation tests.
+2. Decide whether the change needs a live-validation scenario update or a `release-matrix.md` update.
+3. Keep the public story aligned with the supported DevAgent surface; do not leave docs or help text behind the code.
+
+## Phase 8: Integration Test
 
 If the feature crosses package boundaries, add an integration test:
 
@@ -121,14 +135,27 @@ describe("myFeature integration", () => {
 });
 ```
 
-## Phase 8: Verify
+## Phase 9: Verify
 
-Run the full verification checklist:
+Run the smallest valid verification set first, then widen if the feature changes public behavior:
 
 ```bash
 bun run typecheck   # Zero errors
 bun run test        # All tests pass
 bun run build       # Clean build
+```
+
+For public surface changes, add:
+
+```bash
+bun run check:oss
+```
+
+For packaging, install, or release-critical changes, escalate to:
+
+```bash
+bun run test:bundle-smoke
+bun run test:live-validation
 ```
 
 Review your changes:
