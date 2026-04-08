@@ -295,8 +295,8 @@ function ToolSpecificHarness(): React.ReactElement {
             exitCode: 1,
             timedOut: false,
             warningOnly: false,
-            stdoutPreview: "stdout line",
-            stderrPreview: "stderr line",
+            stdoutPreview: "stdout line 1\nstdout line 2",
+            stderrPreview: "stderr line 1\nstderr line 2",
             stdoutTruncated: false,
             stderrTruncated: false,
           },
@@ -333,7 +333,7 @@ function ToolSpecificHarness(): React.ReactElement {
             passed: false,
             diagnosticErrors: ["src/new.ts: Unexpected token"],
             testPassed: false,
-            testOutputPreview: "1 failed",
+            testOutputPreview: "Packages in scope: @devagent/cli\nRunning test in 5 packages",
             testSummary: {
               framework: "vitest",
               passed: 3,
@@ -738,16 +738,23 @@ describe("interactive completion notices", () => {
     await settle();
 
     const output = view.stdout.readAll();
+    const plain = stripAnsi(output);
     expect(output).toContain("Run validation");
     expect(output).toContain("command");
     expect(output).toContain("npm test");
     expect(output).toContain("Exited with code 1");
-    expect(output).toContain("stderr line");
+    expect(plain).toContain("stdout line 1");
+    expect(plain).toContain("stdout line 2");
+    expect(plain).toContain("stderr line 1");
+    expect(plain).toContain("stderr line 2");
     expect(output).toContain("validation");
     expect(output).toContain("Validation failed");
     expect(output).toContain("vitest: 3 passed, 1 failed");
+    expect(plain).toContain("Packages in scope: @devagent/cli");
+    expect(plain).toContain("Running test in 5 packages");
     expect(output).toContain("diagnostics (1)");
     expect(output).toContain("src/new.ts: Unexpected token");
+    expect(plain).not.toContain("↵");
   });
 
   it("caps large snapshot diffs in condensed mode", async () => {

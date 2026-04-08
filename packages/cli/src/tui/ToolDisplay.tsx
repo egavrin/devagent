@@ -137,18 +137,48 @@ export function CommandResultDisplay({ data }: { data: PresentedCommandResult })
       </Text>
       <Text dimColor>      {data.cwd === "." ? "cwd ." : `cwd ${data.cwd}`} · <Text color={tone}>{data.statusLine}</Text></Text>
       {data.stdoutPreview && (
-        <Text>
-          <Text dimColor>      stdout </Text>
-          <Text>{data.stdoutPreview.replace(/\n/g, " ↵ ")}</Text>
-          {data.stdoutTruncated ? <Text dimColor> …</Text> : null}
-        </Text>
+        data.stdoutPreview.includes("\n")
+          ? (
+            <Box flexDirection="column">
+              <Text dimColor>      stdout</Text>
+              {data.stdoutPreview.split("\n").map((line, index) => (
+                <Text key={`stdout-${index}`}>
+                  <Text dimColor>        </Text>
+                  <Text>{line}</Text>
+                </Text>
+              ))}
+              {data.stdoutTruncated ? <Text dimColor>        …</Text> : null}
+            </Box>
+          )
+          : (
+            <Text>
+              <Text dimColor>      stdout </Text>
+              <Text>{data.stdoutPreview}</Text>
+              {data.stdoutTruncated ? <Text dimColor> …</Text> : null}
+            </Text>
+          )
       )}
       {data.stderrPreview && (
-        <Text>
-          <Text dimColor>      stderr </Text>
-          <Text color={data.status === "warning" ? "yellow" : "red"}>{data.stderrPreview.replace(/\n/g, " ↵ ")}</Text>
-          {data.stderrTruncated ? <Text dimColor> …</Text> : null}
-        </Text>
+        data.stderrPreview.includes("\n")
+          ? (
+            <Box flexDirection="column">
+              <Text dimColor>      stderr</Text>
+              {data.stderrPreview.split("\n").map((line, index) => (
+                <Text key={`stderr-${index}`}>
+                  <Text dimColor>        </Text>
+                  <Text color={data.status === "warning" ? "yellow" : "red"}>{line}</Text>
+                </Text>
+              ))}
+              {data.stderrTruncated ? <Text dimColor>        …</Text> : null}
+            </Box>
+          )
+          : (
+            <Text>
+              <Text dimColor>      stderr </Text>
+              <Text color={data.status === "warning" ? "yellow" : "red"}>{data.stderrPreview}</Text>
+              {data.stderrTruncated ? <Text dimColor> …</Text> : null}
+            </Text>
+          )
       )}
     </Box>
   );
@@ -165,10 +195,24 @@ export function ValidationResultDisplay({ data }: { data: PresentedValidationRes
       </Text>
       {data.testSummaryLine ? <Text dimColor>      {data.testSummaryLine}</Text> : null}
       {data.testOutputPreview ? (
-        <Text>
-          <Text dimColor>      tests </Text>
-          <Text>{data.testOutputPreview.replace(/\n/g, " ↵ ")}</Text>
-        </Text>
+        data.testOutputPreview.includes("\n")
+          ? (
+            <Box flexDirection="column">
+              <Text dimColor>      tests</Text>
+              {data.testOutputPreview.split("\n").map((line, index) => (
+                <Text key={`validation-output-${index}`}>
+                  <Text dimColor>        </Text>
+                  <Text>{line}</Text>
+                </Text>
+              ))}
+            </Box>
+          )
+          : (
+            <Text>
+              <Text dimColor>      tests </Text>
+              <Text>{data.testOutputPreview}</Text>
+            </Text>
+          )
       ) : null}
     </Box>
   );

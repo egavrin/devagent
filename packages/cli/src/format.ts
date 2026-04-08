@@ -190,10 +190,26 @@ function formatPresentedCommandResult(
     `${dim("  status")} ${tone(data.statusLine)}`,
   ];
   if (data.stdoutPreview) {
-    lines.push(`${dim("  stdout")} ${data.stdoutPreview.replace(/\n/g, " ↵ ")}${data.stdoutTruncated ? dim(" …") : ""}`);
+    if (data.stdoutPreview.includes("\n")) {
+      lines.push(`${dim("  stdout")}`);
+      lines.push(...data.stdoutPreview.split("\n").map((line) => `${dim("    ")}${line}`));
+      if (data.stdoutTruncated) {
+        lines.push(dim("    …"));
+      }
+    } else {
+      lines.push(`${dim("  stdout")} ${data.stdoutPreview}${data.stdoutTruncated ? dim(" …") : ""}`);
+    }
   }
   if (data.stderrPreview) {
-    lines.push(`${dim("  stderr")} ${tone(data.stderrPreview.replace(/\n/g, " ↵ "))}${data.stderrTruncated ? dim(" …") : ""}`);
+    if (data.stderrPreview.includes("\n")) {
+      lines.push(`${dim("  stderr")}`);
+      lines.push(...data.stderrPreview.split("\n").map((line) => `${dim("    ")}${tone(line)}`));
+      if (data.stderrTruncated) {
+        lines.push(dim("    …"));
+      }
+    } else {
+      lines.push(`${dim("  stderr")} ${tone(data.stderrPreview)}${data.stderrTruncated ? dim(" …") : ""}`);
+    }
   }
   return lines.join("\n");
 }
@@ -207,7 +223,12 @@ function formatPresentedValidationResult(
     rest.push(`${dim("  tests")} ${data.testSummaryLine}`);
   }
   if (data.testOutputPreview) {
-    rest.push(`${dim("  output")} ${data.testOutputPreview.replace(/\n/g, " ↵ ")}`);
+    if (data.testOutputPreview.includes("\n")) {
+      rest.push(`${dim("  output")}`);
+      rest.push(...data.testOutputPreview.split("\n").map((line) => `${dim("    ")}${line}`));
+    } else {
+      rest.push(`${dim("  output")} ${data.testOutputPreview}`);
+    }
   }
   return [head, ...rest].join("\n");
 }

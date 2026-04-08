@@ -282,6 +282,41 @@ describe("formatTranscriptPart", () => {
     expect(rendered).toContain("stderr");
   });
 
+  it("preserves multiline command previews instead of flattening them", () => {
+    const parts = presentToolAfterEvent({
+      name: "run_command",
+      callId: "call-cmd-2",
+      durationMs: 45,
+      result: {
+        success: true,
+        output: "done",
+        error: null,
+        artifacts: [],
+        metadata: {
+          commandResult: {
+            command: "bun run test",
+            cwd: ".",
+            exitCode: 0,
+            timedOut: false,
+            warningOnly: false,
+            stdoutPreview: "first line\nsecond line",
+            stderrPreview: "warn one\nwarn two",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          },
+        },
+      },
+    }, 2, 10);
+
+    const rendered = stripAnsi(formatTranscriptPart(parts[1]!));
+    expect(rendered).toContain("  stdout\n");
+    expect(rendered).toContain("    first line");
+    expect(rendered).toContain("    second line");
+    expect(rendered).toContain("  stderr\n");
+    expect(rendered).toContain("    warn one");
+    expect(rendered).not.toContain("↵");
+  });
+
   it("renders validation and diagnostic parts from typed validation metadata", () => {
     const parts = presentToolAfterEvent({
       name: "write_file",
@@ -311,6 +346,35 @@ describe("formatTranscriptPart", () => {
 
     expect(formatTranscriptPart(parts[1]!)).toContain("Validation failed");
     expect(formatTranscriptPart(parts[2]!)).toContain("src/new.ts: Unexpected token");
+  });
+
+  it("preserves multiline validation previews instead of flattening them", () => {
+    const parts = presentToolAfterEvent({
+      name: "write_file",
+      callId: "call-validate-2",
+      durationMs: 12,
+      result: {
+        success: true,
+        output: "Wrote file",
+        error: null,
+        artifacts: ["src/new.ts"],
+        metadata: {
+          validationResult: {
+            passed: true,
+            diagnosticErrors: [],
+            testPassed: true,
+            testOutputPreview: "Packages in scope: cli\nRunning test in 5 packages",
+          },
+        },
+      },
+    }, 2, 10);
+
+    const rendered = stripAnsi(formatTranscriptPart(parts[1]!));
+    expect(rendered).toContain("Validation passed");
+    expect(rendered).toContain("  output\n");
+    expect(rendered).toContain("    Packages in scope: cli");
+    expect(rendered).toContain("    Running test in 5 packages");
+    expect(rendered).not.toContain("↵");
   });
 });
 
