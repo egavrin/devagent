@@ -4,9 +4,17 @@ import { createDefaultRegistry } from "./index.js";
 
 describe("createDefaultRegistry", () => {
   const originalFetch = globalThis.fetch;
+  const proxyEnvKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"] as const;
+  const originalProxyEnv = new Map<string, string | undefined>();
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    for (const key of proxyEnvKeys) {
+      const value = originalProxyEnv.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+      originalProxyEnv.delete(key);
+    }
     vi.restoreAllMocks();
   });
 
@@ -79,6 +87,42 @@ describe("createDefaultRegistry", () => {
     expect(body.messages?.map((message) => message.role)).toContain("system");
     expect(body.messages?.map((message) => message.role)).not.toContain("developer");
   });
+
+  it("keeps devagent-api request rewriting when proxy env vars are configured", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    setProxyEnv(originalProxyEnv, {
+      HTTPS_PROXY: "https://proxy.example.com:8443",
+    });
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("devagent-api", {
+      model: "cortex",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    for await (const _chunk of provider.chat([
+      { role: MessageRole.SYSTEM, content: "system prompt" },
+      { role: MessageRole.USER, content: "ping" },
+    ])) {
+      void _chunk;
+    }
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown };
+    const headers = new Headers(init.headers);
+    const body = JSON.parse(String(init.body ?? "{}")) as {
+      messages?: Array<{ role?: string }>;
+    };
+    expect(headers.get("x-request-id")).toBeTruthy();
+    expect(init.dispatcher).toBeTruthy();
+    expect(body.messages?.map((message) => message.role)).toContain("system");
+    expect(body.messages?.map((message) => message.role)).not.toContain("developer");
+  });
 });
 
 function makeChatStreamingResponse(): Response {
@@ -102,4 +146,16 @@ function makeChatStreamingResponse(): Response {
       "content-type": "text/event-stream",
     },
   });
+}
+
+function setProxyEnv(
+  originalEnv: Map<string, string | undefined>,
+  values: Partial<Record<string, string>>,
+): void {
+  for (const [key, value] of Object.entries(values)) {
+    if (!originalEnv.has(key)) {
+      originalEnv.set(key, process.env[key]);
+    }
+    process.env[key] = value;
+  }
 }

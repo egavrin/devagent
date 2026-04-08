@@ -19,6 +19,7 @@ import {
   resolveCapabilities,
   stripNullArgs,
 } from "./shared.js";
+import { createProxyAwareFetch, hasProxyEnv } from "./network.js";
 
 // Re-export shared utilities so existing consumers (tests, index.ts) don't break.
 export { resolveCapabilities, stripNullArgs } from "./shared.js";
@@ -55,10 +56,13 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
   const fieldsToStrip = config.stripFields;
   const requestIdHeaderName = config.requestIdHeaderName;
   const messageRoleOverrides = config.messageRoleOverrides;
+  const useProxyAwareFetch = hasProxyEnv();
   const needsCustomFetch = codexOpts
     || (fieldsToStrip && fieldsToStrip.length > 0)
     || requestIdHeaderName
-    || (messageRoleOverrides && Object.keys(messageRoleOverrides).length > 0);
+    || (messageRoleOverrides && Object.keys(messageRoleOverrides).length > 0)
+    || useProxyAwareFetch;
+  const transportFetch = createProxyAwareFetch(globalThis.fetch);
   const customFetch = needsCustomFetch
     ? async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const nextHeaders = new Headers(init?.headers);
@@ -99,7 +103,7 @@ export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
         } else {
           init = { ...init, headers: nextHeaders };
         }
-        return globalThis.fetch(input, init);
+        return transportFetch(input, init);
       }
     : undefined;
 

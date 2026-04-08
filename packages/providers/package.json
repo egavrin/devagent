@@ -23,7 +23,8 @@
     "@devagent/runtime": "workspace:*",
     "ai": "^5.0.52",
     "@ai-sdk/anthropic": "^2.0.74",
-    "@ai-sdk/openai": "^2.0.102"
+    "@ai-sdk/openai": "^2.0.102",
+    "undici": "^7.16.0"
   },
   "devDependencies": {
     "vitest": "^3.0.0",

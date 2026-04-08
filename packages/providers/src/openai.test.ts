@@ -14,9 +14,17 @@ import {
 
 describe("createOpenAIProvider", () => {
   const originalFetch = globalThis.fetch;
+  const proxyEnvKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"] as const;
+  const originalProxyEnv = new Map<string, string | undefined>();
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    for (const key of proxyEnvKeys) {
+      const value = originalProxyEnv.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+      originalProxyEnv.delete(key);
+    }
     vi.restoreAllMocks();
   });
 
@@ -84,6 +92,47 @@ describe("createOpenAIProvider", () => {
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("x-request-id")).toBe("preset-request-id");
   });
+
+  it("uses proxy-aware transport for remote requests when proxy env vars are set", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    setProxyEnv(originalProxyEnv, {
+      HTTPS_PROXY: "https://proxy.example.com:8443",
+    });
+
+    const provider = createOpenAIProvider({
+      model: "gpt-4o",
+      apiKey: "test-key",
+      requestIdHeaderName: "x-request-id",
+    });
+
+    await collectText(provider);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown };
+    const headers = new Headers(init.headers);
+    expect(headers.get("x-request-id")).toBeTruthy();
+    expect(init.dispatcher).toBeTruthy();
+  });
+
+  it("bypasses proxy-aware transport for loopback baseUrls", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    setProxyEnv(originalProxyEnv, {
+      HTTPS_PROXY: "https://proxy.example.com:8443",
+    });
+
+    const provider = createOpenAIProvider({
+      model: "llama3",
+      baseUrl: "http://localhost:11434/v1",
+    });
+
+    await collectText(provider);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1] as { dispatcher?: unknown } | undefined;
+    expect(init?.dispatcher).toBeUndefined();
+  });
 });
 
 describe("resolveCapabilities", () => {
@@ -145,6 +194,18 @@ async function collectText(provider: ReturnType<typeof createOpenAIProvider>): P
     }
   }
   return output;
+}
+
+function setProxyEnv(
+  originalEnv: Map<string, string | undefined>,
+  values: Partial<Record<string, string>>,
+): void {
+  for (const [key, value] of Object.entries(values)) {
+    if (!originalEnv.has(key)) {
+      originalEnv.set(key, process.env[key]);
+    }
+    process.env[key] = value;
+  }
 }
 
 function makeStreamingResponse(): Response {
