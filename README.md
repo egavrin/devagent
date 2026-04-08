@@ -83,8 +83,8 @@ devagent --resume <session-id-or-unique-prefix>
 devagent --continue    # resume most recent
 
 # Interactive safety modes
-devagent --mode default       # low-noise default for daily coding
-devagent --mode autopilot     # auto-approve everything
+devagent --mode autopilot     # default: auto-approve everything
+devagent --mode default       # opt into guarded prompts
 
 # Code review
 devagent review patch.diff --rule rules/security.md --json
@@ -128,7 +128,7 @@ provider = "anthropic"
 model = "claude-sonnet-4-20250514"
 
 [safety]
-mode = "default"
+mode = "autopilot"
 
 [budget]
 max_iterations = 0

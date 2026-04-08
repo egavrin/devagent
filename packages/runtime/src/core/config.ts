@@ -38,10 +38,10 @@ interface SafetyConfig {
 }
 
 const DEFAULT_SAFETY: SafetyConfig = {
-  mode: SafetyMode.DEFAULT,
-  approvalPolicy: "on-request" as ApprovalPolicyMode,
-  sandboxMode: "workspace-write" as SandboxMode,
-  networkAccess: "off" as NetworkAccessMode,
+  mode: SafetyMode.AUTOPILOT,
+  approvalPolicy: "never" as ApprovalPolicyMode,
+  sandboxMode: "danger-full-access" as SandboxMode,
+  networkAccess: "on" as NetworkAccessMode,
 };
 
 const DEFAULT_APPROVAL: ApprovalPolicy = {

@@ -70,7 +70,7 @@ contributor work on the executor, CLI, providers, and tools.
 - Supported: `devagent` as the first-party executor through `devagent execute --request --artifact-dir`
 - Experimental: any alternative executor story outside the validated DevAgent path
 
-The workflow frontmatter above remains a hub/runner compatibility contract. For the public interactive CLI surface, use `devagent --mode default` or `devagent --mode autopilot` rather than legacy approval-mode flags.
+The workflow frontmatter above remains a hub/runner compatibility contract. For the public interactive CLI surface, DevAgent now defaults to autopilot; use `devagent --mode default` to opt into guarded prompts, or `devagent --mode autopilot` to set it explicitly, rather than legacy approval-mode flags.
 
 ## Contributor completion bar
 

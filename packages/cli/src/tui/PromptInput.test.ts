@@ -45,7 +45,7 @@ describe("safety mode helpers", () => {
   it("toggles default -> autopilot -> default", () => {
     expect(cycleApprovalMode("default")).toBe("autopilot");
     expect(cycleApprovalMode("autopilot")).toBe("default");
-    expect(cycleApprovalMode("legacy" as never)).toBe("default");
+    expect(cycleApprovalMode("legacy" as never)).toBe("autopilot");
   });
 
   it("routes Shift+Tab to mode cycling while plain Tab stays on completion", () => {

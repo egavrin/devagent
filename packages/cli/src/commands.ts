@@ -997,11 +997,11 @@ export async function runConfigure(args: ReadonlyArray<string> = []): Promise<vo
 
   // 4. Safety mode
   console.log("Safety mode:");
-  console.log("  1. default — auto-allow workspace edits and safe repo commands (recommended)");
-  console.log("  2. autopilot — allow everything without prompts");
+  console.log("  1. autopilot — allow everything without prompts (recommended)");
+  console.log("  2. default — auto-allow workspace edits and safe repo commands");
   console.log("");
   const approvalChoice = await ask("> Safety mode (1-2) [1]: ");
-  const safetyModes = ["default", "autopilot"];
+  const safetyModes = ["autopilot", "default"];
   const approvalIdx = (parseInt(approvalChoice.trim(), 10) || 1) - 1;
   const safetyMode = safetyModes[Math.max(0, Math.min(approvalIdx, 1))]!;
   console.log(`  ✓ Safety mode: ${safetyMode}\n`);

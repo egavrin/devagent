@@ -48,7 +48,7 @@ export function PromptInput({
   placeholder = "Ask anything… use /review or /simplify anywhere",
   history = [],
   cwd,
-  approvalMode = "default",
+  approvalMode = "autopilot",
 }: PromptInputProps): React.ReactElement {
   const [value, setValue] = useState("");
   const [cursorPos, setCursorPos] = useState(0);

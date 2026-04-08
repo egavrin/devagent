@@ -28,8 +28,8 @@ describe("loadConfig", () => {
 
     expect(config.provider).toBe("anthropic");
     expect(config.model).toBe("claude-sonnet-4-20250514");
-    expect(config.approval.mode).toBe("default");
-    expect(config.approval.approvalPolicy).toBe("on-request");
+    expect(config.approval.mode).toBe("autopilot");
+    expect(config.approval.approvalPolicy).toBe("never");
     expect(config.budget.maxIterations).toBe(0);
     expect(config.budget.enableCostTracking).toBe(true);
     expect(config.context.pruningStrategy).toBe("hybrid");
