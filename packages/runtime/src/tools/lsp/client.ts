@@ -130,6 +130,52 @@ const DIAGNOSTICS_LRU_CAP = 100;
 /** Maximum number of entries in the open-documents LRU cache. */
 const OPEN_DOCUMENTS_LRU_CAP = 100;
 
+function getErrorCode(error: unknown): string {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    return String((error as { code?: unknown }).code ?? "");
+  }
+  return "";
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    return String((error as { message?: unknown }).message ?? "");
+  }
+  return String(error);
+}
+
+function isIgnorableTransportError(error: unknown): boolean {
+  const code = getErrorCode(error);
+  if (code === "ERR_STREAM_DESTROYED" || code === "EPIPE") {
+    return true;
+  }
+
+  const message = getErrorMessage(error).toLowerCase();
+  return message.includes("stream was destroyed") ||
+    message.includes("write after end") ||
+    message.includes("broken pipe") ||
+    message.includes("connection is closed") ||
+    message.includes("connection got disposed") ||
+    message.includes("connection is disposed");
+}
+
+async function sendLSPNotification(
+  connection: MessageConnection,
+  method: string,
+  params: unknown,
+  options?: { ignoreTransportErrors?: boolean },
+): Promise<void> {
+  try {
+    await connection.sendNotification(method, params);
+  } catch (error) {
+    if (options?.ignoreTransportErrors && isIgnorableTransportError(error)) {
+      return;
+    }
+    throw error;
+  }
+}
+
 export class LSPClient {
   private process: ChildProcess | null = null;
   private connection: MessageConnection | null = null;
@@ -211,7 +257,7 @@ export class LSPClient {
         }),
       );
 
-      this.connection.sendNotification("initialized", {});
+      await sendLSPNotification(this.connection, "initialized", {});
       this.initialized = true;
     } catch (err) {
       this.connection.dispose();
@@ -231,9 +277,9 @@ export class LSPClient {
 
     try {
       if (connection && this.initialized) {
-        this.closeAllOpenDocuments();
+        await this.closeAllOpenDocuments(connection);
         await this.withTimeout(connection.sendRequest("shutdown"));
-        connection.sendNotification("exit");
+        await sendLSPNotification(connection, "exit", {}, { ignoreTransportErrors: true });
       }
     } catch {
       // Server might already be dead
@@ -367,7 +413,7 @@ export class LSPClient {
     const existing = this.openDocuments.get(uri);
 
     if (!existing) {
-      this.connection!.sendNotification("textDocument/didOpen", {
+      await sendLSPNotification(this.connection!, "textDocument/didOpen", {
         textDocument: {
           uri,
           languageId: languageId ?? this.languageId,
@@ -381,7 +427,7 @@ export class LSPClient {
 
     if (existing.content !== content) {
       const nextVersion = existing.version + 1;
-      this.connection!.sendNotification("textDocument/didChange", {
+      await sendLSPNotification(this.connection!, "textDocument/didChange", {
         textDocument: { uri, version: nextVersion },
         contentChanges: [{ text: content }],
       });
@@ -391,12 +437,11 @@ export class LSPClient {
     return { uri };
   }
 
-  private closeAllOpenDocuments(): void {
-    if (!this.connection) return;
+  private async closeAllOpenDocuments(connection: MessageConnection): Promise<void> {
     for (const uri of this.openDocuments.keys()) {
-      this.connection.sendNotification("textDocument/didClose", {
+      await sendLSPNotification(connection, "textDocument/didClose", {
         textDocument: { uri },
-      });
+      }, { ignoreTransportErrors: true });
     }
     this.openDocuments.clear();
   }

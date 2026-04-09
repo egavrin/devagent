@@ -13,6 +13,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function makeDestroyedStreamError(): Error & { code: string } {
+  return Object.assign(
+    new Error("Cannot call write after a stream was destroyed"),
+    { code: "ERR_STREAM_DESTROYED" },
+  );
+}
+
 describe("LSPClient", () => {
   it("creates a client with options", () => {
     const client = new LSPClient({
@@ -366,6 +373,195 @@ describe("LSPClient", () => {
     expect(dispose).toHaveBeenCalledOnce();
     expect(kill).toHaveBeenCalledOnce();
     expect(client.isRunning()).toBe(false);
+  });
+
+  it("stop suppresses destroyed-stream exit notification rejections", async () => {
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: "/tmp",
+      languageId: "typescript",
+    });
+
+    const dispose = vi.fn();
+    const kill = vi.fn();
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    const internals = client as unknown as {
+      initialized: boolean;
+      process: { kill: () => void };
+      connection: {
+        dispose: () => void;
+        sendRequest: (method: string) => Promise<void>;
+        sendNotification: (method: string, params?: unknown) => Promise<void>;
+      };
+    };
+    internals.initialized = true;
+    internals.process = { kill };
+    internals.connection = {
+      dispose,
+      sendRequest: vi.fn(async () => undefined),
+      sendNotification: vi.fn(async (method: string) => {
+        if (method === "exit") {
+          throw makeDestroyedStreamError();
+        }
+      }),
+    };
+
+    try {
+      await client.stop();
+      await sleep(0);
+      expect(unhandled).toHaveLength(0);
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(kill).toHaveBeenCalledOnce();
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  it("stop suppresses destroyed-stream didClose notification rejections", async () => {
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: "/tmp",
+      languageId: "typescript",
+    });
+
+    const dispose = vi.fn();
+    const kill = vi.fn();
+    const notifications: string[] = [];
+    const internals = client as unknown as {
+      initialized: boolean;
+      process: { kill: () => void };
+      connection: {
+        dispose: () => void;
+        sendRequest: (method: string) => Promise<void>;
+        sendNotification: (method: string, params?: unknown) => Promise<void>;
+      };
+      openDocuments: Map<string, { version: number; content: string }>;
+    };
+    internals.initialized = true;
+    internals.process = { kill };
+    internals.openDocuments.set("file:///tmp/test.ts", { version: 1, content: "const x = 1;\n" });
+    internals.connection = {
+      dispose,
+      sendRequest: vi.fn(async () => undefined),
+      sendNotification: vi.fn(async (method: string) => {
+        notifications.push(method);
+        if (method === "textDocument/didClose") {
+          throw makeDestroyedStreamError();
+        }
+      }),
+    };
+
+    await client.stop();
+
+    expect(notifications).toEqual(["textDocument/didClose", "exit"]);
+    expect(internals.openDocuments.size).toBe(0);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(kill).toHaveBeenCalledOnce();
+  });
+
+  it("fails immediately when didOpen notification rejects", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-open-fail-"));
+    const fileName = "test.ts";
+    writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: tempDir,
+      languageId: "typescript",
+      timeout: 5000,
+    });
+
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    const internals = client as unknown as {
+      initialized: boolean;
+      connection: {
+        sendNotification: (method: string, params?: unknown) => Promise<void>;
+        sendRequest: (method: string) => Promise<unknown[]>;
+      };
+    };
+    internals.initialized = true;
+    internals.connection = {
+      sendNotification: vi.fn(async (method: string) => {
+        if (method === "textDocument/didOpen") {
+          throw makeDestroyedStreamError();
+        }
+      }),
+      sendRequest: vi.fn(async () => []),
+    };
+
+    try {
+      await expect(client.getSymbols(fileName)).rejects.toThrow("stream was destroyed");
+      await sleep(0);
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails immediately when didChange notification rejects", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-change-fail-"));
+    const fileName = "test.ts";
+    writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: tempDir,
+      languageId: "typescript",
+      timeout: 5000,
+    });
+
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    const notifications: string[] = [];
+    const internals = client as unknown as {
+      initialized: boolean;
+      connection: {
+        sendNotification: (method: string, params?: unknown) => Promise<void>;
+        sendRequest: (method: string) => Promise<unknown[]>;
+      };
+    };
+    internals.initialized = true;
+    internals.connection = {
+      sendNotification: vi.fn(async (method: string) => {
+        notifications.push(method);
+        if (method === "textDocument/didChange") {
+          throw makeDestroyedStreamError();
+        }
+      }),
+      sendRequest: vi.fn(async () => []),
+    };
+
+    try {
+      await client.getSymbols(fileName);
+      writeFileSync(join(tempDir, fileName), "const x = 2;\n", "utf-8");
+
+      await expect(client.getSymbols(fileName)).rejects.toThrow("stream was destroyed");
+      await sleep(0);
+      expect(unhandled).toHaveLength(0);
+      expect(notifications).toEqual(["textDocument/didOpen", "textDocument/didChange"]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
 describe("createLSPTools", () => {
