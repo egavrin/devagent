@@ -144,7 +144,7 @@ async function main(): Promise<void> {
   await writeFile(join(outputRoot, "summary.md"), renderSummaryMarkdown(summary));
 
   process.stdout.write(`Summary written to ${outputRoot}\n`);
-  if (summary.failed > 0) {
+  if (summary.failed > 0 || summary.blocked > 0) {
     process.exit(1);
   }
 }

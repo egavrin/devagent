@@ -1,5 +1,6 @@
 export type ValidationSuite = "smoke" | "full";
 export type ValidationSafetyMode = "default" | "autopilot";
+export type ValidationReportStatus = "passed" | "failed" | "blocked";
 export type TargetRepoId =
   | "arkcompiler_ets_frontend"
   | "arkcompiler_runtime_core"
@@ -40,7 +41,19 @@ export type ScenarioPreSetupStep =
 
 export interface ExecuteScenarioInvocation {
   readonly type: "execute";
-  readonly taskType: "triage" | "plan" | "implement" | "review" | "repair";
+  readonly taskType:
+    | "task-intake"
+    | "design"
+    | "breakdown"
+    | "issue-generation"
+    | "test-plan"
+    | "triage"
+    | "plan"
+    | "implement"
+    | "verify"
+    | "review"
+    | "repair"
+    | "completion";
   readonly workItemTitle: string;
   readonly summary: string;
   readonly issueBody?: string;
@@ -153,6 +166,37 @@ export interface ArtifactValidationCheck {
   readonly message: string;
 }
 
+export interface ArtifactInventoryEntry {
+  readonly path: string;
+  readonly category: "expected" | "generated" | "request" | "raw-output";
+  readonly exists: boolean;
+  readonly sizeBytes?: number;
+}
+
+export interface RepoMutationReview {
+  readonly expectedWorkspaceEffect: "non-mutating" | "mutating";
+  readonly passed: boolean;
+  readonly observedChanges: boolean;
+  readonly summary: string;
+  readonly repoStatusExcerpt?: string;
+}
+
+export interface StageReviewCheck {
+  readonly name: string;
+  readonly severity: "hard" | "soft";
+  readonly passed: boolean;
+  readonly message: string;
+}
+
+export interface StageReview {
+  readonly verdict: "pass" | "soft-fail";
+  readonly handoffReady: boolean;
+  readonly summary: string;
+  readonly humanJudgment: string;
+  readonly checks: ReadonlyArray<StageReviewCheck>;
+  readonly followUpIssues: ReadonlyArray<string>;
+}
+
 export interface VerificationCommandResult {
   readonly command: string;
   readonly cwd: string;
@@ -168,9 +212,10 @@ export interface ValidationScenarioReport {
   readonly targetRepo: TargetRepoId;
   readonly surface: ValidationSurface;
   readonly taskShape: ValidationTaskShape;
+  readonly taskType?: ExecuteScenarioInvocation["taskType"];
   readonly provider: string;
   readonly model: string;
-  readonly status: "passed" | "failed";
+  readonly status: ValidationReportStatus;
   readonly failureClass?: FailureClass;
   readonly failureMessage?: string;
   readonly startedAt: string;
@@ -184,10 +229,13 @@ export interface ValidationScenarioReport {
     readonly args: ReadonlyArray<string>;
     readonly exitCode: number;
   };
+  readonly artifactInventory: ReadonlyArray<ArtifactInventoryEntry>;
   readonly artifactValidation: {
     readonly passed: boolean;
     readonly checks: ReadonlyArray<ArtifactValidationCheck>;
   };
+  readonly repoMutation: RepoMutationReview;
+  readonly stageReview?: StageReview;
   readonly assertionResults: ReadonlyArray<AssertionResult>;
   readonly toolCallAssertionResults: ReadonlyArray<ToolCallAssertionResult>;
   readonly toolBatchAssertionResults: ReadonlyArray<ToolBatchAssertionResult>;
@@ -204,6 +252,7 @@ export interface ValidationScenarioReport {
     readonly totalCost?: number;
   };
   readonly rawOutputs: {
+    readonly requestPath?: string;
     readonly stdoutPath?: string;
     readonly stderrPath?: string;
     readonly repoDiffPath?: string;
@@ -219,6 +268,7 @@ export interface AggregateValidationSummary {
   readonly total: number;
   readonly passed: number;
   readonly failed: number;
+  readonly blocked: number;
   readonly reports: ReadonlyArray<ValidationScenarioReport>;
 }
 

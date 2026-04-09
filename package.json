@@ -45,6 +45,8 @@
     "validate:live:smoke": "bun run scripts/live-validation.ts --suite smoke",
     "validate:live:full": "bun run scripts/live-validation.ts --suite full",
     "validate:live:scenario": "bun run scripts/live-validation.ts --scenario",
+    "validate:live:execute-deep": "bun run scripts/live-validation/execute-deep.ts",
+    "validate:live:execute-chain": "bun run scripts/live-validation/execute-chain.ts",
     "validate:live:provider-smoke": "bun run scripts/live-validation/provider-smoke.ts",
     "validate:live:tui": "bun run scripts/live-validation/tui-validator.ts"
   },

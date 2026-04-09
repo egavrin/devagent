@@ -90,15 +90,62 @@ export function summarizeScenarioReports(
   },
 ): AggregateValidationSummary {
   const passed = reports.filter((report) => report.status === "passed").length;
+  const blocked = reports.filter((report) => report.status === "blocked").length;
   return {
     provider: context.provider,
     model: context.model,
     suite: context.suite,
     total: reports.length,
     passed,
-    failed: reports.length - passed,
+    failed: reports.length - passed - blocked,
+    blocked,
     reports: [...reports],
   };
+}
+
+function renderArtifactInventory(report: ValidationScenarioReport): string[] {
+  if (report.artifactInventory.length === 0) {
+    return ["- Artifact inventory: none captured"];
+  }
+
+  return [
+    "- Artifact inventory:",
+    ...report.artifactInventory.map((entry) => `  - ${entry.category}: ${entry.path}${entry.exists
+      ? entry.sizeBytes !== undefined
+        ? ` (${entry.sizeBytes} bytes)`
+        : ""
+      : " (missing)"}`
+    ),
+  ];
+}
+
+function renderStageReview(report: ValidationScenarioReport): string[] {
+  if (!report.stageReview) {
+    return [];
+  }
+
+  const lines = [
+    `- Artifact-quality verdict: ${report.stageReview.verdict}`,
+    `- Handoff ready: ${report.stageReview.handoffReady ? "yes" : "no"}`,
+    `- Review summary: ${report.stageReview.summary}`,
+    `- Human judgment: ${report.stageReview.humanJudgment}`,
+  ];
+
+  if (report.stageReview.checks.length > 0) {
+    lines.push("- Review checks:");
+    for (const check of report.stageReview.checks) {
+      lines.push(`  - [${check.passed ? "x" : " "}] ${check.severity}: ${check.name} - ${check.message}`);
+    }
+  }
+
+  if (report.stageReview.followUpIssues.length > 0) {
+    lines.push("- Follow-up issues:");
+    for (const issue of report.stageReview.followUpIssues) {
+      lines.push(`  - ${issue}`);
+    }
+  }
+
+  return lines;
 }
 
 export function renderSummaryMarkdown(
@@ -113,6 +160,7 @@ export function renderSummaryMarkdown(
     `- Total: ${summary.total}`,
     `- Passed: ${summary.passed}`,
     `- Failed: ${summary.failed}`,
+    `- Blocked: ${summary.blocked}`,
     "",
   ];
   for (const report of summary.reports) {
@@ -120,9 +168,89 @@ export function renderSummaryMarkdown(
     lines.push(`- Status: ${report.status}`);
     lines.push(`- Repo: ${report.targetRepo}`);
     lines.push(`- Surface: ${report.surface}`);
+    if (report.taskType) lines.push(`- Task type: ${report.taskType}`);
+    lines.push(`- Workspace effect: expected ${report.repoMutation.expectedWorkspaceEffect}, observed ${report.repoMutation.observedChanges ? "changes" : "clean workspace"}`);
+    lines.push(`- Workspace review: ${report.repoMutation.summary}`);
     if (report.failureClass) lines.push(`- Failure class: ${report.failureClass}`);
     if (report.failureMessage) lines.push(`- Failure: ${report.failureMessage}`);
+    lines.push(...renderArtifactInventory(report));
+    lines.push(...renderStageReview(report));
     lines.push("");
   }
   return lines.join("\n").trim() + "\n";
+}
+
+export function renderScenarioReviewMarkdown(
+  report: ValidationScenarioReport,
+): string {
+  const lines = [
+    `# Scenario Review: ${report.scenarioId}`,
+    "",
+    `- Status: ${report.status}`,
+    `- Provider: ${report.provider}`,
+    `- Model: ${report.model}`,
+    `- Repo: ${report.targetRepo}`,
+    `- Surface: ${report.surface}`,
+    `- Task shape: ${report.taskShape}`,
+    ...(report.taskType ? [`- Task type: ${report.taskType}`] : []),
+    "",
+    "## Evidence",
+    "",
+    ...(report.rawOutputs.requestPath ? [`- Request: ${report.rawOutputs.requestPath}`] : []),
+    ...(report.rawOutputs.stdoutPath ? [`- Stdout: ${report.rawOutputs.stdoutPath}`] : []),
+    ...(report.rawOutputs.stderrPath ? [`- Stderr: ${report.rawOutputs.stderrPath}`] : []),
+    ...(report.rawOutputs.repoStatusPath ? [`- Repo status: ${report.rawOutputs.repoStatusPath}`] : []),
+    ...(report.rawOutputs.repoDiffPath ? [`- Repo diff: ${report.rawOutputs.repoDiffPath}`] : []),
+    ...(report.rawOutputs.eventsPath ? [`- Events: ${report.rawOutputs.eventsPath}`] : []),
+    "",
+    "## Artifact Inventory",
+    "",
+    ...renderArtifactInventory(report),
+    "",
+    "## Workspace Review",
+    "",
+    `- Expected workspace effect: ${report.repoMutation.expectedWorkspaceEffect}`,
+    `- Observed changes: ${report.repoMutation.observedChanges ? "yes" : "no"}`,
+    `- Verdict: ${report.repoMutation.passed ? "pass" : "fail"}`,
+    `- Notes: ${report.repoMutation.summary}`,
+  ];
+
+  if (report.repoMutation.repoStatusExcerpt) {
+    lines.push("");
+    lines.push("```text");
+    lines.push(report.repoMutation.repoStatusExcerpt);
+    lines.push("```");
+  }
+
+  if (report.stageReview) {
+    lines.push("");
+    lines.push("## Artifact Review");
+    lines.push("");
+    lines.push(`- Verdict: ${report.stageReview.verdict}`);
+    lines.push(`- Handoff ready: ${report.stageReview.handoffReady ? "yes" : "no"}`);
+    lines.push(`- Summary: ${report.stageReview.summary}`);
+    lines.push("");
+    lines.push("### Human Judgment");
+    lines.push("");
+    lines.push(report.stageReview.humanJudgment);
+    lines.push("");
+    if (report.stageReview.checks.length > 0) {
+      lines.push("### Review Checks");
+      lines.push("");
+      for (const check of report.stageReview.checks) {
+        lines.push(`- [${check.passed ? "x" : " "}] ${check.name} (${check.severity}): ${check.message}`);
+      }
+      lines.push("");
+    }
+    if (report.stageReview.followUpIssues.length > 0) {
+      lines.push("### Follow-up Issues");
+      lines.push("");
+      for (const issue of report.stageReview.followUpIssues) {
+        lines.push(`- ${issue}`);
+      }
+      lines.push("");
+    }
+  }
+
+  return `${lines.join("\n").trim()}\n`;
 }

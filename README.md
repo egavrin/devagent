@@ -1,6 +1,6 @@
 # DevAgent
 
-AI-powered coding agent for the terminal. Reads your codebase, writes code, runs commands, and iterates — all from a single prompt.
+Workflow-grade coding executor for staged software delivery. DevAgent turns a typed request into stage-specific artifacts through the fixed `devagent execute --request <file> --artifact-dir <dir>` contract, while still offering an interactive terminal UI for direct operator-driven work.
 
 ## Install
 
@@ -31,17 +31,127 @@ bunx @egavrin/devagent "fix failing tests"
 ## Quick Start
 
 ```bash
-# First-time setup (provider, model, API key, subagents)
+# First-time setup for interactive use (provider, model, API key, subagents)
 devagent setup
 
 # Check your environment
 devagent doctor
 
-# Start coding
+# Interactive coding
 devagent "fix the bug in auth.ts"
 devagent "add unit tests for the parser module"
 devagent "review my last commit for issues"
 ```
+
+## Staged Workflow
+
+The primary DevAgent product surface is the staged executor contract:
+
+```bash
+devagent execute --request request.json --artifact-dir artifacts/
+```
+
+Lead with this canonical staged flow:
+
+`design -> breakdown -> issue-generation -> implement -> review -> repair`
+
+- `design` creates the design doc for the change.
+- `breakdown` turns that design into small executable tasks.
+- `issue-generation` converts the approved breakdown into executable issue specs.
+- `implement` applies the requested code changes.
+- `review` inspects the resulting workspace for defects.
+- `repair` addresses review findings and closes the loop.
+
+The workflow is a fixed supported stage set. Stages are chosen from the built-in `taskType` contract; users do not define new public stages or override stage semantics in config.
+
+Stage prompts follow a fixed shape plus dynamic request context:
+
+- Stage-specific behavior is code-defined by `taskType`.
+- Each run still injects dynamic request context such as repo/work item metadata, summary, issue body, comments, changed file hints, requested skills, continuation context, and `extraInstructions`.
+- This pass does not expose stage prompts as user-editable templates.
+
+Canonical example:
+
+```json
+{
+  "protocolVersion": "0.1",
+  "taskId": "demo-design",
+  "taskType": "design",
+  "workspaceRef": {
+    "id": "workspace-1",
+    "name": "demo",
+    "provider": "local",
+    "primaryRepositoryId": "repo-1"
+  },
+  "repositories": [
+    {
+      "id": "repo-1",
+      "workspaceId": "workspace-1",
+      "alias": "primary",
+      "name": "demo",
+      "repoRoot": "/absolute/path/to/repo",
+      "provider": "local"
+    }
+  ],
+  "workItem": {
+    "kind": "local-task",
+    "externalId": "demo-design",
+    "title": "Design the staged workflow docs refresh"
+  },
+  "execution": {
+    "primaryRepositoryId": "repo-1",
+    "repositories": [
+      {
+        "repositoryId": "repo-1",
+        "alias": "primary",
+        "sourceRepoPath": "/absolute/path/to/repo",
+        "workBranch": "devagent/demo-design",
+        "isolation": "git-worktree"
+      }
+    ]
+  },
+  "targetRepositoryIds": ["repo-1"],
+  "executor": {
+    "executorId": "devagent",
+    "approvalMode": "full-auto"
+  },
+  "constraints": {
+    "allowNetwork": true,
+    "maxIterations": 12
+  },
+  "capabilities": {
+    "canSyncTasks": true,
+    "canCreateTask": true,
+    "canComment": true,
+    "canReview": true,
+    "canMerge": true,
+    "canOpenReviewable": true
+  },
+  "context": {
+    "summary": "Design the docs-and-validation reframe for staged execute workflows."
+  },
+  "expectedArtifacts": ["design-doc"]
+}
+```
+
+## Stage Matrix
+
+| Stage | Behavior | Artifact | Role In Workflow |
+|---------|-------------|-------------|-------------|
+| `task-intake` | Readonly | `task-spec.md` | Capture goals, assumptions, and acceptance criteria before design work |
+| `design` | Readonly | `design-doc.md` | Define architecture, interfaces, risks, and validation strategy |
+| `breakdown` | Readonly, strict structured output | `breakdown-doc.json`, `breakdown-doc.md` | Turn the design into ordered, reviewable implementation slices |
+| `issue-generation` | Readonly, strict structured output | `issue-spec.json`, `issue-spec.md` | Convert approved breakdown tasks into executable issue specs |
+| `test-plan` | Readonly | `test-plan.md` | Define scenarios, regressions, and expected test outcomes |
+| `triage` | Readonly | `triage-report.md` | Analyze impact area, risks, and immediate follow-up direction |
+| `plan` | Readonly | `plan.md` | Produce an implementation plan for a narrower coding task |
+| `implement` | Mutating | `implementation-summary.md` | Apply the requested change in the current workspace |
+| `verify` | Readonly summary over external commands | `verification-report.md` | Summarize the outcome of caller-provided verification commands |
+| `review` | Readonly | `review-report.md` | Inspect the current workspace for concrete defects |
+| `repair` | Mutating | `final-summary.md` | Apply fixes for the current issue or review findings |
+| `completion` | Readonly | `workflow-summary.md` | Summarize completed work, key decisions, and remaining risks |
+
+The canonical public example flow is `design -> breakdown -> issue-generation -> implement -> review -> repair`, but the full fixed stage matrix above is supported by the executor contract.
 
 Devagent API gateway:
 
@@ -52,13 +162,14 @@ devagent --provider devagent-api --model cortex "fix failing tests"
 
 ## Features
 
+- **Fixed staged workflow** — code-defined `taskType` stages with stage-specific artifact contracts
+- **Machine orchestration** — `devagent execute` for CI/CD and runner integration
 - **Multi-provider** — Anthropic, OpenAI, Devagent API, DeepSeek, OpenRouter, Ollama, ChatGPT, GitHub Copilot
 - **Tool use** — reads/writes files, runs commands, searches code, git operations
 - **Subagents** — spawns specialized agents (explore, review, architect) with configurable models
 - **Session persistence** — resume previous sessions with `--resume` or `--continue`
 - **Interactive TUI** — Ink-based terminal UI with streaming output, tool display, and plan tracking
 - **Code review** — rule-based patch review with `devagent review`
-- **Machine orchestration** — `devagent execute` for CI/CD integration
 
 ## Usage
 
@@ -118,6 +229,8 @@ Public machine contract:
 ```bash
 devagent execute --request request.json --artifact-dir artifacts/
 ```
+
+Interactive CLI and TUI usage remain supported public surfaces for operator-driven work, but the staged `execute` flow above is the primary machine-facing workflow story.
 
 ## Configuration
 

@@ -12,6 +12,7 @@ import { loadValidationScenarios } from "./manifest";
 import { classifyProviderFailure, selectPreferredOllamaModel } from "./provider-smoke";
 import {
   evaluateAssertions,
+  renderScenarioReviewMarkdown,
   summarizeScenarioReports,
 } from "./reporting";
 import type {
@@ -110,8 +111,11 @@ describe("validateScenarioManifest", () => {
     );
 
     expect(scenarios.some((scenario) => scenario.id === "ets-frontend-execute-repair")).toBe(true);
+    expect(scenarios.some((scenario) => scenario.id === "runtime-core-docs-execute-design")).toBe(true);
+    expect(scenarios.some((scenario) => scenario.id === "runtime-core-docs-execute-breakdown")).toBe(true);
+    expect(scenarios.some((scenario) => scenario.id === "runtime-core-docs-execute-issue-generation")).toBe(true);
     expect(scenarios.filter((scenario) => scenario.suites.includes("smoke"))).toHaveLength(3);
-    expect(scenarios.filter((scenario) => scenario.suites.includes("full"))).toHaveLength(7);
+    expect(scenarios.filter((scenario) => scenario.suites.includes("full"))).toHaveLength(10);
     expect(scenarios.find((scenario) => scenario.id === "ets-frontend-execute-repair")?.suites).toEqual(["full"]);
     expect(scenarios.find((scenario) => scenario.id === "doctor-provider-model-mismatch")?.expectedExitCode).toBe(1);
     expect(scenarios.find((scenario) => scenario.id === "runtime-core-docs-execute-triage")?.requiredToolCalls).toEqual([
@@ -119,6 +123,14 @@ describe("validateScenarioManifest", () => {
     ]);
     expect(scenarios.find((scenario) => scenario.id === "runtime-core-docs-execute-triage")?.requiredToolBatches).toEqual([
       { tool: "delegate", minBatches: 1, minBatchSize: 2 },
+    ]);
+    expect(scenarios.find((scenario) => scenario.id === "runtime-core-docs-execute-breakdown")?.expectedArtifacts).toEqual([
+      "breakdown-doc.md",
+      "breakdown-doc.json",
+    ]);
+    expect(scenarios.find((scenario) => scenario.id === "runtime-core-docs-execute-issue-generation")?.expectedArtifacts).toEqual([
+      "issue-spec.md",
+      "issue-spec.json",
     ]);
     expect(scenarios.find((scenario) => scenario.id === "runtime-core-docs-execute-triage")?.isolationMode).toBe("worktree");
     expect(scenarios.find((scenario) => scenario.id === "runtime-core-execute-plan")?.isolationMode).toBe("worktree");
@@ -242,6 +254,7 @@ describe("summarizeScenarioReports", () => {
         targetRepo: "arkcompiler_ets_frontend",
         surface: "execute",
         taskShape: "repair",
+        taskType: "repair",
         provider: "chatgpt",
         model: "gpt-5.4",
         status: "passed",
@@ -252,7 +265,14 @@ describe("summarizeScenarioReports", () => {
         isolationPath: "/tmp/a",
         outputDir: "/tmp/out/a",
         command: { executable: "bun", args: ["run"], exitCode: 0 },
+        artifactInventory: [],
         artifactValidation: { passed: true, checks: [] },
+        repoMutation: {
+          expectedWorkspaceEffect: "mutating",
+          passed: true,
+          observedChanges: true,
+          summary: "Mutating scenario produced tracked workspace changes.",
+        },
         assertionResults: [],
         toolCallAssertionResults: [],
         toolBatchAssertionResults: [],
@@ -278,7 +298,14 @@ describe("summarizeScenarioReports", () => {
         isolationPath: "/tmp/b",
         outputDir: "/tmp/out/b",
         command: { executable: "bun", args: ["run"], exitCode: 1 },
+        artifactInventory: [],
         artifactValidation: { passed: false, checks: [] },
+        repoMutation: {
+          expectedWorkspaceEffect: "non-mutating",
+          passed: true,
+          observedChanges: false,
+          summary: "Readonly scenario kept the workspace clean.",
+        },
         assertionResults: [],
         toolCallAssertionResults: [],
         toolBatchAssertionResults: [],
@@ -303,7 +330,14 @@ describe("summarizeScenarioReports", () => {
         isolationPath: "/tmp/c",
         outputDir: "/tmp/out/c",
         command: { executable: "bun", args: ["run"], exitCode: 0 },
+        artifactInventory: [],
         artifactValidation: { passed: true, checks: [] },
+        repoMutation: {
+          expectedWorkspaceEffect: "non-mutating",
+          passed: true,
+          observedChanges: false,
+          summary: "Readonly scenario kept the workspace clean.",
+        },
         assertionResults: [],
         toolCallAssertionResults: [],
         toolBatchAssertionResults: [],
@@ -323,6 +357,70 @@ describe("summarizeScenarioReports", () => {
     expect(summary.total).toBe(3);
     expect(summary.passed).toBe(2);
     expect(summary.failed).toBe(1);
+    expect(summary.blocked).toBe(0);
+  });
+});
+
+describe("renderScenarioReviewMarkdown", () => {
+  it("renders stage review and human judgment details", () => {
+    const markdown = renderScenarioReviewMarkdown({
+      scenarioId: "runtime-core-docs-execute-design",
+      description: "Design docs flow",
+      targetRepo: "arkcompiler_runtime_core_docs",
+      surface: "execute",
+      taskShape: "readonly",
+      taskType: "design",
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      status: "passed",
+      startedAt: new Date(0).toISOString(),
+      finishedAt: new Date(1).toISOString(),
+      durationMs: 1,
+      sourceRepoPath: "/src",
+      isolationPath: "/tmp/workspace",
+      outputDir: "/tmp/out",
+      command: { executable: "bun", args: ["run"], exitCode: 0 },
+      artifactInventory: [
+        { path: "design-doc.md", category: "expected", exists: true, sizeBytes: 1200 },
+        { path: "request.json", category: "request", exists: true, sizeBytes: 400 },
+      ],
+      artifactValidation: { passed: true, checks: [] },
+      repoMutation: {
+        expectedWorkspaceEffect: "non-mutating",
+        passed: true,
+        observedChanges: false,
+        summary: "Readonly scenario kept the workspace clean.",
+      },
+      stageReview: {
+        verdict: "pass",
+        handoffReady: true,
+        summary: "Artifacts look coherent enough for the next stage.",
+        humanJudgment: "Review the artifacts directly before treating this as a golden packet.",
+        checks: [
+          {
+            name: "primary-artifacts-non-empty",
+            severity: "hard",
+            passed: true,
+            message: "Expected stage artifacts contain non-empty content.",
+          },
+        ],
+        followUpIssues: [],
+      },
+      assertionResults: [],
+      toolCallAssertionResults: [],
+      toolBatchAssertionResults: [],
+      verificationResults: [],
+      timing: { durationMs: 1 },
+      cost: {},
+      rawOutputs: {
+        requestPath: "/tmp/out/request.json",
+        stdoutPath: "/tmp/out/stdout.txt",
+      },
+    });
+
+    expect(markdown).toContain("## Artifact Review");
+    expect(markdown).toContain("### Human Judgment");
+    expect(markdown).toContain("design-doc.md");
   });
 });
 
@@ -419,6 +517,10 @@ process.exit(0);
     expect(report.status).toBe("passed");
     expect(report.artifactValidation.passed).toBe(true);
     expect(report.command.exitCode).toBe(0);
+    expect(report.rawOutputs.requestPath).toContain("request.json");
+    expect(report.artifactInventory.some((entry) => entry.path === "triage-report.md" && entry.category === "expected")).toBe(true);
+    expect(report.repoMutation.passed).toBe(true);
+    expect(report.stageReview?.verdict).toBe("pass");
     expect(report.observedToolCalls).toMatchObject({ delegate: 2 });
     expect(report.observedToolBatches).toMatchObject({ delegate: { batchCount: 1, maxBatchSize: 2 } });
     expect(report.toolCallAssertionResults).toEqual([
@@ -429,6 +531,113 @@ process.exit(0);
     ]);
     const request = JSON.parse(await readFile(join(outputRoot, "runtime-core-execute-triage", "request.json"), "utf-8")) as { execution: { repositories: Array<{ isolation: string }> } };
     expect(request.execution.repositories[0]?.isolation).toBe("git-worktree");
+  });
+
+  it("supports strict structured execute stages with JSON and rendered artifacts", async () => {
+    const harnessRoot = await makeTempDir("devagent-live-harness-");
+    const sourceRoot = await makeTempDir("devagent-live-breakdown-src-");
+    await writeFile(join(sourceRoot, "README.md"), "# Source\n");
+    await initGitRepo(sourceRoot);
+    await commitAll(sourceRoot, "initial");
+
+    const fakeCli = join(harnessRoot, "fake-devagent-breakdown.mjs");
+    await writeFile(fakeCli, `
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const args = process.argv.slice(2);
+if (args[0] === "auth" && args[1] === "status") {
+  process.stderr.write("Provider  Source  Key\\nchatgpt  oauth   tok***\\n");
+  process.exit(0);
+}
+if (args[0] === "execute") {
+  const requestPath = args[args.indexOf("--request") + 1];
+  const request = JSON.parse(readFileSync(requestPath, "utf-8"));
+  if (request.taskType !== "breakdown") {
+    process.stderr.write("unexpected task type\\n");
+    process.exit(1);
+  }
+  const artifactDir = args[args.indexOf("--artifact-dir") + 1];
+  mkdirSync(artifactDir, { recursive: true });
+  writeFileSync(join(artifactDir, "breakdown-doc.md"), "- [ ] B1. Tighten verifier docs\\n");
+  writeFileSync(join(artifactDir, "breakdown-doc.json"), JSON.stringify({
+    summary: "Ordered breakdown",
+    executionOrder: ["B1"],
+    tasks: [{
+      id: "B1",
+      title: "Tighten verifier docs",
+      checklistLabel: "B1. Tighten verifier docs",
+      objective: "Document verifier work",
+      rationale: "Ground the docs pass",
+      grounding: {
+        designRefs: ["DesignDoc#Verifier"],
+        repoPaths: ["docs/bc_verification"],
+        codeSymbols: ["Verifier"]
+      },
+      dependencies: [],
+      acceptanceCriteria: ["Docs updated"],
+      expectedChanges: ["Refresh staged workflow docs"],
+      validation: ["bun run check:oss"],
+      riskNotes: ["Doc drift"],
+      sizeBudget: {
+        maxEstimatedChangedLines: 80,
+        estimateReason: "Docs-only slice"
+      }
+    }]
+  }, null, 2));
+  writeFileSync(join(artifactDir, "result.json"), JSON.stringify({ status: "success", metrics: { durationMs: 10 } }, null, 2));
+  process.stdout.write(JSON.stringify({ type: "started" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "completed" }) + "\\n");
+  process.exit(0);
+}
+process.exit(1);
+`);
+    chmodSync(fakeCli, 0o755);
+
+    const scenario: ValidationScenario = validateScenarioManifest({
+      id: "runtime-core-docs-execute-breakdown",
+      description: "Breakdown runtime core docs",
+      suites: ["full"],
+      targetRepo: "arkcompiler_runtime_core_docs",
+      surface: "execute",
+      taskShape: "readonly",
+      isolationMode: "worktree",
+      invocation: {
+        type: "execute",
+        taskType: "breakdown",
+        workItemTitle: "Break down docs work",
+        summary: "Produce breakdown",
+      },
+      expectedArtifacts: ["breakdown-doc.md", "breakdown-doc.json"],
+      assertions: [
+        { type: "contains", source: "artifact", path: "breakdown-doc.md", value: "- [ ] B1." },
+        { type: "contains", source: "artifact", path: "breakdown-doc.json", value: "\"executionOrder\"" },
+      ],
+      verificationCommands: [],
+      cleanupPolicy: "destroy",
+    }, "inline");
+
+    const outputRoot = await makeTempDir("devagent-live-output-");
+    const report = await runValidationScenario(scenario, {
+      devagentRoot: dirname(dirname(harnessRoot)),
+      sourceRepoRoots: {
+        arkcompiler_runtime_core_docs: sourceRoot,
+      },
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      outputRoot,
+      command: {
+        executable: "node",
+        baseArgs: [fakeCli],
+      },
+      authStatusOverride: { configuredProviders: ["chatgpt"] },
+    });
+
+    expect(report.status).toBe("passed");
+    expect(report.artifactValidation.passed).toBe(true);
+    expect(report.stageReview?.checks.some((check) => check.name === "structured-json-parse" && check.passed)).toBe(true);
+    const request = JSON.parse(await readFile(join(outputRoot, "runtime-core-docs-execute-breakdown", "request.json"), "utf-8")) as { expectedArtifacts: string[] };
+    expect(request.expectedArtifacts).toEqual(["breakdown-doc"]);
   });
 
   it("renders assertion templates before evaluating CLI repo diffs", async () => {
@@ -624,6 +833,87 @@ process.exit(1);
     expect(report.status).toBe("passed");
     expect(report.command.exitCode).toBe(1);
     expect(report.assertionResults.every((result) => result.passed)).toBe(true);
+  });
+
+  it("treats prepared staged review diffs as baseline rather than unexpected mutations", async () => {
+    const harnessRoot = await makeTempDir("devagent-live-harness-");
+    const sourceRoot = await makeTempDir("devagent-live-review-src-");
+    await writeFile(join(sourceRoot, "README.md"), "# Source\n");
+    await mkdir(join(sourceRoot, "scripts"), { recursive: true });
+    await initGitRepo(sourceRoot);
+    await commitAll(sourceRoot, "initial");
+
+    const fakeCli = join(harnessRoot, "fake-devagent-review.mjs");
+    await writeFile(fakeCli, `
+const args = process.argv.slice(2);
+if (args[0] === "auth" && args[1] === "status") {
+  process.stderr.write("Provider  Source  Key\\nchatgpt  oauth   tok***\\n");
+  process.exit(0);
+}
+process.stdout.write("Critical: unsafe eval on untrusted input\\n");
+process.exit(0);
+`);
+    chmodSync(fakeCli, 0o755);
+
+    const scenario: ValidationScenario = validateScenarioManifest({
+      id: "runtime-core-cli-review",
+      description: "CLI review scenario",
+      suites: ["full"],
+      targetRepo: "arkcompiler_runtime_core",
+      surface: "cli",
+      taskShape: "review",
+      isolationMode: "worktree",
+      preSetup: [
+        {
+          kind: "write-file",
+          path: "scripts/devagent_live_validation_review.sh",
+          content: "#!/bin/sh\\n\\nuser_input=\\\"$1\\\"\\neval \\\"$user_input\\\"\\n",
+          executable: true,
+        },
+        {
+          kind: "run-command",
+          cwd: "repo",
+          command: "git add scripts/devagent_live_validation_review.sh",
+        },
+      ],
+      invocation: {
+        type: "cli",
+        query: "Review the staged diff. Focus on correctness and security. Report concrete defects only.",
+        safetyMode: "autopilot",
+        maxIterations: 14,
+      },
+      expectedArtifacts: [],
+      assertions: [
+        {
+          type: "matches",
+          source: "stdout",
+          pattern: "unsafe eval|eval",
+        },
+      ],
+      verificationCommands: [],
+      cleanupPolicy: "destroy",
+      requiresAuth: true,
+    }, "inline");
+
+    const outputRoot = await makeTempDir("devagent-live-output-");
+    const report = await runValidationScenario(scenario, {
+      devagentRoot: dirname(dirname(harnessRoot)),
+      sourceRepoRoots: {
+        arkcompiler_runtime_core: sourceRoot,
+      },
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      outputRoot,
+      command: {
+        executable: "node",
+        baseArgs: [fakeCli],
+      },
+      authStatusOverride: { configuredProviders: ["chatgpt"] },
+    });
+
+    expect(report.status).toBe("passed");
+    expect(report.repoMutation.passed).toBe(true);
+    expect(report.repoMutation.summary).toContain("prepared baseline");
   });
 
   it("hydrates ArkTS linter assets into execute temp-copy workspaces", async () => {
@@ -1052,7 +1342,7 @@ process.exit(1);
       authStatusOverride: { configuredProviders: ["chatgpt"] },
     });
 
-    expect(report.status).toBe("failed");
+    expect(report.status).toBe("blocked");
     expect(report.failureClass).toBe("provider");
     expect(report.failureMessage).toContain("openai auth is not configured");
   });
@@ -1099,7 +1389,7 @@ process.exit(1);
       },
     });
 
-    expect(report.status).toBe("failed");
+    expect(report.status).toBe("blocked");
     expect(report.failureClass).toBe("provider");
     expect(report.failureMessage).toContain("chatgpt auth is expired");
   });

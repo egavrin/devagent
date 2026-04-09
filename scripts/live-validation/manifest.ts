@@ -22,7 +22,20 @@ const VALID_TARGET_REPOS = new Set([
 const VALID_SURFACES = new Set(["execute", "cli"]);
 const VALID_TASK_SHAPES = new Set(["readonly", "review", "implement", "repair"]);
 const VALID_ISOLATION_MODES = new Set(["temp-copy", "worktree"]);
-const VALID_EXECUTE_TASK_TYPES = new Set(["triage", "plan", "implement", "review", "repair"]);
+const VALID_EXECUTE_TASK_TYPES = new Set([
+  "task-intake",
+  "design",
+  "breakdown",
+  "issue-generation",
+  "test-plan",
+  "triage",
+  "plan",
+  "implement",
+  "verify",
+  "review",
+  "repair",
+  "completion",
+]);
 const VALID_ASSERTION_SOURCES = new Set(["stdout", "stderr", "repoDiff", "repoStatus", "events", "artifact"]);
 const VALID_ASSERTION_TYPES = new Set(["contains", "matches"]);
 const VALID_COMMAND_CWDS = new Set(["repo", "linter"]);

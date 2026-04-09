@@ -1,0 +1,45 @@
+{
+  "id": "runtime-core-docs-execute-issue-generation",
+  "description": "Execute issue-generation scenario for stricter malformed ABC validation using the smaller runtime_core docs mirror.",
+  "suites": ["full"],
+  "targetRepo": "arkcompiler_runtime_core_docs",
+  "surface": "execute",
+  "taskShape": "readonly",
+  "isolationMode": "worktree",
+  "requiresAuth": true,
+  "invocation": {
+    "type": "execute",
+    "taskType": "issue-generation",
+    "workItemTitle": "Generate issue specs for stricter malformed ABC validation",
+    "summary": "Generate executable issue specs for stricter malformed ABC validation using the smaller runtime_core docs mirror repository.",
+    "issueBody": "Derive issue specs from an approved breakdown for docs/bc_verification, assembler, and verifier-related tests. No code changes are allowed.",
+    "extraInstructions": [
+      "Return strict JSON with structured and rendered fields only.",
+      "Each issue must link to approved breakdown task ids and mention concrete repo paths or code symbols.",
+      "Keep verifier and assembler responsibilities explicit in the issue specs."
+    ],
+    "maxIterations": 16
+  },
+  "expectedArtifacts": ["issue-spec.md", "issue-spec.json"],
+  "assertions": [
+    {
+      "type": "contains",
+      "source": "artifact",
+      "path": "issue-spec.json",
+      "value": "\"linkedBreakdownTaskIds\""
+    },
+    {
+      "type": "contains",
+      "source": "artifact",
+      "path": "issue-spec.json",
+      "value": "\"implementationNotes\""
+    },
+    {
+      "type": "matches",
+      "source": "repoStatus",
+      "pattern": "^\\s*$"
+    }
+  ],
+  "verificationCommands": [],
+  "cleanupPolicy": "destroy"
+}

@@ -10,7 +10,19 @@ describe("documentation parity", () => {
   it("documents execute as the public machine contract", () => {
     const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
     expect(readme).toContain("devagent execute --request request.json --artifact-dir");
+    expect(readme).toContain("The primary DevAgent product surface is the staged executor contract");
+    expect(readme).toContain("`design -> breakdown -> issue-generation -> implement -> review -> repair`");
+    expect(readme).toContain("## Stage Matrix");
     expect(readme).not.toContain("desktop/");
+  });
+
+  it("documents the fixed stage set and dynamic request context for execute", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain("The workflow is a fixed supported stage set.");
+    expect(readme).toContain("Stage prompts follow a fixed shape plus dynamic request context");
+    expect(readme).toContain("repo/work item metadata");
+    expect(readme).toContain("extraInstructions");
+    expect(readme).toContain("This pass does not expose stage prompts as user-editable templates.");
   });
 
   it("documents the devagent-api gateway pairing with cortex", () => {
@@ -66,6 +78,9 @@ describe("documentation parity", () => {
 
   it("keeps workflow prose aligned with public safety-mode language", () => {
     const workflow = readFileSync(join(repoRoot, "WORKFLOW.md"), "utf-8");
+    expect(workflow).toContain("`design -> breakdown -> issue-generation -> implement -> review -> repair`");
+    expect(workflow).toContain("fixed rather than user-defined");
+    expect(workflow).toContain("Public stage semantics are code-defined by `taskType`");
     expect(workflow).toContain("`devagent --mode default`");
     expect(workflow).toContain("`devagent --mode autopilot`");
     expect(workflow).toContain("legacy approval-mode flags");

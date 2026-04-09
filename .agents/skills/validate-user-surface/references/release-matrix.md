@@ -12,6 +12,8 @@ Use this file when planning coverage or writing the final report.
 - Pass `bun run test:bundle-smoke`.
 - Pass `bun run test:live-validation`.
 - Pass `bun run validate:live:full`.
+- Pass `bun run validate:live:execute-deep` for a release-grade `devagent execute` packet when staged workflow quality matters.
+- Pass `bun run validate:live:execute-chain` when you need proof that the canonical `design -> breakdown -> issue-generation -> implement -> review -> repair` flow works as one chained provider-backed run.
 - Pass `bun run validate:live:provider-smoke` when local provider credentials or services are available.
 - Explain every remaining failure or blocked surface explicitly.
 
@@ -38,10 +40,12 @@ Use this file when planning coverage or writing the final report.
 
 - Verify every install snippet in `README.md`.
 - Verify every quick-start command in `README.md`.
+- Verify the staged workflow section in `README.md`, including the lead example flow and the full stage matrix.
 - Verify the supported provider list in `README.md`.
 - Verify the command list in `README.md` against `devagent help`.
 - Verify environment-variable documentation against actual runtime behavior.
 - Verify `WORKFLOW.md` and any executor-facing docs still match `devagent execute --request --artifact-dir`.
+- Verify the docs describe stage prompts as code-defined per `taskType` with dynamic request context, not user-configurable workflow stages.
 - Treat doc drift as a release issue even when the code is correct.
 
 ## CLI Matrix
@@ -91,8 +95,18 @@ Use this file when planning coverage or writing the final report.
 - Query from file with `-f`.
 - `devagent review <patch> --rule <rule> --json`.
 - `devagent execute --request request.json --artifact-dir artifacts/`.
+- `devagent execute` readonly planning stages: `design`, `breakdown`, and `issue-generation`.
 - Resume flow after a completed or partial session.
 - Continue flow after an iteration-limited session when practical.
+
+For execute validation:
+
+- Verify the fixed supported stage set is documented and reflected in automation.
+- Verify readonly stages stay non-mutating.
+- Verify `breakdown` and `issue-generation` produce both structured JSON and rendered Markdown artifacts.
+- Verify the canonical public flow `design -> breakdown -> issue-generation -> implement -> review -> repair` is covered by docs and scenario coverage, even if individual stages run as separate scenarios.
+- When validating a true chained flow, verify later stages consume earlier-stage artifacts through request context such as comments, changed file hints, issue units, or context bundles rather than relying on a fresh ungrounded prompt.
+- Preserve a reviewable packet with request JSON, stdout or stderr, emitted events, artifact inventory, workspace-effect review, and a human judgment note for each staged scenario.
 
 ## Provider Matrix
 
@@ -118,6 +132,8 @@ For each provider:
 - Use `bun run scripts/live-validation.ts --list-scenarios` to inventory current scenarios.
 - Run the full suite before adding bespoke manual checks.
 - Inspect `summary.json` and `summary.md` from the generated output directory.
+- Use `bun run validate:live:execute-deep` when you need one ordered `execute` packet with prereqs, canonical staged flow, continuity checks, and per-scenario review notes.
+- Use `bun run validate:live:execute-chain` when you need one disposable-worktree run that carries real stage artifacts forward into `implement`, `review`, and `repair`.
 - Add manual coverage for gaps the harness does not own yet, especially packaging, registry install paths, auth flows, TUI interactions, and full provider breadth.
 
 ## Final Report Shape

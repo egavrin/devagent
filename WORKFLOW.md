@@ -56,9 +56,14 @@ handoff:
 
 This file configures how devagent-hub orchestrates work on this repository.
 
-The intended path is: triage, plan, implement in an isolated worktree, verify,
-open a draft PR, run review and repair loops, then hand off once CI is green or
-a human decision is required.
+The public machine-facing story for this repository is the fixed staged
+`devagent execute --request --artifact-dir` workflow. The lead example flow is:
+
+`design -> breakdown -> issue-generation -> implement -> review -> repair`
+
+Other supported stages such as `task-intake`, `test-plan`, `triage`, `plan`,
+`verify`, and `completion` are still part of the supported contract, but the
+executor stage set itself is fixed rather than user-defined.
 
 ## How work enters this repo
 
@@ -70,7 +75,14 @@ contributor work on the executor, CLI, providers, and tools.
 - Supported: `devagent` as the first-party executor through `devagent execute --request --artifact-dir`
 - Experimental: any alternative executor story outside the validated DevAgent path
 
-The workflow frontmatter above remains a hub/runner compatibility contract. For the public interactive CLI surface, DevAgent now defaults to autopilot; use `devagent --mode default` to opt into guarded prompts, or `devagent --mode autopilot` to set it explicitly, rather than legacy approval-mode flags.
+The workflow frontmatter above remains a hub/runner compatibility contract.
+Public stage semantics are code-defined by `taskType`, with dynamic request
+context layered on top at runtime. This repository does not treat stage prompts
+or stage definitions as user-configurable public surfaces.
+
+For the public interactive CLI surface, DevAgent now defaults to autopilot; use
+`devagent --mode default` to opt into guarded prompts, or `devagent --mode autopilot`
+to set it explicitly, rather than legacy approval-mode flags.
 
 ## Contributor completion bar
 

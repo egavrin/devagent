@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { PROTOCOL_VERSION, type TaskExecutionRequest } from "@devagent-sdk/types";
@@ -17,8 +17,11 @@ import {
   ensureGitIdentity,
   initializeTempCopyRepository,
 } from "./isolation";
-import { evaluateAssertions } from "./reporting";
+import { evaluateAssertions, renderScenarioReviewMarkdown } from "./reporting";
 import type {
+  ArtifactInventoryEntry,
+  StageReview,
+  StageReviewCheck,
   ArtifactValidationCheck,
   AuthStatusSummary,
   FailureClass,
@@ -531,16 +534,30 @@ async function collectToolCallObservations(
 
 function artifactKindForTaskType(taskType: TaskExecutionRequest["taskType"]): TaskExecutionRequest["expectedArtifacts"][number] {
   switch (taskType) {
+    case "task-intake":
+      return "task-spec";
+    case "design":
+      return "design-doc";
+    case "breakdown":
+      return "breakdown-doc";
+    case "issue-generation":
+      return "issue-spec";
+    case "test-plan":
+      return "test-plan";
     case "triage":
       return "triage-report";
     case "plan":
       return "plan";
     case "implement":
       return "implementation-summary";
+    case "verify":
+      return "verification-report";
     case "review":
       return "review-report";
     case "repair":
       return "final-summary";
+    case "completion":
+      return "workflow-summary";
     default:
       return "plan";
   }
@@ -629,6 +646,346 @@ function buildExecuteRequest(
     },
     expectedArtifacts: [artifactKindForTaskType(scenario.invocation.taskType)],
   };
+}
+
+async function walkFiles(root: string, prefix = ""): Promise<string[]> {
+  if (!existsSync(root)) {
+    return [];
+  }
+
+  const entries = await readdir(root, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const relativePath = prefix.length > 0 ? join(prefix, entry.name) : entry.name;
+    if (entry.isDirectory()) {
+      files.push(...await walkFiles(join(root, entry.name), relativePath));
+    } else if (entry.isFile()) {
+      files.push(relativePath);
+    }
+  }
+  return files.sort();
+}
+
+function extractKeywordSet(text: string): string[] {
+  const stopWords = new Set([
+    "about",
+    "across",
+    "after",
+    "allow",
+    "analyze",
+    "analysis",
+    "artifact",
+    "artifacts",
+    "before",
+    "between",
+    "concrete",
+    "derive",
+    "docs",
+    "document",
+    "execute",
+    "explicitly",
+    "final",
+    "focus",
+    "generate",
+    "generation",
+    "ground",
+    "impact",
+    "issue",
+    "issues",
+    "keep",
+    "mirror",
+    "produce",
+    "related",
+    "report",
+    "repository",
+    "runtime",
+    "scenario",
+    "smaller",
+    "stage",
+    "staged",
+    "strict",
+    "stricter",
+    "summary",
+    "surface",
+    "task",
+    "tests",
+    "using",
+    "validation",
+    "verifier",
+    "work",
+  ]);
+  return [...new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, " ")
+      .split(/\s+/)
+      .filter((token) => token.length >= 4 && !stopWords.has(token)),
+  )];
+}
+
+function determineExpectedWorkspaceEffect(taskShape: ValidationScenario["taskShape"]): "non-mutating" | "mutating" {
+  return taskShape === "implement" || taskShape === "repair" ? "mutating" : "non-mutating";
+}
+
+function buildRepoMutationReview(
+  scenario: ValidationScenario,
+  baselineRepoStatus: string,
+  baselineRepoDiff: string,
+  repoStatus: string,
+  repoDiff: string,
+): ValidationScenarioReport["repoMutation"] {
+  const expectedWorkspaceEffect = determineExpectedWorkspaceEffect(scenario.taskShape);
+  const observedChanges = repoStatus !== baselineRepoStatus || repoDiff !== baselineRepoDiff;
+  const baselineWasDirty = baselineRepoStatus.trim().length > 0 || baselineRepoDiff.trim().length > 0;
+  const passed = expectedWorkspaceEffect === "non-mutating" ? !observedChanges : true;
+  const summary = expectedWorkspaceEffect === "non-mutating"
+    ? (observedChanges
+        ? "Readonly scenario changed the workspace relative to its prepared baseline. Inspect repo status and diff before trusting the packet."
+        : baselineWasDirty
+          ? "Readonly scenario preserved the prepared baseline without adding new workspace mutations."
+          : "Readonly scenario kept the workspace clean.")
+    : (observedChanges
+        ? "Mutating scenario produced tracked workspace changes beyond its prepared baseline."
+        : "Mutating scenario did not leave tracked workspace changes beyond its prepared baseline. Review whether the stage still produced enough evidence.");
+  const excerpt = repoStatus.trim().length > 0
+    ? repoStatus.trim().split("\n").slice(0, 12).join("\n")
+    : undefined;
+  return {
+    expectedWorkspaceEffect,
+    passed,
+    observedChanges,
+    summary,
+    ...(excerpt ? { repoStatusExcerpt: excerpt } : {}),
+  };
+}
+
+function buildStructuredStageChecks(
+  scenario: ValidationScenario,
+  artifactContents: ReadonlyMap<string, string>,
+): StageReviewCheck[] {
+  if (scenario.invocation.type !== "execute") {
+    return [];
+  }
+
+  if (scenario.invocation.taskType === "breakdown") {
+    const markdown = artifactContents.get("breakdown-doc.md") ?? "";
+    const jsonText = artifactContents.get("breakdown-doc.json") ?? "";
+    try {
+      const parsed = JSON.parse(jsonText) as {
+        executionOrder?: unknown;
+        tasks?: Array<{ checklistLabel?: string; title?: string }>;
+      };
+      const taskLabels = Array.isArray(parsed.tasks)
+        ? parsed.tasks.flatMap((task) => [task.checklistLabel, task.title].filter((value): value is string => typeof value === "string"))
+        : [];
+      return [
+        {
+          name: "structured-json-parse",
+          severity: "hard",
+          passed: true,
+          message: "Structured breakdown JSON parsed successfully.",
+        },
+        {
+          name: "structured-breakdown-shape",
+          severity: "hard",
+          passed: Array.isArray(parsed.executionOrder) && Array.isArray(parsed.tasks) && parsed.tasks.length > 0,
+          message: Array.isArray(parsed.executionOrder) && Array.isArray(parsed.tasks) && parsed.tasks.length > 0
+            ? "Breakdown JSON includes execution order and at least one task."
+            : "Breakdown JSON is missing executionOrder or tasks.",
+        },
+        {
+          name: "rendered-checklist-aligns",
+          severity: "soft",
+          passed: taskLabels.length === 0 || taskLabels.some((label) => markdown.includes(label)),
+          message: taskLabels.length === 0 || taskLabels.some((label) => markdown.includes(label))
+            ? "Rendered markdown references at least one structured breakdown task."
+            : "Rendered markdown does not appear to reference any structured breakdown task labels.",
+        },
+      ];
+    } catch (error) {
+      return [{
+        name: "structured-json-parse",
+        severity: "hard",
+        passed: false,
+        message: `Breakdown JSON could not be parsed: ${error instanceof Error ? error.message : String(error)}`,
+      }];
+    }
+  }
+
+  if (scenario.invocation.taskType === "issue-generation") {
+    const markdown = artifactContents.get("issue-spec.md") ?? "";
+    const jsonText = artifactContents.get("issue-spec.json") ?? "";
+    try {
+      const parsed = JSON.parse(jsonText) as {
+        issues?: Array<{ id?: string; title?: string; linkedBreakdownTaskIds?: string[]; implementationNotes?: string[] }>;
+      };
+      const issueLabels = Array.isArray(parsed.issues)
+        ? parsed.issues.flatMap((issue) => [issue.id, issue.title].filter((value): value is string => typeof value === "string"))
+        : [];
+      const hasStructuredFields = Array.isArray(parsed.issues)
+        && parsed.issues.length > 0
+        && parsed.issues.every((issue) => Array.isArray(issue.linkedBreakdownTaskIds) && Array.isArray(issue.implementationNotes));
+      return [
+        {
+          name: "structured-json-parse",
+          severity: "hard",
+          passed: true,
+          message: "Structured issue-spec JSON parsed successfully.",
+        },
+        {
+          name: "structured-issue-shape",
+          severity: "hard",
+          passed: hasStructuredFields,
+          message: hasStructuredFields
+            ? "Issue-spec JSON includes linked breakdown task ids and implementation notes."
+            : "Issue-spec JSON is missing linkedBreakdownTaskIds or implementationNotes.",
+        },
+        {
+          name: "rendered-issue-summary-aligns",
+          severity: "soft",
+          passed: issueLabels.length === 0 || issueLabels.some((label) => markdown.includes(label)),
+          message: issueLabels.length === 0 || issueLabels.some((label) => markdown.includes(label))
+            ? "Rendered markdown references at least one structured issue."
+            : "Rendered markdown does not appear to reference any structured issue id or title.",
+        },
+      ];
+    } catch (error) {
+      return [{
+        name: "structured-json-parse",
+        severity: "hard",
+        passed: false,
+        message: `Issue-spec JSON could not be parsed: ${error instanceof Error ? error.message : String(error)}`,
+      }];
+    }
+  }
+
+  return [];
+}
+
+function buildStageReview(
+  scenario: ValidationScenario,
+  artifactContents: ReadonlyMap<string, string>,
+  repoMutation: ValidationScenarioReport["repoMutation"],
+): StageReview | undefined {
+  if (scenario.surface !== "execute") {
+    return undefined;
+  }
+
+  const allArtifactText = [...artifactContents.values()].join("\n\n");
+  const primaryArtifacts = [...artifactContents.values()].filter((text) => text.trim().length > 0);
+  const taskKeywords = scenario.invocation.type === "execute"
+    ? extractKeywordSet(`${scenario.invocation.workItemTitle} ${scenario.invocation.summary} ${scenario.invocation.issueBody ?? ""}`)
+    : [];
+  const hasKeywordOverlap = taskKeywords.length === 0
+    ? true
+    : taskKeywords.some((keyword) => allArtifactText.toLowerCase().includes(keyword));
+  const placeholderPattern = /\b(?:todo|tbd|placeholder|lorem ipsum|as an ai)\b/i;
+
+  const checks: StageReviewCheck[] = [
+    {
+      name: "primary-artifacts-non-empty",
+      severity: "hard",
+      passed: primaryArtifacts.length > 0,
+      message: primaryArtifacts.length > 0
+        ? "Expected stage artifacts contain non-empty content."
+        : "Expected stage artifacts were empty or missing.",
+    },
+    {
+      name: "workspace-effect-matches-stage",
+      severity: "hard",
+      passed: repoMutation.passed,
+      message: repoMutation.summary,
+    },
+    {
+      name: "artifact-specificity",
+      severity: "soft",
+      passed: hasKeywordOverlap,
+      message: hasKeywordOverlap
+        ? "Artifacts reference task-specific keywords from the request."
+        : "Artifacts did not obviously reflect the request-specific keywords. Review for generic output.",
+    },
+    {
+      name: "placeholder-language",
+      severity: "soft",
+      passed: !placeholderPattern.test(allArtifactText),
+      message: !placeholderPattern.test(allArtifactText)
+        ? "Artifacts do not contain obvious placeholder language."
+        : "Artifacts contain placeholder-style language that may indicate incomplete output.",
+    },
+    ...buildStructuredStageChecks(scenario, artifactContents),
+  ];
+
+  const failedChecks = checks.filter((check) => !check.passed);
+  const hardFailures = failedChecks.filter((check) => check.severity === "hard");
+  const followUpIssues = failedChecks.map((check) => check.message);
+  const verdict = failedChecks.length === 0 ? "pass" : "soft-fail";
+  const handoffReady = hardFailures.length === 0 && repoMutation.passed;
+  const summary = failedChecks.length === 0
+    ? "Artifacts look coherent enough for the next stage, subject to quick human review."
+    : "Artifacts need reviewer attention before they should be treated as a trusted staged-workflow packet.";
+
+  return {
+    verdict,
+    handoffReady,
+    summary,
+    humanJudgment: handoffReady
+      ? "Review the artifacts directly and confirm they are specific, complete, and good enough to hand to the next stage without rewriting."
+      : "Do not treat this packet as a trusted handoff until the failed checks below are reviewed and either fixed or explicitly accepted.",
+    checks,
+    followUpIssues,
+  };
+}
+
+async function buildArtifactInventory(
+  artifactDir: string,
+  scenario: ValidationScenario,
+  rawOutputs: ValidationScenarioReport["rawOutputs"],
+): Promise<ArtifactInventoryEntry[]> {
+  const entries: ArtifactInventoryEntry[] = [];
+  const allArtifactFiles = await walkFiles(artifactDir);
+  const expectedArtifactSet = new Set(scenario.expectedArtifacts);
+
+  for (const relativePath of scenario.expectedArtifacts) {
+    const fullPath = join(artifactDir, relativePath);
+    const exists = existsSync(fullPath);
+    const sizeBytes = exists ? (await stat(fullPath)).size : undefined;
+    entries.push({
+      path: relativePath,
+      category: "expected",
+      exists,
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    });
+  }
+
+  for (const relativePath of allArtifactFiles) {
+    if (expectedArtifactSet.has(relativePath)) {
+      continue;
+    }
+    const fullPath = join(artifactDir, relativePath);
+    const sizeBytes = (await stat(fullPath)).size;
+    entries.push({
+      path: relativePath,
+      category: "generated",
+      exists: true,
+      sizeBytes,
+    });
+  }
+
+  for (const [label, path] of Object.entries(rawOutputs)) {
+    if (!path) {
+      continue;
+    }
+    const exists = existsSync(path);
+    const sizeBytes = exists ? (await stat(path)).size : undefined;
+    entries.push({
+      path: label === "requestPath" ? "request.json" : basename(path),
+      category: label === "requestPath" ? "request" : "raw-output",
+      exists,
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    });
+  }
+
+  return entries.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 async function validateExecuteArtifacts(
@@ -759,6 +1116,7 @@ async function writeRawOutputs(
   repoStatus: string,
   repoDiff: string,
   events: string,
+  requestPath?: string,
 ): Promise<ValidationScenarioReport["rawOutputs"]> {
   const stdoutPath = join(outputDir, "stdout.txt");
   const stderrPath = join(outputDir, "stderr.txt");
@@ -773,6 +1131,7 @@ async function writeRawOutputs(
     writeFile(eventsPath, events),
   ]);
   return {
+    ...(requestPath ? { requestPath } : {}),
     stdoutPath,
     stderrPath,
     repoStatusPath,
@@ -886,15 +1245,17 @@ async function createFailureReport(
   durationMs = 0,
 ): Promise<ValidationScenarioReport> {
   const finishedAt = new Date().toISOString();
+  const status = failureClass === "provider" ? "blocked" : "failed";
   const report: ValidationScenarioReport = {
     scenarioId: scenario.id,
     description: scenario.description,
     targetRepo: scenario.targetRepo,
     surface: scenario.surface,
     taskShape: scenario.taskShape,
+    ...(scenario.invocation.type === "execute" ? { taskType: scenario.invocation.taskType } : {}),
     provider: options.provider,
     model: options.model,
-    status: "failed",
+    status,
     failureClass,
     failureMessage,
     startedAt,
@@ -908,7 +1269,16 @@ async function createFailureReport(
       args: options.command?.baseArgs ?? defaultCommand(options.devagentRoot).baseArgs,
       exitCode: 1,
     },
+    artifactInventory: [],
     artifactValidation: { passed: false, checks: [] },
+    repoMutation: {
+      expectedWorkspaceEffect: determineExpectedWorkspaceEffect(scenario.taskShape),
+      passed: false,
+      observedChanges: false,
+      summary: failureClass === "provider"
+        ? "Scenario did not run because the required provider credential or service was unavailable."
+        : "Scenario did not reach workspace mutation checks.",
+    },
     assertionResults: [],
     toolCallAssertionResults: [],
     toolBatchAssertionResults: [],
@@ -919,6 +1289,7 @@ async function createFailureReport(
   };
   await mkdir(outputDir, { recursive: true });
   await writeFile(join(outputDir, "report.json"), JSON.stringify(report, null, 2));
+  await writeFile(join(outputDir, "review.md"), renderScenarioReviewMarkdown(report));
   return report;
 }
 
@@ -1038,11 +1409,14 @@ export async function runValidationScenario(
     if (scenario.baselineAfterSetup) {
       await commitWorkspaceState(workspace.path, "seed live validation scenario");
     }
+    const baselineGitOutputs = await captureGitOutputs(workspace.path);
+    const baselineCombinedDiff = [baselineGitOutputs.repoDiff, baselineGitOutputs.repoDiffCached].filter(Boolean).join("\n");
 
     const command = options.command ?? defaultCommand(options.devagentRoot);
     const commandEnv = buildCommandEnv(scenario, variables, defaultHomeDir);
     let invocationResult: CommandResult;
     let executedArgs: string[];
+    let requestPath: string | undefined;
 
     if (scenario.invocation.type === "execute") {
       await mkdir(artifactDir, { recursive: true });
@@ -1054,7 +1428,7 @@ export async function runValidationScenario(
         options.model,
         variables,
       );
-      const requestPath = join(outputDir, "request.json");
+      requestPath = join(outputDir, "request.json");
       await writeFile(requestPath, JSON.stringify(request, null, 2));
       executedArgs = [...command.baseArgs, "execute", "--request", requestPath, "--artifact-dir", artifactDir];
       invocationResult = await runCommand(
@@ -1085,21 +1459,32 @@ export async function runValidationScenario(
       gitOutputs.repoStatus,
       combinedDiff,
       toolCallObservation.eventsText,
+      requestPath,
     );
+    const repoMutation = buildRepoMutationReview(
+      scenario,
+      baselineGitOutputs.repoStatus,
+      baselineCombinedDiff,
+      gitOutputs.repoStatus,
+      combinedDiff,
+    );
+    const artifactInventory = await buildArtifactInventory(artifactDir, scenario, rawOutputs);
 
     const expectedExitCode = scenario.expectedExitCode ?? 0;
     if (invocationResult.exitCode !== expectedExitCode) {
       const failureClass = classifyInvocationFailure(invocationResult.stderr, invocationResult.timedOut);
       const finishedAt = new Date().toISOString();
+      const status = failureClass === "provider" ? "blocked" : "failed";
       const report: ValidationScenarioReport = {
         scenarioId: scenario.id,
         description: scenario.description,
         targetRepo: scenario.targetRepo,
         surface: scenario.surface,
         taskShape: scenario.taskShape,
+        ...(scenario.invocation.type === "execute" ? { taskType: scenario.invocation.taskType } : {}),
         provider: options.provider,
         model: options.model,
-        status: "failed",
+        status,
         failureClass,
         failureMessage: invocationResult.stderr.trim() || invocationResult.stdout.trim() || `Scenario command exited with ${invocationResult.exitCode}, expected ${expectedExitCode}.`,
         startedAt,
@@ -1113,7 +1498,9 @@ export async function runValidationScenario(
           args: executedArgs,
           exitCode: invocationResult.exitCode,
         },
+        artifactInventory,
         artifactValidation: { passed: false, checks: [] },
+        repoMutation,
         assertionResults: [],
         toolCallAssertionResults: toolCallObservation.assertionResults,
         toolBatchAssertionResults: toolCallObservation.batchAssertionResults,
@@ -1126,12 +1513,15 @@ export async function runValidationScenario(
         rawOutputs,
       };
       await writeFile(join(outputDir, "report.json"), JSON.stringify(report, null, 2));
+      await writeFile(join(outputDir, "review.md"), renderScenarioReviewMarkdown(report));
       return report;
     }
 
     const executeValidation = scenario.surface === "execute"
       ? await validateExecuteArtifacts(scenario, artifactDir, invocationResult.stdout)
       : { passed: true, checks: [] as ArtifactValidationCheck[], artifactContents: new Map<string, string>(), cost: {} };
+    const stageReview = buildStageReview(scenario, executeValidation.artifactContents, repoMutation);
+    const hardStageReviewPassed = !stageReview || stageReview.checks.every((check) => check.severity !== "hard" || check.passed);
     const assertionEvaluation = evaluateAssertions(renderAssertions(scenario.assertions, variables), {
       stdout: invocationResult.stdout,
       stderr: invocationResult.stderr,
@@ -1152,6 +1542,8 @@ export async function runValidationScenario(
     const finishedAt = new Date().toISOString();
     const durationMs = Date.now() - new Date(startedAt).getTime();
     const status = executeValidation.passed
+      && repoMutation.passed
+      && hardStageReviewPassed
       && assertionEvaluation.passed
       && toolCallAssertionsPassed
       && toolBatchAssertionsPassed
@@ -1160,13 +1552,17 @@ export async function runValidationScenario(
       : "failed";
     const failureClass = status === "passed"
       ? undefined
-      : !executeValidation.passed || !assertionEvaluation.passed || !toolCallAssertionsPassed || !toolBatchAssertionsPassed
+      : !executeValidation.passed || !repoMutation.passed || !hardStageReviewPassed || !assertionEvaluation.passed || !toolCallAssertionsPassed || !toolBatchAssertionsPassed
         ? "assertion"
         : "verification";
     const failureMessage = status === "passed"
       ? undefined
       : !executeValidation.passed
         ? "Artifact validation failed."
+        : !repoMutation.passed
+          ? "Workspace mutation check failed."
+          : !hardStageReviewPassed
+            ? "Structured stage review failed."
         : !assertionEvaluation.passed || !toolCallAssertionsPassed || !toolBatchAssertionsPassed
           ? "One or more assertions failed."
           : "Verification command failed.";
@@ -1177,6 +1573,7 @@ export async function runValidationScenario(
       targetRepo: scenario.targetRepo,
       surface: scenario.surface,
       taskShape: scenario.taskShape,
+      ...(scenario.invocation.type === "execute" ? { taskType: scenario.invocation.taskType } : {}),
       provider: options.provider,
       model: options.model,
       status,
@@ -1193,10 +1590,13 @@ export async function runValidationScenario(
         args: executedArgs,
         exitCode: invocationResult.exitCode,
       },
+      artifactInventory,
       artifactValidation: {
         passed: executeValidation.passed,
         checks: executeValidation.checks,
       },
+      repoMutation,
+      ...(stageReview ? { stageReview } : {}),
       assertionResults: assertionEvaluation.results,
       toolCallAssertionResults: toolCallObservation.assertionResults,
       toolBatchAssertionResults: toolCallObservation.batchAssertionResults,
@@ -1209,6 +1609,7 @@ export async function runValidationScenario(
       rawOutputs,
     };
     await writeFile(join(outputDir, "report.json"), JSON.stringify(report, null, 2));
+    await writeFile(join(outputDir, "review.md"), renderScenarioReviewMarkdown(report));
     return report;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

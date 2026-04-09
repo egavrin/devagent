@@ -1,0 +1,45 @@
+{
+  "id": "runtime-core-docs-execute-design",
+  "description": "Execute design scenario for stricter malformed ABC validation using the smaller runtime_core docs mirror.",
+  "suites": ["full"],
+  "targetRepo": "arkcompiler_runtime_core_docs",
+  "surface": "execute",
+  "taskShape": "readonly",
+  "isolationMode": "worktree",
+  "requiresAuth": true,
+  "invocation": {
+    "type": "execute",
+    "taskType": "design",
+    "workItemTitle": "Design stricter malformed ABC validation flow",
+    "summary": "Produce a design doc for stricter malformed ABC validation using the smaller runtime_core docs mirror repository.",
+    "issueBody": "Ground the design in docs/bc_verification, assembler-facing responsibilities, verifier-related tests, and validation strategy. No code changes are allowed.",
+    "extraInstructions": [
+      "Describe the fixed staged workflow as code-defined by task type, with request-specific context layered on top.",
+      "Reference docs/bc_verification and verifier-related tests explicitly.",
+      "Call out assembler and verifier responsibilities separately."
+    ],
+    "maxIterations": 14
+  },
+  "expectedArtifacts": ["design-doc.md"],
+  "assertions": [
+    {
+      "type": "contains",
+      "source": "artifact",
+      "path": "design-doc.md",
+      "value": "bc_verification"
+    },
+    {
+      "type": "contains",
+      "source": "artifact",
+      "path": "design-doc.md",
+      "value": "assembler"
+    },
+    {
+      "type": "matches",
+      "source": "repoStatus",
+      "pattern": "^\\s*$"
+    }
+  ],
+  "verificationCommands": [],
+  "cleanupPolicy": "destroy"
+}
