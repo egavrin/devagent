@@ -5,6 +5,7 @@ import { EventBus } from "@devagent/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  App,
   ITERATION_LIMIT_NOTICE,
   TranscriptView,
   renderResumeCommandOutput,
@@ -66,8 +67,24 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
+async function waitForRenders(cycles: number = 6): Promise<void> {
+  for (let index = 0; index < cycles; index++) {
+    await settle();
+  }
+}
+
 function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function countPromptPlaceholders(text: string): number {
+  return (stripAnsi(text).match(/Ask anything…/g) ?? []).length;
+}
+
+async function typeAndSubmit(stdin: TestInput, text: string): Promise<void> {
+  stdin.write(text);
+  await settle();
+  stdin.write("\r");
 }
 
 function renderForTest(
@@ -152,7 +169,6 @@ function AgentLogHarness({ entries }: { readonly entries: ReadonlyArray<string> 
   const { transcriptNodes, appendStandalonePart } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "default",
   });
   const emittedCount = useRef(0);
 
@@ -175,7 +191,6 @@ function ToolDiffHarness(): React.ReactElement {
   const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "default",
   });
 
   useEffect(() => {
@@ -234,7 +249,6 @@ function StatusHarness(): React.ReactElement {
   const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "default",
   });
 
   useEffect(() => {
@@ -268,7 +282,6 @@ function ToolSpecificHarness(): React.ReactElement {
   const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "default",
   });
 
   useEffect(() => {
@@ -360,7 +373,6 @@ function LargeCreateHarness(): React.ReactElement {
   const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "default",
   });
 
   useEffect(() => {
@@ -406,7 +418,6 @@ function FallbackHarness(): React.ReactElement {
   const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "default",
   });
 
   useEffect(() => {
@@ -450,7 +461,6 @@ function BlankLineHarness(): React.ReactElement {
   const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "default",
   });
 
   useEffect(() => {
@@ -496,7 +506,6 @@ function MultiHunkHarness(): React.ReactElement {
   const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "default",
   });
 
   useEffect(() => {
@@ -542,7 +551,6 @@ function NarrowHarness(): React.ReactElement {
   const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
     bus,
     model: "test-model",
-    approvalMode: "default",
   });
 
   useEffect(() => {
@@ -871,6 +879,70 @@ describe("interactive completion notices", () => {
     expect(output).toContain("Everything passed.");
     expect(output).toContain("╭─");
     expect(output).toContain("╰─");
+  });
+
+  it("keeps prompt scrollback stable after a completed turn", async () => {
+    const bus = new EventBus();
+    const view = renderForTest(
+      React.createElement(App, {
+        bus,
+        model: "test-model",
+        approvalMode: "autopilot",
+        cwd: "/tmp/devagent",
+        onClear: () => {},
+        onCycleApprovalMode: () => {},
+        onQuery: async () => {
+          bus.emit("iteration:start", {
+            iteration: 1,
+            maxIterations: 10,
+            estimatedTokens: 100,
+            maxContextTokens: 1_000,
+          });
+          await settle();
+          return {
+            iterations: 1,
+            toolCalls: 0,
+            lastText: "Bottom line: done",
+            status: "success" as const,
+          };
+        },
+      }),
+    );
+
+    await settle();
+    await typeAndSubmit(view.stdin, "x");
+    await waitForRenders();
+
+    const output = view.stdout.readAll();
+    expect(countPromptPlaceholders(output)).toBe(2);
+    expect(output).toContain("Bottom line: done");
+  });
+
+  it("keeps prompt scrollback stable after idle slash-command output", async () => {
+    const view = renderForTest(
+      React.createElement(App, {
+        bus: new EventBus(),
+        model: "test-model",
+        approvalMode: "autopilot",
+        cwd: "/tmp/devagent",
+        onClear: () => {},
+        onCycleApprovalMode: () => {},
+        onQuery: async () => ({
+          iterations: 0,
+          toolCalls: 0,
+          lastText: null,
+          status: "success" as const,
+        }),
+      }),
+    );
+
+    await settle();
+    await typeAndSubmit(view.stdin, "/help");
+    await waitForRenders();
+
+    const output = view.stdout.readAll();
+    expect(countPromptPlaceholders(output)).toBe(2);
+    expect(output).toContain("Commands: /clear (reset)");
   });
 
   it("renders markdown tables cleanly inside the assistant card", async () => {

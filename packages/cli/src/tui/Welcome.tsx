@@ -21,7 +21,7 @@ function markFirstRunDone(): void {
   } catch { /* non-fatal */ }
 }
 
-export interface WelcomeProps {
+interface WelcomeProps {
   readonly model: string;
   readonly version?: string;
 }
@@ -49,7 +49,7 @@ export function Welcome({ model, version }: WelcomeProps): React.ReactElement {
           <Text dimColor>  • Tab completes slash commands and file paths</Text>
           <Text dimColor>  • Shift+Tab toggles default and autopilot</Text>
           <Text dimColor>  • Type /continue after an iteration-limit pause</Text>
-          <Text dimColor>  • PgUp/PgDn scrolls through history</Text>
+          <Text dimColor>  • Use terminal scrollback (for example PgUp/PgDn) to review prior output</Text>
           <Text dimColor>  • Type /help for all commands</Text>
         </Box>
       ) : (

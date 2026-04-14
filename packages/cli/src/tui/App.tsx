@@ -44,21 +44,30 @@ export interface AppProps {
   readonly version?: string;
 }
 
-export interface TranscriptViewProps {
+interface TranscriptViewProps {
   readonly showWelcome: boolean;
   readonly transcriptNodes: ReadonlyArray<TranscriptNode>;
   readonly model: string;
   readonly version?: string;
+  readonly keepLatestNodeLive?: boolean;
 }
 
 function isRunningTurnNode(node: TranscriptNode | undefined): node is Extract<TranscriptNode, { readonly kind: "turn" }> {
   return node?.kind === "turn" && node.turn.status === "running";
 }
 
-export function TranscriptView({ showWelcome, transcriptNodes, model, version }: TranscriptViewProps): React.ReactElement {
+export function TranscriptView({
+  showWelcome,
+  transcriptNodes,
+  model,
+  version,
+  keepLatestNodeLive = false,
+}: TranscriptViewProps): React.ReactElement {
   const lastNode = transcriptNodes.at(-1);
-  const activeTurnNode = isRunningTurnNode(lastNode) ? lastNode : null;
-  const staticNodes = activeTurnNode ? transcriptNodes.slice(0, -1) : transcriptNodes;
+  const liveTailNode = lastNode && (keepLatestNodeLive || isRunningTurnNode(lastNode))
+    ? lastNode
+    : null;
+  const staticNodes = liveTailNode ? transcriptNodes.slice(0, -1) : transcriptNodes;
 
   return (
     <>
@@ -66,7 +75,7 @@ export function TranscriptView({ showWelcome, transcriptNodes, model, version }:
       <Static items={[...staticNodes]}>
         {(node) => <TranscriptNodeView key={node.id} node={node} />}
       </Static>
-      {activeTurnNode ? <TranscriptNodeView node={activeTurnNode} /> : null}
+      {liveTailNode ? <TranscriptNodeView node={liveTailNode} /> : null}
     </>
   );
 }
@@ -153,6 +162,10 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     setToasts((prev) => [...prev, { id: nextId("toast"), message, variant }]);
   }, [nextId]);
 
+  const clearSubagents = useCallback(() => {
+    setSubagents((prev) => (prev.size === 0 ? prev : new Map()));
+  }, [setSubagents]);
+
   // Handle input submission
   const handleSubmit = useCallback(async (value: string) => {
     const trimmed = value.trim();
@@ -160,7 +173,7 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
 
     if (trimmed === "/exit" || trimmed === "/quit" || trimmed === "/q") { exit(); return; }
     if (trimmed === "/clear" || trimmed === "/c") {
-      onClear(); setSubagents(new Map());
+      onClear(); clearSubagents();
       setStatus((s) => ({ ...s, cost: 0, iteration: 0, inputTokens: 0 }));
       appendStandalonePart(nextId("clear"), makeInfoPart("info", ["Context cleared."]));
       return;
@@ -234,11 +247,11 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
       );
     } finally {
       setRunning(false);
-      setSubagents(new Map());
+      clearSubagents();
       setSpinnerMessage(undefined);
       refs.textBuffer.current = "";
     }
-  }, [onQuery, onClear, exit, appendStandalonePart, startTurn, appendTurnPart, completeTurn, addToast, flushThinking, flushGroup, nextId, refs, setStatus, setSubagents, setSpinnerMessage, currentApprovalMode]);
+  }, [onQuery, onClear, exit, clearSubagents, appendStandalonePart, startTurn, appendTurnPart, completeTurn, addToast, flushThinking, flushGroup, nextId, refs, setStatus, setSpinnerMessage, currentApprovalMode]);
 
   const handleCycleApprovalMode = useCallback(() => {
     if (running || pendingApproval || showCommandPalette) {
@@ -275,8 +288,10 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const showPrompt = !running && !pendingApproval && !showCommandPalette;
+
   const commands: Command[] = [
-    { name: "Clear context", description: "Reset conversation and session state", shortcut: "/clear", action: () => { onClear(); setSubagents(new Map()); addToast("Context cleared", "success"); } },
+    { name: "Clear context", description: "Reset conversation and session state", shortcut: "/clear", action: () => { onClear(); clearSubagents(); addToast("Context cleared", "success"); } },
     { name: "Continue", description: "Continue the current session after a pause or budget limit", shortcut: "/continue", action: () => handleSubmit("/continue") },
     { name: "Session list", description: "Show recent sessions", shortcut: "/sessions", action: () => handleSubmit("/sessions") },
     { name: "Help", description: "Show available commands", shortcut: "/help", action: () => handleSubmit("/help") },
@@ -292,7 +307,13 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
 
   return (
     <>
-      <TranscriptView showWelcome={showWelcome} transcriptNodes={transcriptNodes} model={model} version={version} />
+      <TranscriptView
+        showWelcome={showWelcome}
+        transcriptNodes={transcriptNodes}
+        model={model}
+        version={version}
+        keepLatestNodeLive={showPrompt}
+      />
       {hasActiveSubagents && <SubagentPanel agents={subagents} />}
       {pendingApproval && <ApprovalDialog request={pendingApproval} onResponse={handleApproval} />}
       {showCommandPalette && <CommandPalette commands={commands} onClose={() => setShowCommandPalette(false)} />}
@@ -303,7 +324,7 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
           <Spinner active message={spinnerMessage} suffix={status.cost > 0 ? `$${status.cost.toFixed(4)}` : ""} />
         </Box>
       )}
-      {!running && !pendingApproval && !showCommandPalette && (
+      {showPrompt && (
         <PromptInput
           onSubmit={handleSubmit}
           onCycleApprovalMode={handleCycleApprovalMode}
