@@ -54,6 +54,31 @@ describe("resolveProviderCredentialStatus", () => {
     expect(result.apiKey).toBe("config-key");
   });
 
+  it("falls back to stored credentials when an explicit provider env ref is unset", () => {
+    const result = resolveProviderCredentialStatus({
+      providerId: "openai",
+      providerConfigApiKey: "env:DEVAGENT_TEST_OPENAI_KEY",
+      storedCredential: { type: "api", key: "stored-key", storedAt: 1 },
+      env: { OPENAI_API_KEY: "default-env-key" },
+    });
+
+    expect(result.hasCredential).toBe(true);
+    expect(result.source).toBe("stored");
+    expect(result.apiKey).toBe("stored-key");
+  });
+
+  it("reports the referenced env var when an explicit top-level env ref is unset with no stored credential", () => {
+    const result = resolveProviderCredentialStatus({
+      providerId: "openai",
+      topLevelApiKey: "env:DEVAGENT_TEST_TOP_LEVEL_KEY",
+      env: { OPENAI_API_KEY: "default-env-key" },
+    });
+
+    expect(result.hasCredential).toBe(false);
+    expect(result.source).toBe("missing");
+    expect(result.envVar).toBe("DEVAGENT_TEST_TOP_LEVEL_KEY");
+  });
+
   it("resolves oauth credentials from stored login when present", () => {
     const result = resolveProviderCredentialStatus({
       providerId: "chatgpt",

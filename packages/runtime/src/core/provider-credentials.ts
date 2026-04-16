@@ -19,6 +19,12 @@ export interface ResolvedProviderCredentialStatus {
   readonly apiKey?: string;
 }
 
+interface ResolvedConfiguredApiKey {
+  readonly source: "literal" | "env" | "missing-env" | "absent";
+  readonly apiKey?: string;
+  readonly envVar?: string;
+}
+
 const PROVIDER_CREDENTIALS: readonly ProviderCredentialDescriptor[] = [
   { id: "anthropic", envVar: "ANTHROPIC_API_KEY", hint: "set ANTHROPIC_API_KEY or devagent auth login", credentialMode: "api" },
   { id: "openai", envVar: "OPENAI_API_KEY", hint: "set OPENAI_API_KEY or devagent auth login", credentialMode: "api" },
@@ -42,9 +48,41 @@ export function getProviderCredentialEnvVar(providerId: string): string | null {
   return getProviderCredentialDescriptor(providerId)?.envVar ?? null;
 }
 
+function resolveConfiguredApiKey(
+  value: string | null | undefined,
+  env: NodeJS.ProcessEnv,
+): ResolvedConfiguredApiKey {
+  if (!value) {
+    return { source: "absent" };
+  }
+
+  if (!value.startsWith("env:")) {
+    return {
+      source: "literal",
+      apiKey: value,
+    };
+  }
+
+  const envVar = value.slice(4);
+  const envValue = env[envVar];
+  if (envValue === undefined) {
+    return {
+      source: "missing-env",
+      envVar,
+    };
+  }
+
+  return {
+    source: "env",
+    envVar,
+    apiKey: envValue,
+  };
+}
+
 export function resolveProviderCredentialStatus(opts: {
   readonly providerId: string;
   readonly providerConfig?: ProviderConfig;
+  readonly providerConfigApiKey?: string | null;
   readonly topLevelApiKey?: string;
   readonly storedCredential?: CredentialInfo | null;
   readonly env?: NodeJS.ProcessEnv;
@@ -89,23 +127,85 @@ export function resolveProviderCredentialStatus(opts: {
     };
   }
 
-  if (providerConfig?.apiKey) {
+  const providerConfigApiKey =
+    opts.providerConfigApiKey !== undefined
+      ? opts.providerConfigApiKey
+      : providerConfig?.apiKey;
+  const providerApiKey = resolveConfiguredApiKey(providerConfigApiKey, env);
+  if (providerApiKey.source === "literal") {
     return {
       providerId: opts.providerId,
       credentialMode,
       hasCredential: true,
       source: "provider-config",
-      apiKey: providerConfig.apiKey,
+      apiKey: providerApiKey.apiKey,
+    };
+  }
+  if (providerApiKey.source === "env") {
+    return {
+      providerId: opts.providerId,
+      credentialMode,
+      hasCredential: true,
+      source: "env",
+      envVar: providerApiKey.envVar,
+      apiKey: providerApiKey.apiKey,
+    };
+  }
+  if (providerApiKey.source === "missing-env") {
+    if (storedCredential?.type === "api") {
+      return {
+        providerId: opts.providerId,
+        credentialMode,
+        hasCredential: true,
+        source: "stored",
+        apiKey: storedCredential.key,
+      };
+    }
+    return {
+      providerId: opts.providerId,
+      credentialMode,
+      hasCredential: false,
+      source: "missing",
+      envVar: providerApiKey.envVar,
     };
   }
 
-  if (opts.topLevelApiKey) {
+  const topLevelApiKey = resolveConfiguredApiKey(opts.topLevelApiKey, env);
+  if (topLevelApiKey.source === "literal") {
     return {
       providerId: opts.providerId,
       credentialMode,
       hasCredential: true,
       source: "top-level-config",
-      apiKey: opts.topLevelApiKey,
+      apiKey: topLevelApiKey.apiKey,
+    };
+  }
+  if (topLevelApiKey.source === "env") {
+    return {
+      providerId: opts.providerId,
+      credentialMode,
+      hasCredential: true,
+      source: "env",
+      envVar: topLevelApiKey.envVar,
+      apiKey: topLevelApiKey.apiKey,
+    };
+  }
+  if (topLevelApiKey.source === "missing-env") {
+    if (storedCredential?.type === "api") {
+      return {
+        providerId: opts.providerId,
+        credentialMode,
+        hasCredential: true,
+        source: "stored",
+        apiKey: storedCredential.key,
+      };
+    }
+    return {
+      providerId: opts.providerId,
+      credentialMode,
+      hasCredential: false,
+      source: "missing",
+      envVar: topLevelApiKey.envVar,
     };
   }
 

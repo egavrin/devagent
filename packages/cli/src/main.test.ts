@@ -294,6 +294,85 @@ describe("renderHelpText", () => {
     }
   });
 
+  it("loads normal CLI startup when the active config env ref falls back to a stored credential", () => {
+    const home = mkdtempSync(join(tmpdir(), "devagent-stored-fallback-home-"));
+    try {
+      execFileSync("bun", ["run", "build"], {
+        cwd: join(cliPackageDir, "..", "runtime"),
+        stdio: "pipe",
+      });
+
+      const configDir = join(home, ".config", "devagent");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, "config.toml"),
+        'provider = "openai"\nmodel = "gpt-4.1"\napi_key = "env:DEVAGENT_TEST_MAIN_OPENAI_KEY"\n',
+      );
+      writeFileSync(
+        join(configDir, "credentials.json"),
+        JSON.stringify({
+          openai: {
+            type: "api",
+            key: "stored-openai-key",
+            storedAt: 1,
+          },
+        }) + "\n",
+      );
+
+      try {
+        execFileSync("bun", ["packages/cli/src/index.ts", "--resume", "bogus-session"], {
+          cwd: join(cliPackageDir, "..", ".."),
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            HOME: home,
+            DEVAGENT_DISABLE_UPDATE_CHECK: "1",
+          },
+        });
+        expect.unreachable("expected command to fail with a missing session");
+      } catch (error: any) {
+        expect(error.status).toBe(1);
+        expect(error.stderr).toContain('No session found for "bogus-session".');
+        expect(error.stderr).not.toContain('Environment variable "DEVAGENT_TEST_MAIN_OPENAI_KEY" referenced in config but not set');
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes legacy approval config before configure updates the interactive setup state", () => {
+    const home = mkdtempSync(join(tmpdir(), "devagent-configure-legacy-home-"));
+    try {
+      const configDir = join(home, ".config", "devagent");
+      const configPath = join(configDir, "config.toml");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        'provider = "openai"\n\n[approval]\nmode = "suggest"\n',
+      );
+
+      const output = execFileSync("bun", ["packages/cli/src/index.ts", "configure"], {
+        cwd: join(cliPackageDir, "..", ".."),
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+        input: "1\n\n\n1\n0\nn\n",
+        env: {
+          ...process.env,
+          HOME: home,
+          DEVAGENT_DISABLE_UPDATE_CHECK: "1",
+        },
+      });
+
+      const nextConfig = readFileSync(configPath, "utf-8");
+      expect(output).toContain("DevAgent Setup");
+      expect(nextConfig).toContain("[safety]");
+      expect(nextConfig).not.toContain("[approval]");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("reports a missing recent session before provider auth on --continue", () => {
     const home = mkdtempSync(join(tmpdir(), "devagent-continue-home-"));
     try {

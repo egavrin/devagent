@@ -263,6 +263,7 @@ export {
   RateLimitError,
   ProviderTimeoutError,
   ProviderConnectionError,
+  ProviderTlsCertificateError,
   OverloadedError,
   MaxOutputTokensError,
   ToolError,

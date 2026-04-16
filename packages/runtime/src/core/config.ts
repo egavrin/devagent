@@ -200,6 +200,13 @@ function mergeProviderConfig(
   };
 }
 
+function getRawApiKeyValue(raw: Record<string, unknown> | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  return (raw["api_key"] ?? raw["apiKey"]) as string | undefined;
+}
+
 function parseSafety(
   raw: Record<string, unknown>,
 ): Partial<SafetyConfig> {
@@ -550,7 +557,7 @@ export function loadConfig(
   const providers: Record<string, ProviderConfig> = {};
   for (const [key, value] of Object.entries(rawProviders)) {
     providers[key] = mergeProviderConfig(value, {
-      allowMissingApiKeyEnv: key !== provider,
+      allowMissingApiKeyEnv: true,
     });
   }
 
@@ -650,15 +657,23 @@ export function loadConfig(
     overrides?.agentReasoningOverrides,
   );
 
-  const resolvedTopLevelApiKey = topLevelApiKey
-    ? (resolveEnvValue(topLevelApiKey) as string)
-    : undefined;
   const activeCredential = resolveProviderCredentialStatus({
     providerId: provider,
     providerConfig: providers[provider],
-    topLevelApiKey: resolvedTopLevelApiKey,
+    providerConfigApiKey: getRawApiKeyValue(rawProviders[provider]) ?? null,
+    topLevelApiKey,
     storedCredential: credentialStore.get(provider),
   });
+
+  if (
+    activeCredential.credentialMode === "api" &&
+    !activeCredential.hasCredential &&
+    activeCredential.envVar
+  ) {
+    throw new Error(
+      `Environment variable "${activeCredential.envVar}" referenced in config but not set`,
+    );
+  }
 
   if (activeCredential.credentialMode === "api" && activeCredential.apiKey) {
     if (providers[provider]) {

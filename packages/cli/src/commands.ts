@@ -188,6 +188,7 @@ interface DoctorConfigFile {
   readonly topLevelProvider?: string;
   readonly topLevelApiKey?: string;
   readonly topLevelModel?: string;
+  readonly rawText?: string;
 }
 
 function makeCheck(
@@ -264,6 +265,7 @@ function loadDoctorConfigFile(configPath: string | undefined): DoctorConfigFile 
       ...(topLevelApiKey ? { topLevelApiKey } : {}),
       ...(topLevelProvider ? { topLevelProvider } : {}),
       ...(topLevelModel ? { topLevelModel } : {}),
+      rawText: text,
     };
   } catch {
     return {};
@@ -288,6 +290,23 @@ function matchTopLevelTomlString(text: string, key: string): string | undefined 
   return match?.[1];
 }
 
+function matchProviderTomlString(
+  text: string,
+  providerId: string,
+  key: string,
+): string | undefined {
+  const sectionMatch = text.match(
+    new RegExp(
+      `^\\[providers\\.${escapeRegExp(providerId)}\\]\\s*$([\\s\\S]*?)(?=^\\[|\\Z)`,
+      "m",
+    ),
+  );
+  if (!sectionMatch?.[1]) {
+    return undefined;
+  }
+  return matchTopLevelTomlString(sectionMatch[1], key);
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -301,6 +320,9 @@ function resolveCredentialSource(
   return formatResolvedCredentialSource(resolveProviderCredentialStatus({
     providerId,
     providerConfig: config.providers[providerId],
+    providerConfigApiKey: fileConfig.rawText
+      ? (matchProviderTomlString(fileConfig.rawText, providerId, "api_key") ?? null)
+      : undefined,
     topLevelApiKey: fileConfig.topLevelApiKey,
     storedCredential: storedCredentials[providerId],
   }));

@@ -1,8 +1,16 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ApprovalMode } from "@devagent/runtime";
 import type { DevAgentConfig } from "@devagent/runtime";
 import type { DoctorReportInput } from "./commands.js";
 import { buildDoctorReport, renderDoctorReport } from "./commands.js";
+
+const cliSrcDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(cliSrcDir, "..", "..", "..");
 
 function makeConfig(overrides: Partial<DevAgentConfig> = {}): DevAgentConfig {
   return {
@@ -254,5 +262,52 @@ All checks passed.`);
     expect(report.ok).toBe(true);
     expect(output).toContain("Checks passed with advisories.");
     expect(output).not.toContain("Blocking issues:");
+  });
+});
+
+describe("doctor command", () => {
+  it("uses a stored credential when the active top-level env ref is unset", () => {
+    const home = mkdtempSync(join(tmpdir(), "devagent-doctor-home-"));
+
+    try {
+      execFileSync("bun", ["run", "build"], {
+        cwd: join(repoRoot, "packages", "runtime"),
+        stdio: "pipe",
+      });
+
+      const configDir = join(home, ".config", "devagent");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, "config.toml"),
+        'provider = "openai"\nmodel = "gpt-4.1"\napi_key = "env:DEVAGENT_TEST_DOCTOR_OPENAI_KEY"\n',
+      );
+      writeFileSync(
+        join(configDir, "credentials.json"),
+        JSON.stringify({
+          openai: {
+            type: "api",
+            key: "stored-openai-key",
+            storedAt: 1,
+          },
+        }) + "\n",
+      );
+
+      const output = execFileSync("bun", ["packages/cli/src/index.ts", "doctor"], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          HOME: home,
+          DEVAGENT_DISABLE_UPDATE_CHECK: "1",
+        },
+      });
+
+      expect(output).toContain("Provider: openai (config)");
+      expect(output).toContain("Credential: stored api key");
+      expect(output).not.toContain('Environment variable "DEVAGENT_TEST_DOCTOR_OPENAI_KEY" referenced in config but not set');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

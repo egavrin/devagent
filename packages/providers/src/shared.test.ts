@@ -4,6 +4,7 @@ import {
   ProviderError,
   RateLimitError,
   ProviderConnectionError,
+  ProviderTlsCertificateError,
   OverloadedError,
   MessageRole,
 } from "@devagent/runtime";
@@ -67,6 +68,37 @@ describe("classifyProviderError", () => {
       const result = classifyProviderError(err, "Test");
       expect(result).toBeInstanceOf(ProviderConnectionError);
     }
+  });
+
+  it("classifies certificate verification messages as ProviderTlsCertificateError", () => {
+    const cases = [
+      "self-signed certificate in certificate chain",
+      "unable to verify the first certificate",
+      "unable to get local issuer certificate",
+      "Unknown certificate verification error",
+    ];
+
+    for (const msg of cases) {
+      const err = new Error(msg);
+      const result = classifyProviderError(err, "Test");
+      expect(result).toBeInstanceOf(ProviderTlsCertificateError);
+      expect(result.message).toContain("NODE_EXTRA_CA_CERTS");
+      expect(result.message).toContain("HTTPS_PROXY/HTTP_PROXY/NO_PROXY");
+    }
+  });
+
+  it("classifies nested TLS certificate failures by code", () => {
+    const err = {
+      message: "fetch failed",
+      cause: {
+        code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+        message: "certificate rejected",
+      },
+    };
+    const result = classifyProviderError(err, "Test");
+
+    expect(result).toBeInstanceOf(ProviderTlsCertificateError);
+    expect(result.message).toContain("UNABLE_TO_VERIFY_LEAF_SIGNATURE");
   });
 
   it("classifies generic errors as ProviderError", () => {

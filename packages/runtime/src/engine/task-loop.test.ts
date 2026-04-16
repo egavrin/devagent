@@ -16,6 +16,7 @@ import {
   ApprovalMode,
   MessageRole,
   ProviderError,
+  ProviderTlsCertificateError,
   ContextManager,
   lookupModelPricing,
   loadModelRegistry,
@@ -1505,6 +1506,80 @@ describe("TaskLoop", () => {
     expect(retryEvents[0]!.fatal).toBe(false);
     expect(retryEvents[1]!.code).toBe("PROVIDER_RETRY");
     expect(result.iterations).toBe(1);
+  });
+
+  it("emits TLS-specific retry guidance for certificate verification failures", async () => {
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "tls-retry-events",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        if (callCount <= 2) {
+          throw new ProviderTlsCertificateError("MockProvider", "self-signed certificate in certificate chain");
+        }
+        yield { type: "text", content: "Finally works" };
+        yield { type: "done", content: "" };
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+
+    const retryEvents: Array<{ message: string; code: string; fatal: boolean }> = [];
+    bus.on("error", (event) => {
+      if ((event as { code?: string }).code === "PROVIDER_RETRY") {
+        retryEvents.push(event as { message: string; code: string; fatal: boolean });
+      }
+    });
+
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("hello");
+
+    expect(callCount).toBe(3);
+    expect(retryEvents.length).toBe(2);
+    expect(retryEvents[0]!.message).toContain("certificate verification failed");
+    expect(retryEvents[0]!.message).toContain("NODE_EXTRA_CA_CERTS");
+    expect(retryEvents[0]!.message).toContain("HTTPS_PROXY/HTTP_PROXY/NO_PROXY");
+    expect(result.iterations).toBe(1);
+  });
+
+  it("surfaces TLS remediation after exhausting certificate verification retries", async () => {
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: "tls-always-failing",
+      async *chat(): AsyncIterable<StreamChunk> {
+        callCount++;
+        throw new ProviderTlsCertificateError("MockProvider", "unable to verify the first certificate");
+      },
+      abort() {},
+    };
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const runPromise = loop.run("hello");
+    await expect(runPromise).rejects.toThrow("certificate verification failed");
+    await expect(runPromise).rejects.toThrow("NODE_EXTRA_CA_CERTS");
+    expect(callCount).toBe(4);
   });
 
   // ─── Doom Loop Detection Tests ─────────────────────────────

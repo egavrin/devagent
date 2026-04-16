@@ -12,6 +12,27 @@ function writeHomeConfig(home: string, contents: string): string {
   return configPath;
 }
 
+function writeStoredApiCredential(
+  home: string,
+  providerId: string,
+  key: string,
+): string {
+  const configDir = join(home, ".config", "devagent");
+  mkdirSync(configDir, { recursive: true });
+  const credentialsPath = join(configDir, "credentials.json");
+  writeFileSync(
+    credentialsPath,
+    JSON.stringify({
+      [providerId]: {
+        type: "api",
+        key,
+        storedAt: 1,
+      },
+    }) + "\n",
+  );
+  return credentialsPath;
+}
+
 describe("loadConfig", () => {
   let originalHome: string | undefined;
   let tempHome: string;
@@ -381,6 +402,61 @@ api_key = "env:TEST_DEVAGENT_KEY"
       expect(config.providers["anthropic"]?.apiKey).toBe("sk-test-123");
     } finally {
       delete process.env["TEST_DEVAGENT_KEY"];
+    }
+  });
+
+  it("falls back to a stored credential when the active provider block references an unset env var", () => {
+    writeHomeConfig(
+      tempHome,
+      `
+provider = "openai"
+model = "gpt-4.1"
+
+[providers.openai]
+api_key = "env:DEVAGENT_TEST_OPENAI_KEY"
+model = "gpt-4.1"
+`,
+    );
+    writeStoredApiCredential(tempHome, "openai", "stored-openai-key");
+
+    const originalOpenAiApiKey = process.env["OPENAI_API_KEY"];
+    process.env["OPENAI_API_KEY"] = "default-openai-env-key";
+
+    try {
+      const config = loadConfig("/nonexistent/path");
+      expect(config.providers["openai"]?.apiKey).toBe("stored-openai-key");
+    } finally {
+      if (originalOpenAiApiKey === undefined) {
+        delete process.env["OPENAI_API_KEY"];
+      } else {
+        process.env["OPENAI_API_KEY"] = originalOpenAiApiKey;
+      }
+    }
+  });
+
+  it("falls back to a stored credential when the active top-level api_key env ref is unset", () => {
+    writeHomeConfig(
+      tempHome,
+      `
+provider = "openai"
+model = "gpt-4.1"
+api_key = "env:DEVAGENT_TEST_TOP_LEVEL_KEY"
+`,
+    );
+    writeStoredApiCredential(tempHome, "openai", "stored-openai-key");
+
+    const originalOpenAiApiKey = process.env["OPENAI_API_KEY"];
+    process.env["OPENAI_API_KEY"] = "default-openai-env-key";
+
+    try {
+      const config = loadConfig("/nonexistent/path");
+      expect(config.providers["openai"]?.apiKey).toBe("stored-openai-key");
+    } finally {
+      if (originalOpenAiApiKey === undefined) {
+        delete process.env["OPENAI_API_KEY"];
+      } else {
+        process.env["OPENAI_API_KEY"] = originalOpenAiApiKey;
+      }
     }
   });
 

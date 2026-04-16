@@ -62,6 +62,19 @@ export class ProviderConnectionError extends ProviderError {
   }
 }
 
+export class ProviderTlsCertificateError extends ProviderError {
+  readonly detail: string;
+
+  constructor(providerName: string, detail: string) {
+    super(
+      `${providerName} certificate verification failed: ${detail}. If you're behind enterprise TLS interception or a proxy, set NODE_EXTRA_CA_CERTS to your CA bundle and verify HTTPS_PROXY/HTTP_PROXY/NO_PROXY.`,
+      "PROVIDER_TLS_CERTIFICATE",
+    );
+    this.name = "ProviderTlsCertificateError";
+    this.detail = detail;
+  }
+}
+
 export class OverloadedError extends ProviderError {
   constructor(message: string) {
     super(message, "OVERLOADED");

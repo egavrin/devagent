@@ -25,6 +25,7 @@ import {
   EventBus,
   ApprovalGate,
   ProviderError,
+  ProviderTlsCertificateError,
   ContextManager,
   estimateMessageTokens,
   estimateTokens,
@@ -454,8 +455,11 @@ export class TaskLoop {
         {
           overflowCompactionUsed,
           onRetry: (error, attempt, delayMs) => {
+            const message = error instanceof ProviderTlsCertificateError
+              ? `Provider certificate verification failed (attempt ${attempt}): ${error.detail}. Check NODE_EXTRA_CA_CERTS and HTTPS_PROXY/HTTP_PROXY/NO_PROXY. Retrying in ${delayMs}ms…`
+              : `Provider error (attempt ${attempt}, ${error.name}): ${error.message}. Retrying in ${delayMs}ms…`;
             this.bus.emit("error", {
-              message: `Provider error (attempt ${attempt}, ${error.name}): ${error.message}. Retrying in ${delayMs}ms…`,
+              message,
               code: "PROVIDER_RETRY",
               fatal: false,
             });

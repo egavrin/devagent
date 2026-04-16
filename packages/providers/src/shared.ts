@@ -10,7 +10,15 @@
 
 import { tool as aiTool, jsonSchema, type CoreMessage, type TextStreamPart, type ToolSet } from "ai";
 import type { Message, ModelCapabilities, StreamChunk, ToolSpec } from "@devagent/runtime";
-import { MessageRole, ProviderError, RateLimitError, ProviderConnectionError, OverloadedError, extractErrorMessage } from "@devagent/runtime";
+import {
+  MessageRole,
+  ProviderError,
+  RateLimitError,
+  ProviderConnectionError,
+  ProviderTlsCertificateError,
+  OverloadedError,
+  extractErrorMessage,
+} from "@devagent/runtime";
 
 // ─── Stream Processing ───────────────────────────────────────
 
@@ -125,6 +133,7 @@ export function classifyProviderError(err: unknown, providerName: string): Provi
 
   const msg = extractErrorMessage(err);
   const status = extractHttpStatus(err);
+  const certificateDetail = extractCertificateVerificationDetail(err);
 
   if (status === 401 || status === 403) {
     return new ProviderError(`${providerName} authentication failed (${status}): ${msg}. Check your provider, model, and credentials with 'devagent doctor'.`);
@@ -135,6 +144,9 @@ export function classifyProviderError(err: unknown, providerName: string): Provi
   }
   if (status === 529) {
     return new OverloadedError(`${providerName} overloaded (529): ${msg}`);
+  }
+  if (certificateDetail) {
+    return new ProviderTlsCertificateError(providerName, certificateDetail);
   }
   if (isConnectionError(msg)) {
     return new ProviderConnectionError(`${providerName} connection error: ${msg}`);
@@ -192,9 +204,87 @@ const CONNECTION_ERROR_PATTERNS = [
   "connection reset", "connection refused",
 ];
 
+const CERTIFICATE_MESSAGE_PATTERNS = [
+  "self-signed certificate",
+  "self signed certificate",
+  "unable to verify the first certificate",
+  "unable to verify leaf signature",
+  "unable to get local issuer certificate",
+  "unable to get issuer certificate",
+  "certificate verify failed",
+  "certificate verification failed",
+  "unknown certificate verification error",
+  "unable to verify",
+];
+
+const CERTIFICATE_ERROR_CODES = new Set([
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "CERT_REJECTED",
+  "CERT_SIGNATURE_FAILURE",
+  "CERT_UNTRUSTED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+  "ERR_TLS_CERT_SIGNATURE_ALGORITHM_UNSUPPORTED",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+
 function isConnectionError(message: string): boolean {
   const lower = message.toLowerCase();
   return CONNECTION_ERROR_PATTERNS.some((p) => lower.includes(p));
+}
+
+function extractCertificateVerificationDetail(err: unknown): string | null {
+  const messages = collectErrorStrings(err, new Set<unknown>(), "message");
+  for (const message of messages) {
+    const lower = message.toLowerCase();
+    if (CERTIFICATE_MESSAGE_PATTERNS.some((pattern) => lower.includes(pattern))) {
+      return message;
+    }
+  }
+
+  const codes = collectErrorStrings(err, new Set<unknown>(), "code");
+  for (const code of codes) {
+    const upper = code.toUpperCase();
+    if (CERTIFICATE_ERROR_CODES.has(upper)) {
+      return code;
+    }
+  }
+
+  return null;
+}
+
+function collectErrorStrings(
+  value: unknown,
+  seen: Set<unknown>,
+  key: "message" | "code",
+): string[] {
+  if (!value || (typeof value !== "object" && typeof value !== "function")) {
+    return [];
+  }
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+
+  const collected: string[] = [];
+  const record = value as Record<string, unknown>;
+  const direct = record[key];
+  if (typeof direct === "string" && direct.trim().length > 0) {
+    collected.push(direct.trim());
+  }
+
+  if (record["cause"] !== undefined) {
+    collected.push(...collectErrorStrings(record["cause"], seen, key));
+  }
+  if (record["data"] !== undefined) {
+    collected.push(...collectErrorStrings(record["data"], seen, key));
+  }
+
+  return collected;
 }
 
 // ─── Message Conversion ──────────────────────────────────────
