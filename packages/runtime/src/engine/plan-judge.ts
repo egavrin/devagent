@@ -21,7 +21,7 @@ export { isStructuralChange } from "./plan-tool.js";
 
 // ─── Types ───────────────────────────────────────────────────
 
-export interface PlanJudgeResult {
+interface PlanJudgeResult {
   quality_score: number;
   issues: string[];
   suggestion: string | null;
@@ -29,7 +29,7 @@ export interface PlanJudgeResult {
 
 // ─── System prompt ───────────────────────────────────────────
 
-export const PLAN_JUDGE_SYSTEM_PROMPT = `You assess the quality of a structured task plan created by an AI coding assistant.
+const PLAN_JUDGE_SYSTEM_PROMPT = `You assess the quality of a structured task plan created by an AI coding assistant.
 
 Evaluate the plan against the original user request and these quality criteria:
 
@@ -84,4 +84,3 @@ export async function judgePlanQuality(
     return null;
   }
 }
-

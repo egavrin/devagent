@@ -17,14 +17,14 @@ import {
   type ToolRegistry,
 } from "@devagent/runtime";
 
-export interface SkillInfrastructure {
+interface SkillInfrastructure {
   readonly skills: SkillRegistry;
   readonly skillResolver: SkillResolver;
   readonly skillAccess: SkillAccessManager;
   readonly toolRegistry: ToolRegistry;
 }
 
-export interface SkillInfrastructureOptions {
+interface SkillInfrastructureOptions {
   readonly additionalDeferredToolNames?: ReadonlySet<string>;
 }
 

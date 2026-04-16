@@ -67,7 +67,7 @@ const KNOWN_PROVIDERS: readonly ProviderEntry[] = listProviderCredentialDescript
     authMethods: PROVIDER_AUTH_METHODS[provider.id] ?? ["api-key"],
   }));
 
-export function renderAuthHelpText(): string {
+function renderAuthHelpText(): string {
   return `Usage:
   devagent auth login
   devagent auth status

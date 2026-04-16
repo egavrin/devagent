@@ -10,12 +10,12 @@ import {
   highlightCodeForTerminal,
 } from "./syntax-highlight.js";
 
-export interface PresentedDiffHunk {
+interface PresentedDiffHunk {
   readonly key: string;
   readonly lines: ReadonlyArray<ToolFileChangeLine>;
 }
 
-export interface PresentedFileEdit {
+interface PresentedFileEdit {
   readonly summary: string;
   readonly hunks: ReadonlyArray<PresentedDiffHunk>;
   readonly truncated: boolean;
@@ -26,22 +26,22 @@ export interface HighlightedDiffLine extends ToolFileChangeLine {
   readonly syntaxHighlighted: boolean;
 }
 
-export interface HighlightedDiffHunk {
+interface HighlightedDiffHunk {
   readonly key: string;
   readonly lines: ReadonlyArray<HighlightedDiffLine>;
 }
 
-export interface HighlightedFileEdit {
+interface HighlightedFileEdit {
   readonly summary: string;
   readonly hunks: ReadonlyArray<HighlightedDiffHunk>;
   readonly truncated: boolean;
 }
 
-export type PresentedDiffItem =
+type PresentedDiffItem =
   | { readonly type: "separator"; readonly key: string }
   | { readonly type: "line"; readonly line: ToolFileChangeLine };
 
-export type HighlightedDiffItem =
+type HighlightedDiffItem =
   | { readonly type: "separator"; readonly key: string }
   | { readonly type: "line"; readonly line: HighlightedDiffLine };
 
@@ -63,7 +63,7 @@ export function formatFileEditSummary(fileEdit: ToolFileChangePreview): string {
   return "Updated file";
 }
 
-export function buildPresentedFileEdit(fileEdit: ToolFileChangePreview): PresentedFileEdit {
+function buildPresentedFileEdit(fileEdit: ToolFileChangePreview): PresentedFileEdit {
   const structuredDiff = fileEdit.structuredDiff ?? buildToolFileStructuredDiffFromUnifiedDiff(fileEdit.unifiedDiff);
   return {
     summary: formatFileEditSummary(fileEdit),
@@ -106,7 +106,7 @@ export function buildHighlightedFileEdit(
   return highlighted;
 }
 
-export function takeVisiblePresentedDiffItems(
+function takeVisiblePresentedDiffItems(
   hunks: ReadonlyArray<PresentedDiffHunk>,
   maxLines: number,
 ): {

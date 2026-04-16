@@ -20,7 +20,7 @@ export const TOOL_USE_SUMMARY_MARKER = "[TOOL USE SUMMARY";
 
 // ─── Types ──────────────────────────────────────────────────
 
-export interface ToolUseSummaryOptions {
+interface ToolUseSummaryOptions {
   /** Iterations between summaries (0 = disabled). */
   readonly interval: number;
 }

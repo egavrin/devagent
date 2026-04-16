@@ -1,7 +1,7 @@
 export const MINIMUM_NODE_MAJOR = 20;
 export const MINIMUM_BUN_VERSION = "1.3";
 
-export interface RuntimeVersionInfo {
+interface RuntimeVersionInfo {
   readonly nodeVersion: string;
   readonly hasBun: boolean;
 }

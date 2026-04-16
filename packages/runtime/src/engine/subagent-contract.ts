@@ -1,6 +1,6 @@
 import { AgentType } from "../core/index.js";
 
-export interface DelegationRequest {
+interface DelegationRequest {
   readonly objective: string;
   readonly laneLabel?: string;
   readonly scope?: string;
@@ -10,7 +10,7 @@ export interface DelegationRequest {
   readonly parentContext?: string;
 }
 
-export interface AgentMeta {
+interface AgentMeta {
   readonly agentId: string;
   readonly parentId: string | null;
   readonly depth: number;

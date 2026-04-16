@@ -29,7 +29,7 @@ export { resolveCapabilities, stripNullArgs } from "./shared.js";
  * When set on ProviderConfig, these are injected into providerOptions
  * and via a custom fetch wrapper for fields the SDK doesn't natively support.
  */
-export interface ChatGPTCodexOptions {
+interface ChatGPTCodexOptions {
   /** Send `store: false` to prevent response storage (required by Codex endpoint). */
   readonly store?: boolean;
   /** Additional response `include` fields (e.g., ["reasoning.encrypted_content"]). */

@@ -31,12 +31,12 @@ export interface InteractiveQueryResult {
   readonly status: TaskCompletionStatus;
 }
 
-export const APPROVAL_MODE_ORDER = [
+const APPROVAL_MODE_ORDER = [
   SafetyMode.AUTOPILOT,
   SafetyMode.DEFAULT,
 ] as const;
 
-export type PromptTabAction = "cycle-mode" | "complete" | "none";
+type PromptTabAction = "cycle-mode" | "complete" | "none";
 
 export function cycleApprovalMode(mode: string): SafetyMode {
   const currentIndex = APPROVAL_MODE_ORDER.indexOf(mode as SafetyMode);

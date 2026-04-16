@@ -186,7 +186,7 @@ function renderTableSeparator(widths: ReadonlyArray<number>): string {
  * Render a unified diff with colored additions/deletions.
  * Green for additions (+), red for deletions (-), dim for context.
  */
-export function renderDiff(diff: string): string {
+function renderDiff(diff: string): string {
   if (NO_COLOR) return diff;
 
   return diff.split("\n").map((line) => {

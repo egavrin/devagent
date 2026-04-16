@@ -6,7 +6,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { renderMarkdown } from "../markdown-render.js";
 
-export interface FinalOutputProps {
+interface FinalOutputProps {
   readonly text: string;
 }
 

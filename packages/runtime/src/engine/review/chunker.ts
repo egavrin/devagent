@@ -33,7 +33,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
 /**
  * Sum of added + removed + context lines in a single hunk.
  */
-export function estimateHunkImpact(hunk: Hunk): number {
+function estimateHunkImpact(hunk: Hunk): number {
   const added = hunk.addedLines?.length ?? 0;
   const removed = hunk.removedLines?.length ?? 0;
   const context = hunk.contextLines?.length ?? 0;
@@ -43,7 +43,7 @@ export function estimateHunkImpact(hunk: Hunk): number {
 /**
  * Total line impact across all hunks in a file entry.
  */
-export function estimateEntryLines(fileEntry: FileEntry): number {
+function estimateEntryLines(fileEntry: FileEntry): number {
   const hunks = fileEntry.hunks ?? [];
   return hunks.reduce((sum, h) => sum + estimateHunkImpact(h), 0);
 }
@@ -188,7 +188,7 @@ export function chunkPatchFiles(
  * Copy boundary files from the tail of chunk N into the head of chunk N+1 so
  * the reviewer has surrounding context.
  */
-export function applyChunkOverlap(
+function applyChunkOverlap(
   chunks: FileEntry[][],
   overlapLines: number,
 ): FileEntry[][] {
@@ -298,7 +298,7 @@ export function computeDynamicFileLimit(
  * Delegates to the canonical `estimateTokens` from `@devagent/runtime`
  * (Math.ceil(length / 4)) so engine and core stay in sync.
  */
-export function estimatePromptTokens(...segments: (string | undefined | null)[]): number {
+function estimatePromptTokens(...segments: (string | undefined | null)[]): number {
   let total = 0;
   for (const s of segments) {
     if (s) total += estimateTokens(s);

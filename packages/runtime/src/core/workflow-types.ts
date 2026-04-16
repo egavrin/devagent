@@ -4,7 +4,7 @@
 
 export const WORKFLOW_SCHEMA_VERSION = 1;
 
-export type WorkflowPhase =
+type WorkflowPhase =
   | "triage"
   | "plan"
   | "implement"

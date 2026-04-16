@@ -32,7 +32,7 @@ import {
 
 // ─── Hook Options ──────────────────────────────────────────
 
-export interface UseAgentLogOptions {
+interface UseAgentLogOptions {
   readonly bus: EventBus;
   readonly model: string;
   /** Called on each streaming text chunk (App uses this for live preview). */
@@ -49,7 +49,7 @@ export interface UseAgentLogOptions {
 
 // ─── Hook Result ───────────────────────────────────────────
 
-export interface UseAgentLogResult {
+interface UseAgentLogResult {
   readonly transcriptNodes: ReadonlyArray<TranscriptNode>;
   readonly status: StatusBarProps;
   readonly subagents: Map<string, SubagentState>;

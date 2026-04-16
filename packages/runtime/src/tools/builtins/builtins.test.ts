@@ -968,6 +968,30 @@ describe("run_command", () => {
     });
   });
 
+  it("treats env JSON null as an empty env override map", async () => {
+    const result = await runCommandTool.handler(
+      {
+        command: "echo hello",
+        env: "null",
+      },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe("hello");
+  });
+
+  it("accepts an explicit empty env override object", async () => {
+    const result = await runCommandTool.handler(
+      {
+        command: "echo hello",
+        env: {},
+      },
+      ctx,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe("hello");
+  });
+
   it("works without env parameter (backward compatible)", async () => {
     const result = await runCommandTool.handler(
       { command: "echo hello" },

@@ -21,7 +21,7 @@ export interface ExecuteChainArtifactContext {
   readonly reviewReport?: string;
 }
 
-export interface ExecuteChainRequestOptions {
+interface ExecuteChainRequestOptions {
   readonly stage: ExecuteChainStage;
   readonly workspaceRoot: string;
   readonly sourceRepoRoot: string;
@@ -32,9 +32,9 @@ export interface ExecuteChainRequestOptions {
   readonly priorArtifacts: ExecuteChainArtifactContext;
 }
 
-export const EXECUTE_CHAIN_REPO_ID = "repo-1";
-export const EXECUTE_CHAIN_WORKSPACE_ID = "workspace-1";
-export const EXECUTE_CHAIN_TITLE = "Document the bytecode validation workflow in README.md";
+const EXECUTE_CHAIN_REPO_ID = "repo-1";
+const EXECUTE_CHAIN_WORKSPACE_ID = "workspace-1";
+const EXECUTE_CHAIN_TITLE = "Document the bytecode validation workflow in README.md";
 
 function buildStageSummary(stage: ExecuteChainStage): string {
   switch (stage) {
@@ -250,7 +250,7 @@ export function buildExecuteChainRequest(options: ExecuteChainRequestOptions): T
   };
 }
 
-export function artifactKindForChainStage(stage: ExecuteChainStage): TaskExecutionRequest["expectedArtifacts"][number] {
+function artifactKindForChainStage(stage: ExecuteChainStage): TaskExecutionRequest["expectedArtifacts"][number] {
   switch (stage) {
     case "design":
       return "design-doc";

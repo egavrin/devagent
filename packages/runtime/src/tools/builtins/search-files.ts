@@ -9,7 +9,7 @@ import { resolveReadonlyPath, toRootRelativePath, type ReadonlyToolOptions } fro
 import { escapeRegex, globToRegex, normalizeGlobPattern } from "./glob-utils.js";
 import { walkDirectory } from "./walk-directory.js";
 
-export interface SearchMatch {
+interface SearchMatch {
   readonly file: string;
   readonly line: number;
   readonly content: string;

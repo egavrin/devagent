@@ -1,9 +1,9 @@
-export type PromptCommandName = "review" | "simplify";
-export type PromptCommandFocus = "correctness" | "performance" | "tests" | "types";
-export type PromptCommandDelegatePreference = "auto" | "force" | "forbid";
-export type PromptCommandVerificationPreference = "normal" | "skip";
+type PromptCommandName = "review" | "simplify";
+type PromptCommandFocus = "correctness" | "performance" | "tests" | "types";
+type PromptCommandDelegatePreference = "auto" | "force" | "forbid";
+type PromptCommandVerificationPreference = "normal" | "skip";
 
-export type PromptCommandTarget =
+type PromptCommandTarget =
   | { readonly kind: "auto" }
   | { readonly kind: "staged" }
   | { readonly kind: "unstaged" }
@@ -12,7 +12,7 @@ export type PromptCommandTarget =
 
 export type ResolvedPromptCommandTarget = Exclude<PromptCommandTarget, { readonly kind: "auto" }>;
 
-export interface PromptCommandSegment {
+interface PromptCommandSegment {
   readonly name: PromptCommandName;
   readonly body: string;
   readonly rawBody: string;
@@ -25,17 +25,17 @@ export interface PromptCommandSegment {
   readonly end: number;
 }
 
-export interface ParsedPromptCommandQuery {
+interface ParsedPromptCommandQuery {
   readonly originalQuery: string;
   readonly leadingText: string;
   readonly segments: ReadonlyArray<PromptCommandSegment>;
 }
 
-export interface ResolvedPromptCommandSegment extends PromptCommandSegment {
+interface ResolvedPromptCommandSegment extends PromptCommandSegment {
   readonly target: ResolvedPromptCommandTarget;
 }
 
-export interface PreparedPromptCommandQuery {
+interface PreparedPromptCommandQuery {
   readonly parsed: ParsedPromptCommandQuery;
   readonly resolvedSegments: ReadonlyArray<ResolvedPromptCommandSegment>;
   readonly rewrittenQuery: string;
@@ -47,12 +47,12 @@ export interface PreparedPromptCommandQuery {
   readonly finalTextValidator?: PromptCommandFinalTextValidator;
 }
 
-export interface PromptCommandFinalTextValidationResult {
+interface PromptCommandFinalTextValidationResult {
   readonly valid: boolean;
   readonly retryMessage?: string;
 }
 
-export type PromptCommandFinalTextValidator = (
+type PromptCommandFinalTextValidator = (
   candidate: string,
 ) => PromptCommandFinalTextValidationResult;
 
@@ -372,7 +372,7 @@ function makePreloadKey(
   return `${targetKey}::${pathFilters.join("|")}`;
 }
 
-export function buildPromptCommandRewrite(
+function buildPromptCommandRewrite(
   parsed: ParsedPromptCommandQuery,
   resolvedSegments: ReadonlyArray<ResolvedPromptCommandSegment>,
   diffByScope: ReadonlyMap<string, string | null> = new Map(),

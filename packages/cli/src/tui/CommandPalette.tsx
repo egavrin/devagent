@@ -12,7 +12,7 @@ export interface Command {
   readonly action: () => void;
 }
 
-export interface CommandPaletteProps {
+interface CommandPaletteProps {
   readonly commands: ReadonlyArray<Command>;
   readonly onClose: () => void;
 }

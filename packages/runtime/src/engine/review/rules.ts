@@ -16,7 +16,7 @@
  *
  * The returned regex is anchored with `$` at the end.
  */
-export function globToRegex(glob: string): string {
+function globToRegex(glob: string): string {
   let result = "";
   let i = 0;
 
@@ -82,7 +82,7 @@ export function globToRegex(glob: string): string {
  *
  * Multiple tokens are combined with alternation (`|`).
  */
-export function normalizeAppliesToPattern(raw: string): string | null {
+function normalizeAppliesToPattern(raw: string): string | null {
   const tokens = raw
     .split(/[,\s]+/)
     .map((t) => t.trim())

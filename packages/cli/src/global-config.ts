@@ -47,12 +47,12 @@ const LEGACY_APPROVAL_MODE_MAP = new Map<string, string>([
   ["full-auto", "autopilot"],
 ]);
 
-export interface GlobalConfigMigrationResult {
+interface GlobalConfigMigrationResult {
   readonly migrated: boolean;
   readonly backupPath?: string;
 }
 
-export function getGlobalConfigDir(home: string = process.env["HOME"] ?? homedir()): string {
+function getGlobalConfigDir(home: string = process.env["HOME"] ?? homedir()): string {
   return join(home, GLOBAL_CONFIG_DIRNAME);
 }
 
@@ -60,11 +60,11 @@ export function getGlobalConfigPath(home: string = process.env["HOME"] ?? homedi
   return join(getGlobalConfigDir(home), GLOBAL_CONFIG_FILENAME);
 }
 
-export function getLegacyGlobalConfigPath(home: string = process.env["HOME"] ?? homedir()): string {
+function getLegacyGlobalConfigPath(home: string = process.env["HOME"] ?? homedir()): string {
   return join(getGlobalConfigDir(home), LEGACY_CONFIG_FILENAME);
 }
 
-export function getLegacyGlobalTomlPath(home: string = process.env["HOME"] ?? homedir()): string {
+function getLegacyGlobalTomlPath(home: string = process.env["HOME"] ?? homedir()): string {
   return join(home, LEGACY_GLOBAL_TOML_FILENAME);
 }
 
@@ -105,13 +105,13 @@ export function migrateLegacyGlobalConfigIfNeeded(
   return { migrated: true, backupPath };
 }
 
-export interface LegacyTomlMigrationResult {
+interface LegacyTomlMigrationResult {
   readonly migrated: boolean;
   readonly sourcePath?: string;
   readonly backupPath?: string;
 }
 
-export interface GlobalConfigNormalizationResult {
+interface GlobalConfigNormalizationResult {
   readonly normalized: boolean;
 }
 

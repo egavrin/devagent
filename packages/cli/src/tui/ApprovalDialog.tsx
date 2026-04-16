@@ -12,7 +12,7 @@ export interface ApprovalRequest {
   readonly details: string;
 }
 
-export interface ApprovalDialogProps {
+interface ApprovalDialogProps {
   readonly request: ApprovalRequest;
   readonly onResponse: (approved: boolean, session?: boolean, reason?: string) => void;
 }

@@ -9,7 +9,7 @@ interface CreateIsolationWorkspaceOptions {
   readonly targetRoot: string;
 }
 
-export interface TimedWorkspaceCreationResult {
+interface TimedWorkspaceCreationResult {
   readonly workspace: IsolationWorkspace;
   readonly durationMs: number;
 }

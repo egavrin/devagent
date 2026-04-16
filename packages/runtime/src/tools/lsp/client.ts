@@ -27,7 +27,7 @@ import { resolve } from "node:path";
 
 // ─── Types ──────────────────────────────────────────────────
 
-export interface LSPClientOptions {
+interface LSPClientOptions {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly rootPath: string;
@@ -39,7 +39,7 @@ export interface LSPClientOptions {
   readonly diagnosticTimeout?: number;
 }
 
-export interface DiagnosticResult {
+interface DiagnosticResult {
   readonly file: string;
   readonly diagnostics: ReadonlyArray<{
     readonly line: number;
@@ -49,7 +49,7 @@ export interface DiagnosticResult {
   }>;
 }
 
-export interface SymbolResult {
+interface SymbolResult {
   readonly name: string;
   readonly kind: string;
   readonly line: number;
@@ -57,7 +57,7 @@ export interface SymbolResult {
   readonly containerName?: string;
 }
 
-export interface LocationResult {
+interface LocationResult {
   readonly file: string;
   readonly line: number;
   readonly character: number;

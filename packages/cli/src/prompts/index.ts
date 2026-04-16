@@ -24,7 +24,7 @@ import {
   PROMPT_REVIEW,
 } from "./embedded.js";
 
-export interface AssemblePromptOptions {
+interface AssemblePromptOptions {
   readonly mode: TaskMode;
   readonly repoRoot: string;
   readonly skills: SkillRegistry;

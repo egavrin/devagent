@@ -9,7 +9,7 @@ import { readdirSync, type Stats, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 /** Directories that are always skipped during traversal. */
-export const IGNORED_DIRS: ReadonlyArray<string> = [
+const IGNORED_DIRS: ReadonlyArray<string> = [
   "node_modules",
   ".git",
   "dist",
@@ -18,7 +18,7 @@ export const IGNORED_DIRS: ReadonlyArray<string> = [
 
 const ignoredSet = new Set<string>(IGNORED_DIRS);
 
-export interface WalkEntry {
+interface WalkEntry {
   /** Absolute path to the file. */
   readonly fullPath: string;
   /** Path relative to `repoRoot`. */
@@ -27,7 +27,7 @@ export interface WalkEntry {
   readonly stat: Stats;
 }
 
-export interface WalkOptions {
+interface WalkOptions {
   /** Stop yielding after this many results. */
   maxResults?: number;
   /** Maximum directory recursion depth (0 = only files in `dir` itself). */

@@ -22,7 +22,7 @@ const DEFAULT_MAX_READONLY_COVERAGE_PER_TOOL = 200;
 const DEFAULT_MAX_FINDINGS = 20;
 const DEFAULT_MAX_KNOWLEDGE = 10;
 export const SUMMARY_MAX_CHARS = 2000;
-export const FINDING_DETAIL_MAX_CHARS = 500;
+const FINDING_DETAIL_MAX_CHARS = 500;
 export const KNOWLEDGE_CONTENT_MAX_CHARS = 1000;
 
 /** Marker prefix used to identify session-state system messages. */

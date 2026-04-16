@@ -5,7 +5,7 @@ import type {
   ToolSpec,
 } from "@devagent/runtime";
 
-export interface RootPromptCapabilities {
+interface RootPromptCapabilities {
   readonly hasDelegate: boolean;
   readonly hasRunCommand: boolean;
   readonly hasExecuteToolScript: boolean;

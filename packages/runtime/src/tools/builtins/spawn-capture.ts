@@ -14,7 +14,7 @@ const DEFAULT_MAX_BYTES = 100_000;
 /** Node.js setTimeout uses a 32-bit signed integer; values above this overflow to 1ms. */
 const MAX_SAFE_TIMEOUT_MS = 2_147_483_647; // 2^31 - 1
 
-export interface SpawnCaptureOptions {
+interface SpawnCaptureOptions {
   /** Working directory for the subprocess. */
   readonly cwd: string;
   /** Timeout in milliseconds. Defaults to 120 000 (2 minutes). */
@@ -25,7 +25,7 @@ export interface SpawnCaptureOptions {
   readonly env?: Record<string, string>;
 }
 
-export interface SpawnCaptureResult {
+interface SpawnCaptureResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;

@@ -13,7 +13,7 @@ export interface ReadonlyToolOptions {
   readonly skillAccess?: SkillAccessManager;
 }
 
-export interface ResolvedReadonlyPath {
+interface ResolvedReadonlyPath {
   readonly kind: "repo" | "skill";
   readonly rootPath: string;
   readonly resolvedPath: string;

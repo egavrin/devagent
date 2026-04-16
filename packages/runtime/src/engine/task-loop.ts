@@ -137,7 +137,7 @@ interface ToolExecutionBatchContext {
   readonly batchSize?: number;
 }
 
-export interface AgentExecutionContext {
+interface AgentExecutionContext {
   readonly agentId: string;
   readonly parentAgentId: string | null;
   readonly depth: number;

@@ -15,7 +15,7 @@ import type { DiagnosticProvider, TestRunner, DoubleCheck } from "@devagent/runt
 
 // ─── Language Map ───────────────────────────────────────────
 
-export interface CompilerFallbackCheck {
+interface CompilerFallbackCheck {
   /** Command to run (e.g. "npx", "cargo", "gcc") */
   readonly command: string;
   /** Arguments for the command */
@@ -33,7 +33,7 @@ export interface CompilerFallbackCheck {
   readonly retryArgs?: ReadonlyArray<string>;
 }
 
-export interface LanguageEntry {
+interface LanguageEntry {
   readonly languageId: string;
   readonly extensions: ReadonlyArray<string>;
   readonly defaultCommand: string;
@@ -513,7 +513,7 @@ function commandExists(command: string): Promise<boolean> {
   });
 }
 
-export interface DetectedLSPServer {
+interface DetectedLSPServer {
   readonly command: string;
   readonly args: readonly string[];
   readonly languages: readonly string[];
@@ -560,7 +560,7 @@ export async function detectAvailableLSPServers(): Promise<ReadonlyArray<Detecte
   return results.filter((r): r is MutableGroup => r !== null);
 }
 
-export interface LazyLSPUpgradeOptions {
+interface LazyLSPUpgradeOptions {
   readonly repoRoot: string;
   readonly doubleCheck: DoubleCheck;
   readonly lspRouter: LSPRouter;

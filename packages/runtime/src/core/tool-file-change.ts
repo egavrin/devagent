@@ -14,7 +14,7 @@ const DIFF_CONTEXT_LINES = 3;
 const MAX_LCS_CELLS = 200_000;
 const TRUNCATION_MARKER = "... diff truncated ...";
 
-export interface BuildToolFileChangePreviewOptions {
+interface BuildToolFileChangePreviewOptions {
   readonly path: string;
   readonly kind: ToolFileChangePreview["kind"];
   readonly before: string;
@@ -24,7 +24,7 @@ export interface BuildToolFileChangePreviewOptions {
   readonly maxSnapshotBytes?: number;
 }
 
-export interface ToolFileChangePreviewSummary {
+interface ToolFileChangePreviewSummary {
   readonly fileEdits?: ReadonlyArray<ToolFileChangePreview>;
   readonly hiddenFileCount: number;
 }

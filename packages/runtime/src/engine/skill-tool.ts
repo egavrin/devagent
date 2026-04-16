@@ -7,7 +7,7 @@ import type { ToolSpec } from "../core/index.js";
 import type { SkillAccessManager, SkillRegistry, SkillResolver } from "../core/index.js";
 import { extractErrorMessage } from "../core/index.js";
 
-export interface SkillToolOptions {
+interface SkillToolOptions {
   readonly skillAccess?: SkillAccessManager;
 }
 

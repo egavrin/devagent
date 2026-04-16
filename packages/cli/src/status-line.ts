@@ -10,7 +10,7 @@
 
 // ─── Types ──────────────────────────────────────────────────
 
-export interface StatusLineState {
+interface StatusLineState {
   model: string;
   cost: number;
   inputTokens: number;

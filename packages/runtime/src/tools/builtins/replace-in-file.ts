@@ -730,13 +730,8 @@ export const replaceInFileTool: ToolSpec = {
 export {
   levenshtein,
   makeCtx,
-  SimpleReplacer,
   LineTrimmedReplacer,
   BlockAnchorReplacer,
   WhitespaceNormalizedReplacer,
   IndentationFlexibleReplacer,
-  EscapeNormalizedReplacer,
-  TrimmedBoundaryReplacer,
-  ContextAwareReplacer,
 };
-export type { Replacer, ReplacerCtx };

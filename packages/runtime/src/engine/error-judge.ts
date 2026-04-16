@@ -24,7 +24,7 @@ export interface ErrorClassification {
 
 // ─── System prompt ───────────────────────────────────────────
 
-export const ERROR_JUDGE_SYSTEM_PROMPT = `You classify tool errors to guide recovery strategy for an AI coding assistant.
+const ERROR_JUDGE_SYSTEM_PROMPT = `You classify tool errors to guide recovery strategy for an AI coding assistant.
 
 Categories:
 - code_error: Syntax error, type error, test failure, lint error — fixable by editing code

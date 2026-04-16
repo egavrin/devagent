@@ -26,7 +26,7 @@ export interface CompactionJudgeResult {
 
 // ─── System prompt ───────────────────────────────────────────
 
-export const COMPACTION_JUDGE_SYSTEM_PROMPT = `You assess whether context compaction preserved critical information for an AI coding assistant.
+const COMPACTION_JUDGE_SYSTEM_PROMPT = `You assess whether context compaction preserved critical information for an AI coding assistant.
 
 Evaluate whether the assistant can continue its current task from the compacted context.
 

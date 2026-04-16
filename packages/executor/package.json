@@ -12,7 +12,6 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@devagent-sdk/schema": "file:../../../devagent-sdk/packages/schema",
     "@devagent-sdk/types": "file:../../../devagent-sdk/packages/types",
     "@devagent-sdk/validation": "file:../../../devagent-sdk/packages/validation",
     "@devagent/runtime": "workspace:*"

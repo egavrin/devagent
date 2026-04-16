@@ -1034,7 +1034,7 @@ export class SubagentPanelRenderer {
 
 // ─── Helpers ────────────────────────────────────────────────
 
-export function truncate(s: string, maxLen: number): string {
+function truncate(s: string, maxLen: number): string {
   if (s.length <= maxLen) return s;
   return s.substring(0, maxLen - 1) + "…";
 }

@@ -52,7 +52,7 @@ import {
 } from "./provider-model-compat.js";
 import { createSkillInfrastructure } from "./skill-setup.js";
 
-export interface WorkflowQueryOptions {
+interface WorkflowQueryOptions {
   query: string;
   taskType?: string;
   repoPath: string;
@@ -71,7 +71,7 @@ export interface WorkflowQueryOptions {
   };
 }
 
-export interface WorkflowQueryResult {
+interface WorkflowQueryResult {
   success: boolean;
   responseText: string;
   iterations: number;
@@ -86,7 +86,7 @@ type HeadlessSessionPayload = {
   sessionState?: SessionStateJSON;
 };
 
-export interface ResolvedWorkflowContinuation {
+interface ResolvedWorkflowContinuation {
   readonly query: string;
   readonly initialMessages: Message[] | undefined;
   readonly sessionState: SessionStateJSON | undefined;

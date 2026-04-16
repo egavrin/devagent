@@ -12,12 +12,12 @@ import { mapSeverity } from "./rules.js";
 
 // ─── DiagnosticProvider-compatible type (structural match) ──
 
-export interface Diagnostic {
+interface Diagnostic {
   readonly message: string;
   readonly severity: string;
 }
 
-export type DiagnosticProviderFn = (filePath: string) => Promise<ReadonlyArray<Diagnostic>>;
+type DiagnosticProviderFn = (filePath: string) => Promise<ReadonlyArray<Diagnostic>>;
 
 // ─── Factory ────────────────────────────────────────────────
 

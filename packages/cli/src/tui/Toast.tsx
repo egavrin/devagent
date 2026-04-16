@@ -14,7 +14,7 @@ export interface ToastMessage {
   readonly durationMs?: number;
 }
 
-export interface ToastProps {
+interface ToastProps {
   readonly toasts: ReadonlyArray<ToastMessage>;
   readonly onDismiss: (id: string) => void;
 }

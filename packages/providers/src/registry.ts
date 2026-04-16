@@ -6,7 +6,7 @@
 import type { LLMProvider, ProviderConfig } from "@devagent/runtime";
 import { ProviderError } from "@devagent/runtime";
 
-export type ProviderFactory = (config: ProviderConfig) => LLMProvider;
+type ProviderFactory = (config: ProviderConfig) => LLMProvider;
 
 export class ProviderRegistry {
   private readonly factories = new Map<string, ProviderFactory>();

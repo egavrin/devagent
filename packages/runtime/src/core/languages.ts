@@ -6,7 +6,7 @@
  */
 
 /** All language IDs that have a known extension mapping. */
-export type KnownLanguageId =
+type KnownLanguageId =
   | "typescript"
   | "javascript"
   | "python"
@@ -41,7 +41,7 @@ export const LANGUAGE_EXTENSIONS: {
  * Detect a language ID from a file extension.
  * Returns `null` when the extension is not recognised.
  */
-export function detectLanguageFromExtension(ext: string): string | null {
+function detectLanguageFromExtension(ext: string): string | null {
   const lower = ext.toLowerCase();
   for (const [langId, exts] of Object.entries(LANGUAGE_EXTENSIONS)) {
     if (exts?.includes(lower)) return langId;

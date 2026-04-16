@@ -33,7 +33,7 @@ export const SLASH_COMMANDS = [
   "/quit",
 ];
 
-export interface PromptInputProps {
+interface PromptInputProps {
   readonly onSubmit: (value: string) => void;
   readonly onCycleApprovalMode?: () => void;
   readonly placeholder?: string;

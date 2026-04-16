@@ -1,0 +1,5 @@
+{
+  "entry": [
+    "eslint.config.mjs"
+  ]
+}

@@ -16,7 +16,7 @@ import type { ToolRegistry } from "../tools/index.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
-export interface CoordinatorConfig {
+interface CoordinatorConfig {
   /** Enable coordinator mode. Default: false. */
   readonly enabled: boolean;
   /** Max concurrent workers. Default: 3. */

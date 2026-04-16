@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 
-export function ThinkingDuration({ durationMs }: { durationMs: number }): React.ReactElement | null {
+function ThinkingDuration({ durationMs }: { durationMs: number }): React.ReactElement | null {
   if (durationMs < 500) return null;
   return (
     <Text>

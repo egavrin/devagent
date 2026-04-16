@@ -42,7 +42,7 @@ const EXTENSION_LANGUAGE_MAP: Readonly<Record<string, string>> = {
   ".cs": "csharp",
 };
 
-export interface TerminalHighlightResult {
+interface TerminalHighlightResult {
   readonly text: string;
   readonly syntaxHighlighted: boolean;
 }

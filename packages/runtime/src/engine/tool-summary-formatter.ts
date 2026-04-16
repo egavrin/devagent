@@ -13,7 +13,7 @@ import { SUMMARY_MAX_CHARS } from "./session-state.js";
  * Minimal tool call shape needed by formatting functions.
  * Compatible with the PendingToolCall interface in task-loop.ts.
  */
-export interface ToolCallInfo {
+interface ToolCallInfo {
   readonly name: string;
   readonly arguments: Record<string, unknown>;
 }
@@ -21,7 +21,7 @@ export interface ToolCallInfo {
 // ─── Truncation ─────────────────────────────────────────────
 
 /** Truncate text to SUMMARY_MAX_CHARS with trailing "..." when exceeded. */
-export function truncateToSummary(text: string): string {
+function truncateToSummary(text: string): string {
   return text.length <= SUMMARY_MAX_CHARS
     ? text
     : text.slice(0, SUMMARY_MAX_CHARS - 3) + "...";
@@ -164,7 +164,7 @@ export function formatSearchFilesSummary(
 /**
  * Format find_files summary preserving glob pattern and file paths.
  */
-export function formatFindFilesSummary(
+function formatFindFilesSummary(
   toolCall: ToolCallInfo,
   originalOutput: string,
 ): string {
@@ -185,7 +185,7 @@ export function formatFindFilesSummary(
 /**
  * Format run_command summary with head+tail and test output extraction.
  */
-export function formatRunCommandSummary(
+function formatRunCommandSummary(
   toolCall: ToolCallInfo,
   originalOutput: string,
 ): string {
@@ -225,7 +225,7 @@ export function formatRunCommandSummary(
  * Format git_status output into grouped status summary.
  * Groups files by status code (M, A, D, ?, etc.) for compact display.
  */
-export function formatGitStatusSummary(output: string): string {
+function formatGitStatusSummary(output: string): string {
   const lines = output.split("\n").filter((l) => l.trim());
   const groups = new Map<string, string[]>();
 
@@ -259,7 +259,7 @@ export function formatGitStatusSummary(output: string): string {
  * Format diagnostics output with severity counts and diagnostic lines.
  * Prioritizes errors over warnings.
  */
-export function formatDiagnosticsSummary(output: string): string {
+function formatDiagnosticsSummary(output: string): string {
   const lines = output.split("\n").filter((l) => l.trim());
   let errorCount = 0;
   let warningCount = 0;
@@ -297,7 +297,7 @@ export function formatDiagnosticsSummary(output: string): string {
  * Format symbols output preserving the symbol list.
  * Symbols are compact (~50 chars each), so 2000 chars fits ~35 symbols.
  */
-export function formatSymbolsSummary(output: string): string {
+function formatSymbolsSummary(output: string): string {
   const lines = output.split("\n").filter((l) => l.trim());
   const header = `${lines.length} symbols`;
   const parts = [header, ...lines];
@@ -455,7 +455,7 @@ export function extractStructuralDigest(
  * Captures first 2 and last 2 non-blank, non-comment lines so the LLM
  * retains orientation cues (variable assignments, key logic) beyond just declarations.
  */
-export function extractContentSnippets(lines: string[], maxChars: number): string {
+function extractContentSnippets(lines: string[], maxChars: number): string {
   const meaningful: string[] = [];
   for (const line of lines) {
     const trimmed = line.replace(/^\d+\t/, "").trim(); // strip line number prefix

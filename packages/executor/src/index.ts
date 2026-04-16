@@ -69,6 +69,40 @@ export interface ExecuteTaskOptions {
   emit: (event: TaskExecutionEvent) => void;
 }
 
+type RequestComment = NonNullable<TaskExecutionRequest["context"]["comments"]>[number];
+
+type WorkflowCommentAuthor =
+  | "design-artifact"
+  | "breakdown-artifact"
+  | "issue-spec-artifact"
+  | "implementation-summary"
+  | "review-report";
+
+type ContextSectionId =
+  | "summary"
+  | "issueBody"
+  | "designArtifact"
+  | "breakdownArtifact"
+  | "issueSpecArtifact"
+  | "implementationSummary"
+  | "reviewReport"
+  | "issueUnit"
+  | "contextBundle"
+  | "focusFiles"
+  | "comments"
+  | "skills"
+  | "extraInstructions";
+
+const WORKFLOW_CONTEXT_PREVIEW_CHARS = 4_000;
+
+const WORKFLOW_COMMENT_SECTION_LABELS: Record<WorkflowCommentAuthor, string> = {
+  "design-artifact": "Approved design artifact",
+  "breakdown-artifact": "Approved breakdown artifact",
+  "issue-spec-artifact": "Approved issue spec artifact",
+  "implementation-summary": "Implementation summary artifact",
+  "review-report": "Review report artifact",
+};
+
 function primaryRepositoryForRequest(request: TaskExecutionRequest): RepositoryRef | undefined {
   return request.repositories.find((repository) => repository.id === request.workspaceRef.primaryRepositoryId);
 }
@@ -115,6 +149,251 @@ function buildReviewableContext(reviewable: ReviewableRef | undefined): string[]
     lines.push(`Review URL: ${reviewable.url}`);
   }
   return lines;
+}
+
+function formatSection(title: string, body: string | ReadonlyArray<string> | undefined): string | undefined {
+  if (body === undefined) {
+    return undefined;
+  }
+
+  const normalized = typeof body === "string" ? body : body.join("\n");
+  const trimmed = normalized.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  return `${title}:\n${trimmed}`;
+}
+
+function truncateWorkflowContextPreview(content: string): string {
+  const trimmed = content.trim();
+  if (trimmed.length <= WORKFLOW_CONTEXT_PREVIEW_CHARS) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, WORKFLOW_CONTEXT_PREVIEW_CHARS).trimEnd()}\n[workflow context truncated at ${WORKFLOW_CONTEXT_PREVIEW_CHARS} chars]`;
+}
+
+function normalizeWorkflowCommentBody(author: WorkflowCommentAuthor, body: string): string {
+  const label = WORKFLOW_COMMENT_SECTION_LABELS[author];
+  const normalized = body.replace(/\r\n/g, "\n").trim();
+  const prefix = `${label}:`;
+  if (!normalized.startsWith(prefix)) {
+    return normalized;
+  }
+
+  return normalized.slice(prefix.length).trimStart();
+}
+
+function isWorkflowCommentAuthor(author: string | undefined): author is WorkflowCommentAuthor {
+  if (!author) {
+    return false;
+  }
+
+  return author in WORKFLOW_COMMENT_SECTION_LABELS;
+}
+
+function classifyContextComments(
+  comments: ReadonlyArray<RequestComment> | undefined,
+): {
+  readonly workflow: Partial<Record<WorkflowCommentAuthor, string[]>>;
+  readonly generic: RequestComment[];
+} {
+  const workflow: Partial<Record<WorkflowCommentAuthor, string[]>> = {};
+  const generic: RequestComment[] = [];
+
+  for (const comment of comments ?? []) {
+    if (isWorkflowCommentAuthor(comment.author)) {
+      const author = comment.author;
+      const normalizedBody = normalizeWorkflowCommentBody(author, comment.body);
+      workflow[author] = [...(workflow[author] ?? []), normalizedBody];
+      continue;
+    }
+    generic.push(comment);
+  }
+
+  return { workflow, generic };
+}
+
+function renderWorkflowCommentSection(
+  author: WorkflowCommentAuthor,
+  bodies: ReadonlyArray<string> | undefined,
+): string | undefined {
+  if (!bodies || bodies.length === 0) {
+    return undefined;
+  }
+
+  const rendered = bodies.map((body, index) => {
+    const preview = truncateWorkflowContextPreview(body);
+    if (bodies.length === 1) {
+      return preview;
+    }
+    return `Excerpt ${index + 1}:\n${preview}`;
+  }).join("\n\n");
+
+  return formatSection(WORKFLOW_COMMENT_SECTION_LABELS[author], rendered);
+}
+
+function formatGenericComment(comment: RequestComment): string {
+  const author = comment.author ?? "unknown";
+  if (!comment.body.includes("\n")) {
+    return `- ${author}: ${comment.body}`;
+  }
+
+  const indentedBody = comment.body
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+  return `- ${author}:\n${indentedBody}`;
+}
+
+function renderIssueUnitSection(issueUnit: TaskExecutionRequest["issueUnit"]): string | undefined {
+  if (!issueUnit) {
+    return undefined;
+  }
+
+  const lines = [
+    `Issue unit: [${issueUnit.sequence}] ${issueUnit.title}`,
+  ];
+  if (issueUnit.dependencyIds.length > 0) {
+    lines.push(`Dependencies: ${issueUnit.dependencyIds.join(", ")}`);
+  }
+  if (issueUnit.linkedArtifactVersionIds.length > 0) {
+    lines.push(`Linked artifact version ids: ${issueUnit.linkedArtifactVersionIds.join(", ")}`);
+  }
+  if (issueUnit.acceptanceCriteria.length > 0) {
+    lines.push(`Issue acceptance criteria:\n${issueUnit.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`);
+  }
+
+  return formatSection("Issue unit details", lines);
+}
+
+function renderContextBundleSection(contextBundle: TaskExecutionRequest["contextBundle"]): string | undefined {
+  if (!contextBundle) {
+    return undefined;
+  }
+
+  return formatSection("Context bundle details", [
+    `Context bundle: ${contextBundle.id}`,
+    `Summary: ${contextBundle.summary}`,
+    `Artifact version ids: ${contextBundle.artifactVersionIds.join(", ") || "(none)"}`,
+  ]);
+}
+
+function dedupePreservingOrder(values: ReadonlyArray<string> | undefined): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+
+  for (const value of values ?? []) {
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    deduped.push(value);
+  }
+
+  return deduped;
+}
+
+function buildContextSectionOrder(taskType: TaskExecutionRequest["taskType"]): readonly ContextSectionId[] {
+  switch (taskType) {
+    case "breakdown":
+      return [
+        "designArtifact",
+        "summary",
+        "issueBody",
+        "contextBundle",
+        "breakdownArtifact",
+        "issueSpecArtifact",
+        "implementationSummary",
+        "reviewReport",
+        "issueUnit",
+        "focusFiles",
+        "comments",
+        "skills",
+        "extraInstructions",
+      ];
+    case "issue-generation":
+      return [
+        "designArtifact",
+        "breakdownArtifact",
+        "summary",
+        "issueBody",
+        "contextBundle",
+        "issueSpecArtifact",
+        "implementationSummary",
+        "reviewReport",
+        "issueUnit",
+        "focusFiles",
+        "comments",
+        "skills",
+        "extraInstructions",
+      ];
+    case "implement":
+      return [
+        "issueSpecArtifact",
+        "issueUnit",
+        "focusFiles",
+        "summary",
+        "issueBody",
+        "contextBundle",
+        "breakdownArtifact",
+        "designArtifact",
+        "implementationSummary",
+        "reviewReport",
+        "comments",
+        "skills",
+        "extraInstructions",
+      ];
+    case "review":
+      return [
+        "issueSpecArtifact",
+        "implementationSummary",
+        "issueUnit",
+        "focusFiles",
+        "summary",
+        "issueBody",
+        "contextBundle",
+        "breakdownArtifact",
+        "designArtifact",
+        "reviewReport",
+        "comments",
+        "skills",
+        "extraInstructions",
+      ];
+    case "repair":
+      return [
+        "reviewReport",
+        "implementationSummary",
+        "issueSpecArtifact",
+        "issueUnit",
+        "focusFiles",
+        "summary",
+        "issueBody",
+        "contextBundle",
+        "breakdownArtifact",
+        "designArtifact",
+        "comments",
+        "skills",
+        "extraInstructions",
+      ];
+    default:
+      return [
+        "summary",
+        "issueBody",
+        "contextBundle",
+        "designArtifact",
+        "breakdownArtifact",
+        "issueSpecArtifact",
+        "implementationSummary",
+        "reviewReport",
+        "issueUnit",
+        "focusFiles",
+        "comments",
+        "skills",
+        "extraInstructions",
+      ];
+  }
 }
 
 export interface VerifyCommandRun {
@@ -334,84 +613,89 @@ export function buildTaskQuery(
 ): string {
   const primaryRepository = primaryRepositoryForRequest(request);
   const workItemLabel = request.workItem.kind === "local-task" ? "Task" : "Issue";
-  const lines = [
+  const sections = [
     `Task type: ${request.taskType}`,
     `${workItemLabel}: ${request.workItem.title ?? request.workItem.externalId}`,
   ];
 
   if (request.workItem.kind === "local-task") {
-    lines.push("Task source: local/manual");
+    sections.push("Task source: local/manual");
   } else {
-    lines.push(`Task source: ${request.workItem.kind}`);
+    sections.push(`Task source: ${request.workItem.kind}`);
   }
 
   if (primaryRepository) {
-    lines.push(`Primary repository: ${primaryRepository.alias} (${primaryRepository.repoRoot})`);
+    sections.push(`Primary repository: ${primaryRepository.alias} (${primaryRepository.repoRoot})`);
   }
 
-  lines.push(...buildRepositoryContext(request));
-  lines.push(...buildReviewableContext(request.reviewable));
+  const repositorySection = formatSection("Repository context", buildRepositoryContext(request));
+  if (repositorySection) {
+    sections.push(repositorySection);
+  }
 
-  if (request.context.summary) lines.push(`Summary: ${request.context.summary}`);
-  if (request.context.issueBody) lines.push(`Issue body:\n${request.context.issueBody}`);
-  if (request.context.comments?.length) {
-    lines.push(
-      `Comments:\n${request.context.comments
-        .map((comment) => `- ${comment.author ?? "unknown"}: ${comment.body}`)
-        .join("\n")}`,
-    );
+  const reviewableSection = formatSection("Reviewable context", buildReviewableContext(request.reviewable));
+  if (reviewableSection) {
+    sections.push(reviewableSection);
   }
-  if (request.context.changedFilesHint?.length) {
-    lines.push(`Changed file hints:\n${request.context.changedFilesHint.join("\n")}`);
-  }
-  if (request.issueUnit) {
-    lines.push(`Issue unit: [${request.issueUnit.sequence}] ${request.issueUnit.title}`);
-    if (request.issueUnit.acceptanceCriteria.length > 0) {
-      lines.push(`Issue acceptance criteria:\n${request.issueUnit.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`);
+
+  const classifiedComments = classifyContextComments(request.context.comments);
+  const contextSections: Partial<Record<ContextSectionId, string>> = {
+    summary: formatSection("Summary", request.context.summary),
+    issueBody: formatSection("Issue body", request.context.issueBody),
+    designArtifact: renderWorkflowCommentSection("design-artifact", classifiedComments.workflow["design-artifact"]),
+    breakdownArtifact: renderWorkflowCommentSection("breakdown-artifact", classifiedComments.workflow["breakdown-artifact"]),
+    issueSpecArtifact: renderWorkflowCommentSection("issue-spec-artifact", classifiedComments.workflow["issue-spec-artifact"]),
+    implementationSummary: renderWorkflowCommentSection("implementation-summary", classifiedComments.workflow["implementation-summary"]),
+    reviewReport: renderWorkflowCommentSection("review-report", classifiedComments.workflow["review-report"]),
+    issueUnit: renderIssueUnitSection(request.issueUnit),
+    contextBundle: renderContextBundleSection(request.contextBundle),
+    focusFiles: formatSection(
+      "Focus files",
+      dedupePreservingOrder(request.context.changedFilesHint).map((filePath) => `- ${filePath}`),
+    ),
+    comments: formatSection("Comments", classifiedComments.generic.map(formatGenericComment)),
+    skills: resolvedSkills.length > 0
+      ? formatSection(
+          "Requested skills",
+          resolvedSkills.map((skill) => `## ${skill.name}\nSource: ${skill.source}\n${skill.instructions}`).join("\n\n"),
+        )
+      : undefined,
+    extraInstructions: request.context.extraInstructions?.length
+      ? formatSection("Extra instructions", request.context.extraInstructions)
+      : undefined,
+  };
+
+  for (const sectionId of buildContextSectionOrder(request.taskType)) {
+    const section = contextSections[sectionId];
+    if (section) {
+      sections.push(section);
     }
-  }
-  if (request.contextBundle) {
-    lines.push(
-      `Context bundle: ${request.contextBundle.id}\nSummary: ${request.contextBundle.summary}\nArtifact version ids: ${
-        request.contextBundle.artifactVersionIds.join(", ") || "(none)"
-      }`,
-    );
-  }
-  if (resolvedSkills.length) {
-    lines.push(
-      `Requested skills:\n${resolvedSkills
-        .map((skill) => `## ${skill.name}\nSource: ${skill.source}\n${skill.instructions}`)
-        .join("\n\n")}`,
-    );
-  }
-  if (request.context.extraInstructions?.length) {
-    lines.push(`Extra instructions:\n${request.context.extraInstructions.join("\n")}`);
   }
 
   switch (request.taskType) {
     case "task-intake":
-      lines.push("Workspace is analysis-only for task intake. No file changes are allowed.");
-      lines.push("Do not run project verification commands unless the request explicitly requires them.");
-      lines.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
-      lines.push("Produce a structured task specification with goals, constraints, assumptions, and acceptance criteria.");
+      sections.push("Workspace is analysis-only for task intake. No file changes are allowed.");
+      sections.push("Do not run project verification commands unless the request explicitly requires them.");
+      sections.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
+      sections.push("Produce a structured task specification with goals, constraints, assumptions, and acceptance criteria.");
       break;
     case "design":
-      lines.push("Workspace is design-only for this stage. No file changes are allowed.");
-      lines.push("Do not run project verification commands unless the request explicitly requires them.");
-      lines.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
-      lines.push("Produce a structured design document with architecture outline, interfaces, risks, tradeoffs, and validation strategy.");
+      sections.push("Workspace is design-only for this stage. No file changes are allowed.");
+      sections.push("Do not run project verification commands unless the request explicitly requires them.");
+      sections.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
+      sections.push("Produce a structured design document with architecture outline, interfaces, risks, tradeoffs, and validation strategy.");
       break;
     case "breakdown":
-      lines.push("Workspace is breakdown-only for this stage. No file changes are allowed.");
-      lines.push("Do not run project verification commands unless the request explicitly requires them.");
-      lines.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
-      lines.push("Produce an implementation breakdown as an ordered checklist of small executable tasks, not a design narrative.");
-      lines.push("Ground every task in the approved design, current repository state, and concrete repo paths or symbols you inspected.");
-      lines.push("Every task must be independently executable, reviewable, and scoped to fewer than 500 changed lines.");
-      lines.push("Include explicit dependencies, acceptance criteria, expected changes, validation commands, and risk notes for each task.");
-      lines.push("Do not emit section headings as tasks and do not emit prose-only summaries in place of task records.");
-      lines.push("Return strict JSON with this exact top-level shape: {\"structured\": <BreakdownDoc>, \"rendered\": <Markdown checklist>}.");
-      lines.push(`Use exactly this BreakdownDoc schema:
+      sections.push("Workspace is breakdown-only for this stage. No file changes are allowed.");
+      sections.push("Do not run project verification commands unless the request explicitly requires them.");
+      sections.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
+      sections.push("Produce an implementation breakdown as an ordered checklist of small executable tasks, not a design narrative.");
+      sections.push("Ground every task in the approved design, current repository state, and concrete repo paths or symbols you inspected.");
+      sections.push("Every task must be independently executable, reviewable, and scoped to fewer than 500 changed lines.");
+      sections.push("Include explicit dependencies, acceptance criteria, expected changes, validation commands, and risk notes for each task.");
+      sections.push("Do not emit section headings as tasks and do not emit prose-only summaries in place of task records.");
+      sections.push("Return strict JSON with this exact top-level shape: {\"structured\": <BreakdownDoc>, \"rendered\": <Markdown checklist>}.");
+      sections.push(`Use exactly this BreakdownDoc schema:
 {
   "summary": "short summary",
   "executionOrder": ["B1", "B2"],
@@ -439,18 +723,18 @@ export function buildTaskQuery(
     }
   ]
 }`);
-      lines.push("Use exactly those property names. Do not rename keys, omit required fields, or add extra fields.");
-      lines.push("The rendered markdown must use one checklist item per task in execution order, for example '- [ ] B1. Add input normalization in src/foo.ts'.");
+      sections.push("Use exactly those property names. Do not rename keys, omit required fields, or add extra fields.");
+      sections.push("The rendered markdown must use one checklist item per task in execution order, for example '- [ ] B1. Add input normalization in src/foo.ts'.");
       break;
     case "issue-generation":
-      lines.push("Workspace is issue-generation only. No file changes are allowed.");
-      lines.push("Do not run project verification commands unless the request explicitly requires them.");
-      lines.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
-      lines.push("Generate executable issue specs directly from the approved breakdown tasks. Do not infer issues from document headings.");
-      lines.push("Every issue must link to one or more approved breakdown task ids, preserve the breakdown execution order, and reference concrete repo paths or symbols.");
-      lines.push("Do not invent standalone issues outside the approved breakdown or drop any approved breakdown tasks.");
-      lines.push("Return strict JSON with this exact top-level shape: {\"structured\": <IssueSpecDoc>, \"rendered\": <Markdown summary>}.");
-      lines.push(`Use exactly this IssueSpecDoc schema:
+      sections.push("Workspace is issue-generation only. No file changes are allowed.");
+      sections.push("Do not run project verification commands unless the request explicitly requires them.");
+      sections.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
+      sections.push("Generate executable issue specs directly from the approved breakdown tasks. Do not infer issues from document headings.");
+      sections.push("Every issue must link to one or more approved breakdown task ids, preserve the breakdown execution order, and reference concrete repo paths or symbols.");
+      sections.push("Do not invent standalone issues outside the approved breakdown or drop any approved breakdown tasks.");
+      sections.push("Return strict JSON with this exact top-level shape: {\"structured\": <IssueSpecDoc>, \"rendered\": <Markdown summary>}.");
+      sections.push(`Use exactly this IssueSpecDoc schema:
 {
   "summary": "short summary",
   "issues": [
@@ -474,54 +758,54 @@ export function buildTaskQuery(
     }
   ]
 }`);
-      lines.push("Use exactly those property names. Do not rename keys, omit required fields, or add extra fields.");
+      sections.push("Use exactly those property names. Do not rename keys, omit required fields, or add extra fields.");
       break;
     case "triage":
-      lines.push("Workspace is analysis-only for triage. No file changes are allowed.");
-      lines.push("Do not run project verification commands unless the request explicitly requires them.");
-      lines.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
-      lines.push("Produce a concise triage report covering issue understanding, impact area, risks, unknowns, and next step.");
+      sections.push("Workspace is analysis-only for triage. No file changes are allowed.");
+      sections.push("Do not run project verification commands unless the request explicitly requires them.");
+      sections.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
+      sections.push("Produce a concise triage report covering issue understanding, impact area, risks, unknowns, and next step.");
       break;
     case "plan":
-      lines.push("Workspace is planning-only for plan. No file changes are allowed.");
-      lines.push("Do not run project verification commands unless the request explicitly requires them.");
-      lines.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
-      lines.push("Produce a concise implementation plan covering steps, affected files/components, test strategy, and rollback/risk notes.");
+      sections.push("Workspace is planning-only for plan. No file changes are allowed.");
+      sections.push("Do not run project verification commands unless the request explicitly requires them.");
+      sections.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
+      sections.push("Produce a concise implementation plan covering steps, affected files/components, test strategy, and rollback/risk notes.");
       break;
     case "test-plan":
-      lines.push("Workspace is planning-only for test-plan. No file changes are allowed.");
-      lines.push("Do not run project verification commands unless the request explicitly requires them.");
-      lines.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
-      lines.push("Produce a test plan with scenarios, edge cases, regression risks, required tests, and expected outcomes.");
+      sections.push("Workspace is planning-only for test-plan. No file changes are allowed.");
+      sections.push("Do not run project verification commands unless the request explicitly requires them.");
+      sections.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
+      sections.push("Produce a test plan with scenarios, edge cases, regression risks, required tests, and expected outcomes.");
       break;
     case "implement":
-      lines.push("Implement the requested change in the current workspace, then summarize the changed files, edits, and blockers.");
+      sections.push("Implement the requested change in the current workspace, then summarize the changed files, edits, and blockers.");
       break;
     case "verify":
-      lines.push(
+      sections.push(
         `Verification commands will run outside the model. Summarize the verification outcome and any follow-up actions based on these commands:\n${request.constraints.verifyCommands?.join("\n") ?? "No commands provided."}`,
       );
       break;
     case "review":
-      lines.push("Review the current workspace changes and produce a report with either `No defects found.` or one section per defect using the format `Severity: <low|medium|high|critical>` plus a concrete fix recommendation.");
+      sections.push("Review the current workspace changes and produce a report with either `No defects found.` or one section per defect using the format `Severity: <low|medium|high|critical>` plus a concrete fix recommendation.");
       break;
     case "repair":
-      lines.push("Apply repairs for the current issue, address the review findings, and summarize fixes applied plus remaining concerns.");
+      sections.push("Apply repairs for the current issue, address the review findings, and summarize fixes applied plus remaining concerns.");
       break;
     case "completion":
-      lines.push("Workspace is completion-only for this stage. No file changes are allowed.");
-      lines.push("Do not run project verification commands unless the request explicitly requires them.");
-      lines.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
-      lines.push("Produce a workflow summary covering completed issues, remaining risks, key decisions, and artifact chain highlights.");
+      sections.push("Workspace is completion-only for this stage. No file changes are allowed.");
+      sections.push("Do not run project verification commands unless the request explicitly requires them.");
+      sections.push("Do not use update_plan for this stage. Inspect the repo as needed, then return the final artifact directly.");
+      sections.push("Produce a workflow summary covering completed issues, remaining risks, key decisions, and artifact chain highlights.");
       break;
   }
 
   if (isStrictStructuredArtifactTask(request.taskType)) {
-    lines.push("Return only the JSON object without code fences or surrounding commentary.");
+    sections.push("Return only the JSON object without code fences or surrounding commentary.");
   } else {
-    lines.push("Return plain Markdown without code fences around the entire response.");
+    sections.push("Return plain Markdown without code fences around the entire response.");
   }
-  return lines.join("\n\n");
+  return sections.join("\n\n");
 }
 
 export function artifactInfoForTask(taskType: TaskExecutionRequest["taskType"]): {

@@ -20,8 +20,8 @@ import {
 } from "./subagent-contract.js";
 
 /** Hard cap on subagent iterations to prevent runaway loops. */
-export const SUBAGENT_MAX_ITERATIONS = 30;
-export const MAX_DELEGATION_DEPTH = 1;
+const SUBAGENT_MAX_ITERATIONS = 30;
+const MAX_DELEGATION_DEPTH = 1;
 
 /** Default per-agent-type iteration caps. */
 const DEFAULT_AGENT_ITERATION_CAPS: Readonly<Partial<Record<AgentType, number>>> = {

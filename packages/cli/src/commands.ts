@@ -45,7 +45,7 @@ function hasHelpFlag(args: ReadonlyArray<string>): boolean {
   return args.includes("--help") || args.includes("-h");
 }
 
-export function renderDoctorHelpText(): string {
+function renderDoctorHelpText(): string {
   return `Usage:
   devagent doctor
 
@@ -53,7 +53,7 @@ Check the current environment, global config, provider credentials, model regist
 and LSP availability.`;
 }
 
-export function renderConfigHelpText(): string {
+function renderConfigHelpText(): string {
   return `Usage:
   devagent config path
   devagent config get [key]
@@ -62,14 +62,14 @@ export function renderConfigHelpText(): string {
 Inspect or edit the global DevAgent config directly at ~/.config/devagent/config.toml.`;
 }
 
-export function renderConfigureHelpText(): string {
+function renderConfigureHelpText(): string {
   return `Usage:
   devagent configure
 
 Alias for "devagent setup".`;
 }
 
-export function renderSetupHelpText(): string {
+function renderSetupHelpText(): string {
   return `Usage:
   devagent setup
 
@@ -77,7 +77,7 @@ Guided onboarding for global DevAgent defaults. Writes provider, model, safety,
 budget, and subagent settings to ~/.config/devagent/config.toml.`;
 }
 
-export function renderInitHelpText(): string {
+function renderInitHelpText(): string {
   return `Usage:
   devagent init
 
@@ -86,34 +86,34 @@ DevAgent no longer scaffolds project instruction files automatically.
 Create AGENTS.md manually when you want repository-specific guidance.`;
 }
 
-export function renderInstallLspHelpText(): string {
+function renderInstallLspHelpText(): string {
   return `Usage:
   devagent install-lsp
 
 Install npm-managed LSP servers that power DevAgent code intelligence.`;
 }
 
-export function renderUpdateHelpText(): string {
+function renderUpdateHelpText(): string {
   return `Usage:
   devagent update
 
 Check npm for the latest published version and upgrade the installed CLI.`;
 }
 
-export function renderCompletionsHelpText(): string {
+function renderCompletionsHelpText(): string {
   return `Usage:
   devagent completions <bash|zsh|fish>
 
 Generate shell completions for the public CLI surface.`;
 }
 
-export interface DoctorCheck {
+interface DoctorCheck {
   readonly label: string;
   readonly status: DoctorCheckStatus;
   readonly detail?: string;
 }
 
-export interface DoctorIssue {
+interface DoctorIssue {
   readonly title: string;
   readonly detail: string;
   readonly nextSteps: ReadonlyArray<string>;
@@ -159,7 +159,7 @@ export interface DoctorReportInput {
   readonly credentialSource: string;
 }
 
-export interface DoctorReport {
+interface DoctorReport {
   readonly version: string;
   readonly blockingIssues: ReadonlyArray<DoctorIssue>;
   readonly runtimeCheck: DoctorCheck;

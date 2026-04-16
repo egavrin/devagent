@@ -20,10 +20,7 @@
     "packages/*"
   ],
   "dependencies": {
-    "@devagent-sdk/schema": "file:../devagent-sdk/packages/schema",
-    "@devagent-sdk/types": "file:../devagent-sdk/packages/types",
-    "@devagent-sdk/validation": "file:../devagent-sdk/packages/validation",
-    "cli-highlight": "^2.1.11"
+    "@devagent-sdk/types": "file:../devagent-sdk/packages/types"
   },
   "scripts": {
     "build": "turbo run build",

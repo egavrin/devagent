@@ -13,7 +13,7 @@ import { parseTsLinterLine } from "./rules.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
-export interface ArkTSLinterOptions {
+interface ArkTSLinterOptions {
   /** Path to the ets2panda/linter directory (contains dist/tslinter.js). */
   readonly linterPath: string;
   /** Enable ArkTS 2.0 strict mode. Default: true. */

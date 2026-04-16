@@ -14,7 +14,7 @@ import { MessageRole, ProviderError, RateLimitError, ProviderConnectionError, Ov
 
 // ─── Stream Processing ───────────────────────────────────────
 
-export interface ProcessStreamOptions {
+interface ProcessStreamOptions {
   /** Provider name used in error messages (e.g., "Anthropic", "OpenAI"). */
   readonly providerName: string;
   /** The fullStream from Vercel AI SDK streamText(). */
@@ -302,7 +302,7 @@ export function stripNullArgs(args: Record<string, unknown>): Record<string, unk
 
 // ─── Tool Conversion ─────────────────────────────────────────
 
-export interface ConvertToolsOptions {
+interface ConvertToolsOptions {
   /**
    * When true, enables OpenAI strict mode:
    * - All properties are marked as required

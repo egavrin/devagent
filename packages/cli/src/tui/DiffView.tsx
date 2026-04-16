@@ -12,7 +12,7 @@ import {
   takeVisibleHighlightedDiffItems,
 } from "../file-edit-presentation.js";
 
-export interface DiffViewProps {
+interface DiffViewProps {
   readonly fileEdit: ToolFileChangePreview;
   readonly maxLines?: number;
 }

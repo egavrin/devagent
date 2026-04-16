@@ -143,7 +143,22 @@ export const runCommandTool: ToolSpec = {
     const envParam = params["env"];
     if (typeof envParam === "string" && envParam.length > 0) {
       try {
-        envOverrides = JSON.parse(envParam) as Record<string, string>;
+        const parsedEnv = JSON.parse(envParam) as unknown;
+        if (parsedEnv == null) {
+          envOverrides = {};
+        } else if (typeof parsedEnv === "object" && !Array.isArray(parsedEnv)) {
+          envOverrides = parsedEnv as Record<string, string>;
+        } else {
+          return {
+            success: false,
+            output: "",
+            error: `Invalid env JSON: ${envParam}`,
+            artifacts: [],
+            metadata: {
+              commandResult: buildCommandResultMetadata(command, cwdParam, null, "", "", {}),
+            },
+          };
+        }
       } catch {
         return {
           success: false,

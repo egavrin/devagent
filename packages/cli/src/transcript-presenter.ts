@@ -142,7 +142,7 @@ export type TranscriptPart =
   | { readonly kind: "user"; readonly data: PresentedUser }
   | { readonly kind: "info"; readonly data: PresentedInfo };
 
-export type TranscriptPartKind = TranscriptPart["kind"];
+type TranscriptPartKind = TranscriptPart["kind"];
 const MAX_PRESENTED_DIAGNOSTICS = 5;
 
 export function summarizeToolParamsForTranscript(name: string, params: Record<string, unknown>): string {
@@ -155,7 +155,7 @@ export function summarizeToolParamsForTranscript(name: string, params: Record<st
   return "";
 }
 
-export function extractToolPreviewForTranscript(toolName: string, output: string): string | undefined {
+function extractToolPreviewForTranscript(toolName: string, output: string): string | undefined {
   if (!output || output.length < 10) return undefined;
   if (toolName === "search_files") {
     const match = output.match(/^(\d+) match/);
@@ -330,7 +330,7 @@ export function makeStatusPart(data: PresentedStatus): TranscriptPart {
   return { kind: "status", data };
 }
 
-export function makeProgressPart(data: PresentedProgress): TranscriptPart {
+function makeProgressPart(data: PresentedProgress): TranscriptPart {
   return { kind: "progress", data };
 }
 
@@ -352,7 +352,7 @@ export function makeTurnSummaryPart(
   return { kind: "turn-summary", data };
 }
 
-export function makeUserPart(text: string): TranscriptPart {
+function makeUserPart(text: string): TranscriptPart {
   return { kind: "user", data: { text } };
 }
 

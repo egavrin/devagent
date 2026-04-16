@@ -51,7 +51,7 @@ export function deriveSessionTitle(input: string | null | undefined): string {
   return `${title.slice(0, TITLE_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
-export function deriveRepoLabel(
+function deriveRepoLabel(
   repoLabel: string | null | undefined,
   repoRoot?: string | null | undefined,
 ): string {
@@ -91,7 +91,7 @@ export function buildSessionPreview(
   };
 }
 
-export function shortSessionId(sessionId: string): string {
+function shortSessionId(sessionId: string): string {
   return sessionId.slice(0, 8);
 }
 

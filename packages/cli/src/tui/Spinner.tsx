@@ -6,7 +6,7 @@ import React, { useState, useEffect } from "react";
 import { Text } from "ink";
 import { SPINNER_FRAMES, SPINNER_VERBS } from "./shared.js";
 
-export interface SpinnerProps {
+interface SpinnerProps {
   readonly active: boolean;
   readonly message?: string;
   readonly suffix?: string;

@@ -291,7 +291,7 @@ export async function runAgent(
 /** Marker to detect and prevent recursive forking. */
 const FORK_BOILERPLATE_TAG = "[FORKED_AGENT]";
 
-export interface ForkAgentOptions extends AgentRunOptions {
+interface ForkAgentOptions extends AgentRunOptions {
   /** Parent's current messages — the forked child inherits these for prompt cache sharing. */
   readonly parentMessages: ReadonlyArray<Message>;
   /** Parent's system prompt — reused as-is for cache prefix alignment. */

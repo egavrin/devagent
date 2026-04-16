@@ -17,7 +17,7 @@ export interface SubagentState {
   readonly error?: string;
 }
 
-export interface SubagentPanelProps {
+interface SubagentPanelProps {
   readonly agents: ReadonlyMap<string, SubagentState>;
 }
 

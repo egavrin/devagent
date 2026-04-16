@@ -12,14 +12,14 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
-export interface RepoContext {
+interface RepoContext {
   workflowMd: string | null;
   agentsMd: string | null;
   copilotInstructions: string | null;
   pathInstructions: PathInstruction[];
 }
 
-export interface PathInstruction {
+interface PathInstruction {
   glob: string;
   content: string;
   filePath: string;

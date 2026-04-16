@@ -422,6 +422,145 @@ describe("skills", () => {
     expect(query).toContain("artifact-version-1");
   });
 
+  it("promotes known workflow comments into dedicated sections and preserves unknown comments", () => {
+    const request = createRequest("implement");
+    request.context.comments = [
+      {
+        author: "issue-spec-artifact",
+        body: "Approved issue spec artifact:\n\n# Issue Spec\n\nKeep the edit small.",
+      },
+      {
+        author: "review-report",
+        body: "Review report artifact:\n\nNo defects found.",
+      },
+      {
+        author: "teammate",
+        body: "Please keep the README wording consistent with the issue text.",
+      },
+    ];
+
+    const query = buildTaskQuery(request);
+
+    expect(query).toContain("Approved issue spec artifact:\n# Issue Spec");
+    expect(query).toContain("Review report artifact:\nNo defects found.");
+    expect(query).toContain("Comments:\n- teammate: Please keep the README wording consistent with the issue text.");
+    expect(query).not.toContain("- issue-spec-artifact:");
+    expect(query).not.toContain("- review-report:");
+  });
+
+  it("prioritizes design context ahead of generic context for breakdown", () => {
+    const request = createRequest("breakdown");
+    request.context.summary = "Generic summary comes later.";
+    request.context.comments = [{
+      author: "design-artifact",
+      body: "Approved design artifact:\n\n# Design\n\nUse README.md only.",
+    }];
+
+    const query = buildTaskQuery(request);
+
+    expect(query.indexOf("Approved design artifact:")).toBeLessThan(query.indexOf("Summary:\nGeneric summary comes later."));
+  });
+
+  it("orders workflow-chain context for implement", () => {
+    const request = createRequest("implement");
+    request.context.summary = "Implement the approved issue.";
+    request.issueUnit = {
+      id: "issue-unit-1",
+      title: "Document validation flow",
+      sequence: 1,
+      dependencyIds: [],
+      acceptanceCriteria: ["README explains the validation workflow."],
+      linkedArtifactVersionIds: ["artifact-1"],
+    };
+    request.context.changedFilesHint = ["README.md", "README.md", "docs/flow.md"];
+    request.context.comments = [
+      {
+        author: "issue-spec-artifact",
+        body: "Approved issue spec artifact:\n\n# Issue Spec\n\nUse README.md only.",
+      },
+      {
+        author: "breakdown-artifact",
+        body: "Approved breakdown artifact:\n\n# Breakdown\n\nOne docs task.",
+      },
+    ];
+
+    const query = buildTaskQuery(request);
+
+    expect(query.indexOf("Approved issue spec artifact:")).toBeLessThan(query.indexOf("Issue unit details:"));
+    expect(query.indexOf("Issue unit details:")).toBeLessThan(query.indexOf("Focus files:"));
+    expect(query.indexOf("Focus files:")).toBeLessThan(query.indexOf("Summary:\nImplement the approved issue."));
+    expect(query.match(/- README\.md/g)).toHaveLength(1);
+    expect(query).toContain("- docs/flow.md");
+  });
+
+  it("orders workflow-chain context for review and repair", () => {
+    const reviewRequest = createRequest("review");
+    reviewRequest.context.summary = "Review the approved change.";
+    reviewRequest.issueUnit = {
+      id: "issue-unit-1",
+      title: "Document validation flow",
+      sequence: 1,
+      dependencyIds: [],
+      acceptanceCriteria: ["README explains the validation workflow."],
+      linkedArtifactVersionIds: ["artifact-1"],
+    };
+    reviewRequest.context.changedFilesHint = ["README.md"];
+    reviewRequest.context.comments = [
+      {
+        author: "issue-spec-artifact",
+        body: "Approved issue spec artifact:\n\n# Issue Spec\n\nUse README.md only.",
+      },
+      {
+        author: "implementation-summary",
+        body: "Implementation summary artifact:\n\nUpdated README.md.",
+      },
+    ];
+
+    const reviewQuery = buildTaskQuery(reviewRequest);
+    expect(reviewQuery.indexOf("Approved issue spec artifact:")).toBeLessThan(reviewQuery.indexOf("Implementation summary artifact:"));
+    expect(reviewQuery.indexOf("Implementation summary artifact:")).toBeLessThan(reviewQuery.indexOf("Issue unit details:"));
+    expect(reviewQuery.indexOf("Issue unit details:")).toBeLessThan(reviewQuery.indexOf("Focus files:"));
+
+    const repairRequest = createRequest("repair");
+    repairRequest.context.summary = "Repair concrete review findings.";
+    repairRequest.issueUnit = reviewRequest.issueUnit;
+    repairRequest.context.changedFilesHint = ["README.md"];
+    repairRequest.context.comments = [
+      {
+        author: "issue-spec-artifact",
+        body: "Approved issue spec artifact:\n\n# Issue Spec\n\nUse README.md only.",
+      },
+      {
+        author: "implementation-summary",
+        body: "Implementation summary artifact:\n\nUpdated README.md.",
+      },
+      {
+        author: "review-report",
+        body: "Review report artifact:\n\nSeverity: medium\nClarify the workflow wording.",
+      },
+    ];
+
+    const repairQuery = buildTaskQuery(repairRequest);
+    expect(repairQuery.indexOf("Review report artifact:")).toBeLessThan(repairQuery.indexOf("Implementation summary artifact:"));
+    expect(repairQuery.indexOf("Implementation summary artifact:")).toBeLessThan(repairQuery.indexOf("Approved issue spec artifact:"));
+    expect(repairQuery.indexOf("Approved issue spec artifact:")).toBeLessThan(repairQuery.indexOf("Issue unit details:"));
+    expect(repairQuery.indexOf("Issue unit details:")).toBeLessThan(repairQuery.indexOf("Focus files:"));
+  });
+
+  it("truncates promoted workflow artifacts deterministically", () => {
+    const request = createRequest("repair");
+    const longBody = `${"a".repeat(4_200)}\nsecond line`;
+    request.context.comments = [{
+      author: "review-report",
+      body: `Review report artifact:\n\n${longBody}`,
+    }];
+
+    const query = buildTaskQuery(request);
+
+    expect(query).toContain("[workflow context truncated at 4000 chars]");
+    expect(query).toContain("Review report artifact:");
+  });
+
   it("emits a warning log and continues when a requested skill is missing", async () => {
     const repoRoot = await createRepoRoot();
     const artifactDir = join(repoRoot, "artifacts");
