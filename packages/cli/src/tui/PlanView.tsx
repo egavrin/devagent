@@ -3,8 +3,8 @@
  * Uses left border only (opencode BlockTool pattern) to avoid full-width stretching.
  */
 
-import React from "react";
 import { Box, Text } from "ink";
+import React from "react";
 
 export interface PlanStep {
   readonly description: string;

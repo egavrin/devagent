@@ -1,7 +1,8 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+
 import { detectProjectTestCommand } from "./test-command-detect.js";
 
 describe("detectProjectTestCommand", () => {

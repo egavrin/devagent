@@ -3,12 +3,12 @@
  * Ported from the Python chunking implementation.
  */
 
+import { estimateTokens } from "../../core/index.js";
 import type {
   FileEntry,
   Hunk,
   ParsedPatch,
 } from "../../tools/builtins/patch-parser.js";
-import { estimateTokens } from "../../core/index.js";
 
 // ── Configuration ────────────────────────────────────────────────────────────
 

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
+
+import { classifyError } from "./error-judge.js";
 import { MessageRole } from "../core/index.js";
 import type { LLMProvider, Message, StreamChunk } from "../core/index.js";
-import { classifyError } from "./error-judge.js";
 
 // ─── Mock helpers ────────────────────────────────────────────
 

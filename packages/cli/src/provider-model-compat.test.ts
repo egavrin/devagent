@@ -1,5 +1,6 @@
-import { beforeAll, describe, expect, it } from "vitest";
 import { loadModelRegistry } from "@devagent/runtime";
+import { beforeAll, describe, expect, it } from "vitest";
+
 import {
   formatProviderModelCompatibilityError,
   formatProviderModelCompatibilityHint,

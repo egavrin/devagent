@@ -5,11 +5,12 @@
 
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ToolSpec } from "../../core/types.js";
-import { buildToolFileChangePreview } from "../../core/tool-file-change.js";
-import { ToolError } from "../../core/errors.js";
+
 import { FileTime } from "./file-time.js";
 import { resolvePathInRepo } from "./path-guard.js";
+import { ToolError } from "../../core/errors.js";
+import { buildToolFileChangePreview } from "../../core/tool-file-change.js";
+import type { ToolSpec } from "../../core/types.js";
 
 export const writeFileTool: ToolSpec = {
   name: "write_file",

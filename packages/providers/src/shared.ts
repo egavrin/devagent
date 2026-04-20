@@ -8,8 +8,6 @@
  * stripNullArgs — removes null-valued keys from tool call arguments.
  */
 
-import { tool as aiTool, jsonSchema, type CoreMessage, type TextStreamPart, type ToolSet } from "ai";
-import type { Message, ModelCapabilities, StreamChunk, ToolSpec } from "@devagent/runtime";
 import {
   MessageRole,
   ProviderError,
@@ -19,6 +17,9 @@ import {
   OverloadedError,
   extractErrorMessage,
 } from "@devagent/runtime";
+import { tool as aiTool, jsonSchema, type CoreMessage, type TextStreamPart, type ToolSet } from "ai";
+
+import type { Message, ModelCapabilities, StreamChunk, ToolSpec } from "@devagent/runtime";
 
 // ─── Stream Processing ───────────────────────────────────────
 

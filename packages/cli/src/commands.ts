@@ -2,11 +2,6 @@
  * CLI subcommands: doctor, config, setup.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-import { execSync } from "node:child_process";
-import { createInterface } from "node:readline";
 import {
   CredentialStore,
   formatResolvedCredentialSource,
@@ -20,13 +15,12 @@ import {
   listProviderCredentialDescriptors,
   resolveProviderCredentialStatus,
 } from "@devagent/runtime";
-import type { CredentialInfo, DevAgentConfig, ProviderCredentialDescriptor as ProviderDescriptor } from "@devagent/runtime";
-import type { ProviderModelCompatibilityIssue } from "./provider-model-compat.js";
-import {
-  formatProviderModelCompatibilityError,
-  formatProviderModelCompatibilityHint,
-  getProviderModelCompatibilityIssue,
-} from "./provider-model-compat.js";
+import { execSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createInterface } from "node:readline";
+
 import {
   getGlobalConfigPath,
   getGlobalConfigValue,
@@ -38,6 +32,13 @@ import {
   setGlobalConfigValue,
   writeGlobalConfigObject,
 } from "./global-config.js";
+import type { ProviderModelCompatibilityIssue } from "./provider-model-compat.js";
+import {
+  formatProviderModelCompatibilityError,
+  formatProviderModelCompatibilityHint,
+  getProviderModelCompatibilityIssue,
+} from "./provider-model-compat.js";
+import type { CredentialInfo, DevAgentConfig, ProviderCredentialDescriptor as ProviderDescriptor } from "@devagent/runtime";
 
 type DoctorCheckStatus = "pass" | "blocking" | "advisory";
 
@@ -60,13 +61,6 @@ function renderConfigHelpText(): string {
   devagent config set <key> <value>
 
 Inspect or edit the global DevAgent config directly at ~/.config/devagent/config.toml.`;
-}
-
-function renderConfigureHelpText(): string {
-  return `Usage:
-  devagent configure
-
-Alias for "devagent setup".`;
 }
 
 function renderSetupHelpText(): string {
@@ -1127,7 +1121,7 @@ export async function runConfigure(args: ReadonlyArray<string> = []): Promise<vo
   };
 
   // Subagent config
-  const hasCustomModels = Object.entries(agentModels).some(([k, v]) => v !== model);
+  const hasCustomModels = Object.entries(agentModels).some(([, v]) => v !== model);
   const hasCustomReasoning = true; // Always write reasoning defaults
   if (hasCustomModels || hasCustomReasoning) {
     const subagents = { ...((nextConfig["subagents"] as Record<string, unknown> | undefined) ?? {}) };

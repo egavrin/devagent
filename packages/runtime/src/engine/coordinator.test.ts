@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
+
 import {
   CoordinatorTaskPool,
   filterCoordinatorTools,
   createTaskManagementTools,
 } from "./coordinator.js";
 import type { WorkerTask } from "./coordinator.js";
-import { ToolRegistry } from "../tools/registry.js";
 import type { ToolSpec, ToolCategory } from "../core/index.js";
+import { ToolRegistry } from "../tools/registry.js";
 
 // ─── Helpers ────────────────────────────────────────────────
 

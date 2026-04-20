@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { AgentType } from "../core/index.js";
+
 import {
   buildExplorationLaneRequest,
   buildDelegationQuery,
   parseStructuredAgentOutput,
 } from "./subagent-contract.js";
+import { AgentType } from "../core/index.js";
 
 describe("parseStructuredAgentOutput", () => {
   it("parses pure JSON output", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 
 describe("resolveBundledModelsDir", () => {

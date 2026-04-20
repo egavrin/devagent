@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 import { resolve } from "node:path";
+import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
+
+import { SessionState } from "./session-state.js";
 import { TaskLoop, summarizeDiff, truncateToolOutput, extractStructuralDigest, summarizeTestOutput } from "./task-loop.js";
 import type {
   LLMProvider,
@@ -21,7 +23,6 @@ import {
   lookupModelPricing,
   loadModelRegistry,
 } from "../core/index.js";
-import { SessionState } from "./session-state.js";
 import { ToolRegistry } from "../tools/index.js";
 
 // ─── Mock Provider ──────────────────────────────────────────

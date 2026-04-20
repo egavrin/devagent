@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+
 import { parseTsLinterLine, mapSeverity, ProblemSeverity } from "./rules.js";
 
 describe("mapSeverity", () => {

@@ -107,7 +107,7 @@ async function createExecuteRequest(root: string, artifactDir: string): Promise<
       canOpenReviewable: true,
     },
     context: {
-      summary: "Use README.md and src/index.ts as the planning context.",
+      summary: "Use README.md as the planning context.",
     },
     expectedArtifacts: ["plan"],
   }, null, 2));
@@ -148,7 +148,7 @@ describe("surface smoke", () => {
       {
         cwd: repoRoot,
         env: {
-          DEVAGENT_EXECUTOR_FAKE_RESPONSE_PLAN: "# Plan\n\n- Inspect README.md\n- Update src/index.ts only if needed",
+          DEVAGENT_EXECUTOR_FAKE_RESPONSE_PLAN: "# Plan\n\n- Inspect README.md\n- Draft the implementation plan around the documented scope",
         },
       },
     );

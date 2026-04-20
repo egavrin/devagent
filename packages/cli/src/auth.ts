@@ -8,7 +8,6 @@
  *   - GitHub device code flow (RFC 8628)
  */
 
-import { createInterface } from "node:readline";
 import {
   CredentialStore,
   getOAuthProvider,
@@ -26,8 +25,10 @@ import {
   openUrl,
   extractErrorMessage,
 } from "@devagent/runtime";
-import type { OAuthProviderConfig, CredentialInfo } from "@devagent/runtime";
+import { createInterface } from "node:readline";
+
 import { bold, cyan, dim, green, red, yellow } from "./format.js";
+import type { OAuthProviderConfig, CredentialInfo } from "@devagent/runtime";
 
 // ─── Known Providers ────────────────────────────────────────
 

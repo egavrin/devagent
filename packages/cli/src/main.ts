@@ -5,71 +5,83 @@
 
 import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
 import {
-  EventBus,
+  AgentRegistry,
+  AgentType,
   ApprovalGate,
   ContextManager,
-  SessionStore,
-  loadConfig,
-  resolveProviderCredentials,
-  findProjectRoot,
-  loadModelRegistry,
-  lookupModelEntry,
   DEFAULT_BUDGET,
   DEFAULT_CONTEXT,
-  EventLogger,
-  getProviderCredentialEnvVar,
-  loggedSubagentRunFromEvent,
- AgentType, SafetyMode, MessageRole , extractErrorMessage ,
-  createRoutingLSPTools
-,
-  TaskLoop,
-  truncateToolOutput,
-  createPlanTool,
-  createFindingTool,
-  createToolScriptTool,
-  createDelegateTool,
-  createSkillTool,
-  AgentRegistry,
-  DoubleCheck,
   DEFAULT_DOUBLE_CHECK_OPTIONS,
-  synthesizeBriefing,
+  DoubleCheck,
+  EventLogger,
+  EventBus,
+  MessageRole,
+  SafetyMode,
+  SessionState,
+  SessionStore,
+  TaskLoop,
+  createDelegateTool,
+  createFindingTool,
+  createPlanTool,
+  createRoutingLSPTools,
+  createSkillTool,
+  createToolScriptTool,
+  extractErrorMessage,
   findLastUserContent,
-  SessionState} from "@devagent/runtime";
+  findProjectRoot,
+  getProviderCredentialEnvVar,
+  loadConfig,
+  loadModelRegistry,
+  loggedSubagentRunFromEvent,
+  lookupModelEntry,
+  resolveProviderCredentials,
+  synthesizeBriefing,
+  truncateToolOutput,
+} from "@devagent/runtime";
 import { execSync } from "node:child_process";
 import { readFileSync as nodeReadFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { LSPRouter, createRoutingDiagnosticProvider, createCompilerFallbackProvider, createShellTestRunner, lazyUpgradeLSP } from "./double-check-wiring.js";
+import {
+  LSPRouter,
+  createCompilerFallbackProvider,
+  createRoutingDiagnosticProvider,
+  createShellTestRunner,
+  lazyUpgradeLSP,
+} from "./double-check-wiring.js";
 import {
   Spinner,
-  dim, red, cyan, green, yellow, bold,
-  formatToolStart,
-  formatToolGroupStart,
-  formatToolGroupEnd,
-  formatSubagentBatchLaunch,
-  formatSubagentStart,
-  formatSubagentError,
-  summarizeSubagentUpdate,
   SubagentPanelRenderer,
-  summarizeToolParams,
-  formatPlan,
-  formatError,
-  isCategoryEnabled,
+  bold,
   buildVerbosityConfig,
+  dim,
   formatContextGauge,
   formatEnrichedError,
-  inferErrorSuggestion,
-  formatTurnSummary,
-  formatTurnStart,
-  formatTurnEnd,
+  formatError,
+  formatPlan,
   formatSessionSummary,
-  formatReasoning,
-  setTerminalTitle,
-  terminalBell,
+  formatSubagentBatchLaunch,
+  formatSubagentError,
+  formatSubagentStart,
+  formatToolGroupEnd,
+  formatToolGroupStart,
+  formatToolStart,
   formatTranscriptPart,
+  formatTurnEnd,
+  formatTurnStart,
+  formatTurnSummary,
+  green,
+  inferErrorSuggestion,
+  isCategoryEnabled,
+  red,
+  setTerminalTitle,
+  summarizeSubagentUpdate,
+  summarizeToolParams,
+  terminalBell,
+  yellow,
 } from "./format.js";
 import {
   migrateLegacyGlobalConfigIfNeeded,
@@ -82,12 +94,23 @@ import {
   formatResumeCandidate,
   renderSessionPreview,
 } from "./session-preview.js";
-import type { DevAgentConfig, LLMProvider, Message, Session, VerbosityConfig ,
-  ToolRegistry,
+import type {
+  DevAgentConfig,
+  LLMProvider,
+  Message,
+  MidpointCallback,
+  Session,
+  SessionStateJSON,
+  SessionStatePersistence,
   SkillRegistry,
-  SkillResolver, TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback, SessionStatePersistence, SessionStateJSON, TaskLoopOptions } from "@devagent/runtime";
-
-
+  SkillResolver,
+  TaskLoopOptions,
+  TaskLoopResult,
+  TaskMode,
+  ToolRegistry,
+  TurnBriefing,
+  VerbosityConfig,
+} from "@devagent/runtime";
 
 /** Package version — embedded at build time or read from package.json. */
 export function getVersion(): string {
@@ -1550,7 +1573,7 @@ export async function main(): Promise<void> {
       if (result.status !== "success") {
         process.exit(1);
       }
-    } catch (error) {
+    } catch {
       process.exit(1);
     }
     return;
@@ -2116,7 +2139,6 @@ function setupEventHandlers(
     spinner.stop();
 
     const cacheKey = `${event.agentId ?? "root"}:${event.callId}`;
-    const cachedParams = toolParamsCache.get(cacheKey);
     toolParamsCache.delete(cacheKey);
 
     if (event.agentId) {

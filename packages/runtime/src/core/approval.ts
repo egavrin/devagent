@@ -9,13 +9,14 @@
  */
 
 import { isAbsolute, resolve } from "node:path";
+
+import { ApprovalDeniedError } from "./errors.js";
+import type { EventBus } from "./events.js";
 import type {
   ApprovalPolicy,
   ToolCategory,
 } from "./types.js";
 import { ApprovalMode, SafetyMode } from "./types.js";
-import { ApprovalDeniedError } from "./errors.js";
-import type { EventBus } from "./events.js";
 
 // ─── Decision Types ──────────────────────────────────────────
 
@@ -373,10 +374,10 @@ export class ApprovalGate {
       ? isSubpath(normalizedFilePath, repoRoot)
       : false;
     const command = typeof request.arguments?.["command"] === "string"
-      ? normalizeCommand(request.arguments["command"] as string)
+      ? normalizeCommand(request.arguments["command"])
       : null;
     const commandCwd = typeof request.arguments?.["cwd"] === "string"
-      ? request.arguments["cwd"] as string
+      ? request.arguments["cwd"]
       : ".";
     const resolvedCommandCwd = repoRoot ? resolvePath(commandCwd, repoRoot) : null;
     const commandRunsInRepo = resolvedCommandCwd && repoRoot

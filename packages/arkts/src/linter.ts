@@ -8,7 +8,8 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
-import type { TsLinterProblem, TsLinterFileResult } from "./rules.js";
+
+import type { TsLinterProblem } from "./rules.js";
 import { parseTsLinterLine } from "./rules.js";
 
 // ─── Types ──────────────────────────────────────────────────

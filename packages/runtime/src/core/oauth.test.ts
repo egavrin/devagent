@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+import { OAuthError } from "./errors.js";
 import {
   generatePKCE,
   generateState,
@@ -11,7 +13,6 @@ import {
   exchangeChatGPTDeviceToken,
   extractAccountIdFromIdToken,
 } from "./oauth.js";
-import { OAuthError } from "./errors.js";
 
 // ─── Mock fetch ─────────────────────────────────────────────
 

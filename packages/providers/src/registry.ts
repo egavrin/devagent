@@ -3,8 +3,9 @@
  * Fail fast: throws on unknown provider or missing config.
  */
 
-import type { LLMProvider, ProviderConfig } from "@devagent/runtime";
 import { ProviderError } from "@devagent/runtime";
+
+import type { LLMProvider, ProviderConfig } from "@devagent/runtime";
 
 type ProviderFactory = (config: ProviderConfig) => LLMProvider;
 

@@ -51,7 +51,7 @@ export interface TsLinterAutofix {
 }
 
 /** Parsed output from the IDE-interactive mode (one JSON line per file). */
-export interface TsLinterFileResult {
+interface TsLinterFileResult {
   readonly filePath: string;
   readonly problems: ReadonlyArray<TsLinterProblem>;
 }
@@ -87,7 +87,7 @@ export function parseTsLinterLine(line: string): TsLinterFileResult | null {
       return null;
     }
     return {
-      filePath: parsed["filePath"] as string,
+      filePath: parsed["filePath"],
       problems: parsed["problems"] as TsLinterProblem[],
     };
   } catch {

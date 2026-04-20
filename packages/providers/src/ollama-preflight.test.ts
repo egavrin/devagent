@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { validateOllamaModel } from "./ollama-preflight.js";
 import { ProviderError } from "@devagent/runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { validateOllamaModel } from "./ollama-preflight.js";
 
 describe("validateOllamaModel", () => {
   const originalFetch = globalThis.fetch;

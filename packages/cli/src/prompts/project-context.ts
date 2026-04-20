@@ -9,9 +9,9 @@
  * Total content budget is distributed by file priority rather than equally.
  */
 
+import { extractErrorMessage } from "@devagent/runtime";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { extractErrorMessage } from "@devagent/runtime";
 
 interface InstructionFileSpec {
   readonly filename: string;

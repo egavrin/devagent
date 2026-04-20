@@ -1,8 +1,8 @@
+import { CredentialStore } from "@devagent/runtime";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CredentialStore } from "@devagent/runtime";
 
 import { collectCredentialStatusEntries, runAuthCommand } from "./auth.js";
 

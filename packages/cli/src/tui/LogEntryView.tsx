@@ -4,8 +4,13 @@
  * Used by both App.tsx and SingleShotApp.tsx.
  */
 
-import React from "react";
 import { Box, Text } from "ink";
+import React from "react";
+
+import { FinalOutput } from "./FinalOutput.js";
+import { ErrorView } from "./MessageView.js";
+import { PlanView, type PlanStep } from "./PlanView.js";
+import type { LogEntry } from "./shared.js";
 import {
   CommandResultDisplay,
   DiagnosticListDisplay,
@@ -14,10 +19,6 @@ import {
   ToolGroupDisplay,
   ValidationResultDisplay,
 } from "./ToolDisplay.js";
-import { PlanView, type PlanStep } from "./PlanView.js";
-import { ErrorView } from "./MessageView.js";
-import { FinalOutput } from "./FinalOutput.js";
-import type { LogEntry } from "./shared.js";
 import type { PresentedStatus } from "../transcript-presenter.js";
 import { cleanTime } from "./shared.js";
 

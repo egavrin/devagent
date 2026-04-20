@@ -6,10 +6,9 @@
  * all results aggregated. Only readonly tools are allowed.
  */
 
-import type { ToolSpec, ToolContext } from "../core/index.js";
-import type { EventBus } from "../core/index.js";
-import type { ToolRegistry } from "../tools/index.js";
 import { ToolScriptEngine, parseToolScriptStepsArg } from "./tool-script.js";
+import type { ToolSpec, ToolContext , EventBus } from "../core/index.js";
+import type { ToolRegistry } from "../tools/index.js";
 
 export interface ToolScriptToolContext {
   readonly registry: ToolRegistry;

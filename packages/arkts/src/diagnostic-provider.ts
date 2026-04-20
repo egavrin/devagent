@@ -6,9 +6,9 @@
  * from @devagent/runtime without importing it (avoids circular deps).
  */
 
-import type { ArkTSConfig } from "@devagent/runtime";
 import { ArkTSLinter, isTsLinterAvailable } from "./linter.js";
 import { mapSeverity } from "./rules.js";
+import type { ArkTSConfig } from "@devagent/runtime";
 
 // ─── DiagnosticProvider-compatible type (structural match) ──
 

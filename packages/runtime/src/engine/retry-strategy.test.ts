@@ -1,13 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach , afterEach } from "vitest";
+
 import { retryWithStrategy } from "./retry-strategy.js";
 import type { RetryOptions, RetryResult } from "./retry-strategy.js";
+import { OverloadedError, MaxOutputTokensError } from "../core/errors.js";
 import {
   ProviderError,
   RateLimitError,
   ProviderConnectionError,
   ProviderTimeoutError,
 } from "../core/index.js";
-import { OverloadedError, MaxOutputTokensError } from "../core/errors.js";
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -22,7 +23,6 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 
-import { afterEach } from "vitest";
 afterEach(() => {
   vi.useRealTimers();
 });

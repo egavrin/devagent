@@ -6,13 +6,13 @@
  * permission (ask user), tool_misuse (change approach).
  */
 
-import type { LLMProvider } from "../core/index.js";
-import { MessageRole } from "../core/index.js";
 import {
   collectStreamText,
   parseJudgeResponse,
   formatToolArgs,
 } from "./llm-judge.js";
+import type { LLMProvider } from "../core/index.js";
+import { MessageRole } from "../core/index.js";
 
 // ─── Types ───────────────────────────────────────────────────
 

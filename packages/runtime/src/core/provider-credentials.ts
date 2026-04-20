@@ -1,5 +1,5 @@
-import type { ProviderConfig } from "./types.js";
 import type { CredentialInfo } from "./credentials.js";
+import type { ProviderConfig } from "./types.js";
 
 export type ProviderCredentialMode = "api" | "oauth" | "none";
 

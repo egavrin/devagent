@@ -5,15 +5,15 @@
  * drift from previous plans, dependency ordering.
  */
 
-import type { LLMProvider } from "../core/index.js";
-import { MessageRole } from "../core/index.js";
-import type { SessionState } from "./session-state.js";
-import type { PlanStep } from "./plan-tool.js";
 import {
   collectStreamText,
   parseJudgeResponse,
   buildSessionStateContext,
 } from "./llm-judge.js";
+import type { PlanStep } from "./plan-tool.js";
+import type { SessionState } from "./session-state.js";
+import type { LLMProvider } from "../core/index.js";
+import { MessageRole } from "../core/index.js";
 
 // Re-export isStructuralChange from plan-tool to avoid circular dependency
 // (it lives in plan-tool.ts since plan-tool needs it directly)

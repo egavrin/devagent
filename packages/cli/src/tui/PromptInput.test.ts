@@ -1,8 +1,8 @@
 import { mkdtempSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { join } from "node:path";
 import stringWidth from "string-width";
+import { describe, expect, it } from "vitest";
 
 import { TUI_HELP_MESSAGE } from "./App.js";
 import {

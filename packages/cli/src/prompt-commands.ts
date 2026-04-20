@@ -476,7 +476,7 @@ function extractReviewSections(candidate: string): {
   }
 
   return {
-    blockingFindings: collectSection(lines, headings[0]!.index),
+    blockingFindings: collectSection(lines, headings[0].index),
     nonBlockingSuggestions: collectSection(lines, headings[1]!.index),
     openQuestions: collectSection(lines, headings[2]!.index),
     summary: collectSection(lines, headings[3]!.index),

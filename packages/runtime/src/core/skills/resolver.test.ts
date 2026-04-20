@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { SkillResolver } from "./resolver.js";
-import type { Skill } from "./types.js";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+
+import { SkillResolver } from "./resolver.js";
+import type { Skill } from "./types.js";
 
 const TEST_DIR = "/tmp/devagent-skill-resolver-test";
 

@@ -3,8 +3,8 @@
  * Shows bordered box with tool info, y/n/a keybindings, and optional rejection reason.
  */
 
-import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import React, { useState } from "react";
 
 export interface ApprovalRequest {
   readonly id: string;

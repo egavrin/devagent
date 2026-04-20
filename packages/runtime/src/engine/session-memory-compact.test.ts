@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+
 import { trySessionMemoryCompact } from "./session-memory-compact.js";
 import { SessionState } from "./session-state.js";
 import { MessageRole } from "../core/index.js";

@@ -4,13 +4,16 @@
  * Fail fast: missing required config throws, never guesses.
  */
 
-import { parse as parseToml } from "smol-toml";
 import { readFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { parse as parseToml } from "smol-toml";
+
 import { CredentialStore } from "./credentials.js";
-import { ConfigError , extractErrorMessage } from "./errors.js";
+import { ConfigError , extractErrorMessage , OAuthError } from "./errors.js";
 import { LANGUAGE_EXTENSIONS } from "./languages.js";
+import { getOAuthProvider } from "./oauth-providers.js";
+import { refreshAccessToken, exchangeCopilotSessionToken } from "./oauth.js";
 import { resolveProviderCredentialStatus } from "./provider-credentials.js";
 import type {
   DevAgentConfig,
@@ -864,9 +867,6 @@ export function findProjectRoot(startDir?: string): string | null {
 // ─── OAuth Credential Resolution ────────────────────────────
 
 import type { OAuthCredential } from "./credentials.js";
-import { getOAuthProvider } from "./oauth-providers.js";
-import { refreshAccessToken, exchangeCopilotSessionToken } from "./oauth.js";
-import { OAuthError } from "./errors.js";
 
 /**
  * Resolve OAuth credentials for all providers that have stored OAuth tokens.

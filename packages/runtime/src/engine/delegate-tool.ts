@@ -6,18 +6,18 @@
  * dependencies: it needs access to runAgent which depends on TaskLoop.
  */
 
-import type { ToolSpec, LLMProvider, DevAgentConfig, Message } from "../core/index.js";
-import { AgentType, EventBus, ApprovalGate, extractErrorMessage } from "../core/index.js";
-import type { ToolRegistry } from "../tools/index.js";
-import { AgentRegistry, runAgent, runForkedAgent } from "./agents.js";
-import type { AgentAmbientContext } from "./agents.js";
 import { parseAgentType } from "./agent-type.js";
+import { runAgent, runForkedAgent } from "./agents.js";
+import type { AgentAmbientContext , AgentRegistry} from "./agents.js";
 import type { SessionState } from "./session-state.js";
-import { judgeSubagentOutput } from "./subagent-judge.js";
 import {
   buildDelegationQuery,
   normalizeDelegationRequest,
 } from "./subagent-contract.js";
+import { judgeSubagentOutput } from "./subagent-judge.js";
+import type { ToolSpec, LLMProvider, DevAgentConfig, Message , EventBus, ApprovalGate} from "../core/index.js";
+import { AgentType, extractErrorMessage } from "../core/index.js";
+import type { ToolRegistry } from "../tools/index.js";
 
 /** Hard cap on subagent iterations to prevent runaway loops. */
 const SUBAGENT_MAX_ITERATIONS = 30;

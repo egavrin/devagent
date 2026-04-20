@@ -4,9 +4,10 @@
  * plan-mode tool gating, approval semantics, and briefing extraction.
  */
 import { describe, it, expect } from "vitest";
+
+import { extractHeuristicBriefing } from "./briefing.js";
 import { createPlanTool } from "./plan-tool.js";
 import { SessionState } from "./session-state.js";
-import { extractHeuristicBriefing } from "./briefing.js";
 import { ApprovalGate, EventBus, ApprovalMode, MessageRole } from "../core/index.js";
 import type { Message, ApprovalPolicy } from "../core/index.js";
 

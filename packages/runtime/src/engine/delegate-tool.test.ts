@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createDelegateTool } from "./delegate-tool.js";
+
 import { AgentRegistry } from "./agents.js";
-import type { LLMProvider, StreamChunk, DevAgentConfig } from "../core/index.js";
+import { createDelegateTool } from "./delegate-tool.js";
+import type { LLMProvider, StreamChunk, DevAgentConfig , ToolSpec } from "../core/index.js";
 import { EventBus, ApprovalGate, ApprovalMode } from "../core/index.js";
 import { ToolRegistry } from "../tools/index.js";
-import type { ToolSpec } from "../core/index.js";
 
 // ─── Mock Provider ──────────────────────────────────────────
 

@@ -2,8 +2,8 @@
  * CommandPalette — Ctrl+K searchable command list overlay.
  */
 
-import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import React, { useState } from "react";
 
 export interface Command {
   readonly name: string;

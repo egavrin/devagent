@@ -193,7 +193,7 @@ export class StreamingToolExecutor {
   }
 
   private async waitForRunning(): Promise<void> {
-    const running = this.entries.filter((e) => e.state === "executing" && e.promise);
+    const running = this.entries.filter((e) => e.state === "executing" && e.promise !== null);
     if (running.length === 0) return;
     await Promise.all(running.map((e) => e.promise));
   }

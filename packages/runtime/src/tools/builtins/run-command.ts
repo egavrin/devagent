@@ -4,9 +4,9 @@
  */
 
 import { resolve } from "node:path";
-import type { ToolSpec } from "../../core/index.js";
-import type { ToolCommandResultMetadata } from "../../core/index.js";
+
 import { spawnAndCapture } from "./spawn-capture.js";
+import type { ToolSpec , ToolCommandResultMetadata } from "../../core/index.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000; // 2 minutes
 const MAX_COMMAND_TIMEOUT_MS = 600_000; // 10 minutes — hard cap for LLM-provided values

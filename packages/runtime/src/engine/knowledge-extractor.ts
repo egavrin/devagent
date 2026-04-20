@@ -9,15 +9,15 @@
  * survive all future compactions, preventing the re-read feedback loop.
  */
 
-import type { LLMProvider, Message } from "../core/index.js";
-import { MessageRole } from "../core/index.js";
-import type { SessionState } from "./session-state.js";
 import {
   collectStreamText,
   parseJudgeResponse,
   formatMessageForJudge,
   buildSessionStateContext,
 } from "./llm-judge.js";
+import type { SessionState } from "./session-state.js";
+import type { LLMProvider, Message } from "../core/index.js";
+import { MessageRole } from "../core/index.js";
 
 // ─── Constants ──────────────────────────────────────────────
 

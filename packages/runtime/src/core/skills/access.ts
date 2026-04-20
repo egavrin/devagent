@@ -1,5 +1,5 @@
+import type { SkillRegistry } from "./registry.js";
 import type { SkillMetadata } from "./types.js";
-import { SkillRegistry } from "./registry.js";
 
 export const INVOKED_SKILL_KNOWLEDGE_PREFIX = "invoked-skill:";
 

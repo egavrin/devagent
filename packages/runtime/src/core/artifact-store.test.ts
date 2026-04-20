@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "fs";
-import { join } from "path";
 import { tmpdir } from "os";
+import { join } from "path";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+
 import { ArtifactStore } from "./artifact-store.js";
 
 describe("ArtifactStore", () => {

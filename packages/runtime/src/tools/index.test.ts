@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
-import type { ToolSpec } from "../core/types.js";
+
 import { createDefaultToolRegistry } from "./index.js";
+import type { ToolSpec } from "../core/types.js";
 
 function makeTool(name: string): ToolSpec {
   return {

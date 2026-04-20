@@ -48,6 +48,14 @@ jobs:
         working-directory: devagent
         run: bun run typecheck
 
+      - name: Dead code
+        working-directory: devagent
+        run: bun run check:dead
+
+      - name: Dependency boundaries
+        working-directory: devagent
+        run: bun run check:deps
+
       - name: Test
         working-directory: devagent
         run: bun run test

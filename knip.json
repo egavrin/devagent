@@ -6,21 +6,8 @@
   "project": [
     "scripts/**/*.ts"
   ],
-  "ignoreFiles": [
-    "scripts/live-validation/execute-deep.test.ts",
-    "scripts/live-validation/execute-chain.test.ts",
-    "scripts/live-validation/live-validation.test.ts",
-    "scripts/live-validation/tui-validator.test.ts",
-    "scripts/surface-smoke/fixtures/**"
-  ],
-  "ignoreDependencies": [
-    "undici"
-  ],
-  "ignoreIssues": {
-    "scripts/live-validation/execute-chain-lib.ts": ["exports"],
-    "scripts/live-validation/isolation.ts": ["exports"],
-    "scripts/live-validation/manifest.ts": ["exports"]
-  },
+  "bun": true,
+  "vitest": true,
   "workspaces": {
     "packages/arkts": {
       "project": [
@@ -28,6 +15,9 @@
       ]
     },
     "packages/providers": {
+      "entry": [
+        "src/index.ts"
+      ],
       "project": [
         "src/**/*.ts"
       ]

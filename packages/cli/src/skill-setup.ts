@@ -8,14 +8,12 @@ import {
   createToolSearchTool,
   probeShellTools,
   formatProbeResults,
-} from "@devagent/runtime";
-import {
+
   createDefaultToolRegistry,
   createFindFilesTool,
   createReadFileTool,
   createSearchFilesTool,
-  type ToolRegistry,
-} from "@devagent/runtime";
+  type ToolRegistry} from "@devagent/runtime";
 
 interface SkillInfrastructure {
   readonly skills: SkillRegistry;

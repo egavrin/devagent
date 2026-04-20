@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessageRole } from "@devagent/runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
 import { createDefaultRegistry } from "./index.js";
 
 describe("createDefaultRegistry", () => {

@@ -7,12 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve, basename } from "node:path";
-import type { LLMProvider, Message } from "../../core/index.js";
-import { MessageRole , extractErrorMessage } from "../../core/index.js";
-import { PatchParser } from "../../tools/builtins/patch-parser.js";
-import type { FileEntry, ParsedPatch } from "../../tools/builtins/patch-parser.js";
 
-import { extractAppliesToPattern } from "./rules.js";
 import {
   splitLargeFileEntries,
   chunkPatchFiles,
@@ -20,9 +15,13 @@ import {
   computeDynamicFileLimit,
   refineChunksForTokenBudget,
   formatPatchDataset,
-} from "./chunker.js";
+ DEFAULT_REVIEW_CONFIG } from "./chunker.js";
 import type { ReviewConfig } from "./chunker.js";
-import { DEFAULT_REVIEW_CONFIG } from "./chunker.js";
+import {
+  SourceContextProvider,
+  ContextOrchestrator,
+} from "./context.js";
+import { extractAppliesToPattern } from "./rules.js";
 import { VIOLATION_SCHEMA } from "./schema.js";
 import type { Violation, ReviewResult, ReviewSummary } from "./schema.js";
 import {
@@ -30,10 +29,11 @@ import {
   validateReviewResponse,
   deduplicateViolations,
 } from "./validator.js";
-import {
-  SourceContextProvider,
-  ContextOrchestrator,
-} from "./context.js";
+import type { LLMProvider, Message } from "../../core/index.js";
+import { MessageRole , extractErrorMessage } from "../../core/index.js";
+import { PatchParser } from "../../tools/builtins/patch-parser.js";
+import type { FileEntry, ParsedPatch } from "../../tools/builtins/patch-parser.js";
+
 
 // ── Pipeline options ────────────────────────────────────────────────────────
 

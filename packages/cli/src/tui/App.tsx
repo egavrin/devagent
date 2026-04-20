@@ -2,30 +2,34 @@
  * App — top-level Ink TUI application for devagent interactive mode.
  */
 
-import React, { useState, useCallback } from "react";
-import { Box, Text, Static, useInput, useApp } from "ink";
-import { SafetyMode } from "@devagent/runtime";
-import { PromptInput } from "./PromptInput.js";
-import { StatusBar } from "./StatusBar.js";
-import { Spinner } from "./Spinner.js";
+import { Box, Static, Text, useApp, useInput } from "ink";
+import React, { useCallback, useState } from "react";
+
 import { ApprovalDialog, type ApprovalRequest } from "./ApprovalDialog.js";
-import { SubagentPanel } from "./SubagentPanel.js";
 import { CommandPalette, type Command } from "./CommandPalette.js";
-import { ToastContainer, type ToastMessage } from "./Toast.js";
-import { Welcome } from "./Welcome.js";
 import { LogEntryView } from "./LogEntryView.js";
+import { PromptInput } from "./PromptInput.js";
+import {
+  cycleApprovalMode,
+  getApprovalModeColor,
+  type InteractiveQueryResult,
+  type TranscriptNode,
+} from "./shared.js";
+import { Spinner } from "./Spinner.js";
+import { StatusBar } from "./StatusBar.js";
+import { SubagentPanel } from "./SubagentPanel.js";
+import { ToastContainer, type ToastMessage } from "./Toast.js";
 import { useAgentLog } from "./useAgentLog.js";
-import { cycleApprovalMode, getApprovalModeColor, type InteractiveQueryResult } from "./shared.js";
-import type { TranscriptNode } from "./shared.js";
-import type { EventBus } from "@devagent/runtime";
+import { Welcome } from "./Welcome.js";
 import { renderSessionPreview, type SessionPreview } from "../session-preview.js";
 import type { PresentedTurn } from "../transcript-composer.js";
 import {
-  makeFinalOutputPart,
   makeInfoPart,
-  makeTurnSummaryPart,
   makeErrorPart,
+  makeFinalOutputPart,
+  makeTurnSummaryPart,
 } from "../transcript-presenter.js";
+import type { EventBus, SafetyMode } from "@devagent/runtime";
 
 export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter or Option+Enter for newline │ Shift+Tab toggles safety mode";
 export const ITERATION_LIMIT_NOTICE = "Iteration limit exhausted. Type /continue to proceed.";
@@ -288,16 +292,20 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const runCommand = useCallback((command: string) => {
+    void handleSubmit(command);
+  }, [handleSubmit]);
+
   const showPrompt = !running && !pendingApproval && !showCommandPalette;
 
   const commands: Command[] = [
     { name: "Clear context", description: "Reset conversation and session state", shortcut: "/clear", action: () => { onClear(); clearSubagents(); addToast("Context cleared", "success"); } },
-    { name: "Continue", description: "Continue the current session after a pause or budget limit", shortcut: "/continue", action: () => handleSubmit("/continue") },
-    { name: "Session list", description: "Show recent sessions", shortcut: "/sessions", action: () => handleSubmit("/sessions") },
-    { name: "Help", description: "Show available commands", shortcut: "/help", action: () => handleSubmit("/help") },
-    { name: "Review local changes", description: "Insert or run the embedded /review command anywhere in a prompt", shortcut: "/review", action: () => handleSubmit("/review") },
-    { name: "Simplify local changes", description: "Insert or run the embedded /simplify command anywhere in a prompt", shortcut: "/simplify", action: () => handleSubmit("/simplify") },
-    { name: "Resume session", description: "List sessions to resume", shortcut: "/resume", action: () => handleSubmit("/resume") },
+    { name: "Continue", description: "Continue the current session after a pause or budget limit", shortcut: "/continue", action: () => runCommand("/continue") },
+    { name: "Session list", description: "Show recent sessions", shortcut: "/sessions", action: () => runCommand("/sessions") },
+    { name: "Help", description: "Show available commands", shortcut: "/help", action: () => runCommand("/help") },
+    { name: "Review local changes", description: "Insert or run the embedded /review command anywhere in a prompt", shortcut: "/review", action: () => runCommand("/review") },
+    { name: "Simplify local changes", description: "Insert or run the embedded /simplify command anywhere in a prompt", shortcut: "/simplify", action: () => runCommand("/simplify") },
+    { name: "Resume session", description: "List sessions to resume", shortcut: "/resume", action: () => runCommand("/resume") },
     { name: "Safety mode", description: "Toggle default and autopilot", shortcut: "Shift+Tab", action: handleCycleApprovalMode },
     { name: "Exit", description: "Quit devagent", shortcut: "Ctrl+C", action: () => exit() },
   ];

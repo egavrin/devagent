@@ -11,13 +11,14 @@
  * then `[model-name]` sections with per-model capabilities.
  */
 
-import { parse as parseToml } from "smol-toml";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
 import { homedir } from "node:os";
-import type { ModelCapabilities } from "./types.js";
-import { extractErrorMessage } from "./errors.js";
+import { join } from "node:path";
+import { parse as parseToml } from "smol-toml";
+
 import { EMBEDDED_MODEL_TOML } from "./embedded-models.js";
+import { extractErrorMessage } from "./errors.js";
+import type { ModelCapabilities } from "./types.js";
 
 // ─── Types ──────────────────────────────────────────────────
 

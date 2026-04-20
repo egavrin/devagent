@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { MessageRole } from "../core/index.js";
-import type { LLMProvider, Message, StreamChunk } from "../core/index.js";
+
 import {
   collectStreamText,
   parseJudgeResponse,
@@ -11,6 +10,8 @@ import {
   JUDGE_RESULT_MAX_CHARS,
 } from "./llm-judge.js";
 import { SessionState } from "./session-state.js";
+import { MessageRole } from "../core/index.js";
+import type { LLMProvider, Message, StreamChunk } from "../core/index.js";
 
 // ─── Mock helpers ────────────────────────────────────────────
 

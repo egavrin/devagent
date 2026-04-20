@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { SkillLoader } from "./loader.js";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+
+import { SkillLoader } from "./loader.js";
 
 const TEST_DIR = "/tmp/devagent-skill-loader-test";
 const ORIGINAL_HOME = process.env["HOME"];

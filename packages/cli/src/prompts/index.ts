@@ -3,26 +3,26 @@
  * from markdown files into a single system prompt.
  */
 
-import type { SkillRegistry } from "@devagent/runtime";
-import type {
-  AgentType,
-  ReasoningEffort,
-  TaskMode,
-  ToolSpec,
-  TurnBriefing,
-} from "@devagent/runtime";
 import { formatBriefing, formatDeferredToolsSection } from "@devagent/runtime";
-import {
-  buildRootPromptFragments,
-  deriveRootPromptCapabilities,
-} from "./fragments.js";
-import { loadProjectContext } from "./project-context.js";
+
 import {
   PROMPT_BASE,
   PROMPT_TOOLS,
   PROMPT_MODE_ACT,
   PROMPT_REVIEW,
 } from "./embedded.js";
+import {
+  buildRootPromptFragments,
+  deriveRootPromptCapabilities,
+} from "./fragments.js";
+import { loadProjectContext } from "./project-context.js";
+import type { SkillRegistry ,
+  AgentType,
+  ReasoningEffort,
+  TaskMode,
+  ToolSpec,
+  TurnBriefing,
+} from "@devagent/runtime";
 
 interface AssemblePromptOptions {
   readonly mode: TaskMode;

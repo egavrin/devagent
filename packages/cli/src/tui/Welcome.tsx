@@ -2,11 +2,11 @@
  * Welcome — shown on TUI startup before first query.
  */
 
-import React from "react";
-import { existsSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
 import { Box, Text } from "ink";
+import { existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import React from "react";
 
 const FIRST_RUN_PATH = join(homedir(), ".devagent", ".first-run-done");
 

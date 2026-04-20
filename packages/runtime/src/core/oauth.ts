@@ -5,6 +5,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+
 import { OAuthError } from "./errors.js";
 
 // ─── Types ──────────────────────────────────────────────────

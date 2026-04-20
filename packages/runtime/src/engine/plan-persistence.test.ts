@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, expect, afterEach } from "vitest";
+
 import { writePlanFile, readPlanFile, getPlanFilePath } from "./plan-persistence.js";
 import type { PlanStep } from "./plan-tool.js";
 

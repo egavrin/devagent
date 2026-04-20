@@ -2,8 +2,9 @@
  * FinalOutput — renders the agent's final response inside the transcript card system.
  */
 
-import React from "react";
 import { Box, Text } from "ink";
+import React from "react";
+
 import { renderMarkdown } from "../markdown-render.js";
 
 interface FinalOutputProps {

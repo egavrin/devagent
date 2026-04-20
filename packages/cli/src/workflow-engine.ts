@@ -4,53 +4,54 @@
  * skips human-CLI-only systems and keeps bootstrap minimal.
  */
 
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { appendFileSync } from "node:fs";
+import { createDefaultRegistry } from "@devagent/providers";
 import {
-  EventBus,
+  AgentRegistry,
+  AgentType,
   ApprovalGate,
+  ApprovalMode,
   ContextManager,
+  DEFAULT_BUDGET,
+  DEFAULT_DOUBLE_CHECK_OPTIONS,
+  DoubleCheck,
+  EventBus,
+  SessionState,
+  TaskLoop,
+  createDelegateTool,
+  createFindingTool,
+  createPlanTool,
+  createSkillTool,
+  createToolScriptTool,
+  extractErrorMessage,
   loadConfig,
-  resolveProviderCredentials,
   loadModelRegistry,
   lookupModelEntry,
-  DEFAULT_BUDGET,
-  AgentType,
-  ApprovalMode,
-  extractErrorMessage,
+  resolveProviderCredentials,
 } from "@devagent/runtime";
-import type { DevAgentConfig, ApprovalPolicy } from "@devagent/runtime";
-import { createDefaultRegistry } from "@devagent/providers";
-import { ToolRegistry } from "@devagent/runtime";
-import {
-  TaskLoop,
-  createPlanTool,
-  createFindingTool,
-  createToolScriptTool,
-  createDelegateTool,
-  createSkillTool,
-  AgentRegistry,
-  DoubleCheck,
-  DEFAULT_DOUBLE_CHECK_OPTIONS,
-  SessionState,
-  type Message,
-  type SessionStateJSON,
-  type FinalTextValidator,
-} from "@devagent/runtime";
-import type { ContinuationSession } from "@devagent-sdk/types";
-import { assembleSystemPrompt } from "./prompts/index.js";
-import { detectProjectTestCommand } from "./test-command-detect.js";
-import { loadRepoContext, buildContextPrompt } from "./repo-context.js";
-import { resolveBundledModelsDir } from "./model-registry-path.js";
+import { appendFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { createShellTestRunner } from "./double-check-wiring.js";
+import { resolveBundledModelsDir } from "./model-registry-path.js";
+import { assembleSystemPrompt } from "./prompts/index.js";
 import { buildProviderConfig } from "./provider-config.js";
 import {
   formatProviderModelCompatibilityError,
   formatProviderModelCompatibilityHint,
   getProviderModelCompatibilityIssue,
 } from "./provider-model-compat.js";
+import { buildContextPrompt, loadRepoContext } from "./repo-context.js";
 import { createSkillInfrastructure } from "./skill-setup.js";
+import { detectProjectTestCommand } from "./test-command-detect.js";
+import type {
+  ApprovalPolicy,
+  DevAgentConfig,
+  FinalTextValidator,
+  Message,
+  SessionStateJSON,
+} from "@devagent/runtime";
+import type { ContinuationSession } from "@devagent-sdk/types";
 
 interface WorkflowQueryOptions {
   query: string;

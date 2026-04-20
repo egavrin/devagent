@@ -6,12 +6,11 @@
  * simultaneously, each handling different file types.
  */
 
+import { extractErrorMessage, LANGUAGE_EXTENSIONS, LSPClient, spawnAndCapture } from "@devagent/runtime";
 import { execFile } from "node:child_process";
 import { extname } from "node:path";
-import { LSPClient, spawnAndCapture } from "@devagent/runtime";
-import type { LSPServerConfig } from "@devagent/runtime";
-import { extractErrorMessage, LANGUAGE_EXTENSIONS } from "@devagent/runtime";
-import type { DiagnosticProvider, TestRunner, DoubleCheck } from "@devagent/runtime";
+
+import type { DiagnosticProvider, DoubleCheck, LSPServerConfig, TestRunner } from "@devagent/runtime";
 
 // ─── Language Map ───────────────────────────────────────────
 
@@ -50,14 +49,8 @@ const TSC_PATTERN = /^(?<file>.+)\((?<line>\d+),(?<col>\d+)\):\s*(?<sev>error|wa
 /** pyright: /path/file.py:10:5 - error: Message */
 const PYRIGHT_PATTERN = /^(?<file>.+):(?<line>\d+):(?<col>\d+)\s*-\s*(?<sev>error|warning|information):\s*(?<message>.+)$/;
 
-/** cargo check: error[E0382]: borrow of moved value */
-const CARGO_PATTERN = /^\s*--> (?<file>.+):(?<line>\d+):(?<col>\d+)$/;
-
 /** gcc/clang: file.c:10:5: error: message */
 const GCC_PATTERN = /^(?<file>.+):(?<line>\d+):(?<col>\d+):\s*(?<sev>error|warning):\s*(?<message>.+)$/;
-
-/** shellcheck: In file.sh line 10: SC2086: message */
-const SHELLCHECK_PATTERN = /^In (?<file>.+) line (?<line>\d+):/;
 
 /** Built-in map of supported languages with default LSP servers. */
 export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
@@ -588,7 +581,7 @@ interface LazyLSPUpgradeOptions {
 export async function lazyUpgradeLSP(
   opts: LazyLSPUpgradeOptions,
 ): Promise<void> {
-  const { repoRoot, doubleCheck, lspRouter, onServerStarted, onUpgradeComplete, onError, arktsProvider, onLSPDiagnostics } = opts;
+  const { doubleCheck, lspRouter, onServerStarted, onUpgradeComplete, onError, arktsProvider, onLSPDiagnostics } = opts;
 
   try {
     const available = await detectAvailableLSPServers();

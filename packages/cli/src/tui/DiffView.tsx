@@ -2,15 +2,16 @@
  * DiffView — renders structured file diffs shared with the plain CLI formatter.
  */
 
-import React from "react";
 import { Box, Text, useStdout } from "ink";
-import type { ToolFileChangePreview, ToolFileChangeLine } from "@devagent/runtime";
+import React from "react";
+
 import {
   buildHighlightedFileEdit,
   getPresentedDiffGutterWidth,
   type HighlightedDiffLine,
   takeVisibleHighlightedDiffItems,
 } from "../file-edit-presentation.js";
+import type { ToolFileChangePreview } from "@devagent/runtime";
 
 interface DiffViewProps {
   readonly fileEdit: ToolFileChangePreview;

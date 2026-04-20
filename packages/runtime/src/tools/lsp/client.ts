@@ -7,12 +7,15 @@
  */
 
 import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
   createMessageConnection,
   StreamMessageReader,
   StreamMessageWriter,
 } from "vscode-jsonrpc/node.js";
+
+import type { ChildProcess } from "node:child_process";
 import type { MessageConnection } from "vscode-jsonrpc/node.js";
 import type {
   InitializeResult,
@@ -22,8 +25,7 @@ import type {
   DocumentSymbol,
   PublishDiagnosticsParams,
 } from "vscode-languageserver-protocol";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+
 
 // ─── Types ──────────────────────────────────────────────────
 

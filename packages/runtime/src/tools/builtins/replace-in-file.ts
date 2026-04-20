@@ -16,11 +16,12 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
-import type { ToolSpec } from "../../core/types.js";
-import { buildToolFileChangePreview } from "../../core/tool-file-change.js";
-import { ToolError, extractErrorMessage } from "../../core/errors.js";
+
 import { FileTime } from "./file-time.js";
 import { resolvePathInRepo } from "./path-guard.js";
+import { ToolError, extractErrorMessage } from "../../core/errors.js";
+import { buildToolFileChangePreview } from "../../core/tool-file-change.js";
+import type { ToolSpec } from "../../core/types.js";
 
 // ─── Levenshtein Distance ───────────────────────────────────
 

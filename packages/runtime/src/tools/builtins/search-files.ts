@@ -4,10 +4,11 @@
  */
 
 import { readFileSync } from "node:fs";
-import type { ToolSpec } from "../../core/types.js";
-import { resolveReadonlyPath, toRootRelativePath, type ReadonlyToolOptions } from "./readonly-paths.js";
+
 import { escapeRegex, globToRegex, normalizeGlobPattern } from "./glob-utils.js";
+import { resolveReadonlyPath, toRootRelativePath, type ReadonlyToolOptions } from "./readonly-paths.js";
 import { walkDirectory } from "./walk-directory.js";
+import type { ToolSpec } from "../../core/types.js";
 
 interface SearchMatch {
   readonly file: string;

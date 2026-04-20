@@ -6,13 +6,13 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { StatusBarProps } from "./StatusBar.js";
-import type { SubagentState } from "./SubagentPanel.js";
-import type { EventBus } from "@devagent/runtime";
+
 import {
   type LogEntry,
   type TranscriptNode,
 } from "./shared.js";
+import type { StatusBarProps } from "./StatusBar.js";
+import type { SubagentState } from "./SubagentPanel.js";
 import { TranscriptComposer } from "../transcript-composer.js";
 import {
   type PresentedToolGroup,
@@ -29,6 +29,7 @@ import {
   presentToolGroupEvent,
   summarizeToolParamsForTranscript,
 } from "../transcript-presenter.js";
+import type { EventBus } from "@devagent/runtime";
 
 // ─── Hook Options ──────────────────────────────────────────
 

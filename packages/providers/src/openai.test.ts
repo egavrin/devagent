@@ -1,7 +1,3 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createOpenAIProvider, resolveCapabilities, stripNullArgs } from "./openai.js";
-import { convertTools } from "./shared.js";
-import type { ProviderConfig, ModelCapabilities } from "@devagent/runtime";
 import {
   AgentRegistry,
   ApprovalGate,
@@ -11,6 +7,11 @@ import {
   MessageRole,
   ToolRegistry,
 } from "@devagent/runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { createOpenAIProvider, resolveCapabilities, stripNullArgs } from "./openai.js";
+import { convertTools } from "./shared.js";
+import type { ProviderConfig, ModelCapabilities } from "@devagent/runtime";
 
 describe("createOpenAIProvider", () => {
   const originalFetch = globalThis.fetch;

@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
+
+import { SessionState } from "./session-state.js";
+import { StagnationDetector } from "./stagnation-detector.js";
 import { EventBus, MessageRole } from "../core/index.js";
 import type { LLMProvider, Message, StreamChunk } from "../core/index.js";
-import { StagnationDetector } from "./stagnation-detector.js";
-import { SessionState } from "./session-state.js";
 
 // ─── Mock helpers ────────────────────────────────────────────
 

@@ -9,6 +9,16 @@
  * when approaching the budget limit, following the Codex pattern.
  */
 
+import type { DoubleCheck, DoubleCheckResult } from "./double-check.js";
+import type { SessionState} from "./session-state.js";
+import { extractEnvFact, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX } from "./session-state.js";
+import { StagnationDetector } from "./stagnation-detector.js";
+import { StreamingToolExecutor } from "./streaming-tool-executor.js";
+import type { StreamingToolCall } from "./streaming-tool-executor.js";
+import { parseToolScriptStepsArg } from "./tool-script.js";
+import type { ToolScriptStep } from "./tool-script.js";
+import { formatToolSummary } from "./tool-summary-formatter.js";
+import { ToolUseSummaryGenerator, TOOL_USE_SUMMARY_MARKER } from "./tool-use-summary.js";
 import type {
   LLMProvider,
   Message,
@@ -18,15 +28,15 @@ import type {
   CostRecord,
   DevAgentConfig,
   ToolValidationResultMetadata,
-} from "../core/index.js";
+
+  EventBus,
+  ApprovalGate,
+  ContextManager} from "../core/index.js";
 import {
   AgentType,
   MessageRole,
-  EventBus,
-  ApprovalGate,
   ProviderError,
   ProviderTlsCertificateError,
-  ContextManager,
   estimateMessageTokens,
   estimateTokens,
   lookupModelPricing,
@@ -35,22 +45,13 @@ import {
   formatDuration,
 } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
-import type { DoubleCheck, DoubleCheckResult } from "./double-check.js";
-import { SessionState, extractEnvFact, SESSION_STATE_MARKER, PRUNED_MARKER_PREFIX, SUPERSEDED_MARKER_PREFIX } from "./session-state.js";
-import { formatToolSummary } from "./tool-summary-formatter.js";
 
 // Re-export formatter functions that were previously defined here,
 // preserving backward compatibility for external consumers.
 export { summarizeDiff, summarizeTestOutput, extractStructuralDigest } from "./tool-summary-formatter.js";
-import { StagnationDetector } from "./stagnation-detector.js";
 import { judgeCompactionQuality, buildPreCompactionSummary } from "./compaction-judge.js";
 import { extractPreCompactionKnowledge } from "./knowledge-extractor.js";
-import { parseToolScriptStepsArg } from "./tool-script.js";
-import type { ToolScriptStep } from "./tool-script.js";
-import { StreamingToolExecutor } from "./streaming-tool-executor.js";
-import type { StreamingToolCall } from "./streaming-tool-executor.js";
 import { retryWithStrategy } from "./retry-strategy.js";
-import { ToolUseSummaryGenerator, TOOL_USE_SUMMARY_MARKER } from "./tool-use-summary.js";
 import { trySessionMemoryCompact } from "./session-memory-compact.js";
 import { clearPromptCache } from "./agent-prompt.js";
 
@@ -1519,7 +1520,7 @@ export class TaskLoop {
             ...prevMsg,
             content: replacement,
           };
-          this.estimatedTokens += estimateMessageTokens([this.messages[prevIdx]!]);
+          this.estimatedTokens += estimateMessageTokens([this.messages[prevIdx]]);
         }
         // Check for post-compaction re-read storm
         this.stagnationDetector.checkRereadStorm(toolName, target, this.iterations);

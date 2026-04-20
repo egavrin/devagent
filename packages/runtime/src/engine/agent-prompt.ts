@@ -1,13 +1,14 @@
 import * as fs from "node:fs";
 import { join } from "node:path";
+
+import { formatBriefing } from "./briefing.js";
+import type { TurnBriefing } from "./briefing.js";
 import type { AgentType, SkillRegistry, ToolSpec } from "../core/index.js";
 import { AgentType as AgentTypeEnum, LRUCache } from "../core/index.js";
 import {
   formatSkillMatchLine,
   formatSkillPromptGuidance,
 } from "../core/skills/prompt-format.js";
-import { formatBriefing } from "./briefing.js";
-import type { TurnBriefing } from "./briefing.js";
 import type { DeferredToolStub } from "../tools/index.js";
 import { PROMPT_AGENT_COMMON } from "./prompts/embedded.js";
 

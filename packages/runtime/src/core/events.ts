@@ -3,6 +3,7 @@
  * ArkTS-compatible: no dynamic property access, explicit types.
  */
 
+import { extractErrorMessage } from "./errors.js";
 import type {
   ToolResult,
   StreamChunk,
@@ -13,7 +14,6 @@ import type {
   ReasoningEffort,
   ToolFileChangePreview,
 } from "./types.js";
-import { extractErrorMessage } from "./errors.js";
 
 // ─── Event Definitions ───────────────────────────────────────
 

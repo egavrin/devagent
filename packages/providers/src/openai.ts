@@ -6,11 +6,12 @@
  * are driven by config.capabilities. No heuristics — configure explicitly.
  */
 
-import { randomUUID } from "node:crypto";
 import { createOpenAI } from "@ai-sdk/openai";
-import { streamText } from "ai";
-import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
 import { ProviderError } from "@devagent/runtime";
+import { streamText } from "ai";
+import { randomUUID } from "node:crypto";
+
+import { createProxyAwareFetch, hasProxyEnv } from "./network.js";
 import {
   classifyProviderError,
   convertMessages,
@@ -19,24 +20,10 @@ import {
   resolveCapabilities,
   stripNullArgs,
 } from "./shared.js";
-import { createProxyAwareFetch, hasProxyEnv } from "./network.js";
+import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
 
 // Re-export shared utilities so existing consumers (tests, index.ts) don't break.
 export { resolveCapabilities, stripNullArgs } from "./shared.js";
-
-/**
- * ChatGPT Codex-specific request body fields.
- * When set on ProviderConfig, these are injected into providerOptions
- * and via a custom fetch wrapper for fields the SDK doesn't natively support.
- */
-interface ChatGPTCodexOptions {
-  /** Send `store: false` to prevent response storage (required by Codex endpoint). */
-  readonly store?: boolean;
-  /** Additional response `include` fields (e.g., ["reasoning.encrypted_content"]). */
-  readonly include?: ReadonlyArray<string>;
-  /** System-level instructions sent as top-level `instructions` field. */
-  readonly instructions?: string;
-}
 
 export function createOpenAIProvider(config: ProviderConfig): LLMProvider {
   // Build custom headers — merge customHeaders + OAuth-specific headers

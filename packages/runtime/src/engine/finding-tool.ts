@@ -7,8 +7,8 @@
  * analysis without needing to re-read the source material.
  */
 
-import type { ToolSpec } from "../core/index.js";
 import type { SessionState } from "./session-state.js";
+import type { ToolSpec } from "../core/index.js";
 
 export function createFindingTool(
   getSessionState: () => SessionState | undefined,

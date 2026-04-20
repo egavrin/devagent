@@ -60,6 +60,7 @@ bun run install-cli
 ## Conventions and Pitfalls
 
 - Follow the fail-fast philosophy: surface errors explicitly, fix root causes, and avoid silent fallbacks or defensive guards that hide breakage.
+- Keep static-analysis ignore lists clean and preferably empty. Do not add entries to `knip`, `eslint`, `dependency-cruiser`, or similar ignore/exclude lists just to silence findings; fix the code, analysis graph, or dead code instead. If a tool-required baseline exclude ever needs to change, call out the justification explicitly in the task summary.
 - Public CLI `--resume` and `--continue` must replay exact raw message history plus persisted session state. Outside that restore path, prefer LLM-based synthesis or deterministic structured extraction from persisted state, and do not add ad hoc phrase heuristics that guess user intent from prompts like "continue" or "what's next?".
 - Run `bun run typecheck` and `bun run test` before and after meaningful code changes. Run `bun run check:oss` when changing public docs, contributor workflow, or package metadata.
 - Keep changes small and test-backed. If behavior changes, start with a failing or expanded test near the affected code.

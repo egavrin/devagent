@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { ToolUseSummaryGenerator, DEFAULT_TOOL_USE_SUMMARY_INTERVAL, TOOL_USE_SUMMARY_MARKER } from "./tool-use-summary.js";
+
 import { SessionState } from "./session-state.js";
+import { ToolUseSummaryGenerator, DEFAULT_TOOL_USE_SUMMARY_INTERVAL, TOOL_USE_SUMMARY_MARKER } from "./tool-use-summary.js";
 import { MessageRole } from "../core/index.js";
 import type { Message } from "../core/index.js";
 

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { AgentType } from "./types.js";
+
 import {
   aggregateDelegatedWork,
   formatDuration,
   loggedSubagentRunFromEvent,
 } from "./subagent-summary.js";
+import { AgentType } from "./types.js";
 
 describe("formatDuration", () => {
   it("formats milliseconds, seconds, and minutes", () => {

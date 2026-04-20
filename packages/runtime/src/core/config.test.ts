@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { loadConfig, findProjectRoot, DEFAULT_CONTEXT } from "./config.js";
 import { writeFileSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+import { loadConfig, findProjectRoot, DEFAULT_CONTEXT } from "./config.js";
 
 function writeHomeConfig(home: string, contents: string): string {
   const configDir = join(home, ".config", "devagent");

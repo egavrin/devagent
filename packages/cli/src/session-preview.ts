@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+
 import type { Session } from "@devagent/runtime";
 
 export interface SessionPreview {
@@ -80,7 +81,7 @@ export function buildSessionPreview(
     session.messages,
   );
   const repoLabel = deriveRepoLabel(getString(meta?.["repoLabel"]), getString(meta?.["repoRoot"]));
-  const cost = typeof meta?.["totalCost"] === "number" ? meta["totalCost"] as number : undefined;
+  const cost = typeof meta?.["totalCost"] === "number" ? meta["totalCost"] : undefined;
 
   return {
     id: session.id,

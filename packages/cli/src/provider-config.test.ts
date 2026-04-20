@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
-import type { DevAgentConfig } from "@devagent/runtime";
 import { AgentType, ApprovalMode } from "@devagent/runtime";
+import { describe, expect, it } from "vitest";
+
 import { buildProviderConfig } from "./provider-config.js";
+import type { DevAgentConfig } from "@devagent/runtime";
 
 function makeConfig(): DevAgentConfig {
   return {

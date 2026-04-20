@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, expect, afterEach } from "vitest";
+
 import { EventLogger } from "./event-logger.js";
 import { EventBus } from "./events.js";
 

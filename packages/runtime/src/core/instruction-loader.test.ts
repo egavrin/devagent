@@ -1,13 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { RepositoryInstructionLoader } from "./instruction-loader.js";
 import {
   writeFileSync,
   mkdirSync,
   rmSync,
   mkdtempSync,
 } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+
+import { RepositoryInstructionLoader } from "./instruction-loader.js";
 
 describe("RepositoryInstructionLoader", () => {
   let root: string;

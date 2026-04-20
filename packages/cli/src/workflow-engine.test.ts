@@ -1,10 +1,11 @@
+import { MessageRole, type SessionStateJSON } from "@devagent/runtime";
 import { describe, expect, it } from "vitest";
+
 import {
   createWorkflowFinalTextValidator,
   resolveWorkflowContinuation,
   shouldEnableWorkflowPlanTool,
 } from "./workflow-engine.js";
-import { MessageRole, type SessionStateJSON } from "@devagent/runtime";
 
 describe("shouldEnableWorkflowPlanTool", () => {
   it("disables update_plan for prompt-only workflow stages", () => {

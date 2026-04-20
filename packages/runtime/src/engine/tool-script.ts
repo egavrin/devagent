@@ -10,8 +10,7 @@
  *   $stepId.lines[N] → Nth line (0-indexed) of that step's output
  */
 
-import type { ToolSpec, ToolResult, ToolContext } from "../core/index.js";
-import type { EventBus } from "../core/index.js";
+import type { ToolSpec, ToolResult, ToolContext , EventBus } from "../core/index.js";
 import { extractErrorMessage, extractToolFileChangePreviewSummary } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
 

@@ -6,10 +6,10 @@
  * and provides a quality signal to the parent agent.
  */
 
-import type { LLMProvider } from "../core/index.js";
-import { AgentType, MessageRole } from "../core/index.js";
 import { parseAgentType } from "./agent-type.js";
 import { collectStreamText, parseJudgeResponse } from "./llm-judge.js";
+import type { LLMProvider } from "../core/index.js";
+import { AgentType, MessageRole } from "../core/index.js";
 
 // ─── Types ───────────────────────────────────────────────────
 

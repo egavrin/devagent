@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+
 import { ProviderRegistry } from "./registry.js";
 import type { LLMProvider, ProviderConfig, StreamChunk } from "@devagent/runtime";
 
@@ -14,7 +15,7 @@ function makeMockProvider(id: string): LLMProvider {
 }
 
 function makeMockFactory(id: string) {
-  return (_config: ProviderConfig) => makeMockProvider(id);
+  return (_: ProviderConfig) => makeMockProvider(id);
 }
 
 describe("ProviderRegistry", () => {
@@ -67,7 +68,7 @@ describe("ProviderRegistry", () => {
   it("clear() removes cached instances", () => {
     const registry = new ProviderRegistry();
     let callCount = 0;
-    registry.register("test", (config) => {
+    registry.register("test", (_) => {
       callCount++;
       return makeMockProvider("test");
     });

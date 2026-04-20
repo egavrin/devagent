@@ -2,8 +2,9 @@
  * Spinner — animated thinking indicator with metrics suffix.
  */
 
-import React, { useState, useEffect } from "react";
 import { Text } from "ink";
+import React, { useState, useEffect } from "react";
+
 import { SPINNER_FRAMES, SPINNER_VERBS } from "./shared.js";
 
 interface SpinnerProps {

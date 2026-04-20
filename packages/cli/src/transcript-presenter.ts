@@ -1,3 +1,5 @@
+import { formatFileEditSummary } from "./file-edit-presentation.js";
+import type { PlanStep } from "./tui/PlanView.js";
 import type {
   ToolAfterEvent,
   ToolBeforeEvent,
@@ -6,14 +8,10 @@ import type {
   ContextCompactedEvent,
   ApprovalRequestEvent,
   ApprovalResponseEvent,
-} from "@devagent/runtime";
-import type {
+
   ToolFileChangePreview,
   ToolCommandResultMetadata,
-  ToolValidationResultMetadata,
-} from "@devagent/runtime";
-import type { PlanStep } from "./tui/PlanView.js";
-import { formatFileEditSummary } from "./file-edit-presentation.js";
+  ToolValidationResultMetadata} from "@devagent/runtime";
 
 export interface PresentedToolEvent {
   readonly id: string;
@@ -142,7 +140,6 @@ export type TranscriptPart =
   | { readonly kind: "user"; readonly data: PresentedUser }
   | { readonly kind: "info"; readonly data: PresentedInfo };
 
-type TranscriptPartKind = TranscriptPart["kind"];
 const MAX_PRESENTED_DIAGNOSTICS = 5;
 
 export function summarizeToolParamsForTranscript(name: string, params: Record<string, unknown>): string {
@@ -330,10 +327,6 @@ export function makeStatusPart(data: PresentedStatus): TranscriptPart {
   return { kind: "status", data };
 }
 
-function makeProgressPart(data: PresentedProgress): TranscriptPart {
-  return { kind: "progress", data };
-}
-
 export function makePlanPart(steps: ReadonlyArray<PlanStep>): TranscriptPart {
   return { kind: "plan", data: steps };
 }
@@ -350,10 +343,6 @@ export function makeTurnSummaryPart(
   data: PresentedTurnSummary,
 ): Extract<TranscriptPart, { readonly kind: "turn-summary" }> {
   return { kind: "turn-summary", data };
-}
-
-function makeUserPart(text: string): TranscriptPart {
-  return { kind: "user", data: { text } };
 }
 
 export function makeInfoPart(title: string, lines: ReadonlyArray<string>): TranscriptPart {
@@ -431,13 +420,13 @@ function extractValidationResultMetadata(
   return {
     passed: record["passed"],
     diagnosticErrors: record["diagnosticErrors"] as ReadonlyArray<string>,
-    testPassed: record["testPassed"] as boolean | null,
+    testPassed: record["testPassed"],
     ...(testSummary ? { testSummary } : {}),
     ...(typeof record["testOutputPreview"] === "string" || record["testOutputPreview"] === null
-      ? { testOutputPreview: record["testOutputPreview"] as string | null }
+      ? { testOutputPreview: record["testOutputPreview"] }
       : {}),
     ...(typeof record["baselineFiltered"] === "number"
-      ? { baselineFiltered: record["baselineFiltered"] as number }
+      ? { baselineFiltered: record["baselineFiltered"] }
       : {}),
   };
 }

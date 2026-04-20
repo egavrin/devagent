@@ -2,8 +2,8 @@
  * Toast — auto-dismiss notification overlay.
  */
 
-import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
+import React, { useEffect } from "react";
 
 export type ToastVariant = "info" | "success" | "warning" | "error";
 

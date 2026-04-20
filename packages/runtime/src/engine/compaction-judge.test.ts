@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { MessageRole } from "../core/index.js";
-import type { LLMProvider, Message, StreamChunk } from "../core/index.js";
+
 import { judgeCompactionQuality, buildPreCompactionSummary } from "./compaction-judge.js";
 import { SessionState } from "./session-state.js";
+import { MessageRole } from "../core/index.js";
+import type { LLMProvider, Message, StreamChunk } from "../core/index.js";
 
 // ─── Mock helpers ────────────────────────────────────────────
 

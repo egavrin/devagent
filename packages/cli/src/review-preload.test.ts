@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+
 import { isReviewQuery } from "./main.js";
 
 describe("isReviewQuery", () => {

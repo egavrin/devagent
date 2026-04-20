@@ -10,8 +10,8 @@
  * every mutation auto-saves when bound to a persistence backend.
  */
 
-import type { SessionStateConfigCore } from "../core/index.js";
 import type { PlanStep } from "./plan-tool.js";
+import type { SessionStateConfigCore } from "../core/index.js";
 
 // ─── Constants (defaults) ──────────────────────────────────────
 

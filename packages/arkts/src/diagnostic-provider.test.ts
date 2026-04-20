@@ -3,7 +3,9 @@
  */
 
 import { describe, it, expect } from "vitest";
+
 import { createArkTSDiagnosticProvider } from "./diagnostic-provider.js";
+import { isTsLinterAvailable } from "./linter.js";
 
 describe("createArkTSDiagnosticProvider", () => {
   it("returns null when linterPath is not set", () => {
@@ -35,9 +37,6 @@ describe("createArkTSDiagnosticProvider", () => {
     expect(provider).toBeNull();
   });
 });
-
-// Integration tests (only run if tslinter is available)
-import { isTsLinterAvailable } from "./linter.js";
 
 const LINTER_PATH = process.env["ARKTS_LINTER_PATH"] ??
   `${process.env["HOME"]}/Documents/arkcompiler_ets_frontend/ets2panda/linter`;

@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getGlobalConfigPath, loadGlobalConfigObject, writeGlobalConfigObject } from "./global-config.js";
 import { runCompletions, runConfig, runConfigure, runInit, runSetup } from "./commands.js";
+import { getGlobalConfigPath, loadGlobalConfigObject, writeGlobalConfigObject } from "./global-config.js";
 
 describe("command help", () => {
   let tempHome: string;

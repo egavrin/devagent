@@ -1,4 +1,6 @@
+import { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS , EventBus } from "@devagent/runtime";
 import { describe, it, expect, vi } from "vitest";
+
 import {
   createLSPDiagnosticProvider,
   createRoutingDiagnosticProvider,
@@ -12,8 +14,6 @@ import {
   LANGUAGE_MAP,
 } from "./double-check-wiring.js";
 import type { LSPClient } from "@devagent/runtime";
-import { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS } from "@devagent/runtime";
-import { EventBus } from "@devagent/runtime";
 
 // ─── Language Detection ──────────────────────────────────────
 

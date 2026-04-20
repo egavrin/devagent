@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { LSPClient } from "./client.js";
-import { createLSPTools, createRoutingLSPTools, type LSPClientResolver } from "./tools.js";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, it, expect, vi, afterEach } from "vitest";
+
+import { LSPClient } from "./client.js";
+import { createLSPTools, createRoutingLSPTools, type LSPClientResolver } from "./tools.js";
 
 afterEach(() => {
   vi.useRealTimers();

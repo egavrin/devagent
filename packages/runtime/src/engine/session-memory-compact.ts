@@ -6,9 +6,9 @@
  * Falls back to LLM compaction when session state is too sparse.
  */
 
+import type { SessionState } from "./session-state.js";
 import type { Message } from "../core/index.js";
 import { MessageRole, estimateMessageTokens } from "../core/index.js";
-import type { SessionState } from "./session-state.js";
 
 // ─── Constants ──────────────────────────────────────────────
 

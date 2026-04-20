@@ -4,12 +4,19 @@
  * and restricted tool set. Agents are spawned by the delegate tool.
  */
 
+import { assembleAgentSystemPrompt } from "./agent-prompt.js";
+import type { TurnBriefing } from "./briefing.js";
 import {
   PROMPT_AGENT_GENERAL,
   PROMPT_AGENT_REVIEWER,
   PROMPT_AGENT_ARCHITECT,
   PROMPT_AGENT_EXPLORE,
 } from "./prompts/embedded.js";
+import { SessionState } from "./session-state.js";
+import type { SessionStateJSON } from "./session-state.js";
+import { parseStructuredAgentOutput } from "./subagent-contract.js";
+import { TaskLoop } from "./task-loop.js";
+import type { TaskMode, TaskLoopResult } from "./task-loop.js";
 import type {
   LLMProvider,
   DevAgentConfig,
@@ -17,16 +24,9 @@ import type {
   ToolSpec,
   SkillRegistry,
   Message,
-} from "../core/index.js";
-import { AgentType, MessageRole, EventBus, ApprovalGate } from "../core/index.js";
+ EventBus, ApprovalGate } from "../core/index.js";
+import { AgentType, MessageRole } from "../core/index.js";
 import { ToolRegistry } from "../tools/index.js";
-import { TaskLoop } from "./task-loop.js";
-import type { TaskMode, TaskLoopResult } from "./task-loop.js";
-import { SessionState } from "./session-state.js";
-import type { SessionStateJSON } from "./session-state.js";
-import { assembleAgentSystemPrompt } from "./agent-prompt.js";
-import type { TurnBriefing } from "./briefing.js";
-import { parseStructuredAgentOutput } from "./subagent-contract.js";
 
 // ─── Agent Definition ────────────────────────────────────────
 

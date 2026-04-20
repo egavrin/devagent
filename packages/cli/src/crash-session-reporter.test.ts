@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+
 import { createCrashSessionReporter } from "./main.js";
 
 describe("createCrashSessionReporter", () => {

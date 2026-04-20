@@ -17,8 +17,8 @@ export { LSPClient, createRoutingLSPTools } from "./lsp/index.js";
 // Shared utilities
 export { spawnAndCapture } from "./builtins/spawn-capture.js";
 
-import type { ToolSpec } from "../core/index.js";
 import { ToolRegistry } from "./registry.js";
+import type { ToolSpec } from "../core/index.js";
 import {
   readFileTool,
   writeFileTool,

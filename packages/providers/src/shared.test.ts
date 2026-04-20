@@ -1,5 +1,3 @@
-import { describe, it, expect } from "vitest";
-import { classifyProviderError, stripNullArgs, resolveCapabilities, convertMessages } from "./shared.js";
 import {
   ProviderError,
   RateLimitError,
@@ -8,6 +6,9 @@ import {
   OverloadedError,
   MessageRole,
 } from "@devagent/runtime";
+import { describe, it, expect } from "vitest";
+
+import { classifyProviderError, stripNullArgs, resolveCapabilities, convertMessages } from "./shared.js";
 
 // ─── classifyProviderError ──────────────────────────────────
 

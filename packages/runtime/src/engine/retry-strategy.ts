@@ -10,6 +10,7 @@
  * Inspired by claude-code-src withRetry.ts pattern.
  */
 
+import { OverloadedError, MaxOutputTokensError } from "../core/errors.js";
 import {
   ProviderError,
   RateLimitError,
@@ -20,7 +21,6 @@ import {
 
 // Import new error types — these are added in the same PR
 // to avoid circular dependency, we import them directly.
-import { OverloadedError, MaxOutputTokensError } from "../core/errors.js";
 
 // ─── Constants ──────────────────────────────────────────────
 

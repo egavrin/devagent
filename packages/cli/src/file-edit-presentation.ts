@@ -1,14 +1,15 @@
-import type {
-  ToolFileChangePreview,
-  ToolFileChangeLine,
-  ToolFileChangeHunk,
-} from "@devagent/runtime";
 import { buildToolFileStructuredDiffFromUnifiedDiff } from "@devagent/runtime";
+
 import {
   detectSyntaxLanguage,
   getFirstContentLine,
   highlightCodeForTerminal,
 } from "./syntax-highlight.js";
+import type {
+  ToolFileChangePreview,
+  ToolFileChangeLine,
+  ToolFileChangeHunk,
+} from "@devagent/runtime";
 
 interface PresentedDiffHunk {
   readonly key: string;
@@ -36,10 +37,6 @@ interface HighlightedFileEdit {
   readonly hunks: ReadonlyArray<HighlightedDiffHunk>;
   readonly truncated: boolean;
 }
-
-type PresentedDiffItem =
-  | { readonly type: "separator"; readonly key: string }
-  | { readonly type: "line"; readonly line: ToolFileChangeLine };
 
 type HighlightedDiffItem =
   | { readonly type: "separator"; readonly key: string }
@@ -104,30 +101,6 @@ export function buildHighlightedFileEdit(
   }
   perFile.set(cacheKey, highlighted);
   return highlighted;
-}
-
-function takeVisiblePresentedDiffItems(
-  hunks: ReadonlyArray<PresentedDiffHunk>,
-  maxLines: number,
-): {
-  readonly items: ReadonlyArray<PresentedDiffItem>;
-  readonly hiddenLines: number;
-} {
-  const items: PresentedDiffItem[] = [];
-
-  for (let index = 0; index < hunks.length; index++) {
-    if (index > 0) {
-      items.push({ type: "separator", key: `separator-${index}` });
-    }
-    for (const line of hunks[index]!.lines) {
-      items.push({ type: "line", line });
-    }
-  }
-
-  return {
-    items: items.slice(0, maxLines),
-    hiddenLines: Math.max(0, items.length - maxLines),
-  };
 }
 
 export function takeVisibleHighlightedDiffItems(

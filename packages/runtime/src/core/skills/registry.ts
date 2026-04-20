@@ -3,8 +3,8 @@
  * Pure data store: no filesystem discovery logic (that's SkillLoader's job).
  */
 
-import type { SkillMetadata, Skill } from "./types.js";
 import { SkillLoader } from "./loader.js";
+import type { SkillMetadata, Skill } from "./types.js";
 
 export class SkillRegistry {
   private readonly skills = new Map<string, SkillMetadata>();

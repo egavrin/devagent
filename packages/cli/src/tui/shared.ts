@@ -3,9 +3,10 @@
  */
 
 import { SafetyMode } from "@devagent/runtime";
-import type { TaskCompletionStatus } from "@devagent/runtime";
-import type { TranscriptPart } from "../transcript-presenter.js";
+
 import type { TranscriptNode } from "../transcript-composer.js";
+import type { TranscriptPart } from "../transcript-presenter.js";
+import type { TaskCompletionStatus } from "@devagent/runtime";
 
 // ─── Spinner Constants ──────────────────────────────────────
 

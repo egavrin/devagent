@@ -15,11 +15,12 @@
  * - Tab completion: slash commands + file paths
  */
 
-import React, { useRef, useState } from "react";
+import { Box, Text, useInput, useStdout } from "ink";
 import { readdirSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
-import { Box, Text, useInput, useStdout } from "ink";
+import React, { useRef, useState } from "react";
 import stringWidth from "string-width";
+
 import { getApprovalModeColor, resolvePromptTabAction } from "./shared.js";
 
 export const SLASH_COMMANDS = [

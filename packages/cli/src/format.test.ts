@@ -2,7 +2,9 @@
  * Tests for CLI output formatting — categorical verbosity, gauges, summaries.
  */
 
+import { AgentType } from "@devagent/runtime";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+
 import {
   isCategoryEnabled,
   buildVerbosityConfig,
@@ -15,7 +17,6 @@ import {
   formatSessionSummary,
   formatCompactionResult,
   formatReasoning,
-  Spinner,
   formatFileEditPreview,
   formatTranscriptPart,
   formatToolStart,
@@ -28,13 +29,12 @@ import {
   summarizeSubagentUpdate,
   SubagentPanelRenderer,
 } from "./format.js";
-import { AgentType } from "@devagent/runtime";
-import type { VerbosityConfig } from "@devagent/runtime";
 import {
   presentApprovalRequestEvent,
   presentContextCompactingEvent,
   presentToolAfterEvent,
 } from "./transcript-presenter.js";
+import type { VerbosityConfig } from "@devagent/runtime";
 
 function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, "");

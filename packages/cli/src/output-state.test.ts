@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { AgentType } from "@devagent/runtime";
+import { describe, expect, it } from "vitest";
+
 import { OutputState } from "./output-state.js";
 
 describe("OutputState delegated work summary", () => {

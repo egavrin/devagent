@@ -3,8 +3,7 @@
  * Follows the same factory pattern as the other runtime tool constructors.
  */
 
-import type { ToolSpec } from "../core/index.js";
-import type { SkillAccessManager, SkillRegistry, SkillResolver } from "../core/index.js";
+import type { ToolSpec , SkillAccessManager, SkillRegistry, SkillResolver } from "../core/index.js";
 import { extractErrorMessage } from "../core/index.js";
 
 interface SkillToolOptions {

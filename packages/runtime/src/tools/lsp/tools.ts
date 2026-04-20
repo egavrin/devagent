@@ -4,9 +4,9 @@
  * All are read-only (category: "readonly").
  */
 
-import type { ToolSpec, ToolErrorGuidance } from "../../core/types.js";
-import { extractErrorMessage } from "../../core/errors.js";
 import type { LSPClient } from "./client.js";
+import { extractErrorMessage } from "../../core/errors.js";
+import type { ToolSpec, ToolErrorGuidance } from "../../core/types.js";
 
 // ─── Types ──────────────────────────────────────────────────
 

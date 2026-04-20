@@ -1,13 +1,14 @@
 import { existsSync } from "node:fs";
 import { relative } from "node:path";
-import { ToolError } from "../../core/errors.js";
-import type { SkillAccessManager } from "../../core/skills/index.js";
+
 import {
   normalizeRelativePath,
   resolvePathInRepo,
   resolvePathInRoot,
   resolveRepoRoot,
 } from "./path-guard.js";
+import { ToolError } from "../../core/errors.js";
+import type { SkillAccessManager } from "../../core/skills/index.js";
 
 export interface ReadonlyToolOptions {
   readonly skillAccess?: SkillAccessManager;

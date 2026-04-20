@@ -1,13 +1,14 @@
+import { ApprovalMode } from "@devagent/runtime";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ApprovalMode } from "@devagent/runtime";
-import type { DevAgentConfig } from "@devagent/runtime";
+
 import type { DoctorReportInput } from "./commands.js";
 import { buildDoctorReport, renderDoctorReport } from "./commands.js";
+import type { DevAgentConfig } from "@devagent/runtime";
 
 const cliSrcDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(cliSrcDir, "..", "..", "..");

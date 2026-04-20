@@ -5,16 +5,17 @@
  * components, then writes final output to stdout and exits.
  */
 
-import React, { useState, useEffect } from "react";
-import { Static, useApp } from "ink";
-import { StatusBar } from "./StatusBar.js";
+import { useApp } from "ink";
+import React, { useEffect, useRef, useState } from "react";
+
+import { TranscriptView } from "./App.js";
+import type { InteractiveQueryResult } from "./shared.js";
 import { Spinner } from "./Spinner.js";
+import { StatusBar } from "./StatusBar.js";
 import { SubagentPanel } from "./SubagentPanel.js";
 import { useAgentLog } from "./useAgentLog.js";
-import type { InteractiveQueryResult } from "./shared.js";
-import type { EventBus } from "@devagent/runtime";
-import { TranscriptView } from "./App.js";
 import { makeErrorPart, makeTurnSummaryPart } from "../transcript-presenter.js";
+import type { EventBus } from "@devagent/runtime";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ export interface SingleShotAppProps {
 export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: SingleShotAppProps): React.ReactElement {
   const { exit } = useApp();
   const [running, setRunning] = useState(true);
+  const hasStartedRef = useRef(false);
 
   const {
     transcriptNodes, status, subagents, spinnerMessage,
@@ -38,10 +40,15 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
     refs,
   } = useAgentLog({ bus, model });
 
-  // Execute query on mount
   useEffect(() => {
+    if (hasStartedRef.current) {
+      return;
+    }
+    hasStartedRef.current = true;
+
     let cancelled = false;
-    (async () => {
+
+    const runQuery = async (): Promise<void> => {
       refs.turnStart.current = Date.now();
       refs.turnToolCount.current = 0;
       refs.costAccum.current = 0;
@@ -73,9 +80,11 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
       }
       setRunning(false);
       setTimeout(() => { if (!cancelled) exit(); }, 100);
-    })();
+    };
+
+    void runQuery();
     return () => { cancelled = true; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appendTurnPart, completeTurn, exit, flushGroup, flushThinking, model, nextId, onFinalOutput, onQuery, query, refs, startTurn]);
 
   let hasActiveSubagents = false;
   for (const a of subagents.values()) { if (a.status === "running") { hasActiveSubagents = true; break; } }

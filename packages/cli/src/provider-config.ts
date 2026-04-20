@@ -1,11 +1,11 @@
+import { lookupModelCapabilities } from "@devagent/runtime";
+
 import type {
   AgentType,
   DevAgentConfig,
-  ModelCapabilities,
   ProviderConfig,
   ReasoningEffort,
 } from "@devagent/runtime";
-import { lookupModelCapabilities } from "@devagent/runtime";
 
 export function buildProviderConfig(
   config: DevAgentConfig,
@@ -34,7 +34,7 @@ export function buildProviderConfig(
         ? { reasoningEffort: "high" }
         : {}),
     ...(!baseProviderConfig.capabilities && registryCaps
-      ? { capabilities: registryCaps as ModelCapabilities }
+      ? { capabilities: registryCaps }
       : {}),
   };
 }

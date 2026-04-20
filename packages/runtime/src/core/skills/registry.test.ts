@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { SkillRegistry } from "./registry.js";
-import type { SkillMetadata } from "./types.js";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+
+import { SkillRegistry } from "./registry.js";
+import type { SkillMetadata } from "./types.js";
 
 const TEST_DIR = "/tmp/devagent-skill-registry-test";
 

@@ -3,8 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { ToolScriptEngine } from "./tool-script.js";
+
 import { createToolScriptTool } from "./tool-script-tool.js";
+import { ToolScriptEngine } from "./tool-script.js";
 import type { ToolScriptStep, ToolScript } from "./tool-script.js";
 import type { ToolSpec, ToolContext, ToolResult } from "../core/index.js";
 import { EventBus } from "../core/index.js";

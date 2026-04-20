@@ -8,9 +8,9 @@
  * compaction-judge, plan-judge, subagent-judge, and error-judge.
  */
 
+import type { SessionState } from "./session-state.js";
 import type { LLMProvider, Message } from "../core/index.js";
 import { MessageRole } from "../core/index.js";
-import type { SessionState } from "./session-state.js";
 
 // ─── Constants ────────────────────────────────────────────────
 

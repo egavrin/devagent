@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+
 import { EventBus } from "./events.js";
 
 describe("EventBus", () => {

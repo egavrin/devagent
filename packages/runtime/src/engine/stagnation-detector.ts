@@ -10,16 +10,16 @@
  * - Post-compaction re-read storms
  */
 
-import type { EventBus, LLMProvider, Message } from "../core/index.js";
-import { MessageRole } from "../core/index.js";
-import type { SessionState } from "./session-state.js";
+import { classifyError } from "./error-judge.js";
 import {
   collectStreamText,
   parseJudgeResponse,
   formatMessageForJudge,
   buildSessionStateContext,
 } from "./llm-judge.js";
-import { classifyError } from "./error-judge.js";
+import type { SessionState } from "./session-state.js";
+import type { EventBus, LLMProvider, Message } from "../core/index.js";
+import { MessageRole } from "../core/index.js";
 
 // ─── Constants ────────────────────────────────────────────────
 

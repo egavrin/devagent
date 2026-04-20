@@ -9,14 +9,13 @@
 
 let highlightLib: typeof import("cli-highlight") | null = null;
 let highlightLoadAttempted = false;
-let highlightLoadPromise: Promise<typeof import("cli-highlight") | null> | null = null;
 
 function getHighlight(): typeof import("cli-highlight") | null {
   if (!highlightLoadAttempted) {
     highlightLoadAttempted = true;
     // Eagerly start loading (async) — first call to highlightCode may miss,
     // but subsequent calls will have it cached.
-    highlightLoadPromise = import("cli-highlight")
+    void import("cli-highlight")
       .then((m) => { highlightLib = m; return m; })
       .catch(() => { highlightLib = null; return null; });
   }
@@ -32,8 +31,6 @@ const DIM = NO_COLOR ? "" : "\x1b[2m";
 const ITALIC = NO_COLOR ? "" : "\x1b[3m";
 const RESET = NO_COLOR ? "" : "\x1b[0m";
 const CYAN = NO_COLOR ? "" : "\x1b[36m";
-const GREEN = NO_COLOR ? "" : "\x1b[32m";
-const RED = NO_COLOR ? "" : "\x1b[31m";
 
 // ─── Public API ─────────────────────────────────────────────
 
@@ -180,30 +177,6 @@ function renderTableSeparator(widths: ReadonlyArray<number>): string {
   return widths
     .map((width) => `${DIM}${"─".repeat(Math.max(3, width))}${RESET}`)
     .join(`${DIM}─┼─${RESET}`);
-}
-
-/**
- * Render a unified diff with colored additions/deletions.
- * Green for additions (+), red for deletions (-), dim for context.
- */
-function renderDiff(diff: string): string {
-  if (NO_COLOR) return diff;
-
-  return diff.split("\n").map((line) => {
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      return `${GREEN}${line}${RESET}`;
-    }
-    if (line.startsWith("-") && !line.startsWith("---")) {
-      return `${RED}${line}${RESET}`;
-    }
-    if (line.startsWith("@@")) {
-      return `${CYAN}${line}${RESET}`;
-    }
-    if (line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("---") || line.startsWith("+++")) {
-      return `${BOLD}${line}${RESET}`;
-    }
-    return `${DIM}${line}${RESET}`;
-  }).join("\n");
 }
 
 // ─── Code Highlighting ──────────────────────────────────────

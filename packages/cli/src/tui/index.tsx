@@ -3,8 +3,9 @@
  * No alt-screen — content scrolls naturally in terminal scrollback.
  */
 
-import React from "react";
 import { render } from "ink";
+import React from "react";
+
 import { App, type AppProps } from "./App.js";
 import { SingleShotApp, type SingleShotAppProps } from "./SingleShotApp.js";
 

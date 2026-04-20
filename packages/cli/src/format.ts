@@ -4,27 +4,27 @@
  * All output goes to stderr (stdout reserved for LLM content).
  */
 
-import type {
-  VerbosityConfig,
-  SubagentStartEvent,
-  SubagentUpdateEvent,
-  SubagentEndEvent,
-  SubagentErrorEvent,
-  DelegatedWorkSummary,
-  ToolFileChangePreview,
-} from "@devagent/runtime";
 import { formatDuration } from "@devagent/runtime";
-import type {
-  TranscriptPart,
-  PresentedToolEvent,
-  PresentedToolGroup,
-} from "./transcript-presenter.js";
-import type { PresentedTurn } from "./transcript-composer.js";
+
 import {
   buildHighlightedFileEdit,
   getPresentedDiffGutterWidth,
   takeVisibleHighlightedDiffItems,
 } from "./file-edit-presentation.js";
+import type { PresentedTurn } from "./transcript-composer.js";
+import type {
+  TranscriptPart,
+  PresentedToolEvent,
+  PresentedToolGroup,
+} from "./transcript-presenter.js";
+import type {
+  VerbosityConfig,
+  SubagentStartEvent,
+  SubagentUpdateEvent,
+  SubagentErrorEvent,
+  DelegatedWorkSummary,
+  ToolFileChangePreview,
+} from "@devagent/runtime";
 
 // ─── Color Helpers ──────────────────────────────────────────
 

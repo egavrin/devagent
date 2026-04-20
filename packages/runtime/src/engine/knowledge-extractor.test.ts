@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
+
 import { extractPreCompactionKnowledge, KNOWLEDGE_EXTRACTION_SYSTEM_PROMPT } from "./knowledge-extractor.js";
 import type { KnowledgeExtractionResult } from "./knowledge-extractor.js";
+import { SessionState } from "./session-state.js";
 import type { LLMProvider, StreamChunk, Message } from "../core/index.js";
 import { MessageRole } from "../core/index.js";
-import { SessionState } from "./session-state.js";
 
 function createMockProvider(responseText: string): LLMProvider {
   return {

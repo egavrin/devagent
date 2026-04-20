@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import type { LLMProvider, StreamChunk } from "../core/index.js";
+
 import { judgePlanQuality, isStructuralChange } from "./plan-judge.js";
 import type { PlanStep } from "./plan-tool.js";
 import { SessionState } from "./session-state.js";
+import type { LLMProvider, StreamChunk } from "../core/index.js";
 
 // ─── Mock helpers ────────────────────────────────────────────
 

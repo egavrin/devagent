@@ -6,6 +6,7 @@
 
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+
 import type { FileEntry, Hunk } from "../../tools/builtins/patch-parser.js";
 
 // ── ContextItem ─────────────────────────────────────────────────────────────

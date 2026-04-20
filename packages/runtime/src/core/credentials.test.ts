@@ -1,9 +1,10 @@
+import { writeFileSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+
 import { CredentialStore } from "./credentials.js";
 import { CredentialError } from "./errors.js";
-import { writeFileSync, mkdirSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 describe("CredentialStore", () => {
   let testDir: string;

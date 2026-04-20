@@ -1,16 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { AgentType, SkillRegistry } from "../core/index.js";
-import type { SkillMetadata } from "../core/index.js";
-import type { TurnBriefing } from "./briefing.js";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+
 import {
   __getCommonPromptReadCountForTesting,
   __resetCommonPromptCacheForTesting,
   assembleAgentSystemPrompt,
   clearPromptCache,
 } from "./agent-prompt.js";
+import type { TurnBriefing } from "./briefing.js";
+import { AgentType, SkillRegistry } from "../core/index.js";
+import type { SkillMetadata } from "../core/index.js";
 
 describe("assembleAgentSystemPrompt", () => {
   let repoRoot: string | null = null;

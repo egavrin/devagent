@@ -222,7 +222,7 @@ function resolveConfigPath(
     return { path: [topLevel], legacyApprovalAlias: false };
   }
 
-  const second = rawParts[1] ? toSnakeCase(rawParts[1]!) : undefined;
+  const second = rawParts[1] ? toSnakeCase(rawParts[1]) : undefined;
   if (topLevel === "approval") {
     if (rawParts.length !== 2 || second !== "mode") {
       throw new Error(`Unsupported config key: "${path}"`);
@@ -239,7 +239,7 @@ function resolveConfigPath(
 
   if (topLevel === "providers") {
     const providerId = rawParts[1];
-    const field = rawParts[2] ? toSnakeCase(rawParts[2]!) : undefined;
+    const field = rawParts[2] ? toSnakeCase(rawParts[2]) : undefined;
     if (!providerId || rawParts.length !== 3 || !field || !PROVIDER_FIELDS.has(field)) {
       throw new Error(`Unsupported config key: "${path}"`);
     }
@@ -256,15 +256,15 @@ function resolveConfigPath(
     if (
       ["agent_model_overrides", "agent_reasoning_overrides", "agent_iteration_caps", "allowed_child_agents"].includes(second)
     ) {
-      const agentType = rawParts[2] ? toSnakeCase(rawParts[2]!) : undefined;
+      const agentType = rawParts[2] ? toSnakeCase(rawParts[2]) : undefined;
       if (!agentType || rawParts.length !== 3 || !AGENT_TYPES.has(agentType)) {
         throw new Error(`Unsupported config key: "${path}"`);
       }
       return { path: [topLevel, second, agentType], legacyApprovalAlias: false };
     }
     if (second === "agent_permission_overrides") {
-      const agentType = rawParts[2] ? toSnakeCase(rawParts[2]!) : undefined;
-      const category = rawParts[3] ? toSnakeCase(rawParts[3]!) : undefined;
+      const agentType = rawParts[2] ? toSnakeCase(rawParts[2]) : undefined;
+      const category = rawParts[3] ? toSnakeCase(rawParts[3]) : undefined;
       if (!agentType || !category || rawParts.length !== 4 || !AGENT_TYPES.has(agentType) || !TOOL_CATEGORIES.has(category)) {
         throw new Error(`Unsupported config key: "${path}"`);
       }
@@ -372,7 +372,7 @@ function flattenObject(
   for (const [key, value] of Object.entries(obj)) {
     const nextKey = prefix ? `${prefix}.${key}` : key;
     if (isPlainObject(value)) {
-      entries.push(...flattenObject(value as Record<string, unknown>, nextKey));
+      entries.push(...flattenObject(value, nextKey));
       continue;
     }
     entries.push([nextKey, value]);
@@ -391,10 +391,10 @@ function normalizeGlobalConfigObject(
   let changed = false;
 
   const safety = isPlainObject(next["safety"])
-    ? (next["safety"] as Record<string, unknown>)
+    ? (next["safety"])
     : undefined;
   const approval = isPlainObject(next["approval"])
-    ? { ...(next["approval"] as Record<string, unknown>) }
+    ? { ...(next["approval"]) }
     : undefined;
 
   let nextSafety = safety ? { ...safety } : undefined;

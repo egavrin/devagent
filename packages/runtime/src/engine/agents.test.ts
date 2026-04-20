@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { AgentType } from "../core/index.js";
+
 import { AgentRegistry } from "./agents.js";
+import { AgentType } from "../core/index.js";
 
 describe("AgentRegistry", () => {
   it("registers all four agent types", () => {

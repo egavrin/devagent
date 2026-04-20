@@ -5,8 +5,9 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { join, dirname } from "node:path";
+
 import { CredentialError , extractErrorMessage } from "./errors.js";
 
 // ─── Types ──────────────────────────────────────────────────

@@ -6,14 +6,15 @@
  * git_status, git_diff with real filesystem and git operations.
  */
 
+import { resolve } from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
-import { ToolScriptEngine } from "./tool-script.js";
+
 import { createToolScriptTool } from "./tool-script-tool.js";
+import { ToolScriptEngine } from "./tool-script.js";
 import { EventBus } from "../core/index.js";
 import type { ToolContext } from "../core/index.js";
 import { createDefaultToolRegistry } from "../tools/index.js";
 import type { ToolRegistry } from "../tools/index.js";
-import { resolve } from "node:path";
 
 // ─── Setup ──────────────────────────────────────────────────
 

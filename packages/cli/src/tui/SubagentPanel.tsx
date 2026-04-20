@@ -2,8 +2,8 @@
  * SubagentPanel — displays active/completed subagent work.
  */
 
-import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
+import React, { useState, useEffect } from "react";
 
 export interface SubagentState {
   readonly agentId: string;

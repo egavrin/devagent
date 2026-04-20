@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+
 import { DoubleCheck, DEFAULT_DOUBLE_CHECK_OPTIONS, parseTestOutput } from "./double-check.js";
 import type { DiagnosticProvider, TestRunner } from "./double-check.js";
 import { EventBus } from "../core/index.js";

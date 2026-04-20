@@ -3,8 +3,9 @@
  * Single line per tool: `● tool_name summary` → `✓ tool_name summary (Xms)`
  */
 
-import React from "react";
 import { Box, Text } from "ink";
+import React from "react";
+
 import { DiffView } from "./DiffView.js";
 import type {
   PresentedToolEvent,

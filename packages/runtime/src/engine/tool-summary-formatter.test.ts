@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+
 import { formatSearchFilesSummary } from "./tool-summary-formatter.js";
 
 describe("formatSearchFilesSummary", () => {

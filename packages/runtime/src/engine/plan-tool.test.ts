@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
+
 import { createPlanTool } from "./plan-tool.js";
-import { EventBus } from "../core/index.js";
 import { SessionState } from "./session-state.js";
+import { EventBus } from "../core/index.js";
 
 function makePlanTool() {
   const bus = new EventBus();

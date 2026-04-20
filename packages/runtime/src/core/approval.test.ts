@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
+
 import { ApprovalGate } from "./approval.js";
 import type { ApprovalRequest } from "./approval.js";
+import { EventBus } from "./events.js";
 import type { ApprovalPolicy } from "./types.js";
 import { ApprovalMode, SafetyMode } from "./types.js";
-import { EventBus } from "./events.js";
 
 function makePolicy(overrides?: Partial<ApprovalPolicy>): ApprovalPolicy {
   return {

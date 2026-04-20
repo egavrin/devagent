@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import type { LLMProvider, StreamChunk } from "../core/index.js";
+
 import { judgeSubagentOutput } from "./subagent-judge.js";
+import type { LLMProvider, StreamChunk } from "../core/index.js";
 
 // ─── Mock helpers ────────────────────────────────────────────
 

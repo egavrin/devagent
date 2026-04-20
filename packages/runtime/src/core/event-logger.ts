@@ -4,8 +4,9 @@
  */
 
 import { mkdirSync, appendFileSync, readFileSync, readdirSync, statSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
 import { homedir } from "node:os";
+import { join } from "node:path";
+
 import type {
   EventBus,
   EventMap,
@@ -13,14 +14,14 @@ import type {
   SubagentEndEvent,
   SubagentErrorEvent,
 } from "./events.js";
-import type { ToolFileChangePreview } from "./types.js";
-import { stripToolFileChangePresentationData } from "./tool-file-change.js";
 import {
   aggregateDelegatedWork,
   formatDuration,
   loggedSubagentRunFromEvent,
 } from "./subagent-summary.js";
 import type { LoggedSubagentRun, DelegatedWorkSummary } from "./subagent-summary.js";
+import { stripToolFileChangePresentationData } from "./tool-file-change.js";
+import type { ToolFileChangePreview } from "./types.js";
 
 // ─── Types ──────────────────────────────────────────────────
 

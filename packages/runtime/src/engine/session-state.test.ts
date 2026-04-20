@@ -1,14 +1,15 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionState, extractEnvFact, KNOWLEDGE_CONTENT_MAX_CHARS } from "./session-state.js";
+
 import { createPlanTool } from "./plan-tool.js";
-import { EventBus } from "../core/index.js";
 import type { PlanStep } from "./plan-tool.js";
+import { SessionState, extractEnvFact, KNOWLEDGE_CONTENT_MAX_CHARS } from "./session-state.js";
 import type {
   SessionStateJSON,
   SessionStatePersistence,
   ToolResultSummary,
   KnowledgeEntry,
 } from "./session-state.js";
+import { EventBus } from "../core/index.js";
 
 describe("SessionState", () => {
   let state: SessionState;

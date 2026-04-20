@@ -1,5 +1,5 @@
-import { basename, extname } from "node:path";
 import { highlight } from "cli-highlight";
+import { basename, extname } from "node:path";
 
 const EXTENSION_LANGUAGE_MAP: Readonly<Record<string, string>> = {
   ".ts": "typescript",

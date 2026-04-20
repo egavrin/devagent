@@ -5,14 +5,14 @@
  * Fail fast: throws on DB errors, never silently drops data.
  */
 
-import { Database } from "./bun-sqlite.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import type { Session, Message, CostRecord } from "./types.js";
-import { MessageRole } from "./types.js";
+import { dirname, join } from "node:path";
+
+import { Database } from "./bun-sqlite.js";
 import { SessionError , extractErrorMessage } from "./errors.js";
+import type { Session, Message, CostRecord , MessageRole } from "./types.js";
 
 // ─── Schema ──────────────────────────────────────────────────
 

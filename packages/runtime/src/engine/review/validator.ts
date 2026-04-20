@@ -4,7 +4,6 @@
  * change-type values.  Ported from the Python validation implementation.
  */
 
-import type { FileEntry } from "../../tools/builtins/patch-parser.js";
 import type {
   Violation,
   ReviewResult,
@@ -12,6 +11,7 @@ import type {
   Severity,
   ReviewChangeType,
 } from "./schema.js";
+import type { FileEntry } from "../../tools/builtins/patch-parser.js";
 
 // ── Lookup tables returned by collectPatchReviewData ─────────────────────────
 

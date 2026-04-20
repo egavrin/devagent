@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
+
 import { createToolSearchTool } from "./tool-search-tool.js";
-import { ToolRegistry } from "../tools/index.js";
 import type { ToolSpec } from "../core/index.js";
+import { ToolRegistry } from "../tools/index.js";
 
 function makeTool(name: string, description: string): ToolSpec {
   return {

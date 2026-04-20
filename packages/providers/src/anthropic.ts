@@ -4,10 +4,11 @@
  */
 
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { streamText } from "ai";
-import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
 import { ProviderError } from "@devagent/runtime";
+import { streamText } from "ai";
+
 import { classifyProviderError, convertMessages, convertTools, processProviderStream } from "./shared.js";
+import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
 
 export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
   if (!config.apiKey) {

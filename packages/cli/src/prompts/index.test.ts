@@ -2,8 +2,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SkillRegistry } from "@devagent/runtime";
+
 import { assembleSystemPrompt } from "./index.js";
+import type { SkillRegistry } from "@devagent/runtime";
 
 const FULL_TOOLSET = [
   { name: "read_file", category: "readonly" },
