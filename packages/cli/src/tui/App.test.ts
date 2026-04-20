@@ -773,7 +773,7 @@ describe("interactive completion notices", () => {
   it("caps large snapshot diffs in condensed mode", async () => {
     const view = renderForTest(React.createElement(LargeCreateHarness));
 
-    await settle();
+    await waitForRenders();
 
     const output = view.stdout.readAll();
     const plain = stripAnsi(output);

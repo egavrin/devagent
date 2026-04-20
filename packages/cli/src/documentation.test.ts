@@ -86,6 +86,15 @@ describe("documentation parity", () => {
     expect(workflow).toContain("legacy approval-mode flags");
   });
 
+  it("documents the fast gate and distinct execute validation tiers", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain("Use `typecheck`, `test`, `test:surface-smoke`, and `check:oss` as the fast PR gate");
+    expect(readme).toContain("bun run validate:live:execute-deep");
+    expect(readme).toContain("`validate:live:execute-chain` proves the canonical");
+    expect(readme).toContain("`validate:live:execute-deep` is the broader release-grade staged packet");
+    expect(readme).toContain("--only canonical|continuity|remainder");
+  });
+
   it("describes project instructions as optional manual files", () => {
     const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
     expect(readme).toContain("Project instructions are optional.");

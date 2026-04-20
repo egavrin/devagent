@@ -101,6 +101,13 @@ When the task changes the public CLI, publish bundle, or `devagent execute` cont
 ```bash
 bun run test:live-validation
 bun run validate:live:full
+bun run validate:live:execute-deep
 bun run validate:live:execute-chain
 bun run verify:publish
 ```
+
+Treat `bun run typecheck`, `bun run test`, `bun run test:surface-smoke`, and `bun run check:oss` as the fast PR gate.
+
+Treat `bun run validate:live:execute-chain` as proof that the canonical chained stage handoff still works end to end.
+
+Treat `bun run validate:live:execute-deep` as the broader release-grade staged packet. It is expected to run longer; use `--only canonical|continuity|remainder` with `--skip-prereqs` when rerunning a focused slice locally.

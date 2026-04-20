@@ -320,11 +320,18 @@ For local release-surface validation, the repo also includes:
 ```bash
 bun run test:live-validation
 bun run validate:live:full
+bun run validate:live:execute-deep
 bun run validate:live:execute-chain
 bun run verify:publish
 ```
 
-Use `test:surface-smoke` as the fast Week 2-style public-surface gate. Use the `validate:live:*` and publish checks as the broader Week 3-style validation tier for real CLI and `devagent execute` coverage.
+Use `typecheck`, `test`, `test:surface-smoke`, and `check:oss` as the fast PR gate for public-surface confidence.
+
+Use `test:live-validation`, `validate:live:execute-chain`, `validate:live:execute-deep`, and `verify:publish` as the broader local release-validation tier for real CLI and `devagent execute` coverage.
+
+`validate:live:execute-chain` proves the canonical `design -> breakdown -> issue-generation -> implement -> review -> repair` handoff works as one chained provider-backed run.
+
+`validate:live:execute-deep` is the broader release-grade staged packet with prerequisites, canonical flow, continuity checks, and full-suite remainder coverage. It is intentionally long-running; use `--only canonical|continuity|remainder` plus `--skip-prereqs` for focused follow-up reruns.
 
 ## License
 

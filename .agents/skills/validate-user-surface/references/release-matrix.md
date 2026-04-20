@@ -7,6 +7,7 @@ Use this file when planning coverage or writing the final report.
 - Pass `bun run build`.
 - Pass `bun run typecheck`.
 - Pass `bun run test`.
+- Pass `bun run test:surface-smoke`.
 - Pass `bun run check:oss`.
 - Pass `bun run build:publish`.
 - Pass `bun run test:bundle-smoke`.
@@ -132,7 +133,8 @@ For each provider:
 - Use `bun run scripts/live-validation.ts --list-scenarios` to inventory current scenarios.
 - Run the full suite before adding bespoke manual checks.
 - Inspect `summary.json` and `summary.md` from the generated output directory.
-- Use `bun run validate:live:execute-deep` when you need one ordered `execute` packet with prereqs, canonical staged flow, continuity checks, and per-scenario review notes.
+- Use `bun run validate:live:execute-deep` when you need one ordered `execute` packet with prereqs, canonical staged flow, continuity checks, remainder coverage, and per-scenario review notes.
+- Use `bun run validate:live:execute-deep --only canonical|continuity|remainder --skip-prereqs` for focused local reruns after a broader packet establishes the baseline.
 - Use `bun run validate:live:execute-chain` when you need one disposable-worktree run that carries real stage artifacts forward into `implement`, `review`, and `repair`.
 - Add manual coverage for gaps the harness does not own yet, especially packaging, registry install paths, auth flows, TUI interactions, and full provider breadth.
 

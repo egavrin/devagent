@@ -99,6 +99,7 @@ export function summarizeScenarioReports(
     passed,
     failed: reports.length - passed - blocked,
     blocked,
+    durationMs: reports.reduce((totalDuration, report) => totalDuration + report.durationMs, 0),
     reports: [...reports],
   };
 }
@@ -161,6 +162,7 @@ export function renderSummaryMarkdown(
     `- Passed: ${summary.passed}`,
     `- Failed: ${summary.failed}`,
     `- Blocked: ${summary.blocked}`,
+    `- Duration: ${summary.durationMs} ms`,
     "",
   ];
   for (const report of summary.reports) {
@@ -168,6 +170,7 @@ export function renderSummaryMarkdown(
     lines.push(`- Status: ${report.status}`);
     lines.push(`- Repo: ${report.targetRepo}`);
     lines.push(`- Surface: ${report.surface}`);
+    lines.push(`- Duration: ${report.durationMs} ms`);
     if (report.taskType) lines.push(`- Task type: ${report.taskType}`);
     lines.push(`- Workspace effect: expected ${report.repoMutation.expectedWorkspaceEffect}, observed ${report.repoMutation.observedChanges ? "changes" : "clean workspace"}`);
     lines.push(`- Workspace review: ${report.repoMutation.summary}`);

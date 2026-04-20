@@ -12,6 +12,7 @@ import { loadValidationScenarios } from "./manifest";
 import { classifyProviderFailure, selectPreferredOllamaModel } from "./provider-smoke";
 import {
   evaluateAssertions,
+  renderSummaryMarkdown,
   renderScenarioReviewMarkdown,
   summarizeScenarioReports,
 } from "./reporting";
@@ -358,6 +359,53 @@ describe("summarizeScenarioReports", () => {
     expect(summary.passed).toBe(2);
     expect(summary.failed).toBe(1);
     expect(summary.blocked).toBe(0);
+    expect(summary.durationMs).toBe(6);
+  });
+
+  it("renders durations in the aggregate markdown", () => {
+    const summary = summarizeScenarioReports([
+      {
+        scenarioId: "a",
+        description: "A",
+        targetRepo: "arkcompiler_runtime_core_docs",
+        surface: "execute",
+        taskShape: "readonly",
+        taskType: "design",
+        provider: "chatgpt",
+        model: "gpt-5.4",
+        status: "passed",
+        startedAt: new Date(0).toISOString(),
+        finishedAt: new Date(5).toISOString(),
+        durationMs: 5,
+        sourceRepoPath: "/src/a",
+        isolationPath: "/tmp/a",
+        outputDir: "/tmp/out/a",
+        command: { executable: "bun", args: ["run"], exitCode: 0 },
+        artifactInventory: [],
+        artifactValidation: { passed: true, checks: [] },
+        repoMutation: {
+          expectedWorkspaceEffect: "non-mutating",
+          passed: true,
+          observedChanges: false,
+          summary: "Readonly scenario kept the workspace clean.",
+        },
+        assertionResults: [],
+        toolCallAssertionResults: [],
+        toolBatchAssertionResults: [],
+        verificationResults: [],
+        timing: { durationMs: 5 },
+        cost: {},
+        rawOutputs: {},
+      },
+    ], {
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      suite: "scenario",
+    });
+
+    const markdown = renderSummaryMarkdown(summary);
+    expect(markdown).toContain("- Duration: 5 ms");
+    expect(markdown).toContain("## a");
   });
 });
 

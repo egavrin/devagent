@@ -269,6 +269,7 @@ export interface AggregateValidationSummary {
   readonly passed: number;
   readonly failed: number;
   readonly blocked: number;
+  readonly durationMs: number;
   readonly reports: ReadonlyArray<ValidationScenarioReport>;
 }
 
