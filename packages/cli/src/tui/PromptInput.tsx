@@ -10,15 +10,16 @@
  * - Bordered box (round style, gray border)
  * - ❯ prompt indicator (cyan)
  * - Visible cursor (inverted character at cursor position)
- * - Multi-line: Shift+Enter, continuation with … prefix
+ * - Multi-line: modified Return inserts a newline, continuation with … prefix
  * - History: Up/Down arrows
  * - Tab completion: slash commands + file paths
  */
 
-import React, { useState, useRef } from "react";
+import React, { useRef, useState } from "react";
 import { readdirSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
+import stringWidth from "string-width";
 import { getApprovalModeColor, resolvePromptTabAction } from "./shared.js";
 
 export const SLASH_COMMANDS = [
@@ -33,6 +34,32 @@ export const SLASH_COMMANDS = [
   "/quit",
 ];
 
+const FIRST_PROMPT_PREFIX = "❯ ";
+const CONTINUATION_PROMPT_PREFIX = "… ";
+const INPUT_FRAME_WIDTH = 6;
+const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+interface PromptInputKey {
+  readonly return?: boolean;
+  readonly shift?: boolean;
+  readonly meta?: boolean;
+  readonly super?: boolean;
+  readonly hyper?: boolean;
+}
+
+interface PromptRow {
+  readonly prefix: string;
+  readonly text: string;
+  readonly cursorOffset: number | null;
+  readonly dim: boolean;
+}
+
+interface WrappedPromptChunk {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+}
+
 interface PromptInputProps {
   readonly onSubmit: (value: string) => void;
   readonly onCycleApprovalMode?: () => void;
@@ -40,6 +67,136 @@ interface PromptInputProps {
   readonly history?: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly approvalMode?: string;
+}
+
+export function shouldInsertPromptNewline(key: PromptInputKey): boolean {
+  return Boolean(key.return && (key.shift || key.meta || key.super || key.hyper));
+}
+
+function splitGraphemes(line: string): Array<{ readonly text: string; readonly start: number; readonly end: number }> {
+  return Array.from(
+    GRAPHEME_SEGMENTER.segment(line),
+    ({ segment, index }) => ({
+      text: segment,
+      start: index,
+      end: index + segment.length,
+    }),
+  );
+}
+
+function wrapPromptLine(line: string, contentWidth: number): WrappedPromptChunk[] {
+  const width = Math.max(1, contentWidth);
+  if (line.length === 0) return [{ text: "", start: 0, end: 0 }];
+
+  const rows: WrappedPromptChunk[] = [];
+  const graphemes = splitGraphemes(line);
+  let rowText = "";
+  let rowWidth = 0;
+  let rowStart = graphemes[0]!.start;
+  let rowEnd = graphemes[0]!.start;
+
+  for (const grapheme of graphemes) {
+    const graphemeWidth = stringWidth(grapheme.text);
+
+    if (rowText.length > 0 && rowWidth + graphemeWidth > width) {
+      rows.push({ text: rowText, start: rowStart, end: rowEnd });
+      rowText = "";
+      rowWidth = 0;
+    }
+
+    if (rowText.length === 0) {
+      rowStart = grapheme.start;
+    }
+
+    rowText += grapheme.text;
+    rowWidth += graphemeWidth;
+    rowEnd = grapheme.end;
+  }
+
+  rows.push({ text: rowText, start: rowStart, end: rowEnd });
+  return rows;
+}
+
+function rowContainsCursor(
+  cursorPos: number,
+  rowStart: number,
+  rowEnd: number,
+  isLastChunk: boolean,
+): boolean {
+  if (cursorPos < rowStart || cursorPos > rowEnd) return false;
+  if (cursorPos === rowEnd && !isLastChunk) return false;
+  return true;
+}
+
+export function buildPromptRows(
+  value: string,
+  cursorPos: number,
+  placeholder: string,
+  contentWidth: number,
+): PromptRow[] {
+  const promptText = value.length > 0 ? value : placeholder;
+  const dim = value.length === 0;
+  const logicalLines = promptText.split("\n");
+  const rows: PromptRow[] = [];
+  let visualRowIndex = 0;
+  let globalOffset = 0;
+
+  for (const [lineIndex, line] of logicalLines.entries()) {
+    const chunks = wrapPromptLine(line, contentWidth);
+
+    for (const [chunkIndex, chunk] of chunks.entries()) {
+      const rowStart = globalOffset + chunk.start;
+      const rowEnd = globalOffset + chunk.end;
+      const isLastChunk = chunkIndex === chunks.length - 1;
+      const cursorOffset = rowContainsCursor(cursorPos, rowStart, rowEnd, isLastChunk)
+        ? cursorPos - rowStart
+        : null;
+
+      rows.push({
+        prefix: visualRowIndex === 0 ? FIRST_PROMPT_PREFIX : CONTINUATION_PROMPT_PREFIX,
+        text: chunk.text,
+        cursorOffset,
+        dim,
+      });
+
+      visualRowIndex += 1;
+    }
+
+    globalOffset += line.length;
+    if (lineIndex < logicalLines.length - 1) {
+      globalOffset += 1;
+    }
+  }
+
+  return rows;
+}
+
+function renderPromptText(row: PromptRow): React.ReactElement {
+  if (row.cursorOffset === null) {
+    return row.dim ? <Text dimColor>{row.text}</Text> : <Text>{row.text}</Text>;
+  }
+
+  const before = row.text.slice(0, row.cursorOffset);
+  const atCursor = row.text[row.cursorOffset] ?? " ";
+  const after = row.text.slice(row.cursorOffset + 1);
+
+  if (row.dim) {
+    return (
+      <Text>
+        <Text dimColor>{before}</Text>
+        <Text inverse>{atCursor}</Text>
+        <Text dimColor>{after}</Text>
+      </Text>
+    );
+  }
+
+  return (
+    <Text>
+      {before}
+      <Text inverse>{atCursor}</Text>
+      {after}
+    </Text>
+  );
 }
 
 export function PromptInput({
@@ -56,11 +213,22 @@ export function PromptInput({
   const [completions, setCompletions] = useState<string[]>([]);
   const [completionIndex, setCompletionIndex] = useState(0);
   const savedInputRef = useRef("");
+  const { stdout } = useStdout();
   const accentColor = getApprovalModeColor(approvalMode);
+  const contentWidth = Math.max(1, (stdout.columns ?? 80) - INPUT_FRAME_WIDTH);
+  const promptRows = buildPromptRows(value, cursorPos, placeholder, contentWidth);
 
   useInput((input, key) => {
-    // Submit on Enter (without Shift)
-    if (key.return && !key.shift) {
+    if (shouldInsertPromptNewline(key)) {
+      const before = value.slice(0, cursorPos);
+      const after = value.slice(cursorPos);
+      setValue(before + "\n" + after);
+      setCursorPos(cursorPos + 1);
+      return;
+    }
+
+    // Submit on plain Enter
+    if (key.return) {
       const trimmed = value.trim();
       if (trimmed) {
         onSubmit(trimmed);
@@ -69,15 +237,6 @@ export function PromptInput({
         setHistoryIndex(-1);
         savedInputRef.current = "";
       }
-      return;
-    }
-
-    // Newline on Shift+Enter
-    if (key.return && key.shift) {
-      const before = value.slice(0, cursorPos);
-      const after = value.slice(cursorPos);
-      setValue(before + "\n" + after);
-      setCursorPos(cursorPos + 1);
       return;
     }
 
@@ -161,69 +320,16 @@ export function PromptInput({
     }
   });
 
-  // Render the text with an inverted cursor character
-  const renderWithCursor = (): React.ReactElement => {
-    if (!value) {
-      return (
-        <Text>
-          <Text inverse>{placeholder[0] ?? " "}</Text>
-          <Text dimColor>{placeholder.slice(1)}</Text>
-        </Text>
-      );
-    }
-
-    const before = value.slice(0, cursorPos);
-    const atCursor = value[cursorPos] ?? " ";
-    const after = value.slice(cursorPos + 1);
-
-    return (
-      <Text>
-        {before}<Text inverse>{atCursor}</Text>{after}
-      </Text>
-    );
-  };
-
-  const lines = value.split("\n");
-  const isMultiLine = lines.length > 1;
-
-  // For multi-line, render each line with cursor on the correct one
-  const renderMultiLine = (): React.ReactElement[] => {
-    let charOffset = 0;
-    return lines.map((line, i) => {
-      const lineStart = charOffset;
-      const lineEnd = charOffset + line.length;
-      charOffset = lineEnd + 1; // +1 for \n
-
-      const cursorInLine = cursorPos >= lineStart && cursorPos <= lineEnd;
-      const localCursor = cursorPos - lineStart;
-
-      return (
-        <Box key={i}>
-          <Text color={accentColor}>{i === 0 ? "❯ " : "… "}</Text>
-          {cursorInLine ? (
-            <Text>
-              {line.slice(0, localCursor)}<Text inverse>{line[localCursor] ?? " "}</Text>{line.slice(localCursor + 1)}
-            </Text>
-          ) : (
-            <Text>{line}</Text>
-          )}
-        </Box>
-      );
-    });
-  };
-
-    return (
-      <Box flexDirection="column">
-      <Box borderStyle="round" borderColor={accentColor} paddingLeft={1} paddingRight={1}>
+  return (
+    <Box flexDirection="column">
+      <Box borderStyle="round" borderColor={accentColor} paddingLeft={1} paddingRight={1} width="100%">
         <Box flexDirection="column" flexGrow={1}>
-          {isMultiLine ? (
-            renderMultiLine()
-          ) : (
-            <Box>
-              <Text color={accentColor}>❯ </Text>
-              {renderWithCursor()}
+          {promptRows.map((row, index) => (
+            <Box key={`${index}-${row.prefix}`}>
+              <Text color={accentColor}>{row.prefix}</Text>
+              {renderPromptText(row)}
             </Box>
-          )}
+          ))}
         </Box>
       </Box>
       {completions.length > 1 && (

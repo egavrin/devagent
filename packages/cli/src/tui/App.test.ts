@@ -87,6 +87,11 @@ async function typeAndSubmit(stdin: TestInput, text: string): Promise<void> {
   stdin.write("\r");
 }
 
+async function insertModifiedReturn(stdin: TestInput): Promise<void> {
+  stdin.write("\x1b\r");
+  await settle();
+}
+
 function renderForTest(
   node: React.ReactElement,
   options?: { readonly columns?: number },
@@ -943,6 +948,44 @@ describe("interactive completion notices", () => {
     const output = view.stdout.readAll();
     expect(countPromptPlaceholders(output)).toBe(2);
     expect(output).toContain("Commands: /clear (reset)");
+  });
+
+  it("submits multiline prompts when modified Return inserts a newline", async () => {
+    let submittedQuery: string | null = null;
+    const view = renderForTest(
+      React.createElement(App, {
+        bus: new EventBus(),
+        model: "test-model",
+        approvalMode: "autopilot",
+        cwd: "/tmp/devagent",
+        onClear: () => {},
+        onCycleApprovalMode: () => {},
+        onQuery: async (query) => {
+          submittedQuery = query;
+          return {
+            iterations: 1,
+            toolCalls: 0,
+            lastText: "done",
+            status: "success" as const,
+          };
+        },
+      }),
+      { columns: 28 },
+    );
+
+    await settle();
+    view.stdin.write("alpha");
+    await settle();
+    await insertModifiedReturn(view.stdin);
+    view.stdin.write("beta");
+    await settle();
+    view.stdin.write("\r");
+    await waitForRenders();
+
+    expect(submittedQuery).toBe("alpha\nbeta");
+
+    const output = stripAnsi(view.stdout.readAll());
+    expect(output).toContain("done");
   });
 
   it("renders markdown tables cleanly inside the assistant card", async () => {

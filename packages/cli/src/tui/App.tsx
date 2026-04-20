@@ -27,7 +27,7 @@ import {
   makeErrorPart,
 } from "../transcript-presenter.js";
 
-export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter for newline │ Shift+Tab toggles safety mode";
+export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter or Option+Enter for newline │ Shift+Tab toggles safety mode";
 export const ITERATION_LIMIT_NOTICE = "Iteration limit exhausted. Type /continue to proceed.";
 
 // ─── Types ──────────────────────────────────────────────────
