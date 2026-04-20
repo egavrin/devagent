@@ -92,5 +92,15 @@ Before merge, contributors should run:
 bun run lint
 bun run typecheck
 bun run test
+bun run test:surface-smoke
 bun run check:oss
+```
+
+When the task changes the public CLI, publish bundle, or `devagent execute` contract, also run the broader validation tier:
+
+```bash
+bun run test:live-validation
+bun run validate:live:full
+bun run validate:live:execute-chain
+bun run verify:publish
 ```

@@ -14,9 +14,9 @@
  *   - Claude Code: Sub-agents start fresh with focused prompts
  */
 
+import type { PlanStep } from "./plan-tool.js";
 import type { Message, LLMProvider } from "../core/index.js";
 import { MessageRole } from "../core/index.js";
-import type { PlanStep } from "./plan-tool.js";
 
 export interface TurnBriefing {
   readonly turnNumber: number;

@@ -1,0 +1,17 @@
+pre-commit:
+  parallel: true
+  commands:
+    eslint:
+      glob: "*.{ts,tsx,js,mjs}"
+      run: bunx eslint --fix {staged_files}
+
+pre-push:
+  commands:
+    typecheck:
+      run: bun run typecheck
+    test:
+      run: bun run test
+    dead-code:
+      run: bun run check:dead
+    deps:
+      run: bun run check:deps

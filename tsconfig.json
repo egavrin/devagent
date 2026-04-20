@@ -21,6 +21,7 @@
     { "path": "./packages/providers" },
     { "path": "./packages/runtime" },
     { "path": "./packages/executor" },
-    { "path": "./packages/cli" }
+    { "path": "./packages/cli" },
+    { "path": "./scripts" }
   ]
 }

@@ -1,12 +1,11 @@
+import { EventBus, MessageRole, SessionState } from "@devagent/runtime";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EventBus, MessageRole, SessionState } from "@devagent/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DevAgentConfig, LLMProvider, Session, SessionStore } from "@devagent/runtime";
 import {
   buildInteractiveSystemPrompt,
   checkForUpdates,
@@ -19,6 +18,7 @@ import {
   resolveAutoPromptCommandTarget,
   setupSessionPersistence,
 } from "./main.js";
+import type { DevAgentConfig, LLMProvider, Session, SessionStore } from "@devagent/runtime";
 
 const cliSrcDir = dirname(fileURLToPath(import.meta.url));
 const cliPackageDir = join(cliSrcDir, "..");

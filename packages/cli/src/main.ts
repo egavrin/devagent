@@ -3,17 +3,10 @@
  * Integrates: skills, session persistence, and task execution.
  */
 
-import { execSync } from "node:child_process";
-import { readFileSync as nodeReadFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
+import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
 import {
   EventBus,
   ApprovalGate,
-  SkillRegistry,
-  SkillResolver,
   ContextManager,
   SessionStore,
   loadConfig,
@@ -26,10 +19,58 @@ import {
   EventLogger,
   getProviderCredentialEnvVar,
   loggedSubagentRunFromEvent,
-} from "@devagent/runtime";
-import type { DevAgentConfig, LLMProvider, Message, Session, VerbosityConfig } from "@devagent/runtime";
-import { AgentType, SafetyMode, MessageRole , extractErrorMessage } from "@devagent/runtime";
-import { createDefaultRegistry, validateOllamaModel } from "@devagent/providers";
+ AgentType, SafetyMode, MessageRole , extractErrorMessage ,
+  createRoutingLSPTools
+,
+  TaskLoop,
+  truncateToolOutput,
+  createPlanTool,
+  createFindingTool,
+  createToolScriptTool,
+  createDelegateTool,
+  createSkillTool,
+  AgentRegistry,
+  DoubleCheck,
+  DEFAULT_DOUBLE_CHECK_OPTIONS,
+  synthesizeBriefing,
+  findLastUserContent,
+  SessionState} from "@devagent/runtime";
+import { execSync } from "node:child_process";
+import { readFileSync as nodeReadFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
+
+import { LSPRouter, createRoutingDiagnosticProvider, createCompilerFallbackProvider, createShellTestRunner, lazyUpgradeLSP } from "./double-check-wiring.js";
+import {
+  Spinner,
+  dim, red, cyan, green, yellow, bold,
+  formatToolStart,
+  formatToolGroupStart,
+  formatToolGroupEnd,
+  formatSubagentBatchLaunch,
+  formatSubagentStart,
+  formatSubagentError,
+  summarizeSubagentUpdate,
+  SubagentPanelRenderer,
+  summarizeToolParams,
+  formatPlan,
+  formatError,
+  isCategoryEnabled,
+  buildVerbosityConfig,
+  formatContextGauge,
+  formatEnrichedError,
+  inferErrorSuggestion,
+  formatTurnSummary,
+  formatTurnStart,
+  formatTurnEnd,
+  formatSessionSummary,
+  formatReasoning,
+  setTerminalTitle,
+  terminalBell,
+  formatTranscriptPart,
+} from "./format.js";
 import {
   migrateLegacyGlobalConfigIfNeeded,
   migrateLegacyGlobalTomlIfNeeded,
@@ -41,6 +82,12 @@ import {
   formatResumeCandidate,
   renderSessionPreview,
 } from "./session-preview.js";
+import type { DevAgentConfig, LLMProvider, Message, Session, VerbosityConfig ,
+  ToolRegistry,
+  SkillRegistry,
+  SkillResolver, TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback, SessionStatePersistence, SessionStateJSON, TaskLoopOptions } from "@devagent/runtime";
+
+
 
 /** Package version — embedded at build time or read from package.json. */
 export function getVersion(): string {
@@ -152,28 +199,10 @@ export function checkForUpdates(): void {
     })
     .catch(() => { /* network error — silently ignore */ });
 }
-import {
-  createRoutingLSPTools,
-  ToolRegistry,
-} from "@devagent/runtime";
-import {
-  TaskLoop,
-  truncateToolOutput,
-  createPlanTool,
-  createFindingTool,
-  createToolScriptTool,
-  createDelegateTool,
-  createSkillTool,
-  AgentRegistry,
-  DoubleCheck,
-  DEFAULT_DOUBLE_CHECK_OPTIONS,
-  synthesizeBriefing,
-  findLastUserContent,
-  SessionState,
-} from "@devagent/runtime";
-import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback, SessionStatePersistence, SessionStateJSON, TaskLoopOptions } from "@devagent/runtime";
-import { LSPRouter, createRoutingDiagnosticProvider, createCompilerFallbackProvider, createShellTestRunner, lazyUpgradeLSP } from "./double-check-wiring.js";
+
+
 import { createArkTSDiagnosticProvider } from "@devagent/arkts";
+
 import { assembleSystemPrompt } from "./prompts/index.js";
 import { detectProjectTestCommand } from "./test-command-detect.js";
 import {
@@ -182,34 +211,6 @@ import {
   getProviderModelCompatibilityIssue,
 } from "./provider-model-compat.js";
 import type { InteractiveQueryResult } from "./tui/shared.js";
-import {
-  Spinner,
-  dim, red, cyan, green, yellow, bold,
-  formatToolStart,
-  formatToolGroupStart,
-  formatToolGroupEnd,
-  formatSubagentBatchLaunch,
-  formatSubagentStart,
-  formatSubagentError,
-  summarizeSubagentUpdate,
-  SubagentPanelRenderer,
-  summarizeToolParams,
-  formatPlan,
-  formatError,
-  isCategoryEnabled,
-  buildVerbosityConfig,
-  formatContextGauge,
-  formatEnrichedError,
-  inferErrorSuggestion,
-  formatTurnSummary,
-  formatTurnStart,
-  formatTurnEnd,
-  formatSessionSummary,
-  formatReasoning,
-  setTerminalTitle,
-  terminalBell,
-  formatTranscriptPart,
-} from "./format.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { OutputState } from "./output-state.js";
 import { StatusLine } from "./status-line.js";

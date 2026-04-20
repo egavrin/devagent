@@ -311,8 +311,20 @@ cd devagent
 bun install
 bun run build
 bun run test
+bun run test:surface-smoke
 bun run install-cli
 ```
+
+For local release-surface validation, the repo also includes:
+
+```bash
+bun run test:live-validation
+bun run validate:live:full
+bun run validate:live:execute-chain
+bun run verify:publish
+```
+
+Use `test:surface-smoke` as the fast Week 2-style public-surface gate. Use the `validate:live:*` and publish checks as the broader Week 3-style validation tier for real CLI and `devagent execute` coverage.
 
 ## License
 

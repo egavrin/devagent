@@ -1,5 +1,46 @@
 {
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
   "entry": [
-    "eslint.config.mjs"
-  ]
+    "scripts/**/*.ts"
+  ],
+  "project": [
+    "scripts/**/*.ts"
+  ],
+  "ignoreDependencies": [
+    "undici"
+  ],
+  "workspaces": {
+    "packages/arkts": {
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/providers": {
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/runtime": {
+      "entry": [
+        "src/tools/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/executor": {
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/cli": {
+      "entry": [
+        "src/main.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "src/**/*.tsx"
+      ]
+    }
+  }
 }

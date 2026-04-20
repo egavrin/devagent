@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
+
 import {
   synthesizeBriefing,
   extractHeuristicBriefing,
   formatBriefing,
 } from "./briefing.js";
 import type { TurnBriefing } from "./briefing.js";
-import type { Message, LLMProvider, StreamChunk } from "../core/index.js";
-import { MessageRole } from "../core/index.js";
+import type { Message, LLMProvider, StreamChunk , MessageRole } from "../core/index.js";
 
 // ─── Helpers ────────────────────────────────────────────────
 

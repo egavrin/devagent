@@ -1,0 +1,8 @@
+{
+  "name": "devagent-surface-smoke-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node -e \"process.exit(0)\""
+  }
+}
