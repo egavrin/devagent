@@ -45,7 +45,7 @@ export function Welcome({ model, version }: WelcomeProps): React.ReactElement {
         <Box flexDirection="column" marginTop={1}>
           <Text dimColor>  💡 Tips:</Text>
           <Text dimColor>  • Ctrl+K opens the command palette</Text>
-          <Text dimColor>  • Shift+Enter for multi-line input</Text>
+          <Text dimColor>  • Shift+Enter or Option+Enter for multi-line input</Text>
           <Text dimColor>  • Tab completes slash commands and file paths</Text>
           <Text dimColor>  • Shift+Tab toggles default and autopilot</Text>
           <Text dimColor>  • Type /continue after an iteration-limit pause</Text>
