@@ -5,7 +5,7 @@
  * components, then writes final output to stdout and exits.
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Static, useApp } from "ink";
 import { StatusBar } from "./StatusBar.js";
 import { Spinner } from "./Spinner.js";
@@ -31,6 +31,7 @@ export interface SingleShotAppProps {
 export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: SingleShotAppProps): React.ReactElement {
   const { exit } = useApp();
   const [running, setRunning] = useState(true);
+  const launchedRef = useRef(false);
 
   const {
     transcriptNodes, status, subagents, spinnerMessage,
@@ -40,6 +41,11 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
 
   // Execute query on mount
   useEffect(() => {
+    if (launchedRef.current) {
+      return;
+    }
+    launchedRef.current = true;
+
     let cancelled = false;
     (async () => {
       refs.turnStart.current = Date.now();
@@ -73,7 +79,21 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
       }
       setRunning(false);
       setTimeout(() => { if (!cancelled) exit(); }, 100);
-    })();
+    })().catch((err: unknown) => {
+      appendTurnPart(nextId("e"), makeErrorPart({ message: err instanceof Error ? err.message : String(err), code: "QUERY_ERROR" }));
+      completeTurn(
+        nextId("summary"),
+        makeTurnSummaryPart({
+          iterations: 0,
+          toolCalls: refs.turnToolCount.current,
+          cost: refs.costAccum.current,
+          elapsedMs: Date.now() - refs.turnStart.current,
+        }),
+        { status: "error", finishedAt: Date.now() },
+      );
+      setRunning(false);
+      setTimeout(() => { if (!cancelled) exit(); }, 100);
+    });
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

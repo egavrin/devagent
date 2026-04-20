@@ -11,6 +11,7 @@ import {
   renderResumeCommandOutput,
   renderSessionsCommandOutput,
 } from "./App.js";
+import { SingleShotApp } from "./SingleShotApp.js";
 import { StatusBar } from "./StatusBar.js";
 import { useAgentLog } from "./useAgentLog.js";
 import type { TranscriptNode } from "./shared.js";
@@ -986,6 +987,35 @@ describe("interactive completion notices", () => {
 
     const output = stripAnsi(view.stdout.readAll());
     expect(output).toContain("done");
+  });
+
+  it("does not re-append a completed single-shot turn while the TUI settles", async () => {
+    const query = "6264d171-667c-46a5-82be-be9abd3a6e4c";
+    const bus = new EventBus();
+    let onQueryCalls = 0;
+
+    renderForTest(
+      React.createElement(SingleShotApp, {
+        bus,
+        query,
+        model: "cortex",
+        onQuery: async () => {
+          onQueryCalls++;
+          await settle();
+          return {
+            iterations: 1,
+            toolCalls: 0,
+            lastText: null,
+            status: "success" as const,
+          };
+        },
+        onFinalOutput: () => {},
+      }),
+    );
+
+    await waitForRenders(12);
+
+    expect(onQueryCalls).toBe(1);
   });
 
   it("renders markdown tables cleanly inside the assistant card", async () => {
