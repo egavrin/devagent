@@ -19,6 +19,7 @@ import React, { useRef, useState } from "react";
 import { readdirSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { Box, Text, useInput, useStdout } from "ink";
+import stringWidth from "string-width";
 import { getApprovalModeColor, resolvePromptTabAction } from "./shared.js";
 
 export const SLASH_COMMANDS = [
@@ -36,6 +37,7 @@ export const SLASH_COMMANDS = [
 const FIRST_PROMPT_PREFIX = "❯ ";
 const CONTINUATION_PROMPT_PREFIX = "… ";
 const INPUT_FRAME_WIDTH = 6;
+const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 interface PromptInputKey {
   readonly return?: boolean;
@@ -52,6 +54,12 @@ interface PromptRow {
   readonly dim: boolean;
 }
 
+interface WrappedPromptChunk {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+}
+
 interface PromptInputProps {
   readonly onSubmit: (value: string) => void;
   readonly onCycleApprovalMode?: () => void;
@@ -65,14 +73,47 @@ export function shouldInsertPromptNewline(key: PromptInputKey): boolean {
   return Boolean(key.return && (key.shift || key.meta || key.super || key.hyper));
 }
 
-function wrapPromptLine(line: string, contentWidth: number): string[] {
-  const width = Math.max(1, contentWidth);
-  if (line.length === 0) return [""];
+function splitGraphemes(line: string): Array<{ readonly text: string; readonly start: number; readonly end: number }> {
+  return Array.from(
+    GRAPHEME_SEGMENTER.segment(line),
+    ({ segment, index }) => ({
+      text: segment,
+      start: index,
+      end: index + segment.length,
+    }),
+  );
+}
 
-  const rows: string[] = [];
-  for (let index = 0; index < line.length; index += width) {
-    rows.push(line.slice(index, index + width));
+function wrapPromptLine(line: string, contentWidth: number): WrappedPromptChunk[] {
+  const width = Math.max(1, contentWidth);
+  if (line.length === 0) return [{ text: "", start: 0, end: 0 }];
+
+  const rows: WrappedPromptChunk[] = [];
+  const graphemes = splitGraphemes(line);
+  let rowText = "";
+  let rowWidth = 0;
+  let rowStart = graphemes[0]!.start;
+  let rowEnd = graphemes[0]!.start;
+
+  for (const grapheme of graphemes) {
+    const graphemeWidth = stringWidth(grapheme.text);
+
+    if (rowText.length > 0 && rowWidth + graphemeWidth > width) {
+      rows.push({ text: rowText, start: rowStart, end: rowEnd });
+      rowText = "";
+      rowWidth = 0;
+    }
+
+    if (rowText.length === 0) {
+      rowStart = grapheme.start;
+    }
+
+    rowText += grapheme.text;
+    rowWidth += graphemeWidth;
+    rowEnd = grapheme.end;
   }
+
+  rows.push({ text: rowText, start: rowStart, end: rowEnd });
   return rows;
 }
 
@@ -102,11 +143,10 @@ export function buildPromptRows(
 
   for (const [lineIndex, line] of logicalLines.entries()) {
     const chunks = wrapPromptLine(line, contentWidth);
-    let localOffset = 0;
 
     for (const [chunkIndex, chunk] of chunks.entries()) {
-      const rowStart = globalOffset + localOffset;
-      const rowEnd = rowStart + chunk.length;
+      const rowStart = globalOffset + chunk.start;
+      const rowEnd = globalOffset + chunk.end;
       const isLastChunk = chunkIndex === chunks.length - 1;
       const cursorOffset = rowContainsCursor(cursorPos, rowStart, rowEnd, isLastChunk)
         ? cursorPos - rowStart
@@ -114,13 +154,12 @@ export function buildPromptRows(
 
       rows.push({
         prefix: visualRowIndex === 0 ? FIRST_PROMPT_PREFIX : CONTINUATION_PROMPT_PREFIX,
-        text: chunk,
+        text: chunk.text,
         cursorOffset,
         dim,
       });
 
       visualRowIndex += 1;
-      localOffset += chunk.length;
     }
 
     globalOffset += line.length;

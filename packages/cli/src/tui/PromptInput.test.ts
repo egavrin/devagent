@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
+import stringWidth from "string-width";
 
 import { TUI_HELP_MESSAGE } from "./App.js";
 import {
@@ -75,6 +76,26 @@ describe("PromptInput layout helpers", () => {
       { prefix: "… ", text: "", cursorOffset: 0, dim: false },
       { prefix: "… ", text: "there", cursorOffset: null, dim: false },
     ]);
+  });
+
+  it("wraps emoji without splitting surrogate pairs", () => {
+    const rows = buildPromptRows("😀😀😀", 4, "placeholder", 4);
+
+    expect(rows).toEqual([
+      { prefix: "❯ ", text: "😀😀", cursorOffset: null, dim: false },
+      { prefix: "… ", text: "😀", cursorOffset: 0, dim: false },
+    ]);
+    expect(rows.every((row) => stringWidth(row.text) <= 4)).toBe(true);
+  });
+
+  it("wraps full-width CJK characters by terminal cell width", () => {
+    const rows = buildPromptRows("你好a", 2, "placeholder", 4);
+
+    expect(rows).toEqual([
+      { prefix: "❯ ", text: "你好", cursorOffset: null, dim: false },
+      { prefix: "… ", text: "a", cursorOffset: 0, dim: false },
+    ]);
+    expect(rows.map((row) => stringWidth(row.text))).toEqual([4, 1]);
   });
 });
 
