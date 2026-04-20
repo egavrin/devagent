@@ -66,6 +66,13 @@ export function getVersion(): string {
 }
 
 function preflightResumeRequest(cliArgs: CliArgs): void {
+  if (cliArgs.continue_ && (cliArgs.query || cliArgs.file)) {
+    process.stderr.write(
+      formatError("--continue does not accept a query or file input. Use --resume <id> to target a specific session.") + "\n",
+    );
+    process.exit(2);
+  }
+
   if ((!cliArgs.resume && !cliArgs.continue_) || cliArgs.query || cliArgs.file) {
     return;
   }
@@ -164,7 +171,7 @@ import {
   findLastUserContent,
   SessionState,
 } from "@devagent/runtime";
-import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback, SessionStatePersistence, SessionStateJSON } from "@devagent/runtime";
+import type { TaskMode, TaskLoopResult, TurnBriefing, MidpointCallback, SessionStatePersistence, SessionStateJSON, TaskLoopOptions } from "@devagent/runtime";
 import { LSPRouter, createRoutingDiagnosticProvider, createCompilerFallbackProvider, createShellTestRunner, lazyUpgradeLSP } from "./double-check-wiring.js";
 import { createArkTSDiagnosticProvider } from "@devagent/arkts";
 import { assembleSystemPrompt } from "./prompts/index.js";
@@ -257,6 +264,21 @@ interface RunSingleQueryOptions extends RunOptions {
   readonly query: string;
 }
 
+interface InteractiveSystemPromptOptions {
+  readonly repoRoot: string;
+  readonly skills: SkillRegistry;
+  readonly toolRegistry: ToolRegistry;
+  readonly config: DevAgentConfig;
+  readonly safetyMode: SafetyMode;
+  readonly mode: TaskMode;
+  readonly briefing?: TurnBriefing;
+}
+
+interface InteractiveResumeSeed {
+  readonly initialMessages: Message[] | undefined;
+  readonly briefing: TurnBriefing | undefined;
+}
+
 interface ReviewArgs {
   patchFile: string;
   ruleFile: string | null;
@@ -274,6 +296,7 @@ interface CliArgs {
   file: string | null;
   safetyMode: SafetyMode | null;
   modeParseError: string | null;
+  usageError: string | null;
   provider: string | null;
   model: string | null;
   maxIterations: number | null;
@@ -423,6 +446,7 @@ export function parseArgs(argv: string[]): CliArgs {
     file: null,
     safetyMode: null,
     modeParseError: null,
+    usageError: null,
     provider: null,
     model: null,
     maxIterations: null,
@@ -541,6 +565,10 @@ export function parseArgs(argv: string[]): CliArgs {
     }
   }
 
+  if (result.continue_ && (result.query || result.file)) {
+    result.usageError = "--continue does not accept a query or file input. Use --resume <id> to target a specific session.";
+  }
+
   return result;
 }
 
@@ -607,6 +635,55 @@ Environment:
 Installation:
   bun run build && bun run install-cli    Install as 'devagent' command
 `;
+}
+
+export function buildInteractiveSystemPrompt(options: InteractiveSystemPromptOptions): string {
+  const {
+    repoRoot,
+    skills,
+    toolRegistry,
+    config,
+    safetyMode,
+    mode,
+    briefing,
+  } = options;
+
+  return assembleSystemPrompt({
+    mode,
+    repoRoot,
+    skills,
+    availableTools: toolRegistry.getLoaded(),
+    deferredTools: toolRegistry.getDeferred(),
+    approvalMode: safetyMode,
+    provider: config.provider,
+    model: config.model,
+    agentModelOverrides: config.agentModelOverrides,
+    agentReasoningOverrides: config.agentReasoningOverrides,
+    briefing,
+  });
+}
+
+export function createInitialTuiLoopOptions(
+  options: RunSingleQueryOptions,
+): Pick<TaskLoopOptions, "systemPrompt" | "initialMessages" | "injectSessionStateOnFirstTurn"> {
+  const systemPrompt = buildInteractiveSystemPrompt({
+    repoRoot: options.repoRoot,
+    skills: options.skills,
+    toolRegistry: options.toolRegistry,
+    config: options.config,
+    safetyMode: getInteractiveSafetyMode(options.config),
+    mode: options.mode,
+    briefing: options.briefing,
+  });
+
+  return {
+    systemPrompt,
+    initialMessages: options.initialMessages,
+    injectSessionStateOnFirstTurn:
+      Boolean(options.briefing)
+      || (options.initialMessages?.length ?? 0) > 0
+      || options.sessionState.hasContent(),
+  };
 }
 
 export function renderSessionsList(sessions: ReadonlyArray<Session>, now: number = Date.now()): string {
@@ -1239,7 +1316,7 @@ export async function setupSessionPersistence(
   config: DevAgentConfig,
   cliArgs: CliArgs,
   projectRoot: string,
-  provider: LLMProvider,
+  _provider: LLMProvider,
   bus: EventBus,
   sessionState: SessionState,
   options: SessionPersistenceSetupOptions = {},
@@ -1248,9 +1325,7 @@ export async function setupSessionPersistence(
   const createCrashReporter = options.createCrashReporter
     ?? ((sessionId: string, verbosity: Verbosity) => createCrashSessionReporter(sessionId, verbosity));
 
-  // Resume previous session if requested
-  // Turn isolation: synthesize briefing from prior session instead of loading raw messages.
-  // This prevents accumulated history from degrading LLM accuracy (Manager-Worker pattern).
+  // Resume previous session if requested using exact raw history replay.
   let initialMessages: Message[] | undefined;
   let resumeBriefing: TurnBriefing | undefined;
   let prevSession: import("@devagent/runtime").Session | null = null;
@@ -1263,37 +1338,12 @@ export async function setupSessionPersistence(
     }
 
     if (prevSession) {
-      const useTurnIsolation = config.context.turnIsolation !== false;
-      if (useTurnIsolation) {
-        // Synthesize briefing from the prior session instead of replaying raw history.
-        // This prevents accumulated history from degrading LLM accuracy.
-        try {
-          resumeBriefing = await synthesizeBriefing(
-            prevSession.messages, 1,
-            { strategy: config.context.briefingStrategy ?? "auto", provider },
-          );
-          if (cliArgs.verbosity !== "quiet") {
-            process.stderr.write(
-              dim(`[session] Resuming ${prevSession.id} via briefing (${prevSession.messages.length} messages → synthesized)`) + "\n",
-            );
-          }
-        } catch {
-          // Fallback to raw messages if briefing synthesis fails
-          initialMessages = [...prevSession.messages];
-          if (cliArgs.verbosity !== "quiet") {
-            process.stderr.write(
-              dim(`[session] Resuming ${prevSession.id} (${prevSession.messages.length} messages, briefing failed)`) + "\n",
-            );
-          }
-        }
-      } else {
-        // Turn isolation disabled — raw message resume
-        initialMessages = [...prevSession.messages];
-        if (cliArgs.verbosity !== "quiet") {
-          process.stderr.write(
-            dim(`[session] Resuming ${prevSession.id} (${prevSession.messages.length} messages)`) + "\n",
-          );
-        }
+      initialMessages = [...prevSession.messages];
+      resumeBriefing = undefined;
+      if (cliArgs.verbosity !== "quiet") {
+        process.stderr.write(
+          dim(`[session] Resuming ${prevSession.id} (${prevSession.messages.length} messages)`) + "\n",
+        );
       }
     } else if (cliArgs.continue_) {
       const searchId = cliArgs.resume ?? "most recent";
@@ -1528,6 +1578,11 @@ export async function main(): Promise<void> {
     process.exit(2);
   }
 
+  if (cliArgs.usageError) {
+    process.stderr.write(formatError(cliArgs.usageError) + "\n");
+    process.exit(2);
+  }
+
   // Subcommands: doctor, config, setup
   if (cliArgs.subcommand) {
     const cmd = cliArgs.subcommand.name;
@@ -1647,6 +1702,11 @@ export async function main(): Promise<void> {
     process.exit(1);
   }
   try {
+    let interactiveResumeSeed: InteractiveResumeSeed = {
+      initialMessages: persistence.initialMessages,
+      briefing: persistence.resumeBriefing,
+    };
+
     const buildRunOptions = () => ({
       provider,
       toolRegistry: tools.toolRegistry,
@@ -1665,17 +1725,20 @@ export async function main(): Promise<void> {
       briefing: persistence.resumeBriefing,
     });
 
-    const buildInteractiveSystemPrompt = (safetyMode: SafetyMode): string => assembleSystemPrompt({
+    const buildInteractiveRunOptions = () => ({
+      ...buildRunOptions(),
+      initialMessages: interactiveResumeSeed.initialMessages,
+      briefing: interactiveResumeSeed.briefing,
+    });
+
+    const buildInteractivePrompt = (safetyMode: SafetyMode): string => buildInteractiveSystemPrompt({
       mode: "act",
       repoRoot: projectRoot,
       skills: tools.skills,
-      availableTools: tools.toolRegistry.getLoaded(),
-      deferredTools: tools.toolRegistry.getDeferred(),
-      approvalMode: safetyMode,
-      provider: config.provider,
-      model: config.model,
-      agentModelOverrides: config.agentModelOverrides,
-      agentReasoningOverrides: config.agentReasoningOverrides,
+      toolRegistry: tools.toolRegistry,
+      config,
+      safetyMode,
+      briefing: interactiveResumeSeed.briefing,
     });
     const initialSafetyMode = getInteractiveSafetyMode(config);
     let interactiveApprovalMode = initialSafetyMode;
@@ -1709,7 +1772,7 @@ export async function main(): Promise<void> {
             ? config
             : withInteractiveSafetyMode(config, interactiveApprovalMode);
           // Run query but skip flushOutput — TUI handles display via bus events
-          const result = await runTuiQuery({ ...buildRunOptions(), config: interactiveConfig, query: q });
+          const result = await runTuiQuery({ ...buildInteractiveRunOptions(), config: interactiveConfig, query: q });
           return {
             iterations: result.iterations,
             toolCalls: outputState.turnToolCallCount,
@@ -1722,7 +1785,7 @@ export async function main(): Promise<void> {
           tools.gate.setMode(mode);
           tools.delegateAmbientContext.approvalMode = mode;
           if (tuiLoop) {
-            tuiLoop.updateSystemPrompt(buildInteractiveSystemPrompt(mode));
+            tuiLoop.updateSystemPrompt(buildInteractivePrompt(mode));
           }
         },
         onClear: () => {
@@ -1737,6 +1800,10 @@ export async function main(): Promise<void> {
           outputState.resetSession();
           tools.sessionState = new SessionState(config.sessionState);
           persistence.sessionState = tools.sessionState;
+          interactiveResumeSeed = {
+            initialMessages: undefined,
+            briefing: undefined,
+          };
           tuiLoop = null; // Reset persistent loop on /clear
         },
       });
@@ -2833,24 +2900,13 @@ let tuiLoop: InstanceType<typeof TaskLoop> | null = null;
 async function runTuiQuery(options: RunSingleQueryOptions): Promise<TaskLoopResult> {
   const {
     query, provider, toolRegistry, bus, gate, config, repoRoot, mode,
-    skills, contextManager, doubleCheck, sessionState,
+    contextManager, doubleCheck, sessionState,
   } = options;
   const preparedQuery = await prepareQueryForExecution(query, repoRoot);
 
   // Create loop once, reuse for multi-turn context
   if (!tuiLoop) {
-    const systemPrompt = assembleSystemPrompt({
-      mode,
-      repoRoot,
-      skills,
-      availableTools: toolRegistry.getLoaded(),
-      deferredTools: toolRegistry.getDeferred(),
-      approvalMode: getInteractiveSafetyMode(config),
-      provider: config.provider,
-      model: config.model,
-      agentModelOverrides: config.agentModelOverrides,
-      agentReasoningOverrides: config.agentReasoningOverrides,
-    });
+    const initialLoopOptions = createInitialTuiLoopOptions(options);
 
     setupSummarizeCallback(contextManager, provider, sessionState);
 
@@ -2860,12 +2916,14 @@ async function runTuiQuery(options: RunSingleQueryOptions): Promise<TaskLoopResu
       bus,
       approvalGate: gate,
       config,
-      systemPrompt,
+      systemPrompt: initialLoopOptions.systemPrompt,
       repoRoot,
       mode,
       contextManager,
       doubleCheck,
+      initialMessages: initialLoopOptions.initialMessages,
       sessionState,
+      injectSessionStateOnFirstTurn: initialLoopOptions.injectSessionStateOnFirstTurn,
     });
   } else {
     // Reset for new turn but keep message history

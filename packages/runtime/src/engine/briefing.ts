@@ -168,7 +168,7 @@ export function extractHeuristicBriefing(
   const activeContext = extractActiveContext(messages, maxChars * 0.3);
 
   // Pending work: check if the final response indicates incomplete work
-  const pendingWork = extractPendingWork(messages);
+  const pendingWork = extractPendingWork(messages) ?? derivePendingWorkFromPlanSteps(planSteps);
 
   return {
     turnNumber,
@@ -320,12 +320,6 @@ function parseLLMBriefing(
   // activeContext from decisions
   const activeContext = decisions;
 
-  // pendingWork
-  const pendingWork =
-    pending && !pending.toLowerCase().includes("nothing pending")
-      ? pending
-      : null;
-
   // planSteps from LLM response, with heuristic fallback
   let planSteps: PlanStep[] | null = null;
   if (planText && !planText.toLowerCase().includes("no plan")) {
@@ -344,6 +338,12 @@ function parseLLMBriefing(
   if (!planSteps) {
     planSteps = extractPlanSteps(messages);
   }
+
+  // pendingWork
+  const pendingWork =
+    pending && !pending.toLowerCase().includes("nothing pending")
+      ? pending
+      : derivePendingWorkFromPlanSteps(planSteps);
 
   // keyArtifacts from files section + heuristic extraction
   const fileArtifacts = extractFilePathsFromText(files);
@@ -554,6 +554,23 @@ function extractPendingWork(
   }
 
   return null;
+}
+
+function derivePendingWorkFromPlanSteps(
+  planSteps: ReadonlyArray<PlanStep> | null,
+): string | null {
+  if (!planSteps || planSteps.length === 0) {
+    return null;
+  }
+
+  const remainingSteps = planSteps.filter((step) => step.status !== "completed");
+  if (remainingSteps.length === 0) {
+    return null;
+  }
+
+  return remainingSteps
+    .map((step) => `- [${step.status}] ${step.description}`)
+    .join("\n");
 }
 
 function countToolCalls(messages: ReadonlyArray<Message>): number {

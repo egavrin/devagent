@@ -60,6 +60,7 @@ bun run install-cli
 ## Conventions and Pitfalls
 
 - Follow the fail-fast philosophy: surface errors explicitly, fix root causes, and avoid silent fallbacks or defensive guards that hide breakage.
+- Public CLI `--resume` and `--continue` must replay exact raw message history plus persisted session state. Outside that restore path, prefer LLM-based synthesis or deterministic structured extraction from persisted state, and do not add ad hoc phrase heuristics that guess user intent from prompts like "continue" or "what's next?".
 - Run `bun run typecheck` and `bun run test` before and after meaningful code changes. Run `bun run check:oss` when changing public docs, contributor workflow, or package metadata.
 - Keep changes small and test-backed. If behavior changes, start with a failing or expanded test near the affected code.
 - Prefer updating existing docs over creating new Markdown files, unless the task explicitly requires new documentation. Package-level `AGENTS.md` files in this repo are maintained documentation and may be updated when the component reality changes.

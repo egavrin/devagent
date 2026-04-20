@@ -248,6 +248,7 @@ describe("briefing", () => {
       expect(briefing.planSteps![0]!.status).toBe("completed");
       expect(briefing.planSteps![1]!.status).toBe("in_progress");
     });
+
   });
 
   describe("auto strategy", () => {
@@ -317,6 +318,59 @@ Nothing pending.
       expect(briefing.priorTaskSummary).toContain("Goal");
       expect(briefing.priorTaskSummary).toContain("Explore");
       expect(briefing.pendingWork).toBeNull(); // "Nothing pending"
+    });
+
+    it("derives pending work from remaining plan steps when the LLM says nothing pending", async () => {
+      const messages = makeMessages(
+        { role: "user", content: "Finish the parser migration" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{
+            name: "update_plan",
+            arguments: {
+              steps: [
+                { description: "Audit the parser entrypoints", status: "completed" },
+                { description: "Wire the interactive resume path", status: "in_progress" },
+                { description: "Run focused tests", status: "pending" },
+              ],
+            },
+            callId: "plan-1",
+          }],
+        },
+        { role: "tool", content: "Plan updated", toolCallId: "plan-1" },
+        { role: "assistant", content: "Implemented the first half." },
+      );
+
+      const mockProvider = makeMockProvider(
+        `## Goal
+Finish the parser migration.
+
+## Key Decisions & Constraints
+- Keep the CLI behavior unchanged outside resume handling.
+
+## Accomplished
+- Patched the first half of the migration.
+
+## Plan Status
+- [completed] Audit the parser entrypoints
+- [in_progress] Wire the interactive resume path
+- [pending] Run focused tests
+
+## Pending
+Nothing pending.
+
+## Relevant Files
+\`packages/cli/src/main.ts\` — modified`,
+      );
+
+      const briefing = await synthesizeBriefing(messages, 1, {
+        strategy: "auto",
+        provider: mockProvider,
+      });
+
+      expect(briefing.pendingWork).toContain("[in_progress] Wire the interactive resume path");
+      expect(briefing.pendingWork).toContain("[pending] Run focused tests");
     });
   });
 

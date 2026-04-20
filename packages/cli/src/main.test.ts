@@ -3,12 +3,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EventBus, SessionState } from "@devagent/runtime";
+import { EventBus, MessageRole, SessionState } from "@devagent/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DevAgentConfig, LLMProvider, Session, SessionStore } from "@devagent/runtime";
 import {
+  buildInteractiveSystemPrompt,
   checkForUpdates,
+  createInitialTuiLoopOptions,
   getVersion,
   loadQueryFromFile,
   parseArgs,
@@ -30,6 +32,34 @@ describe("parseArgs", () => {
   it("parses -f <path> with --mode and other flags", () => {
     expect(parseArgs(["node", "devagent", "-f", "task.md", "--mode", "default", "--provider", "openai"]))
       .toMatchObject({ file: "task.md", provider: "openai", query: null, safetyMode: "default" });
+  });
+
+  it("rejects a session id after --continue", () => {
+    expect(parseArgs(["node", "devagent", "--continue", "6264d171-667c-46a5-82be-be9abd3a6e4c"]))
+      .toMatchObject({
+        continue_: true,
+        query: "6264d171-667c-46a5-82be-be9abd3a6e4c",
+        usageError: "--continue does not accept a query or file input. Use --resume <id> to target a specific session.",
+      });
+  });
+
+  it("rejects a query after --continue", () => {
+    expect(parseArgs(["node", "devagent", "--continue", "what's next?"]))
+      .toMatchObject({
+        continue_: true,
+        query: "what's next?",
+        usageError: "--continue does not accept a query or file input. Use --resume <id> to target a specific session.",
+      });
+  });
+
+  it("keeps targeted session resume on --resume <id>", () => {
+    expect(parseArgs(["node", "devagent", "--resume", "6264d171-667c-46a5-82be-be9abd3a6e4c"]))
+      .toMatchObject({
+        resume: "6264d171-667c-46a5-82be-be9abd3a6e4c",
+        continue_: false,
+        query: null,
+        usageError: null,
+      });
   });
 
   it("rejects unknown --mode values", () => {
@@ -83,6 +113,113 @@ describe("parseArgs", () => {
           args: ["chatgpt"],
         },
       });
+  });
+});
+
+describe("interactive resume helpers", () => {
+  function createInteractiveResumeOptions(overrides: Partial<Parameters<typeof createInitialTuiLoopOptions>[0]> = {}) {
+    const sessionState = overrides.sessionState ?? new SessionState();
+    return {
+      query: "what's next?",
+      provider: {} as LLMProvider,
+      toolRegistry: {
+        getLoaded: () => [],
+        getDeferred: () => [],
+      } as any,
+      bus: new EventBus(),
+      gate: {} as any,
+      config: createSessionTestConfig(),
+      repoRoot: "/Users/egavrin/Documents/devagent",
+      mode: "act" as const,
+      skills: {
+        list: () => [],
+      } as any,
+      contextManager: {} as any,
+      doubleCheck: {} as any,
+      initialMessages: undefined,
+      verbosity: "quiet" as const,
+      verbosityConfig: {} as any,
+      sessionState,
+      briefing: undefined,
+      ...overrides,
+    };
+  }
+
+  it("seeds the first interactive loop with raw resumed history", () => {
+    const initialMessages = [
+      { role: "user", content: "Original request" },
+      { role: "assistant", content: "Working on it" },
+    ] as const;
+
+    const options = createInteractiveResumeOptions({ initialMessages: [...initialMessages] });
+    const loopOptions = createInitialTuiLoopOptions(options);
+
+    expect(loopOptions.systemPrompt).not.toContain("## Session Context");
+    expect(loopOptions.initialMessages).toEqual(initialMessages);
+    expect(loopOptions.injectSessionStateOnFirstTurn).toBe(true);
+  });
+
+  it("keeps the interactive prompt free of resume summaries when raw history is restored", () => {
+    const initialMessages = [
+      { role: "user", content: "Original request" },
+      { role: "assistant", content: "Working on it" },
+    ] as const;
+
+    const loopOptions = createInitialTuiLoopOptions(createInteractiveResumeOptions({
+      initialMessages: [...initialMessages],
+    }));
+
+    expect(loopOptions.initialMessages).toEqual(initialMessages);
+    expect(loopOptions.systemPrompt).not.toContain("## Session Context");
+    expect(loopOptions.injectSessionStateOnFirstTurn).toBe(true);
+  });
+
+  it("does not add a session summary when rebuilding the interactive prompt for raw-history resume", () => {
+    const baseOptions = createInteractiveResumeOptions({
+      initialMessages: [
+        { role: "user", content: "Restore raw history" },
+        { role: "assistant", content: "Resuming now" },
+      ],
+    });
+
+    const defaultPrompt = buildInteractiveSystemPrompt({
+      repoRoot: baseOptions.repoRoot,
+      skills: baseOptions.skills,
+      toolRegistry: baseOptions.toolRegistry,
+      config: baseOptions.config,
+      safetyMode: "default",
+      mode: baseOptions.mode,
+    });
+    const autopilotPrompt = buildInteractiveSystemPrompt({
+      repoRoot: baseOptions.repoRoot,
+      skills: baseOptions.skills,
+      toolRegistry: baseOptions.toolRegistry,
+      config: baseOptions.config,
+      safetyMode: "autopilot",
+      mode: baseOptions.mode,
+    });
+
+    expect(defaultPrompt).not.toContain("## Session Context");
+    expect(autopilotPrompt).not.toContain("## Session Context");
+  });
+
+  it("enables first-turn session-state injection for restored interactive sessions", () => {
+    const restoredState = new SessionState();
+    restoredState.recordModifiedFile("packages/runtime/src/engine/briefing.ts");
+
+    const loopOptions = createInitialTuiLoopOptions(createInteractiveResumeOptions({
+      sessionState: restoredState,
+    }));
+
+    expect(loopOptions.injectSessionStateOnFirstTurn).toBe(true);
+  });
+
+  it("starts fresh once the resume seed has been cleared", () => {
+    const loopOptions = createInitialTuiLoopOptions(createInteractiveResumeOptions());
+
+    expect(loopOptions.initialMessages).toBeUndefined();
+    expect(loopOptions.systemPrompt).not.toContain("## Session Context");
+    expect(loopOptions.injectSessionStateOnFirstTurn).toBe(false);
   });
 });
 
@@ -418,6 +555,30 @@ describe("renderHelpText", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("rejects --continue <arg> before provider auth with resume guidance", () => {
+    const home = mkdtempSync(join(tmpdir(), "devagent-continue-arg-home-"));
+    try {
+      const result = execFileSync("bun", ["packages/cli/src/index.ts", "--continue", "6264d171-667c-46a5-82be-be9abd3a6e4c"], {
+        cwd: join(cliPackageDir, "..", ".."),
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          HOME: home,
+          DEVAGENT_DISABLE_UPDATE_CHECK: "1",
+        },
+      });
+      expect.unreachable(`expected command to fail, got: ${result}`);
+    } catch (error: any) {
+      expect(error.status).toBe(2);
+      expect(error.stderr).toContain("--continue does not accept a query or file input");
+      expect(error.stderr).toContain("Use --resume <id> to target a specific session.");
+      expect(error.stderr).not.toContain('No API key configured for provider "openai"');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveAutoPromptCommandTarget", () => {
@@ -482,6 +643,9 @@ function createSessionTestConfig(): DevAgentConfig {
   return {
     provider: "openai",
     model: "gpt-5",
+    approval: {
+      mode: "default",
+    },
     context: {
       turnIsolation: false,
     },
@@ -627,6 +791,8 @@ describe("setupSessionPersistence", () => {
       },
     );
 
+    expect(persistence.initialMessages).toEqual(previous.messages);
+    expect(persistence.resumeBriefing).toBeUndefined();
     expect(persistence.sessionState.getModifiedFiles()).toEqual(["packages/cli/src/main.ts"]);
 
     const next = persistence.activateSession("follow-up prompt");
@@ -640,6 +806,30 @@ describe("setupSessionPersistence", () => {
       "packages/cli/src/main.ts",
       "packages/runtime/src/core/session.ts",
     ]);
+  });
+
+  it("restores raw prior messages for named single-shot resume", async () => {
+    const store = createMemorySessionStore();
+    const previous = store.createSession({ query: "earlier prompt" });
+    store.addMessage(previous.id, { role: MessageRole.USER, content: "Original request" });
+    store.addMessage(previous.id, { role: MessageRole.ASSISTANT, content: "Earlier progress" });
+    const restoredSession = store.getSession(previous.id)!;
+
+    const persistence = await setupSessionPersistence(
+      createSessionTestConfig(),
+      parseArgs(["node", "devagent", "--quiet", "--resume", previous.id]),
+      "/Users/egavrin/Documents/devagent",
+      {} as LLMProvider,
+      new EventBus(),
+      new SessionState(),
+      {
+        sessionStore: store,
+        createCrashReporter: () => ({ printSessionId() {}, dispose() {} }),
+      },
+    );
+
+    expect(persistence.initialMessages).toEqual(restoredSession.messages);
+    expect(persistence.resumeBriefing).toBeUndefined();
   });
 
   it("creates a fresh session only after clear-style deactivation", async () => {
