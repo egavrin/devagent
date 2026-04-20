@@ -3,12 +3,13 @@ import { chmodSync, existsSync, lstatSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+
 import {
   createIsolationWorkspace,
   createIsolationWorkspaceWithTimeout,
   destroyIsolationWorkspace,
 } from "./isolation";
-import { loadValidationScenarios } from "./manifest";
+import { loadValidationScenarios , validateScenarioManifest } from "./manifest";
 import { classifyProviderFailure, selectPreferredOllamaModel } from "./provider-smoke";
 import {
   evaluateAssertions,
@@ -16,13 +17,12 @@ import {
   renderScenarioReviewMarkdown,
   summarizeScenarioReports,
 } from "./reporting";
+import { runValidationScenario } from "./runner";
 import type {
   ValidationAssertion,
   ValidationScenario,
   ValidationScenarioReport,
 } from "./types";
-import { validateScenarioManifest } from "./manifest";
-import { runValidationScenario } from "./runner";
 
 const tempPaths: string[] = [];
 

@@ -1,7 +1,7 @@
+import { EventBus } from "@devagent/runtime";
+import { render } from "ink";
 import { PassThrough, Writable } from "node:stream";
 import React, { useEffect, useMemo, useRef } from "react";
-import { render } from "ink";
-import { EventBus } from "@devagent/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -11,9 +11,9 @@ import {
   renderResumeCommandOutput,
   renderSessionsCommandOutput,
 } from "./App.js";
+import type { TranscriptNode } from "./shared.js";
 import { StatusBar } from "./StatusBar.js";
 import { useAgentLog } from "./useAgentLog.js";
-import type { TranscriptNode } from "./shared.js";
 import type { PresentedTurnStatus } from "../transcript-composer.js";
 import {
   makeFinalOutputPart,
