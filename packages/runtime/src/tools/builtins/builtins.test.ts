@@ -157,13 +157,20 @@ function setupBackedUnlockedSkill(name: string = "modernize-arkts"): {
 }
 
 describe("builtinTools", () => {
-  it("has 9 built-in tools", () => {
-    expect(builtinTools.length).toBe(9);
+  it("has 10 built-in tools", () => {
+    expect(builtinTools.length).toBe(10);
   });
 
   it("all tools have unique names", () => {
     const names = builtinTools.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("includes fetch_url as an external built-in", () => {
+    expect(builtinTools.find((tool) => tool.name === "fetch_url")).toMatchObject({
+      name: "fetch_url",
+      category: "external",
+    });
   });
 });
 

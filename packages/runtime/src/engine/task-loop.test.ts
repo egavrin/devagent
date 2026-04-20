@@ -3565,6 +3565,58 @@ describe("TaskLoop", () => {
 
   // ─── Bug fix: record modifiedFiles even on partial success ────────────────
   describe("modifiedFiles recorded on partial success", () => {
+    it("records artifacts in session state for successful mutating tools", async () => {
+      const writeTool: ToolSpec = {
+        name: "write_file",
+        description: "Write a file",
+        category: "mutating",
+        paramSchema: { type: "object" },
+        resultSchema: { type: "object" },
+        handler: async () => ({
+          success: true,
+          output: "Written src/new.ts",
+          error: null,
+          artifacts: ["/repo/src/new.ts"],
+        }),
+      };
+
+      const sessionState = new SessionState();
+      const provider = createMockProvider([
+        [
+          {
+            type: "tool_call",
+            content: '{"path": "src/new.ts", "content": "export const value = 1;"}',
+            toolCallId: "call_0",
+            toolName: "write_file",
+          },
+          { type: "done", content: "" },
+        ],
+        [
+          { type: "text", content: "Done." },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const registry = new ToolRegistry();
+      registry.register(writeTool);
+      const gate = new ApprovalGate(config.approval, bus);
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config,
+        systemPrompt: "Test",
+        repoRoot: "/repo",
+        sessionState,
+      });
+
+      await loop.run("Write a file");
+
+      expect(sessionState.getModifiedFiles()).toContain("/repo/src/new.ts");
+    });
+
     it("records artifacts in session state when success=false but artifacts non-empty (batch partial write)", async () => {
       // Simulate batch replace_in_file with partial failure:
       // success=false (some pairs failed) but artifacts=[filePath] (file was written)
@@ -3624,6 +3676,62 @@ describe("TaskLoop", () => {
       // Tool summary should also be recorded
       const summaries = sessionState.getToolSummaries();
       expect(summaries.length).toBe(1);
+    });
+
+    it("does not record external artifacts as modified files and keys fetch_url summaries by URL", async () => {
+      const fetchTool: ToolSpec = {
+        name: "fetch_url",
+        description: "Fetch a URL",
+        category: "external",
+        paramSchema: { type: "object" },
+        resultSchema: { type: "object" },
+        handler: async () => ({
+          success: true,
+          output: "Saved binary response",
+          error: null,
+          artifacts: ["/tmp/devagent-fetch-url/session/download.bin"],
+        }),
+      };
+
+      const sessionState = new SessionState();
+      const provider = createMockProvider([
+        [
+          {
+            type: "tool_call",
+            content: '{"url": "https://example.com/report.pdf", "save_binary": true}',
+            toolCallId: "call_0",
+            toolName: "fetch_url",
+          },
+          { type: "done", content: "" },
+        ],
+        [
+          { type: "text", content: "Done." },
+          { type: "done", content: "" },
+        ],
+      ]);
+
+      const registry = new ToolRegistry();
+      registry.register(fetchTool);
+      const gate = new ApprovalGate(config.approval, bus);
+
+      const loop = new TaskLoop({
+        provider,
+        tools: registry,
+        bus,
+        approvalGate: gate,
+        config,
+        systemPrompt: "Test",
+        repoRoot: "/repo",
+        sessionState,
+      });
+
+      await loop.run("Download a report");
+
+      expect(sessionState.getModifiedFiles()).toEqual([]);
+      const summaries = sessionState.getToolSummaries();
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0]!.tool).toBe("fetch_url");
+      expect(summaries[0]!.target).toBe("https://example.com/report.pdf");
     });
   });
 

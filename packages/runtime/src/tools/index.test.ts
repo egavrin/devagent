@@ -31,6 +31,16 @@ describe("createDefaultToolRegistry", () => {
     expect(result.output).toBe("override");
   });
 
+  it("registers fetch_url in the default tool registry", () => {
+    const registry = createDefaultToolRegistry();
+
+    expect(registry.has("fetch_url")).toBe(true);
+    expect(registry.get("fetch_url")).toMatchObject({
+      name: "fetch_url",
+      category: "external",
+    });
+  });
+
   it("avoids runtime imports from the async core barrel in tool sources", () => {
     const sourceFiles = collectTypeScriptFiles(import.meta.dirname).filter(
       (filePath) => !filePath.endsWith(".test.ts"),

@@ -2,6 +2,7 @@
  * Built-in tool collection.
  */
 
+import { fetchUrlTool } from "./fetch-url.js";
 import { createFindFilesTool, findFilesTool } from "./find-files.js";
 import { gitStatusTool, gitDiffTool, gitCommitTool } from "./git.js";
 import { createReadFileTool, readFileTool } from "./read-file.js";
@@ -19,6 +20,7 @@ export {
   findFilesTool,
   createSearchFilesTool,
   searchFilesTool,
+  fetchUrlTool,
   runCommandTool,
   gitStatusTool,
   gitDiffTool,
@@ -34,6 +36,7 @@ export const builtinTools: ReadonlyArray<ToolSpec> = [
   replaceInFileTool,
   findFilesTool,
   searchFilesTool,
+  fetchUrlTool,
   runCommandTool,
   gitStatusTool,
   gitDiffTool,

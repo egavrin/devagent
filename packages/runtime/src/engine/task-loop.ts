@@ -1813,6 +1813,12 @@ export class TaskLoop {
     toolName: string,
     args: Record<string, unknown>,
   ): string | null {
+    if (toolName === "fetch_url") {
+      const url = args["url"];
+      if (typeof url === "string" && url.trim().length > 0) {
+        return url;
+      }
+    }
     const path = args["path"];
     if (typeof path === "string" && path.trim().length > 0) {
       const normalized = normalizeRepoPath(path);
@@ -2258,9 +2264,11 @@ export class TaskLoop {
             ?? (result.artifacts.find((a): a is string => typeof a === "string"))
             ?? effectiveCall.name;
           // Record modified file paths for mutating tools
-          for (const artifact of result.artifacts) {
-            if (typeof artifact === "string") {
-              this.sessionState!.recordModifiedFile(artifact);
+          if (tool.category === "mutating") {
+            for (const artifact of result.artifacts) {
+              if (typeof artifact === "string") {
+                this.sessionState!.recordModifiedFile(artifact);
+              }
             }
           }
           // Persist readonly review scope so post-compaction turns can continue

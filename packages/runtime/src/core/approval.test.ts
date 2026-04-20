@@ -329,6 +329,14 @@ describe("ApprovalGate", () => {
       );
       expect(decision).toBe("allow");
     });
+
+    it("default mode asks for fetch_url external access", () => {
+      const gate = new ApprovalGate(makeSafetyPolicy());
+      const decision = gate.decide(
+        makeRequest({ toolCategory: "external", toolName: "fetch_url", filePath: null }),
+      );
+      expect(decision).toBe("ask");
+    });
   });
 
   describe("Per-tool overrides", () => {

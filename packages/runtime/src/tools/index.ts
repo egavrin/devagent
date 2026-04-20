@@ -9,6 +9,7 @@ export {
   createReadFileTool,
   createFindFilesTool,
   createSearchFilesTool,
+  fetchUrlTool,
 } from "./builtins/index.js";
 
 // LSP integration
@@ -25,6 +26,7 @@ import {
   replaceInFileTool,
   findFilesTool,
   searchFilesTool,
+  fetchUrlTool,
   runCommandTool,
   gitStatusTool,
   gitDiffTool,
@@ -37,6 +39,7 @@ const DEFAULT_BUILTIN_TOOLS: ReadonlyArray<ToolSpec> = [
   replaceInFileTool,
   findFilesTool,
   searchFilesTool,
+  fetchUrlTool,
   runCommandTool,
   gitStatusTool,
   gitDiffTool,
