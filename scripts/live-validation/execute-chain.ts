@@ -6,13 +6,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { BreakdownDoc, IssueSpecDoc, TaskExecutionRequest, TaskExecutionResult } from "@devagent-sdk/types";
-import {
-  captureGitOutputs,
-  createIsolationWorkspaceWithTimeout,
-  destroyIsolationWorkspace,
-  ensureGitIdentity,
-} from "./isolation";
+
 import {
   artifactFileNamesForChainStage,
   buildExecuteChainRequest,
@@ -20,7 +14,14 @@ import {
   type ExecuteChainArtifactContext,
   type ExecuteChainStage,
 } from "./execute-chain-lib";
+import {
+  captureGitOutputs,
+  createIsolationWorkspaceWithTimeout,
+  destroyIsolationWorkspace,
+  ensureGitIdentity,
+} from "./isolation";
 import type { IsolationWorkspace } from "./types";
+import type { BreakdownDoc, IssueSpecDoc, TaskExecutionRequest, TaskExecutionResult } from "@devagent-sdk/types";
 
 interface CliOptions {
   readonly outputRoot?: string;

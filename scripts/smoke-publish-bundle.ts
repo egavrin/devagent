@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 
 import { spawn, spawnSync } from "node:child_process";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const DIST = join(ROOT, "dist");

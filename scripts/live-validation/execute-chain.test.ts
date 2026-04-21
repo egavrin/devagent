@@ -1,14 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import type { IssueSpecDoc } from "@devagent-sdk/types";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { buildStageFailureMessage as buildStageFailureMessageFromRun } from "./execute-chain";
 import {
   EXECUTE_CHAIN_STAGES,
   buildExecuteChainRequest,
   extractIssueUnitFromIssueSpec,
 } from "./execute-chain-lib";
-import { buildStageFailureMessage as buildStageFailureMessageFromRun } from "./execute-chain";
+import type { IssueSpecDoc } from "@devagent-sdk/types";
 
 describe("execute chain helpers", () => {
   it("defines the full staged chain in the expected order", () => {

@@ -26,6 +26,9 @@
       "entry": [
         "src/tools/**/*.ts"
       ],
+      "ignoreDependencies": [
+        "undici"
+      ],
       "project": [
         "src/**/*.ts"
       ]
