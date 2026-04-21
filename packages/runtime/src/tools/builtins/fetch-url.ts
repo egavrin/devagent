@@ -9,8 +9,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 
-import { createProxyAwareFetch as createCoreProxyAwareFetch } from "../../core/proxy-fetch.js";
 import { ToolError, extractErrorMessage } from "../../core/errors.js";
+import { createProxyAwareFetch as createCoreProxyAwareFetch } from "../../core/proxy-fetch.js";
 import type { FetchFn, ProxyAwareFetchOptions } from "../../core/proxy-fetch.js";
 import type { ToolSpec } from "../../core/types.js";
 
