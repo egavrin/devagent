@@ -3,29 +3,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDefaultRegistry } from "./index.js";
 
-describe("createDefaultRegistry", () => {
-  const originalFetch = globalThis.fetch;
-  const proxyEnvKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"] as const;
-  const originalProxyEnv = new Map<string, string | undefined>();
+const originalFetch = globalThis.fetch;
+const proxyEnvKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"] as const;
+const originalProxyEnv = new Map<string, string | undefined>();
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    for (const key of proxyEnvKeys) {
-      const value = originalProxyEnv.get(key);
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-      originalProxyEnv.delete(key);
-    }
-    vi.restoreAllMocks();
-  });
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  for (const key of proxyEnvKeys) {
+    const value = originalProxyEnv.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    originalProxyEnv.delete(key);
+  }
+  vi.restoreAllMocks();
+});
 
+describe("createDefaultRegistry basics", () => {
   it("registers devagent-api as a built-in provider", () => {
     const registry = createDefaultRegistry();
 
     expect(registry.has("devagent-api")).toBe(true);
     expect(registry.list()).toContain("devagent-api");
   });
+});
 
+describe("devagent-api registry provider", () => {
   it("forces devagent-api through chat completions for cortex", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
@@ -125,7 +127,9 @@ describe("createDefaultRegistry", () => {
     expect(body.messages?.map((message) => message.role)).toContain("system");
     expect(body.messages?.map((message) => message.role)).not.toContain("developer");
   });
+});
 
+describe("DeepSeek registry provider", () => {
   it("forces DeepSeek through chat completions", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
     globalThis.fetch = fetchMock as typeof globalThis.fetch;

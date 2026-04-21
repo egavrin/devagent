@@ -17,7 +17,7 @@ import {
   OverloadedError,
   extractErrorMessage,
 } from "@devagent/runtime";
-import { tool as aiTool, jsonSchema, type CoreMessage, type TextStreamPart, type ToolSet } from "ai";
+import { tool as aiTool, jsonSchema, type CoreMessage, type TextStreamPart } from "ai";
 
 import type { Message, ModelCapabilities, StreamChunk, ToolSpec } from "@devagent/runtime";
 
@@ -27,7 +27,7 @@ interface ProcessStreamOptions {
   /** Provider name used in error messages (e.g., "Anthropic", "OpenAI"). */
   readonly providerName: string;
   /** The fullStream from Vercel AI SDK streamText(). */
-  readonly fullStream: AsyncIterable<TextStreamPart<ToolSet>>;
+  readonly fullStream: AsyncIterable<TextStreamPart<Record<string, never>>>;
   /** AbortController whose signal was passed to streamText(). */
   readonly abortController: AbortController;
   /**
@@ -52,67 +52,9 @@ export async function* processProviderStream(
 
   try {
     for await (const part of fullStream) {
-      switch (part.type) {
-        case "text-delta":
-          yield {
-            type: "text",
-            content: part.text,
-          };
-          break;
-
-        case "tool-call": {
-          const args = transformArgs
-            ? transformArgs(part.input as Record<string, unknown>)
-            : part.input;
-          yield {
-            type: "tool_call",
-            content: JSON.stringify(args),
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-          };
-          break;
-        }
-
-        case "reasoning-delta":
-          yield {
-            type: "thinking",
-            content: typeof part.text === "string" ? part.text : "",
-          };
-          break;
-
-        case "error":
-          throw new ProviderError(`${providerName} stream error: ${String(part.error)}`);
-
-        case "finish":
-          yield {
-            type: "done",
-            content: "",
-            usage: part.totalUsage
-              ? {
-                  promptTokens: part.totalUsage.inputTokens ?? 0,
-                  completionTokens: part.totalUsage.outputTokens ?? 0,
-                }
-              : undefined,
-          };
-          break;
-
-        case "text-start":
-        case "text-end":
-        case "reasoning-start":
-        case "reasoning-end":
-        case "tool-input-start":
-        case "tool-input-delta":
-        case "tool-input-end":
-        case "tool-result":
-        case "tool-error":
-        case "source":
-        case "file":
-        case "start-step":
-        case "finish-step":
-        case "start":
-        case "abort":
-        case "raw":
-          break;
+      const chunk = mapStreamPart(part, providerName, transformArgs);
+      if (chunk) {
+        yield chunk;
       }
     }
   } catch (err) {
@@ -123,6 +65,51 @@ export async function* processProviderStream(
     if (err instanceof ProviderError) throw err;
     throw classifyProviderError(err, providerName);
   }
+}
+
+function mapStreamPart(
+  part: TextStreamPart<Record<string, never>>,
+  providerName: string,
+  transformArgs: ProcessStreamOptions["transformArgs"],
+): StreamChunk | null {
+  if (part.type === "text-delta") {
+    return { type: "text", content: part.text };
+  }
+  if (part.type === "tool-call") {
+    return {
+      type: "tool_call",
+      content: JSON.stringify(mapToolInput(part.input, transformArgs)),
+      toolCallId: part.toolCallId,
+      toolName: part.toolName,
+    };
+  }
+  if (part.type === "reasoning-delta") {
+    return { type: "thinking", content: typeof part.text === "string" ? part.text : "" };
+  }
+  if (part.type === "error") {
+    throw new ProviderError(`${providerName} stream error: ${String(part.error)}`);
+  }
+  if (part.type === "finish") {
+    return {
+      type: "done",
+      content: "",
+      usage: part.totalUsage
+        ? {
+            promptTokens: part.totalUsage.inputTokens ?? 0,
+            completionTokens: part.totalUsage.outputTokens ?? 0,
+          }
+        : undefined,
+    };
+  }
+  return null;
+}
+
+function mapToolInput(
+  input: unknown,
+  transformArgs: ProcessStreamOptions["transformArgs"],
+): unknown {
+  if (!transformArgs) return input;
+  return transformArgs(input as Record<string, unknown>);
 }
 
 /**
@@ -160,43 +147,54 @@ export function classifyProviderError(err: unknown, providerName: string): Provi
 
   return new ProviderError(`${providerName} API error: ${msg}`);
 }
-
 function extractHttpStatus(err: unknown): number | null {
   if (!err || typeof err !== "object") return null;
   const e = err as Record<string, unknown>;
-  if (typeof e["statusCode"] === "number") return e["statusCode"];
-  if (typeof e["status"] === "number") return e["status"];
-  if (e["cause"] && typeof e["cause"] === "object") {
-    return extractHttpStatus(e["cause"]);
-  }
-  if (e["data"] && typeof e["data"] === "object") {
-    return extractHttpStatus(e["data"]);
-  }
+  const direct = firstNumber(e["statusCode"], e["status"]);
+  if (direct !== null) return direct;
+  const nested = firstNestedStatus(e["cause"], e["data"]);
+  if (nested !== null) return nested;
   const msgStr = typeof e["message"] === "string" ? e["message"] : "";
   const match = msgStr.match(/\b(429|529|502|503|504)\b/);
   return match ? parseInt(match[1]!, 10) : null;
 }
 
-function extractRetryAfter(err: unknown): number | null {
-  if (!err || typeof err !== "object") return null;
-  const e = err as Record<string, unknown>;
-  const headers = e["headers"] as Record<string, string> | undefined;
-  if (headers) {
-    const retryAfter = headers["retry-after"] ?? headers["Retry-After"];
-    if (retryAfter) {
-      const seconds = parseFloat(retryAfter);
-      if (!isNaN(seconds)) return seconds * 1000;
-    }
-  }
-  const responseHeaders = e["responseHeaders"] as Record<string, string> | undefined;
-  if (responseHeaders) {
-    const retryAfter = responseHeaders["retry-after"] ?? responseHeaders["Retry-After"];
-    if (retryAfter) {
-      const seconds = parseFloat(retryAfter);
-      if (!isNaN(seconds)) return seconds * 1000;
+function firstNumber(...values: unknown[]): number | null {
+  const found = values.find((value): value is number => typeof value === "number");
+  return found ?? null;
+}
+
+function firstNestedStatus(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (value && typeof value === "object") {
+      const status = extractHttpStatus(value);
+      if (status !== null) return status;
     }
   }
   return null;
+}
+
+function extractRetryAfter(err: unknown): number | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as Record<string, unknown>;
+  return firstRetryAfter(e["headers"], e["responseHeaders"]);
+}
+
+function firstRetryAfter(...headerValues: unknown[]): number | null {
+  for (const value of headerValues) {
+    const retryAfter = readRetryAfter(value);
+    if (retryAfter !== null) return retryAfter;
+  }
+  return null;
+}
+
+function readRetryAfter(value: unknown): number | null {
+  if (!value || typeof value !== "object") return null;
+  const headers = value as Record<string, string>;
+  const retryAfter = headers["retry-after"] ?? headers["Retry-After"];
+  if (!retryAfter) return null;
+  const seconds = parseFloat(retryAfter);
+  return Number.isNaN(seconds) ? null : seconds * 1000;
 }
 
 const CONNECTION_ERROR_PATTERNS = [
@@ -295,68 +293,56 @@ function collectErrorStrings(
  * Shared by all providers that use the Vercel AI SDK.
  */
 export function convertMessages(messages: ReadonlyArray<Message>): CoreMessage[] {
-  const result: CoreMessage[] = [];
+  return messages.map(convertMessage);
+}
 
-  for (const msg of messages) {
-    switch (msg.role) {
-      case MessageRole.SYSTEM:
-        result.push({ role: "system", content: msg.content ?? "" });
-        break;
-      case MessageRole.USER:
-        result.push({ role: "user", content: msg.content ?? "" });
-        break;
-      case MessageRole.ASSISTANT:
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
-          const parts: Array<
-            | { type: "text"; text: string }
-            | { type: "reasoning"; text: string }
-            | { type: "tool-call"; toolCallId: string; toolName: string; input: Record<string, unknown> }
-          > = [];
-          // Preserve thinking/reasoning content across tool use boundaries
-          if (msg.thinking) {
-            parts.push({ type: "reasoning" as const, text: msg.thinking });
-          }
-          if (msg.content) {
-            parts.push({ type: "text" as const, text: msg.content });
-          }
-          for (const tc of msg.toolCalls) {
-            parts.push({
-              type: "tool-call" as const,
-              toolCallId: tc.callId,
-              toolName: tc.name,
-              input: tc.arguments,
-            });
-          }
-          result.push({ role: "assistant", content: parts });
-        } else if (msg.thinking) {
-          // Thinking-only or thinking + text (no tool calls)
-          const parts: Array<{ type: "text"; text: string } | { type: "reasoning"; text: string }> = [];
-          parts.push({ type: "reasoning" as const, text: msg.thinking });
-          if (msg.content) {
-            parts.push({ type: "text" as const, text: msg.content });
-          }
-          result.push({ role: "assistant", content: parts });
-        } else {
-          result.push({ role: "assistant", content: msg.content ?? "" });
-        }
-        break;
-      case MessageRole.TOOL:
-        result.push({
-          role: "tool",
-          content: [
-            {
-              type: "tool-result" as const,
-              toolCallId: msg.toolCallId ?? "",
-              toolName: "", // Name resolved by SDK via toolCallId
-              output: { type: "text" as const, value: msg.content ?? "" },
-            },
-          ],
-        });
-        break;
-    }
+type AssistantPart =
+  | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
+  | { type: "tool-call"; toolCallId: string; toolName: string; input: Record<string, unknown> };
+
+function convertMessage(msg: Message): CoreMessage {
+  if (msg.role === MessageRole.SYSTEM) return { role: "system", content: msg.content ?? "" };
+  if (msg.role === MessageRole.USER) return { role: "user", content: msg.content ?? "" };
+  if (msg.role === MessageRole.TOOL) return convertToolMessage(msg);
+  return convertAssistantMessage(msg);
+}
+
+function convertAssistantMessage(msg: Message): CoreMessage {
+  const hasToolCalls = Boolean(msg.toolCalls?.length);
+  if (!hasToolCalls && !msg.thinking) {
+    return { role: "assistant", content: msg.content ?? "" };
   }
+  return { role: "assistant", content: buildAssistantParts(msg) };
+}
 
-  return result;
+function buildAssistantParts(msg: Message): AssistantPart[] {
+  const parts: AssistantPart[] = [];
+  if (msg.thinking) parts.push({ type: "reasoning", text: msg.thinking });
+  if (msg.content) parts.push({ type: "text", text: msg.content });
+  for (const tc of msg.toolCalls ?? []) {
+    parts.push({
+      type: "tool-call",
+      toolCallId: tc.callId,
+      toolName: tc.name,
+      input: tc.arguments,
+    });
+  }
+  return parts;
+}
+
+function convertToolMessage(msg: Message): CoreMessage {
+  return {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: msg.toolCallId ?? "",
+        toolName: "",
+        output: { type: "text", value: msg.content ?? "" },
+      },
+    ],
+  };
 }
 
 // ─── Capability Resolution ───────────────────────────────────
@@ -426,48 +412,58 @@ export function convertTools(
   const result: Record<string, ReturnType<typeof aiTool>> = {};
 
   for (const t of tools) {
-    const rawProps = (t.paramSchema.properties ?? {}) as Record<string, Record<string, unknown>>;
-
-    if (strict) {
-      // OpenAI strict mode: all properties required, non-required become nullable
-      const requiredSet = new Set(Array.isArray(t.paramSchema.required) ? t.paramSchema.required : []);
-      const allPropertyNames = Object.keys(rawProps);
-
-      const strictProps: Record<string, Record<string, unknown>> = {};
-      for (const [key, schema] of Object.entries(rawProps)) {
-        if (!requiredSet.has(key)) {
-          // Convert to nullable: type becomes ["originalType", "null"]
-          const origType = schema["type"] as string | undefined;
-          strictProps[key] = {
-            ...schema,
-            type: origType ? [origType, "null"] : ["string", "null"],
-          };
-        } else {
-          strictProps[key] = schema;
-        }
-      }
-
-      result[t.name] = aiTool({
-        description: t.description,
-        inputSchema: jsonSchema({
-          type: t.paramSchema.type as "object",
-          properties: strictProps,
-          required: allPropertyNames,
-          additionalProperties: false,
-        }),
-      });
-    } else {
-      // Base mode: pass through as-is
-      result[t.name] = aiTool({
-        description: t.description,
-        inputSchema: jsonSchema({
-          type: t.paramSchema.type as "object",
-          properties: rawProps,
-          required: Array.isArray(t.paramSchema.required) ? [...t.paramSchema.required] : [],
-        }),
-      });
-    }
+    result[t.name] = convertTool(t, strict);
   }
 
   return result;
+}
+
+function convertTool(t: ToolSpec, strict: boolean): ReturnType<typeof aiTool> {
+  const rawProps = (t.paramSchema.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const schema = strict ? buildStrictToolSchema(t, rawProps) : buildBaseToolSchema(t, rawProps);
+  return aiTool({ description: t.description, inputSchema: jsonSchema(schema) });
+}
+
+function buildBaseToolSchema(
+  t: ToolSpec,
+  rawProps: Record<string, Record<string, unknown>>,
+): Parameters<typeof jsonSchema>[0] {
+  return {
+    type: t.paramSchema.type as "object",
+    properties: rawProps,
+    required: Array.isArray(t.paramSchema.required) ? [...t.paramSchema.required] : [],
+  };
+}
+
+function buildStrictToolSchema(
+  t: ToolSpec,
+  rawProps: Record<string, Record<string, unknown>>,
+): Parameters<typeof jsonSchema>[0] {
+  const requiredSet = new Set(Array.isArray(t.paramSchema.required) ? t.paramSchema.required : []);
+  return {
+    type: t.paramSchema.type as "object",
+    properties: buildStrictProperties(rawProps, requiredSet),
+    required: Object.keys(rawProps),
+    additionalProperties: false,
+  };
+}
+
+function buildStrictProperties(
+  rawProps: Record<string, Record<string, unknown>>,
+  requiredSet: ReadonlySet<string>,
+): Record<string, Record<string, unknown>> {
+  return Object.fromEntries(
+    Object.entries(rawProps).map(([key, schema]) => [
+      key,
+      requiredSet.has(key) ? schema : nullableSchema(schema),
+    ]),
+  );
+}
+
+function nullableSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const origType = schema["type"] as string | undefined;
+  return {
+    ...schema,
+    type: origType ? [origType, "null"] : ["string", "null"],
+  };
 }

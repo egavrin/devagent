@@ -10,9 +10,7 @@ import { describe, it, expect } from "vitest";
 
 import { classifyProviderError, stripNullArgs, resolveCapabilities, convertMessages } from "./shared.js";
 
-// ─── classifyProviderError ──────────────────────────────────
-
-describe("classifyProviderError", () => {
+describe("classifyProviderError status handling", () => {
   it("classifies 429 as RateLimitError", () => {
     const err = { status: 429, message: "Too Many Requests" };
     const result = classifyProviderError(err, "TestProvider");
@@ -54,6 +52,38 @@ describe("classifyProviderError", () => {
     expect(result.message).toContain("overloaded");
   });
 
+  it("extracts status from nested cause object", () => {
+    const err = {
+      message: "wrapper error",
+      cause: { statusCode: 429 },
+    };
+    const result = classifyProviderError(err, "Test");
+    expect(result).toBeInstanceOf(RateLimitError);
+  });
+
+  it("extracts status from nested data object", () => {
+    const err = {
+      message: "wrapper error",
+      data: { status: 529 },
+    };
+    const result = classifyProviderError(err, "Test");
+    expect(result).toBeInstanceOf(OverloadedError);
+  });
+
+  it("extracts status from message string when no status field", () => {
+    const err = { message: "Server returned 429 error" };
+    const result = classifyProviderError(err, "Test");
+    expect(result).toBeInstanceOf(RateLimitError);
+  });
+
+  it("handles statusCode field", () => {
+    const err = { statusCode: 529, message: "overloaded" };
+    const result = classifyProviderError(err, "Test");
+    expect(result).toBeInstanceOf(OverloadedError);
+  });
+});
+
+describe("classifyProviderError connection and fallback handling", () => {
   it("classifies connection errors as ProviderConnectionError", () => {
     const cases = [
       "ECONNRESET",
@@ -115,36 +145,6 @@ describe("classifyProviderError", () => {
     const result = classifyProviderError(original, "Test");
 
     expect(result).toBe(original);
-  });
-
-  it("extracts status from nested cause object", () => {
-    const err = {
-      message: "wrapper error",
-      cause: { statusCode: 429 },
-    };
-    const result = classifyProviderError(err, "Test");
-    expect(result).toBeInstanceOf(RateLimitError);
-  });
-
-  it("extracts status from nested data object", () => {
-    const err = {
-      message: "wrapper error",
-      data: { status: 529 },
-    };
-    const result = classifyProviderError(err, "Test");
-    expect(result).toBeInstanceOf(OverloadedError);
-  });
-
-  it("extracts status from message string when no status field", () => {
-    const err = { message: "Server returned 429 error" };
-    const result = classifyProviderError(err, "Test");
-    expect(result).toBeInstanceOf(RateLimitError);
-  });
-
-  it("handles statusCode field", () => {
-    const err = { statusCode: 529, message: "overloaded" };
-    const result = classifyProviderError(err, "Test");
-    expect(result).toBeInstanceOf(OverloadedError);
   });
 
   it("handles null/undefined input gracefully", () => {

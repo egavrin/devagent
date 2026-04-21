@@ -5,7 +5,7 @@
 
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { ProviderError } from "@devagent/runtime";
-import { streamText } from "ai";
+import { streamText, type TextStreamPart } from "ai";
 
 import { classifyProviderError, convertMessages, convertTools, processProviderStream } from "./shared.js";
 import type { LLMProvider, ProviderConfig, Message, ToolSpec, StreamChunk } from "@devagent/runtime";
@@ -24,48 +24,19 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
 
   return {
     id: "anthropic",
-
     async *chat(
       messages: ReadonlyArray<Message>,
       tools?: ReadonlyArray<ToolSpec>,
     ): AsyncIterable<StreamChunk> {
       abortController = new AbortController();
 
-      const aiMessages = convertMessages(messages);
-      const aiTools = tools ? convertTools(tools) : undefined;
-
       try {
-        const caps = config.capabilities;
-        const defaultMaxTokens = caps?.defaultMaxTokens ?? 4096;
-        const supportsTemp = caps?.supportsTemperature ?? true;
-
-        let result;
-        try {
-          result = streamText({
-            model: anthropic(config.model),
-            messages: aiMessages,
-            tools: aiTools,
-            maxOutputTokens: config.maxTokens ?? defaultMaxTokens,
-            ...(supportsTemp ? { temperature: config.temperature ?? 0 } : {}),
-            abortSignal: abortController.signal,
-          });
-        } catch (err) {
-          throw classifyProviderError(err, "Anthropic");
-        }
-
-        const stream = processProviderStream({
+        const result = startAnthropicStream(config, messages, tools, abortController, anthropic);
+        yield* processProviderStream({
           providerName: "Anthropic",
           fullStream: result.fullStream,
           abortController,
         });
-        try {
-          for await (const chunk of stream) {
-            yield chunk;
-          }
-        } catch (err) {
-          if (err instanceof ProviderError) throw err;
-          throw classifyProviderError(err, "Anthropic");
-        }
       } finally {
         abortController = null;
       }
@@ -75,4 +46,26 @@ export function createAnthropicProvider(config: ProviderConfig): LLMProvider {
       abortController?.abort();
     },
   };
+}
+
+function startAnthropicStream(
+  config: ProviderConfig,
+  messages: ReadonlyArray<Message>,
+  tools: ReadonlyArray<ToolSpec> | undefined,
+  abortController: AbortController,
+  anthropic: ReturnType<typeof createAnthropic>,
+): { readonly fullStream: AsyncIterable<TextStreamPart<Record<string, never>>> } {
+  const caps = config.capabilities;
+  try {
+    return streamText({
+      model: anthropic(config.model),
+      messages: convertMessages(messages),
+      tools: tools ? convertTools(tools) : undefined,
+      maxOutputTokens: config.maxTokens ?? caps?.defaultMaxTokens ?? 4096,
+      ...(caps?.supportsTemperature ?? true ? { temperature: config.temperature ?? 0 } : {}),
+      abortSignal: abortController.signal,
+    });
+  } catch (err) {
+    throw classifyProviderError(err, "Anthropic");
+  }
 }

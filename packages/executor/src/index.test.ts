@@ -221,6 +221,92 @@ async function createRepoRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "devagent-executor-test-"));
 }
 
+async function executeAndAssertTaskType(taskType: TaskExecutionRequest["taskType"]): Promise<void> {
+  const repoRoot = await createRepoRoot();
+  const artifactDir = join(repoRoot, "artifacts");
+  const request = await prepareTaskTypeRequest(taskType, repoRoot);
+  const events: TaskExecutionEvent[] = [];
+
+  const result = await executeTask({
+    request,
+    artifactDir,
+    repoRoot,
+    runQuery: async ({ query }) => ({
+      success: true,
+      responseText: responseForTaskType(taskType, query),
+      iterations: 1,
+    }),
+    emit: (event) => {
+      events.push(event);
+    },
+  });
+
+  await assertTaskTypeResult(taskType, result, events);
+  await rm(repoRoot, { recursive: true, force: true });
+}
+
+async function prepareTaskTypeRequest(
+  taskType: TaskExecutionRequest["taskType"],
+  repoRoot: string,
+): Promise<TaskExecutionRequest> {
+  const request = createRequest(taskType);
+  if (taskType === "verify") {
+    request.constraints.verifyCommands = [`${process.execPath} -e "process.stdout.write('verify-pass')"`];
+    return request;
+  }
+  request.context.skills = ["testing"];
+  const skillDir = join(repoRoot, ".devagent", "skills", "testing");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(
+    join(skillDir, "SKILL.md"),
+    "---\nname: testing\ndescription: Run tests carefully\n---\nCheck the test suite.\n",
+  );
+  return request;
+}
+
+function responseForTaskType(taskType: TaskExecutionRequest["taskType"], query: string): string {
+  if (taskType === "breakdown" || taskType === "issue-generation") {
+    return createStrictStageResponse(taskType);
+  }
+  return `Handled ${taskType}\n\n${query}`;
+}
+
+async function assertTaskTypeResult(
+  taskType: TaskExecutionRequest["taskType"],
+  result: Awaited<ReturnType<typeof executeTask>>,
+  events: TaskExecutionEvent[],
+): Promise<void> {
+  expect(result.status).toBe("success");
+  expect(result.outcome).toBe("completed");
+  expect(result.artifacts).toHaveLength(taskType === "breakdown" || taskType === "issue-generation" ? 2 : 1);
+  expect(result.artifacts[0]?.kind).toBe(artifactInfoForTask(taskType).kind);
+  expect(events.map((event) => event.type)).toContain("started");
+  expect(events.map((event) => event.type)).toContain("artifact");
+  expect(events.at(-1)?.type).toBe("completed");
+  await assertTaskArtifactText(taskType, result, events);
+}
+
+async function assertTaskArtifactText(
+  taskType: TaskExecutionRequest["taskType"],
+  result: Awaited<ReturnType<typeof executeTask>>,
+  events: TaskExecutionEvent[],
+): Promise<void> {
+  const artifactText = await readFile(result.artifacts.at(-1)!.path, "utf-8");
+  if (taskType === "verify") {
+    expect(artifactText).toContain("Overall result: pass");
+    expect(events.some((event) => event.type === "log")).toBe(true);
+    return;
+  }
+  if (taskType === "breakdown" || taskType === "issue-generation") {
+    expect(result.artifacts[0]?.variant).toBe("structured");
+    expect(result.artifacts[1]?.variant).toBe("rendered");
+    expect(result.artifacts[0]?.mimeType).toBe("application/json");
+    expect(result.artifacts[1]?.mimeType).toBe("text/markdown");
+    return;
+  }
+  expect(artifactText).toContain(`Handled ${taskType}`);
+}
+
 describe("parseExecuteArgs", () => {
   it("parses execute args", () => {
     expect(parseExecuteArgs(["node", "devagent", "execute", "--request", "request.json", "--artifact-dir", "artifacts"]))
@@ -269,7 +355,6 @@ describe("capability validation", () => {
     expect(() => validateExecutionCapabilities(request)).toThrow(/allowNetwork=false/);
   });
 });
-
 describe("skills", () => {
   it("resolves requested skills through the registry", async () => {
     const repoRoot = await createRepoRoot();
@@ -320,7 +405,9 @@ describe("skills", () => {
     expect(query).toContain("Workspace: Executor Workspace");
     expect(query).toContain("Target repositories: primary");
   });
+});
 
+describe("task query stage instructions", () => {
   it("includes imported reviewable context in the task query", () => {
     const request = createRequest("review");
     request.reviewable = {
@@ -400,7 +487,9 @@ describe("skills", () => {
     expect(query).toContain("Do not rename keys, omit required fields, or add extra fields.");
     expect(query).toContain("\"structured\": <IssueSpecDoc>");
   });
+});
 
+describe("task query workflow context", () => {
   it("includes issue unit and context bundle metadata when provided", () => {
     const request = createRequest("plan");
     request.issueUnit = {
@@ -493,7 +582,9 @@ describe("skills", () => {
     expect(query.match(/- README\.md/g)).toHaveLength(1);
     expect(query).toContain("- docs/flow.md");
   });
+});
 
+describe("task query review and repair context", () => {
   it("orders workflow-chain context for review and repair", () => {
     const reviewRequest = createRequest("review");
     reviewRequest.context.summary = "Review the approved change.";
@@ -669,7 +760,6 @@ describe("artifact body extraction", () => {
     expect(body).toBe("# Plan\n\nKeep the change set small.");
   });
 });
-
 describe("task execution", () => {
   it("uses fake executor responses for non-verify tasks when configured", async () => {
     const repoRoot = await createRepoRoot();
@@ -710,7 +800,9 @@ describe("task execution", () => {
     expect(readFakeTaskResponse("task-intake")).toBe("Task intake response");
     expect(readFakeTaskResponse("issue-generation")).toBe("Issue generation response");
   });
+});
 
+describe("task execution artifact emission", () => {
   for (const taskType of [
     "task-intake",
     "design",
@@ -726,67 +818,12 @@ describe("task execution", () => {
     "completion",
   ] as const) {
     it(`emits artifacts and events for ${taskType}`, async () => {
-      const repoRoot = await createRepoRoot();
-      const artifactDir = join(repoRoot, "artifacts");
-      const request = createRequest(taskType);
-      if (taskType === "verify") {
-        request.constraints.verifyCommands = [`${process.execPath} -e "process.stdout.write('verify-pass')"`];
-      } else {
-        request.context.skills = ["testing"];
-        const skillDir = join(repoRoot, ".devagent", "skills", "testing");
-        await mkdir(skillDir, { recursive: true });
-        await writeFile(
-          join(skillDir, "SKILL.md"),
-          "---\nname: testing\ndescription: Run tests carefully\n---\nCheck the test suite.\n",
-        );
-      }
-
-      const events: TaskExecutionEvent[] = [];
-      const result = await executeTask({
-        request,
-        artifactDir,
-        repoRoot,
-        runQuery: async ({ query }) => {
-          const responseText = taskType === "breakdown" || taskType === "issue-generation"
-            ? createStrictStageResponse(taskType)
-            : `Handled ${taskType}\n\n${query}`;
-          return {
-            success: true,
-            responseText,
-            iterations: 1,
-          };
-        },
-        emit: (event) => {
-          events.push(event);
-        },
-      });
-
-      expect(result.status).toBe("success");
-      expect(result.outcome).toBe("completed");
-      const expectedArtifactCount = taskType === "breakdown" || taskType === "issue-generation" ? 2 : 1;
-      expect(result.artifacts).toHaveLength(expectedArtifactCount);
-      expect(result.artifacts[0]?.kind).toBe(artifactInfoForTask(taskType).kind);
-      expect(events.map((event) => event.type)).toContain("started");
-      expect(events.map((event) => event.type)).toContain("artifact");
-      expect(events.at(-1)?.type).toBe("completed");
-
-      const artifactText = await readFile(result.artifacts.at(-1)!.path, "utf-8");
-      if (taskType === "verify") {
-        expect(artifactText).toContain("Overall result: pass");
-        expect(events.some((event) => event.type === "log")).toBe(true);
-      } else if (taskType === "breakdown" || taskType === "issue-generation") {
-        expect(result.artifacts[0]?.variant).toBe("structured");
-        expect(result.artifacts[1]?.variant).toBe("rendered");
-        expect(result.artifacts[0]?.mimeType).toBe("application/json");
-        expect(result.artifacts[1]?.mimeType).toBe("text/markdown");
-      } else {
-        expect(artifactText).toContain(`Handled ${taskType}`);
-      }
-
-      await rm(repoRoot, { recursive: true, force: true });
+      await executeAndAssertTaskType(taskType);
     });
   }
+});
 
+describe("task execution failures and continuation", () => {
   it("returns a failed result when verification commands fail", async () => {
     const repoRoot = await createRepoRoot();
     const artifactDir = join(repoRoot, "artifacts");
@@ -888,7 +925,9 @@ describe("task execution", () => {
 
     await rm(repoRoot, { recursive: true, force: true });
   });
+});
 
+describe("task execution strict artifact failures", () => {
   it("does not attempt strict artifact parsing when the workflow run already failed", async () => {
     const repoRoot = await createRepoRoot();
     const artifactDir = join(repoRoot, "artifacts");
