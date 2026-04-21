@@ -7,6 +7,15 @@ const cliRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(cliRoot, "..", "..", "..");
 
 describe("documentation parity", () => {
+  it("positions DevAgent around autonomous repository workflows without hiding the execute contract", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    expect(readme).toContain("autonomous developer for a repository");
+    expect(readme).toContain("DevAgent has two primary surfaces");
+    expect(readme).toContain("the machine-facing contract for repository runners");
+    expect(readme).toContain("The `execute` contract is the core product surface.");
+    expect(readme).toContain("following the workflow defined by the project");
+  });
+
   it("documents execute as the public machine contract", () => {
     const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
     expect(readme).toContain("devagent execute --request request.json --artifact-dir");

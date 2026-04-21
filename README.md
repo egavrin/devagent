@@ -1,6 +1,13 @@
 # DevAgent
 
-Workflow-grade coding executor for staged software delivery. DevAgent turns a typed request into stage-specific artifacts through the fixed `devagent execute --request <file> --artifact-dir <dir>` contract, while still offering an interactive terminal UI for direct operator-driven work.
+Workflow-grade coding executor for staged software delivery. DevAgent is being built to serve as an autonomous developer for a repository: understand issues, create designs, break work into implementable slices, make code changes, review the result, repair defects, and hand off reviewable artifacts while following the workflow defined by the project.
+
+DevAgent has two primary surfaces:
+
+- `devagent execute --request <file> --artifact-dir <dir>` — the machine-facing contract for repository runners, CI systems, and future autonomous workflows.
+- `devagent` — the operator-driven terminal UI for direct coding, review, and investigation.
+
+The `execute` contract is the core product surface. It turns a typed request into stage-specific artifacts and events so an external orchestrator can connect DevAgent to issues, branches, pull requests, code review, and team workflows without reducing the work to an unstructured prompt.
 
 ## Install
 
@@ -51,7 +58,7 @@ The primary DevAgent product surface is the staged executor contract:
 devagent execute --request request.json --artifact-dir artifacts/
 ```
 
-Lead with this canonical staged flow:
+Lead with this canonical staged flow for repository work:
 
 `design -> breakdown -> issue-generation -> implement -> review -> repair`
 
@@ -62,12 +69,15 @@ Lead with this canonical staged flow:
 - `review` inspects the resulting workspace for defects.
 - `repair` addresses review findings and closes the loop.
 
+This is the path DevAgent is optimizing for: connect to a repository, accept work from issues or other task systems, produce designs and implementation plans, change code in isolated workspaces, run verification, open reviewable artifacts, respond to feedback, and continue improving the project under its own documented workflow.
+
 The workflow is a fixed supported stage set. Stages are chosen from the built-in `taskType` contract; users do not define new public stages or override stage semantics in config.
 
 Stage prompts follow a fixed shape plus dynamic request context:
 
 - Stage-specific behavior is code-defined by `taskType`.
 - Each run still injects dynamic request context such as repo/work item metadata, summary, issue body, comments, changed file hints, requested skills, continuation context, and `extraInstructions`.
+- Repository guidance such as `WORKFLOW.md`, `AGENTS.md`, and requested skills can steer how the agent plans, implements, reviews, and verifies work.
 - This pass does not expose stage prompts as user-editable templates.
 
 Canonical example:
@@ -162,8 +172,10 @@ devagent --provider devagent-api --model cortex "fix failing tests"
 
 ## Features
 
+- **Autonomous developer foundation** — staged design, implementation, review, repair, and completion artifacts for repository-connected workflows
 - **Fixed staged workflow** — code-defined `taskType` stages with stage-specific artifact contracts
 - **Machine orchestration** — `devagent execute` for CI/CD and runner integration
+- **Project workflow awareness** — repository instructions, workflow context, requested skills, comments, changed files, continuation state, and review feedback are injected into each run
 - **Multi-provider** — Anthropic, OpenAI, Devagent API, DeepSeek, OpenRouter, Ollama, ChatGPT, GitHub Copilot
 - **Tool use** — reads/writes files, runs commands, searches code, git operations
 - **Subagents** — spawns specialized agents (explore, review, architect) with configurable models
