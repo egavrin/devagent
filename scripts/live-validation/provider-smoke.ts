@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
 
+import { PROTOCOL_VERSION, type TaskExecutionRequest } from "@devagent-sdk/types";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PROTOCOL_VERSION, type TaskExecutionRequest } from "@devagent-sdk/types";
+
 import {
   CredentialStore,
   getProviderCredentialDescriptor,
@@ -13,6 +14,7 @@ import {
 } from "../../packages/runtime/src/index.ts";
 
 type ProviderId =
+  | "anthropic"
   | "devagent-api"
   | "openai"
   | "openrouter"
@@ -58,6 +60,22 @@ interface OllamaModelSelection {
   readonly blockedReason?: string;
 }
 
+interface ProviderCheckContext {
+  readonly provider: ProviderId;
+  readonly model: string;
+  readonly providerDir: string;
+  readonly workDir: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly command: ReturnType<typeof getDevagentCommand>;
+  readonly checks: ProviderSmokeCheck[];
+}
+
+type ProviderCheckRecorder = (
+  label: string,
+  args: string[],
+  timeoutMs: number,
+) => Promise<void>;
+
 function extractStatusCode(output: string): number | null {
   const match = output.match(/statusCode:\s*(\d{3})/);
   return match ? Number.parseInt(match[1]!, 10) : null;
@@ -67,7 +85,7 @@ function extractUrl(output: string): string | null {
   const quoted = output.match(/url:\s*'([^']+)'/);
   if (quoted) return quoted[1]!;
   const plain = output.match(/https?:\/\/[^\s'"]+/);
-  return plain ? plain[0]! : null;
+  return plain?.[0] ?? null;
 }
 
 export function classifyProviderFailure(result: CommandResult): Pick<ProviderSmokeCheck, "status" | "blockedReason"> {
@@ -101,6 +119,7 @@ export function classifyProviderFailure(result: CommandResult): Pick<ProviderSmo
 }
 
 const DEFAULT_MODELS: Readonly<Record<Exclude<ProviderId, "ollama">, string>> = {
+  anthropic: "claude-sonnet-4-20250514",
   "devagent-api": "cortex",
   openai: "gpt-5.4-mini",
   openrouter: "openai/gpt-4o-mini",
@@ -287,7 +306,49 @@ async function writeSmokeArtifacts(
   return { stdoutPath, stderrPath };
 }
 
-function buildExecuteRequest(repoRoot: string, provider: ProviderId, model: string): TaskExecutionRequest {
+function buildRepository(repoRoot: string): TaskExecutionRequest["repositories"][number] {
+  return {
+    id: "repo-1",
+    workspaceId: "workspace-1",
+    alias: "primary",
+    name: "repo",
+    repoRoot,
+    repoFullName: "local/provider-smoke",
+    defaultBranch: "main",
+    provider: "local",
+  };
+}
+
+function buildExecution(repoRoot: string): TaskExecutionRequest["execution"] {
+  return {
+    primaryRepositoryId: "repo-1",
+    repositories: [{
+      repositoryId: "repo-1",
+      alias: "primary",
+      sourceRepoPath: repoRoot,
+      baseRef: "main",
+      workBranch: "devagent/provider-smoke",
+      isolation: "temp-copy",
+    }],
+  };
+}
+
+function buildCapabilities(): TaskExecutionRequest["capabilities"] {
+  return {
+    canSyncTasks: true,
+    canCreateTask: true,
+    canComment: true,
+    canReview: true,
+    canMerge: true,
+    canOpenReviewable: true,
+  };
+}
+
+function buildExecuteRequest(
+  repoRoot: string,
+  provider: ProviderId,
+  model: string,
+): TaskExecutionRequest {
   return {
     protocolVersion: PROTOCOL_VERSION,
     taskId: `provider-smoke-${provider}`,
@@ -298,16 +359,7 @@ function buildExecuteRequest(repoRoot: string, provider: ProviderId, model: stri
       provider: "local",
       primaryRepositoryId: "repo-1",
     },
-    repositories: [{
-      id: "repo-1",
-      workspaceId: "workspace-1",
-      alias: "primary",
-      name: "repo",
-      repoRoot,
-      repoFullName: "local/provider-smoke",
-      defaultBranch: "main",
-      provider: "local",
-    }],
+    repositories: [buildRepository(repoRoot)],
     workItem: {
       id: "item-1",
       kind: "local-task",
@@ -315,17 +367,7 @@ function buildExecuteRequest(repoRoot: string, provider: ProviderId, model: stri
       title: "Create a tiny plan",
       repositoryId: "repo-1",
     },
-    execution: {
-      primaryRepositoryId: "repo-1",
-      repositories: [{
-        repositoryId: "repo-1",
-        alias: "primary",
-        sourceRepoPath: repoRoot,
-        baseRef: "main",
-        workBranch: "devagent/provider-smoke",
-        isolation: "temp-copy",
-      }],
-    },
+    execution: buildExecution(repoRoot),
     targetRepositoryIds: ["repo-1"],
     executor: {
       executorId: "devagent",
@@ -339,14 +381,7 @@ function buildExecuteRequest(repoRoot: string, provider: ProviderId, model: stri
       timeoutSec: 120,
       allowNetwork: true,
     },
-    capabilities: {
-      canSyncTasks: true,
-      canCreateTask: true,
-      canComment: true,
-      canReview: true,
-      canMerge: true,
-      canOpenReviewable: true,
-    },
+    capabilities: buildCapabilities(),
     context: {
       summary: "Return a short plan only.",
       issueBody: "Do not modify files.",
@@ -354,6 +389,111 @@ function buildExecuteRequest(repoRoot: string, provider: ProviderId, model: stri
     },
     expectedArtifacts: ["plan"],
   };
+}
+
+function createBlockedProviderReport(
+  provider: ProviderId,
+  model: string,
+  blockedReason: string,
+): ProviderSmokeReport {
+  return {
+    provider,
+    model,
+    status: "blocked",
+    checks: [{
+      label: "credential",
+      command: "auth status",
+      durationMs: 0,
+      status: "blocked",
+      blockedReason,
+    }],
+  };
+}
+
+function createProviderCheckRecorder(context: ProviderCheckContext): ProviderCheckRecorder {
+  return async (label, args, timeoutMs): Promise<void> => {
+    const result = await runCommand(
+      context.command.executable,
+      [...context.command.baseArgs, ...args],
+      context.workDir,
+      context.env,
+      timeoutMs,
+    );
+    const paths = await writeSmokeArtifacts(context.providerDir, label, result);
+    const classified = result.exitCode === 0
+      ? { status: "passed" as const, blockedReason: undefined }
+      : classifyProviderFailure(result);
+    context.checks.push({
+      label,
+      command: [context.command.executable, ...context.command.baseArgs, ...args].join(" "),
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      status: classified.status,
+      ...(classified.blockedReason ? { blockedReason: classified.blockedReason } : {}),
+      stdoutPath: paths.stdoutPath,
+      stderrPath: paths.stderrPath,
+    });
+  };
+}
+
+async function runDevagentApiChecks(
+  context: ProviderCheckContext,
+  runAndRecord: ProviderCheckRecorder,
+): Promise<void> {
+  await writeFile(join(context.workDir, "prompt.md"), "Reply with exactly: OK\n");
+  await runAndRecord("quiet-query", ["--provider", context.provider, "--model", context.model, "--quiet", "Reply with exactly: OK"], 120_000);
+  await runAndRecord("file-query", ["--provider", context.provider, "--model", context.model, "--quiet", "-f", join(context.workDir, "prompt.md")], 120_000);
+}
+
+async function runOpenRouterExecuteCheck(
+  context: ProviderCheckContext,
+  runAndRecord: ProviderCheckRecorder,
+): Promise<void> {
+  await mkdir(join(context.workDir, "repo"), { recursive: true });
+  await runCommand("git", ["init", "-q"], join(context.workDir, "repo"), context.env, 10_000);
+  await writeFile(join(context.workDir, "repo", "hello.txt"), "hello\n");
+  const requestPath = join(context.workDir, "request.json");
+  await writeFile(
+    requestPath,
+    JSON.stringify(buildExecuteRequest(join(context.workDir, "repo"), context.provider, context.model), null, 2),
+  );
+  await mkdir(join(context.workDir, "artifacts"), { recursive: true });
+  await runAndRecord("execute", ["execute", "--request", requestPath, "--artifact-dir", join(context.workDir, "artifacts")], 180_000);
+}
+
+function quietQueryTimeout(provider: ProviderId): number {
+  return provider === "ollama" ? 180_000 : 120_000;
+}
+
+async function runQuietQueryCheck(
+  context: ProviderCheckContext,
+  runAndRecord: ProviderCheckRecorder,
+): Promise<void> {
+  await runAndRecord(
+    "quiet-query",
+    ["--provider", context.provider, "--model", context.model, "--quiet", "Reply with exactly: OK"],
+    quietQueryTimeout(context.provider),
+  );
+}
+
+async function runProviderSpecificChecks(
+  context: ProviderCheckContext,
+  runAndRecord: ProviderCheckRecorder,
+): Promise<void> {
+  if (context.provider === "devagent-api") {
+    await runDevagentApiChecks(context, runAndRecord);
+  } else if (context.provider === "openrouter") {
+    await runOpenRouterExecuteCheck(context, runAndRecord);
+  } else {
+    await runQuietQueryCheck(context, runAndRecord);
+  }
+}
+
+function summarizeProviderChecks(checks: ReadonlyArray<ProviderSmokeCheck>): SmokeStatus {
+  if (checks.every((check) => check.status === "passed")) {
+    return "passed";
+  }
+  return checks.some((check) => check.status === "failed") ? "failed" : "blocked";
 }
 
 async function runProviderChecks(
@@ -367,69 +507,16 @@ async function runProviderChecks(
   const storedCredential = loadStoredCredentials()[provider];
   const blockedReason = providerBlockedReason(provider, storedCredential);
   if (blockedReason) {
-    return {
-      provider,
-      model,
-      status: "blocked",
-      checks: [{
-        label: "credential",
-        command: "auth status",
-        durationMs: 0,
-        status: "blocked",
-        blockedReason,
-      }],
-    };
+    return createBlockedProviderReport(provider, model, blockedReason);
   }
 
   const env = await createIsolatedEnv(outputRoot, provider);
   const command = getDevagentCommand(devagentRoot);
   const workDir = join(outputRoot, provider, "workspace");
   const checks: ProviderSmokeCheck[] = [];
-
-  const runAndRecord = async (
-    label: string,
-    args: string[],
-    timeoutMs: number,
-  ): Promise<void> => {
-    const result = await runCommand(command.executable, [...command.baseArgs, ...args], workDir, env, timeoutMs);
-    const paths = await writeSmokeArtifacts(providerDir, label, result);
-    const classified = result.exitCode === 0
-      ? { status: "passed" as const, blockedReason: undefined }
-      : classifyProviderFailure(result);
-    checks.push({
-      label,
-      command: [command.executable, ...command.baseArgs, ...args].join(" "),
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      status: classified.status,
-      ...(classified.blockedReason ? { blockedReason: classified.blockedReason } : {}),
-      stdoutPath: paths.stdoutPath,
-      stderrPath: paths.stderrPath,
-    });
-  };
-
-  if (provider === "devagent-api") {
-    await writeFile(join(workDir, "prompt.md"), "Reply with exactly: OK\n");
-    await runAndRecord("quiet-query", ["--provider", provider, "--model", model, "--quiet", "Reply with exactly: OK"], 120_000);
-    await runAndRecord("file-query", ["--provider", provider, "--model", model, "--quiet", "-f", join(workDir, "prompt.md")], 120_000);
-  } else if (provider === "openai" || provider === "deepseek" || provider === "chatgpt" || provider === "github-copilot" || provider === "ollama") {
-    await runAndRecord("quiet-query", ["--provider", provider, "--model", model, "--quiet", "Reply with exactly: OK"], provider === "ollama" ? 180_000 : 120_000);
-  } else if (provider === "openrouter") {
-    await mkdir(join(workDir, "repo"), { recursive: true });
-    await runCommand("git", ["init", "-q"], join(workDir, "repo"), env, 10_000);
-    await writeFile(join(workDir, "repo", "hello.txt"), "hello\n");
-    const requestPath = join(workDir, "request.json");
-    await writeFile(requestPath, JSON.stringify(buildExecuteRequest(join(workDir, "repo"), provider, model), null, 2));
-    await mkdir(join(workDir, "artifacts"), { recursive: true });
-    await runAndRecord("execute", ["execute", "--request", requestPath, "--artifact-dir", join(workDir, "artifacts")], 180_000);
-  }
-
-  const status = checks.every((check) => check.status === "passed")
-    ? "passed"
-    : checks.some((check) => check.status === "failed")
-      ? "failed"
-      : "blocked";
-  return { provider, model, status, checks };
+  const context = { provider, model, providerDir, workDir, env, command, checks };
+  await runProviderSpecificChecks(context, createProviderCheckRecorder(context));
+  return { provider, model, status: summarizeProviderChecks(checks), checks };
 }
 
 function renderMarkdown(reports: ReadonlyArray<ProviderSmokeReport>): string {
@@ -460,6 +547,7 @@ async function main(): Promise<void> {
 
   const ollamaSelection = await selectOllamaModel();
   const matrix: Array<{ provider: ProviderId; model: string | null }> = [
+    { provider: "anthropic", model: DEFAULT_MODELS.anthropic },
     { provider: "devagent-api", model: DEFAULT_MODELS["devagent-api"] },
     { provider: "openai", model: DEFAULT_MODELS.openai },
     { provider: "openrouter", model: DEFAULT_MODELS.openrouter },
