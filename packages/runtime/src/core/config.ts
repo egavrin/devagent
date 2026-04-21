@@ -23,7 +23,6 @@ import type {
   NetworkAccessMode,
   BudgetConfig,
   ContextConfig,
-  ArkTSConfig,
   ProviderConfig,
   ModelCapabilities,
   AgentToolPermissionOverride,
@@ -71,12 +70,6 @@ export const DEFAULT_CONTEXT: ContextConfig = {
   briefingStrategy: "auto",
 };
 
-const DEFAULT_ARKTS: ArkTSConfig = {
-  enabled: false,
-  strictMode: false,
-  targetVersion: "5.0",
-};
-
 const DEFAULT_CONFIG: DevAgentConfig = {
   provider: "anthropic",
   model: "claude-sonnet-4-20250514",
@@ -84,7 +77,6 @@ const DEFAULT_CONFIG: DevAgentConfig = {
   approval: DEFAULT_APPROVAL,
   budget: DEFAULT_BUDGET,
   context: DEFAULT_CONTEXT,
-  arkts: DEFAULT_ARKTS,
 };
 
 const VALID_AGENT_TYPES = new Set<string>([
@@ -610,20 +602,6 @@ export function loadConfig(
     ...overrides?.context,
   };
 
-  // Merge arkts
-  const rawArkts = (fileConfig["arkts"] ?? {}) as Record<string, unknown>;
-  const arkts: ArkTSConfig = {
-    ...DEFAULT_ARKTS,
-    enabled: (rawArkts["enabled"] as boolean) ?? DEFAULT_ARKTS.enabled,
-    strictMode:
-      (rawArkts["strict_mode"] as boolean) ?? DEFAULT_ARKTS.strictMode,
-    targetVersion:
-      (rawArkts["target_version"] as string) ??
-      DEFAULT_ARKTS.targetVersion,
-    linterPath: rawArkts["linter_path"] as string | undefined,
-    ...overrides?.arkts,
-  };
-
   validateBudgetConfig(budget);
   validateContextConfig(context);
 
@@ -781,7 +759,6 @@ export function loadConfig(
     approval,
     budget,
     context,
-    arkts,
     ...(logging ? { logging } : {}),
     ...(doubleCheck ? { doubleCheck } : {}),
     ...(lsp ? { lsp } : {}),

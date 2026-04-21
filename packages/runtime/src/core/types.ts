@@ -1,6 +1,6 @@
 /**
  * Core type definitions for DevAgent.
- * ArkTS-compatible: no `any`, explicit types, interfaces only for objects.
+ * Core types use explicit types and interfaces for object contracts.
  */
 
 // ─── Agent Types ──────────────────────────────────────────────
@@ -288,7 +288,6 @@ export interface DevAgentConfig {
   readonly approval: ApprovalPolicy;
   readonly budget: BudgetConfig;
   readonly context: ContextConfig;
-  readonly arkts: ArkTSConfig;
   readonly logging?: LoggingConfig;
   readonly doubleCheck?: DoubleCheckConfig;
   readonly lsp?: LSPConfig;
@@ -370,14 +369,6 @@ export interface ContextConfig {
   readonly pruneProtectTokens?: number;
   /** Max aggregate chars of tool results before microcompact clears oldest (default 200000). */
   readonly toolResultBudget?: number;
-}
-
-export interface ArkTSConfig {
-  readonly enabled: boolean;
-  readonly strictMode: boolean;
-  readonly targetVersion: string;
-  /** Path to the ets2panda/linter directory (contains dist/tslinter.js after build). */
-  readonly linterPath?: string;
 }
 
 // ─── Session Types ───────────────────────────────────────────

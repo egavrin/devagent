@@ -11,11 +11,8 @@ Use this file when planning coverage or writing the final report.
 - Pass `bun run check:oss`.
 - Pass `bun run build:publish`.
 - Pass `bun run test:bundle-smoke`.
-- Pass `bun run test:live-validation`.
-- Pass `bun run validate:live:full`.
-- Pass `bun run validate:live:execute-deep` for a release-grade `devagent execute` packet when staged workflow quality matters.
-- Pass `bun run validate:live:execute-chain` when you need proof that the canonical `design -> breakdown -> issue-generation -> implement -> review -> repair` flow works as one chained provider-backed run.
 - Pass `bun run validate:live:provider-smoke` when local provider credentials or services are available.
+- Pass `bun run validate:live:tui` when interactive terminal behavior is in scope.
 - Explain every remaining failure or blocked surface explicitly.
 
 ## Environment Matrix
@@ -23,7 +20,7 @@ Use this file when planning coverage or writing the final report.
 - Validate on real Node 20+ because the publish bootstrap targets Node, not Bun's Node shim.
 - Validate Bun-backed developer flows when the README or local contributor workflow depends on Bun.
 - Use isolated `HOME`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME` for every install and auth pass.
-- Do not infer provider credentials only from environment variables. The live validation harness can copy non-expired credentials from the local DevAgent `CredentialStore` into isolated homes; run provider smoke before marking credential-backed providers blocked.
+- Do not infer provider credentials only from environment variables. Run provider smoke before marking credential-backed providers blocked.
 - Keep one clean temp repo for install and help checks and separate temp repos for query and mutation scenarios.
 
 ## Packaging And Install Matrix
@@ -107,9 +104,7 @@ For execute validation:
 - Verify the fixed supported stage set is documented and reflected in automation.
 - Verify readonly stages stay non-mutating.
 - Verify `breakdown` and `issue-generation` produce both structured JSON and rendered Markdown artifacts.
-- Verify the canonical public flow `design -> breakdown -> issue-generation -> implement -> review -> repair` is covered by docs and scenario coverage, even if individual stages run as separate scenarios.
-- When validating a true chained flow, verify later stages consume earlier-stage artifacts through request context such as comments, changed file hints, issue units, or context bundles rather than relying on a fresh ungrounded prompt.
-- Preserve a reviewable packet with request JSON, stdout or stderr, emitted events, artifact inventory, workspace-effect review, and a human judgment note for each staged scenario.
+- Verify the canonical public flow `design -> breakdown -> issue-generation -> implement -> review -> repair` is covered by docs and focused executor tests.
 
 ## Provider Matrix
 
@@ -130,16 +125,11 @@ For each provider:
 - Run at least one real query or command that reaches provider setup.
 - Record whether the surface was fully validated, partially validated, or blocked.
 
-## Built-In Harness Coverage
+## Built-In Validation Helpers
 
-- Use `bun run scripts/live-validation.ts --list-scenarios` to inventory current scenarios.
-- Run the full suite before adding bespoke manual checks.
-- Inspect `summary.json` and `summary.md` from the generated output directory.
-- Run `bun run validate:live:provider-smoke` before declaring provider coverage blocked; it verifies stored local credentials and Ollama service availability from isolated homes.
-- Use `bun run validate:live:execute-deep` when you need one ordered `execute` packet with prereqs, canonical staged flow, continuity checks, remainder coverage, and per-scenario review notes.
-- Use `bun run validate:live:execute-deep --only canonical|continuity|remainder --skip-prereqs` for focused local reruns after a broader packet establishes the baseline.
-- Use `bun run validate:live:execute-chain` when you need one disposable-worktree run that carries real stage artifacts forward into `implement`, `review`, and `repair`.
-- Add manual coverage for gaps the harness does not own yet, especially packaging, registry install paths, auth flows, TUI interactions, and full provider breadth.
+- Run `bun run validate:live:provider-smoke` before declaring provider coverage blocked; it checks stored local credentials and Ollama service availability.
+- Run `bun run validate:live:tui` for interactive terminal behavior when TUI surfaces change.
+- Add manual coverage for gaps the helpers do not own yet, especially packaging, registry install paths, auth flows, `devagent execute`, and full provider breadth.
 
 ## Final Report Shape
 

@@ -48,11 +48,6 @@ function makeConfig(): DevAgentConfig {
       triggerRatio: 0.8,
       keepRecentMessages: 10,
     },
-    arkts: {
-      enabled: false,
-      strictMode: false,
-      targetVersion: "5.0",
-    },
   };
 }
 

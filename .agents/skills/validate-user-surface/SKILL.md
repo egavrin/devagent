@@ -9,7 +9,7 @@ Treat the repository like a release candidate. Prefer live execution against bui
 
 ## Start Here
 
-- Read `README.md`, `package.json`, `scripts/bundle.ts`, `scripts/smoke-publish-bundle.ts`, `scripts/live-validation.ts`, and the scenario manifests under `scripts/live-validation/scenarios/`.
+- Read `README.md`, `package.json`, `scripts/bundle.ts`, `scripts/smoke-publish-bundle.ts`, and the relevant validation helper under `scripts/live-validation/`.
 - Treat the root README, `devagent help`, and the generated `dist/package.json` as the public contract.
 - Read `references/release-matrix.md` before planning coverage or writing the final report.
 - Record the exact command, provider, model, exit code, and observed behavior for every user-facing check.
@@ -18,7 +18,7 @@ Treat the repository like a release candidate. Prefer live execution against bui
 
 - Run live checks for user-facing behavior. Do not count unit tests or code reading as release validation.
 - Use isolated temp homes and temp repos. Do not reuse the operator's real `~/.config/devagent`.
-- Environment variables are not the only credential source. The live harness can seed non-expired credentials from the local DevAgent `CredentialStore` into isolated homes; run `bun run validate:live:provider-smoke` before marking providers blocked just because API-key env vars are unset.
+- Environment variables are not the only credential source. Run `bun run validate:live:provider-smoke` before marking providers blocked just because API-key env vars are unset.
 - Prefer the publish bundle for install and packaging checks. Validate the developer CLI separately only when comparing dev-versus-publish behavior.
 - Treat missing provider credentials or missing external dependencies as validation gaps, not silent skips.
 - Do not publish to npm unless the user explicitly asks.
@@ -36,8 +36,8 @@ bun run test
 bun run check:oss
 bun run build:publish
 bun run test:bundle-smoke
-bun run test:live-validation
-bun run validate:live:full
+bun run validate:live:provider-smoke
+bun run validate:live:tui
 ```
 
 2. Create isolated homes and disposable workspaces for each install, auth, TUI, and query-flow pass. When provider credentials exist in the local DevAgent credential store, copy only the required non-expired credentials into those isolated homes rather than running against the operator's real HOME.
@@ -59,7 +59,7 @@ bun run validate:live:full
 
 ## Credential And Bootstrap Notes
 
-- Use `bun run validate:live:provider-smoke` to discover locally stored credentials and local services; it seeds isolated homes from `CredentialStore` and reports per-provider pass/block status.
+- Use `bun run validate:live:provider-smoke` to discover locally stored credentials and local services; it reports per-provider pass/block status.
 - For raw bundle checks, `node dist/bootstrap.js --help` is valid. Validate `sessions` from a staged or installed publish runtime, because raw `dist/` does not include installed native dependencies such as `better-sqlite3`.
 
 ## Reporting

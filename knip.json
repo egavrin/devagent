@@ -9,11 +9,6 @@
   "bun": true,
   "vitest": true,
   "workspaces": {
-    "packages/arkts": {
-      "project": [
-        "src/**/*.ts"
-      ]
-    },
     "packages/providers": {
       "entry": [
         "src/index.ts"

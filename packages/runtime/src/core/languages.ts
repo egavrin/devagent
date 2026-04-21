@@ -13,8 +13,7 @@ type KnownLanguageId =
   | "c"
   | "cpp"
   | "rust"
-  | "shellscript"
-  | "arkts";
+  | "shellscript";
 
 /**
  * Maps language identifiers to their recognised file extensions.
@@ -34,7 +33,6 @@ export const LANGUAGE_EXTENSIONS: {
   cpp: [".cpp", ".cxx", ".cc", ".hpp", ".hxx", ".hh"],
   rust: [".rs"],
   shellscript: [".sh", ".bash", ".zsh"],
-  arkts: [".ets"],
 };
 
 /**

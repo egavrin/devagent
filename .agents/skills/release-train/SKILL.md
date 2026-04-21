@@ -1,6 +1,6 @@
 ---
 name: release-train
-description: Run release-hardening work when a request says bundle smoke, release checks, packaging changes, install-flow drift, or pre-release readiness without needing the full live-validation sweep.
+description: Run release-hardening work when a request says bundle smoke, release checks, packaging changes, install-flow drift, or pre-release readiness.
 triggers:
   - bundle smoke
   - release checks
@@ -49,7 +49,7 @@ Read `package.json`, `scripts/bundle.ts`, `scripts/smoke-publish-bundle.ts`, and
 
 - Use `validate-user-surface` for full release-candidate validation, real provider coverage, or install/auth/TUI/executor end-to-end checks.
 - Use `oss-surface-guard` for doc-only public-surface drift.
-- Use `live-validation-authoring` when release-hardening uncovers missing scenario coverage.
+- Use `validate-user-surface` when release-hardening uncovers missing validation coverage.
 
 ## Red Flags
 

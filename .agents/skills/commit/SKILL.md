@@ -46,7 +46,6 @@ Derive from the package or module changed:
 - `fix(runtime):` — change in `packages/runtime`
 - `refactor(executor):` — change in `packages/executor`
 - `test(providers):` — change in `packages/providers`
-- `chore(arkts):` — change in `packages/arkts`
 - Omit scope for cross-cutting changes
 
 ## Body

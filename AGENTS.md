@@ -5,7 +5,7 @@ This file provides guidance to AI agents working in this repository.
 ## Repository Identity
 
 - **name**: `devagent`
-- **purpose**: Bun/Turbo monorepo for the DevAgent CLI, shared runtime, machine executor, provider adapters, and ArkTS integration.
+- **purpose**: Bun/Turbo monorepo for the DevAgent CLI, shared runtime, machine executor, provider adapters, and tooling integrations.
 - **primary languages/platforms**: TypeScript, Bun, Node.js 20+, Turbo
 
 ## Repository Layout
@@ -16,7 +16,6 @@ packages/
   runtime/    # Shared core types/config, task loop, review pipeline, tools, skill loading
   executor/   # `devagent execute` SDK request execution and artifact/event contract
   providers/  # Provider adapters and API-specific request shaping
-  arkts/      # ArkTS lint and diagnostic integration
 models/       # Provider model registry TOML files
 prompts/      # Shared prompt templates
 scripts/      # Repo checks such as OSS surface validation
@@ -32,14 +31,12 @@ bun run build
 bun run typecheck
 bun run test
 bun run check:oss
-bun run test:live-validation
 
 # package-focused work
 cd packages/runtime && bun run test
 cd packages/executor && bun run test
 cd packages/cli && bun run test
 cd packages/providers && bun run test
-cd packages/arkts && bun run test
 
 # install the local CLI
 bun run install-cli
@@ -49,13 +46,13 @@ bun run install-cli
 
 - The supported machine orchestration entrypoint is `devagent execute --request <request.json> --artifact-dir <path>`. Treat this as the only public executor contract.
 - The validated cross-repo flow is `devagent-hub -> devagent-runner -> devagent execute`. Keep docs and behavior aligned with that path, and avoid reintroducing deprecated Hub or workflow-stage surfaces.
-- `packages/cli` assembles prompts, repository context, and human-facing command behavior, then delegates into `@devagent/runtime`, `@devagent/executor`, `@devagent/providers`, and `@devagent/arkts`.
+- `packages/cli` assembles prompts, repository context, and human-facing command behavior, then delegates into `@devagent/runtime`, `@devagent/executor`, and `@devagent/providers`.
 - `packages/runtime` is the shared platform layer. Its `src/core`, `src/engine`, and `src/tools` directories are internal subdivisions of one package, not separate workspace packages.
 - `packages/executor` validates SDK requests, builds task queries, resolves requested skills, runs the agent loop, and writes normalized artifacts and events. Contract drift here is high risk and should be test-backed in `packages/executor/src/index.test.ts`.
 - Repo-local skills live under `.agents/skills/` and are discovered by the runtime skill loader. The similarly named `packages/runtime/src/core/skills/` directory is product source code for skill loading, not a repo-maintenance skill directory.
 - `.devagent/workspaces/` contains runner-managed worktrees and stale documentation mirrors. Do not update guidance there unless the task is specifically about the worktree generation flow.
-- Opt-in live runtime validation is driven by `scripts/live-validation.ts` and the `validate:live:*` root scripts. It exercises the real CLI and `devagent execute` surfaces against sibling `arkcompiler_*` repos and is not part of the default `bun run test` path.
-- When adding or removing public commands or live-validation scenarios, update `.agents/skills/validate-user-surface/references/release-matrix.md` so the release checklist stays aligned with the supported user surface.
+- Provider and TUI validation helpers live under `scripts/live-validation/` and remain opt-in outside the default `bun run test` path.
+- When adding or removing public commands or release-critical validation flows, update `.agents/skills/validate-user-surface/references/release-matrix.md` so the release checklist stays aligned with the supported user surface.
 
 ## Conventions and Pitfalls
 
@@ -81,7 +78,6 @@ bun run install-cli
 - `.agents/skills/simplify`: use when removing unnecessary abstraction or dead code.
 - `.agents/skills/surface-change-e2e`: use when the task says things like “update CLI behavior”, “fix help text drift”, or “keep runtime, docs, and validation aligned” for a user-visible change.
 - `.agents/skills/provider-adapter-change`: use when the task says things like “provider proxy”, “auth mismatch”, “model registry drift”, or “streaming regression”.
-- `.agents/skills/live-validation-authoring`: use when the task says things like “add a scenario”, “prove this command works end to end”, or “update release validation”.
 - `.agents/skills/ci-triage-devagent`: use when the task says things like “CI failure”, “why did this check fail”, or “reproduce the failing job locally”.
 - `.agents/skills/release-train`: use when the task says things like “bundle smoke”, “release checks”, “verify packaging”, or “check install-flow drift”.
 - `.agents/skills/execute-contract`: use when touching `packages/executor`, executor-facing docs, or any behavior that affects artifact/event/result expectations.

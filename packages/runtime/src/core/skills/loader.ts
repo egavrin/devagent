@@ -30,6 +30,8 @@ interface ParsedSkillSupportRoots {
   readonly sourceSkillDirPath?: string;
 }
 
+const SKILL_SOURCE_METADATA_FILENAME = ".devagent-skill-source.json";
+
 function defaultGlobalSkillPaths(): ReadonlyArray<string> {
   const home = process.env["HOME"];
   return home ? [join(home, ".agents", "skills")] : [];
@@ -128,7 +130,7 @@ function normalizeOptionalString(
 }
 
 function parseSkillSupportRoots(skillDirPath: string): ParsedSkillSupportRoots {
-  const metadataPath = join(skillDirPath, ".arkts-agent-kit-source.json");
+  const metadataPath = join(skillDirPath, SKILL_SOURCE_METADATA_FILENAME);
   if (!existsSync(metadataPath)) {
     return { supportRootPath: skillDirPath };
   }

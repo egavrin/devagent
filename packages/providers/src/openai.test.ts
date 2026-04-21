@@ -285,11 +285,6 @@ describe("stripNullArgs", () => {
           midpointBriefingInterval: 15,
           briefingStrategy: "auto",
         },
-        arkts: {
-          enabled: false,
-          strictMode: false,
-          targetVersion: "5.0",
-        },
       },
       repoRoot: "/tmp",
       agentRegistry: new AgentRegistry(),

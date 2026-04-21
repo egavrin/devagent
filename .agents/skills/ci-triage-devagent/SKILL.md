@@ -30,7 +30,7 @@ Read `references/check-matrix.md` first. Pair with the GitHub CI skill if the fa
    - unit or integration test regression
    - OSS or docs drift
    - bundle or publish problem
-   - live-validation or provider-environment blocker
+   - validation-helper or provider-environment blocker
 3. Reproduce the narrowest failure locally.
    - Prefer package-local tests when the failure points at one package.
    - Use root commands for cross-package or release checks.
@@ -44,7 +44,7 @@ Read `references/check-matrix.md` first. Pair with the GitHub CI skill if the fa
 
 - Use `debug-test-failure` once the failing test is isolated.
 - Use `release-train` for publish or packaging failures.
-- Use `live-validation-authoring` when the failing CI path reflects stale live-validation coverage.
+- Use `validate-user-surface` when the failing CI path reflects stale release-validation coverage.
 
 ## Red Flags
 

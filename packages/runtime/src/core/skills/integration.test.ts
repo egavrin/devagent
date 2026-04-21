@@ -119,9 +119,9 @@ describe("Skills Integration", () => {
     expect(metadata).toHaveLength(0);
   });
 
-  it("uses the workspace root returned by findProjectRoot for ArkTS-style workspaces", () => {
+  it("uses the workspace root returned by findProjectRoot for nested skill workspaces", () => {
     const parentDir = join(TEST_DIR, "parent-root");
-    const workspaceDir = join(parentDir, "arkts-helloworld");
+    const workspaceDir = join(parentDir, "sample-workspace");
     const nestedDir = join(workspaceDir, "src");
     const globalDir = join(TEST_DIR, "global-skills");
 
@@ -130,8 +130,8 @@ describe("Skills Integration", () => {
     mkdirSync(nestedDir, { recursive: true });
     createFullSkill(
       join(workspaceDir, ".agents", "skills"),
-      "implement-arkts",
-      "Workspace ArkTS skill",
+      "implement-feature",
+      "Workspace feature skill",
       "Workspace instructions",
     );
     createFullSkill(
@@ -148,6 +148,6 @@ describe("Skills Integration", () => {
     const metadata = loader.discover({ repoRoot: repoRoot!, globalPaths: [globalDir] });
     const names = metadata.map((skill) => skill.name).sort();
 
-    expect(names).toEqual(["codex-global", "implement-arkts"]);
+    expect(names).toEqual(["codex-global", "implement-feature"]);
   });
 });

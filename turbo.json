@@ -12,9 +12,6 @@
     "lint": {
       "outputs": []
     },
-    "lint:arkts": {
-      "outputs": []
-    },
     "typecheck": {
       "dependsOn": ["^build"],
       "outputs": []

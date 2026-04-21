@@ -5,7 +5,7 @@ This file provides guidance to AI agents working in this component.
 ## Purpose and Scope
 
 - **component**: `packages/cli`
-- **purpose**: Public `devagent` terminal entrypoint, argument parsing, prompt assembly, formatting, and CLI wiring into runtime, executor, providers, and ArkTS support.
+- **purpose**: Public `devagent` terminal entrypoint, argument parsing, prompt assembly, formatting, and CLI wiring into runtime, executor, and providers.
 - **primary languages/platforms**: TypeScript, Bun, Node.js
 
 ## Important Paths and Interfaces
@@ -36,15 +36,15 @@ bun run test
 - `src/main.ts` owns the supported CLI surface. Keep it aligned with the repo root `README.md` and avoid reintroducing removed surfaces such as interactive chat or public plan mode.
 - Prompt text lives in `src/prompts/*.md` and is copied into `dist/prompts/` during build. If prompt behavior changes, update the prompt assets and the nearby tests together.
 - CLI behavior should delegate into workspace packages instead of reimplementing runtime or executor logic locally.
-- The opt-in live validation harness lives under `scripts/live-validation.ts` and invokes the real CLI entrypoint from outside the package. When CLI behavior changes, keep that harness and the root README guidance aligned with the supported surface.
+- Provider and TUI validation helpers live under `scripts/live-validation/`. When CLI behavior changes, keep root README guidance aligned with the supported surface.
 
 ## Generated Files, Conventions, and Pitfalls
 
 - Do not edit `dist/`; it is build output.
 - Keep user-facing command docs synchronized with the actual command parser and tests.
 - When changing review, execute, continuation, or formatting behavior, extend the nearest `src/*.test.ts` coverage instead of relying on manual validation alone.
-- Preserve the current package boundary: `cli` may depend on `runtime`, `executor`, `providers`, and `arkts`, but it should not absorb their logic.
+- Preserve the current package boundary: `cli` may depend on `runtime`, `executor`, and `providers`, but it should not absorb their logic.
 
 ## Local Skills
 
-- No component-local skill directory exists here. Use the shared repo skills from `.agents/skills`, especially `surface-change-e2e` when the task says “update CLI behavior” or “fix help text drift”, `live-validation-authoring` when a command flow needs scenario coverage, `release-train` for bundle or install-flow checks, plus `testing` and `verification-checklist`.
+- No component-local skill directory exists here. Use the shared repo skills from `.agents/skills`, especially `surface-change-e2e` when the task says “update CLI behavior” or “fix help text drift”, `release-train` for bundle or install-flow checks, plus `testing` and `verification-checklist`.

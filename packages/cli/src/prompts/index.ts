@@ -77,7 +77,7 @@ function formatSkillPromptGuidance(): string {
   return [
     "Match skills using user intent, touched paths, and expected output shape.",
     "Invoke the broadest relevant workflow skill first, then specialist follow-up skills only when the task clearly enters that area.",
-    "Precedence examples: `surface-change-e2e` before `live-validation-authoring`; `provider-adapter-change` before `security-checklist`; `release-train` before `validate-user-surface`.",
+    "Precedence examples: `surface-change-e2e` before `validate-user-surface`; `provider-adapter-change` before `security-checklist`; `release-train` before `validate-user-surface`.",
   ].join(" ");
 }
 

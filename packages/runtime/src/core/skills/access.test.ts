@@ -38,37 +38,37 @@ describe("SkillAccessManager", () => {
   });
 
   it("unlocks known skills and persists them", () => {
-    registry.register([makeMetadata("modernize-arkts")]);
+    registry.register([makeMetadata("modernize-code")]);
     const persist = vi.fn();
     const manager = new SkillAccessManager(registry, {
       persistUnlockedSkill: persist,
     });
 
-    manager.unlock("modernize-arkts");
+    manager.unlock("modernize-code");
 
-    expect(manager.isUnlocked("modernize-arkts")).toBe(true);
-    expect(persist).toHaveBeenCalledWith("modernize-arkts");
+    expect(manager.isUnlocked("modernize-code")).toBe(true);
+    expect(persist).toHaveBeenCalledWith("modernize-code");
   });
 
   it("restores unlocked skills from persistence", () => {
-    registry.register([makeMetadata("modernize-arkts")]);
+    registry.register([makeMetadata("modernize-code")]);
     const manager = new SkillAccessManager(registry, {
-      loadUnlockedSkillNames: () => ["modernize-arkts"],
+      loadUnlockedSkillNames: () => ["modernize-code"],
     });
 
-    expect(manager.isUnlocked("modernize-arkts")).toBe(true);
+    expect(manager.isUnlocked("modernize-code")).toBe(true);
   });
 
   it("hydrates persisted state only once", () => {
-    registry.register([makeMetadata("modernize-arkts")]);
-    const loadUnlockedSkillNames = vi.fn(() => ["modernize-arkts"]);
+    registry.register([makeMetadata("modernize-code")]);
+    const loadUnlockedSkillNames = vi.fn(() => ["modernize-code"]);
     const manager = new SkillAccessManager(registry, {
       loadUnlockedSkillNames,
     });
 
-    expect(manager.isUnlocked("modernize-arkts")).toBe(true);
-    expect(manager.requireUnlocked("modernize-arkts").name).toBe("modernize-arkts");
-    expect(manager.isUnlocked("modernize-arkts")).toBe(true);
+    expect(manager.isUnlocked("modernize-code")).toBe(true);
+    expect(manager.requireUnlocked("modernize-code").name).toBe("modernize-code");
+    expect(manager.isUnlocked("modernize-code")).toBe(true);
     expect(loadUnlockedSkillNames).toHaveBeenCalledTimes(1);
   });
 

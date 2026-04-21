@@ -32,7 +32,6 @@ cd packages/runtime && bun run test
 cd packages/executor && bun run test
 cd packages/cli && bun run test
 cd packages/providers && bun run test
-cd packages/arkts && bun run test
 ```
 
 ### 3. Build

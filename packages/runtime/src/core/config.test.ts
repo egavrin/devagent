@@ -65,7 +65,6 @@ describe("loadConfig", () => {
     expect(config.context.pruningStrategy).toBe("hybrid");
     expect(config.context.triggerRatio).toBe(0.9);
     expect(config.context.keepRecentMessages).toBe(40);
-    expect(config.arkts.enabled).toBe(false);
   });
 
   it("loads config from TOML file", () => {
@@ -79,9 +78,6 @@ model = "gpt-4o"
 max_iterations = 50
 cost_warning_threshold = 5.0
 
-[arkts]
-enabled = true
-strict_mode = true
 `,
     );
 
@@ -90,8 +86,6 @@ strict_mode = true
     expect(config.model).toBe("gpt-4o");
     expect(config.budget.maxIterations).toBe(50);
     expect(config.budget.costWarningThreshold).toBe(5.0);
-    expect(config.arkts.enabled).toBe(true);
-    expect(config.arkts.strictMode).toBe(true);
   });
 
   it("fails fast on legacy [approval] config", () => {
@@ -494,10 +488,10 @@ describe("findProjectRoot", () => {
 
   it("prefers a workspace with .agents/skills over a parent git root", () => {
     const parentDir = join(tmpdir(), `devagent-root-agents-${Date.now()}`);
-    const workspaceDir = join(parentDir, "arkts-helloworld");
+    const workspaceDir = join(parentDir, "sample-workspace");
     const nestedDir = join(workspaceDir, "src");
     mkdirSync(join(parentDir, ".git"), { recursive: true });
-    mkdirSync(join(workspaceDir, ".agents", "skills", "implement-arkts"), { recursive: true });
+    mkdirSync(join(workspaceDir, ".agents", "skills", "implement-feature"), { recursive: true });
     mkdirSync(nestedDir, { recursive: true });
 
     try {
@@ -510,7 +504,7 @@ describe("findProjectRoot", () => {
 
   it("does not treat .devagent alone as a workspace root anchor", () => {
     const parentDir = join(tmpdir(), `devagent-root-devagent-${Date.now()}`);
-    const workspaceDir = join(parentDir, "arkts-helloworld");
+    const workspaceDir = join(parentDir, "sample-workspace");
     const nestedDir = join(workspaceDir, "src");
     mkdirSync(join(parentDir, ".git"), { recursive: true });
     mkdirSync(join(workspaceDir, ".devagent"), { recursive: true });

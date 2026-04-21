@@ -7,7 +7,7 @@
  *
  * From Cline: monitor token usage, truncate before hitting limits,
  * always preserve original task message.
- * ArkTS-compatible: no `any`, explicit types.
+ * Context manager with explicit state and token budgeting types.
  */
 
 import type { Message, ContextConfig } from "./types.js";

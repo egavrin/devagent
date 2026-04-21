@@ -69,11 +69,6 @@ function makeConfig(overrides?: Partial<DevAgentConfig>): DevAgentConfig {
       triggerRatio: 0.8,
       keepRecentMessages: 10,
     },
-    arkts: {
-      enabled: false,
-      strictMode: false,
-      targetVersion: "5.0",
-    },
     ...overrides,
   };
 }
@@ -1609,7 +1604,7 @@ describe("TaskLoop", () => {
           // Same tool call with identical args 3 times
           yield {
             type: "tool_call",
-            content: '{"cmd": "es2panda --input test.ets"}',
+            content: '{"cmd": "tsc --noEmit test.ts"}',
             toolCallId: `call_${callCount}`,
             toolName: "run_command",
           };

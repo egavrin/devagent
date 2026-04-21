@@ -33,7 +33,6 @@ export type {
   DevAgentConfig,
   BudgetConfig,
   ContextConfig,
-  ArkTSConfig,
   DoubleCheckConfig,
   LSPConfig,
   LSPServerConfig,

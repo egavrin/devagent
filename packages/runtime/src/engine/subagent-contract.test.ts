@@ -55,7 +55,7 @@ describe("buildDelegationQuery", () => {
     const request = buildExplorationLaneRequest({
       objective: "Inspect frontend compile-time restrictions",
       laneLabel: "frontend / compile-time behavior",
-      scope: "arkcompiler_ets_frontend only",
+      scope: "frontend package only",
       exclusions: ["runtime/tests behavior"],
       successCriteria: ["Return exact error sites"],
       parentContext: "This is one evidence lane in a broader contradiction analysis.",
@@ -64,7 +64,7 @@ describe("buildDelegationQuery", () => {
     expect(request).toEqual({
       objective: "Inspect frontend compile-time restrictions",
       laneLabel: "frontend / compile-time behavior",
-      scope: "arkcompiler_ets_frontend only",
+      scope: "frontend package only",
       exclusions: ["runtime/tests behavior"],
       successCriteria: ["Return exact error sites"],
       parentContext: "This is one evidence lane in a broader contradiction analysis.",

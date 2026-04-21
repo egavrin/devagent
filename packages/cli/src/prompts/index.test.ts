@@ -104,7 +104,7 @@ describe("assembleSystemPrompt", () => {
     expect(prompt).toContain('triggers: "update CLI behavior", "help text drift"');
     expect(prompt).toContain("paths: `packages/cli`, `packages/runtime`");
     expect(prompt).toContain("Invoke the broadest relevant workflow skill first");
-    expect(prompt).toContain("`surface-change-e2e` before `live-validation-authoring`");
+    expect(prompt).toContain("`surface-change-e2e` before `validate-user-surface`");
   });
 
   it("makes scenario-mandated delegation and investigation playbooks explicit in the parent prompt", () => {
@@ -154,7 +154,7 @@ describe("assembleSystemPrompt", () => {
     expect(prompt).toContain("bounded to the current repo root");
     expect(prompt).toContain("One path-guard failure on a `../...` target is enough to pivot");
     expect(prompt).toContain("readonly shell search with targeted `run_command`");
-    expect(prompt).toContain("../arkcompiler_ets_frontend");
+    expect(prompt).toContain("../devagent-sdk");
   });
 
   it("teaches evidence-lane planning for broad research tasks", () => {

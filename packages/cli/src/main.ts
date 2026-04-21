@@ -223,29 +223,26 @@ export function checkForUpdates(): void {
     .catch(() => { /* network error — silently ignore */ });
 }
 
-
-import { createArkTSDiagnosticProvider } from "@devagent/arkts";
-
-import { assembleSystemPrompt } from "./prompts/index.js";
-import { detectProjectTestCommand } from "./test-command-detect.js";
-import {
-  formatProviderModelCompatibilityError,
-  formatProviderModelCompatibilityHint,
-  getProviderModelCompatibilityIssue,
-} from "./provider-model-compat.js";
-import type { InteractiveQueryResult } from "./tui/shared.js";
+import { renderMarkdown } from "./markdown-render.js";
 import { resolveBundledModelsDir } from "./model-registry-path.js";
 import { OutputState } from "./output-state.js";
-import { StatusLine } from "./status-line.js";
-import { renderMarkdown } from "./markdown-render.js";
 import type { SubagentDisplayState } from "./output-state.js";
-import { buildProviderConfig } from "./provider-config.js";
-import { createSkillInfrastructure } from "./skill-setup.js";
 import {
   formatPreloadedDiffMessage,
   preparePromptCommandQuery,
   type ResolvedPromptCommandTarget,
 } from "./prompt-commands.js";
+import { assembleSystemPrompt } from "./prompts/index.js";
+import { buildProviderConfig } from "./provider-config.js";
+import {
+  formatProviderModelCompatibilityError,
+  formatProviderModelCompatibilityHint,
+  getProviderModelCompatibilityIssue,
+} from "./provider-model-compat.js";
+import { createSkillInfrastructure } from "./skill-setup.js";
+import { StatusLine } from "./status-line.js";
+import { detectProjectTestCommand } from "./test-command-detect.js";
+import { TranscriptComposer } from "./transcript-composer.js";
 import {
   presentApprovalRequestEvent,
   presentApprovalResponseEvent,
@@ -258,7 +255,7 @@ import {
   makeInfoPart,
   makeTurnSummaryPart,
 } from "./transcript-presenter.js";
-import { TranscriptComposer } from "./transcript-composer.js";
+import type { InteractiveQueryResult } from "./tui/shared.js";
 
 // ─── Argument Parsing ────────────────────────────────────────
 
@@ -1121,8 +1118,8 @@ interface LSPSetupResult {
 }
 
 /**
- * Start LSP servers, register routing tools, wire diagnostic providers
- * (including ArkTS and compiler fallback), and schedule lazy LSP upgrade.
+ * Start LSP servers, register routing tools, wire diagnostic providers,
+ * and schedule lazy LSP upgrade.
  */
 async function setupLSP(
   config: DevAgentConfig,
@@ -1167,57 +1164,20 @@ async function setupLSP(
     }
 
     // Wire routing diagnostic provider (routes by file extension)
-    let diagnosticProvider = createRoutingDiagnosticProvider(
+    const diagnosticProvider = createRoutingDiagnosticProvider(
       lspRouter,
       trackInternalLSPDiagnostics,
     );
 
-    // Compose with ArkTS linter if enabled (adds tslinter checks for .ets files)
-    if (config.arkts?.enabled && config.arkts.linterPath) {
-      const arktsProvider = createArkTSDiagnosticProvider(config.arkts);
-      if (arktsProvider) {
-        const lspProvider = diagnosticProvider;
-        diagnosticProvider = async (filePath: string) => {
-          const [lsp, arkts] = await Promise.all([
-            lspProvider(filePath),
-            arktsProvider(filePath),
-          ]);
-          return [...lsp, ...arkts];
-        };
-        if (cliArgs.verbosity !== "quiet") {
-          process.stderr.write(
-            dim(`[arkts] ArkTS linter enabled (${config.arkts.linterPath})`) + "\n",
-          );
-        }
-      }
-    }
-
     doubleCheck.setDiagnosticProvider(diagnosticProvider);
-  } else if (config.arkts?.enabled && config.arkts.linterPath) {
-    // Standalone ArkTS linting (no LSP servers configured)
-    const arktsProvider = createArkTSDiagnosticProvider(config.arkts);
-    if (arktsProvider) {
-      doubleCheck.setDiagnosticProvider(arktsProvider);
-      hasLSPDiagnostics = true;
-      if (cliArgs.verbosity !== "quiet") {
-        process.stderr.write(
-          dim(`[arkts] ArkTS linter enabled (standalone, ${config.arkts.linterPath})`) + "\n",
-        );
-      }
-    }
   }
 
-  // Wire compiler fallback when no LSP/linter diagnostics and DoubleCheck is enabled.
+  // Wire compiler fallback when no LSP diagnostics and DoubleCheck is enabled.
   // Then schedule lazy LSP upgrade in the background — when LSP servers are found
   // in PATH, they'll be started and the provider swapped transparently.
   const effectiveEnabled = doubleCheck.isEnabled();
   if (!hasLSPDiagnostics && effectiveEnabled) {
     doubleCheck.setDiagnosticProvider(createCompilerFallbackProvider(projectRoot));
-
-    // Prepare ArkTS provider for composition with lazy LSP (if enabled)
-    const arktsProviderForLazy = (config.arkts?.enabled && config.arkts.linterPath)
-      ? createArkTSDiagnosticProvider(config.arkts) ?? undefined
-      : undefined;
 
     // Lazy LSP: create a router, detect servers in background, upgrade when ready
     const lazyRouter = new LSPRouter(projectRoot);
@@ -1228,7 +1188,6 @@ async function setupLSP(
       repoRoot: projectRoot,
       doubleCheck,
       lspRouter: lazyRouter,
-      arktsProvider: arktsProviderForLazy,
       onLSPDiagnostics: trackInternalLSPDiagnostics,
       onServerStarted: (server) => {
         // Only write to stderr in single-shot mode (query provided).

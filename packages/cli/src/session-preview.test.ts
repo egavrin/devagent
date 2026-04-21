@@ -59,11 +59,11 @@ describe("session previews", () => {
       messages: [
         { role: "user", content: "hi" },
         { role: "assistant", content: "How can I help?" },
-        { role: "user", content: "Fix the ArkTS validation errors in devagent_lsp" },
+        { role: "user", content: "Fix the validation errors in devagent_lsp" },
       ],
     });
 
-    expect(preview.title).toBe("Fix the ArkTS validation errors in devagent_lsp");
+    expect(preview.title).toBe("Fix the validation errors in devagent_lsp");
   });
 
   it("falls back to an untitled label when only trivial prompts exist", () => {

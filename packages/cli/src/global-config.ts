@@ -21,7 +21,6 @@ const SECTION_FIELDS = new Map<string, ReadonlySet<string>>([
   ["safety", new Set(["mode"])],
   ["budget", new Set(["max_iterations", "max_context_tokens", "response_headroom", "cost_warning_threshold", "enable_cost_tracking"])],
   ["context", new Set(["pruning_strategy", "trigger_ratio", "keep_recent_messages", "turn_isolation", "midpoint_briefing_interval", "briefing_strategy", "prune_protect_tokens"])],
-  ["arkts", new Set(["enabled", "strict_mode", "target_version", "linter_path"])],
   ["logging", new Set(["enabled", "log_dir", "retention_days"])],
   ["double_check", new Set(["enabled", "check_diagnostics", "run_tests", "test_command", "diagnostic_timeout"])],
   ["session_state", new Set(["persist", "track_plan", "track_files", "track_env", "track_tool_results", "track_findings", "track_knowledge", "max_modified_files", "max_env_facts", "max_tool_summaries", "max_findings", "max_knowledge"])],

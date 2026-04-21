@@ -133,7 +133,7 @@ function buildCrossRepoFragment(): string {
     "- One path-guard failure on a `../...` target is enough to pivot; do not keep retrying repo-bounded tools on unreachable paths.",
     "- For sibling repos, use readonly shell search with targeted `run_command` calls (`rg`, `sed`, focused `git` or build commands).",
     "- If broad scans keep returning empty or noisy results, narrow the scope or delegate to `explore`; do not keep scanning blindly.",
-    "- Example: for `../arkcompiler_ets_frontend` and neighboring `arkcompiler_*` repos, pivot to targeted shell search instead of repeating repo-bounded tool calls.",
+    "- Example: for a sibling dependency repo such as `../devagent-sdk`, pivot to targeted shell search instead of repeating repo-bounded tool calls.",
   ].join("\n");
 }
 

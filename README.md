@@ -318,20 +318,14 @@ bun run install-cli
 For local release-surface validation, the repo also includes:
 
 ```bash
-bun run test:live-validation
-bun run validate:live:full
-bun run validate:live:execute-deep
-bun run validate:live:execute-chain
+bun run validate:live:provider-smoke
+bun run validate:live:tui
 bun run verify:publish
 ```
 
 Use `typecheck`, `test`, `test:surface-smoke`, and `check:oss` as the fast PR gate for public-surface confidence.
 
-Use `test:live-validation`, `validate:live:execute-chain`, `validate:live:execute-deep`, and `verify:publish` as the broader local release-validation tier for real CLI and `devagent execute` coverage.
-
-`validate:live:execute-chain` proves the canonical `design -> breakdown -> issue-generation -> implement -> review -> repair` handoff works as one chained provider-backed run.
-
-`validate:live:execute-deep` is the broader release-grade staged packet with prerequisites, canonical flow, continuity checks, and full-suite remainder coverage. It is intentionally long-running; use `--only canonical|continuity|remainder` plus `--skip-prereqs` for focused follow-up reruns.
+Use `validate:live:provider-smoke`, `validate:live:tui`, and `verify:publish` as the broader local release-validation tier for provider credentials, TUI behavior, and publish readiness.
 
 ## License
 

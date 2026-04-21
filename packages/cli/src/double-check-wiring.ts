@@ -135,13 +135,6 @@ export const LANGUAGE_MAP: ReadonlyArray<LanguageEntry> = [
       timeout: 5_000,
     },
   },
-  {
-    languageId: "arkts",
-    extensions: LANGUAGE_EXTENSIONS.arkts,
-    defaultCommand: "typescript-language-server",
-    defaultArgs: ["--stdio"],
-    // ArkTS uses dedicated @devagent/arkts provider, not compiler fallback
-  },
 ];
 
 /** Detect language ID from file extension. Returns null if unknown. */
@@ -563,8 +556,6 @@ interface LazyLSPUpgradeOptions {
   readonly onUpgradeComplete?: (serverCount: number) => void;
   /** Called on upgrade failure. */
   readonly onError?: (error: Error) => void;
-  /** Additional ArkTS diagnostic provider to compose with LSP. */
-  readonly arktsProvider?: DiagnosticProvider;
   /** Called when LSP diagnostics run in DoubleCheck via routing provider. */
   readonly onLSPDiagnostics?: () => void;
 }
@@ -581,7 +572,7 @@ interface LazyLSPUpgradeOptions {
 export async function lazyUpgradeLSP(
   opts: LazyLSPUpgradeOptions,
 ): Promise<void> {
-  const { doubleCheck, lspRouter, onServerStarted, onUpgradeComplete, onError, arktsProvider, onLSPDiagnostics } = opts;
+  const { doubleCheck, lspRouter, onServerStarted, onUpgradeComplete, onError, onLSPDiagnostics } = opts;
 
   try {
     const available = await detectAvailableLSPServers();
@@ -611,22 +602,10 @@ export async function lazyUpgradeLSP(
 
     if (startedCount > 0) {
       // Swap diagnostic provider from compiler fallback to LSP routing
-      let diagnosticProvider: DiagnosticProvider = createRoutingDiagnosticProvider(
+      const diagnosticProvider: DiagnosticProvider = createRoutingDiagnosticProvider(
         lspRouter,
         onLSPDiagnostics,
       );
-
-      // Compose with ArkTS provider if present
-      if (arktsProvider) {
-        const lspProvider = diagnosticProvider;
-        diagnosticProvider = async (filePath: string) => {
-          const [lsp, arkts] = await Promise.all([
-            lspProvider(filePath),
-            arktsProvider(filePath),
-          ]);
-          return [...lsp, ...arkts];
-        };
-      }
 
       doubleCheck.setDiagnosticProvider(diagnosticProvider);
     }

@@ -94,7 +94,6 @@ const EXT_MAP: Record<string, string> = {
   ".py": "python",
   ".js": "javascript",
   ".ts": "typescript",
-  ".ets": "ets",
   ".java": "java",
   ".cpp": "cpp",
   ".c": "c",

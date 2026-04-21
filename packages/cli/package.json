@@ -16,7 +16,6 @@
     "install-cli": "bun link"
   },
   "dependencies": {
-    "@devagent/arkts": "workspace:*",
     "@devagent/executor": "workspace:*",
     "@devagent/providers": "workspace:*",
     "@devagent/runtime": "workspace:*",

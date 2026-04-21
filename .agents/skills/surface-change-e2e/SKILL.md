@@ -37,20 +37,19 @@ Read `AGENTS.md`, then use `references/change-matrix.md` to scope the work.
    - Check README, `WORKFLOW.md`, command help, prompt assets, and documentation tests together.
    - Keep the public story aligned with the supported DevAgent surface.
 4. Decide whether validation coverage changes.
-   - If public behavior, command inventory, or release-critical flows changed, inspect `scripts/live-validation/` and `release-matrix.md`.
-   - If no scenario or matrix update is needed, say why in the final summary.
+   - If public behavior, command inventory, or release-critical flows changed, inspect `release-matrix.md` and the relevant focused tests or validation helpers.
+   - If no matrix update is needed, say why in the final summary.
 5. Run verification in two tiers.
    - First run the minimum checks from `references/change-matrix.md`.
-   - Then widen to `bun run check:oss`, bundle smoke, or live validation if the change is release-critical.
+   - Then widen to `bun run check:oss`, bundle smoke, or focused validation helpers if the change is release-critical.
 
 ## Escalate
 
 - Use `execute-contract` if the change touches `packages/executor` or the `devagent execute` contract.
-- Use `live-validation-authoring` if a scenario needs to be added, removed, or rewritten.
 - Use `release-train` for packaging, publish, install, or pre-release work.
 
 ## Red Flags
 
 - Updating `README.md` without checking `packages/cli/src/documentation.test.ts`.
 - Changing command behavior without checking help text or prompt assets.
-- Treating live validation as optional when the public contract changed materially.
+- Treating release validation as optional when the public contract changed materially.

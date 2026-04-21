@@ -13,7 +13,7 @@ Use this skill when a task edits public documentation, contributor workflow, rel
 - Contributor guidance stays aligned with the current repo layout and verification commands.
 - Package metadata and top-level docs remain compatible with `scripts/check-oss.mjs`.
 - Root docs, `devagent help`, and nearby command/documentation tests stay aligned when public behavior changes.
-- When public commands, release-critical flows, or live-validation coverage changes, `.agents/skills/validate-user-surface/references/release-matrix.md` stays current.
+- When public commands, release-critical flows, or validation coverage changes, `.agents/skills/validate-user-surface/references/release-matrix.md` stays current.
 
 ## Primary Evidence
 
@@ -33,7 +33,7 @@ Use this skill when a task edits public documentation, contributor workflow, rel
 1. Read the docs and metadata you are changing plus `scripts/check-oss.mjs`.
 2. Remove or avoid references to unsupported surfaces, deprecated workflows, local machine paths, or stale package layout claims.
 3. If the change affects command help, CLI output, or other tested behavior, check the nearest command or documentation tests before making the claim.
-4. If the change adds or removes public commands, live-validation scenarios, or release-critical flows, update `release-matrix.md` or explicitly confirm that no matrix change is needed.
+4. If the change adds or removes public commands, validation helpers, or release-critical flows, update `release-matrix.md` or explicitly confirm that no matrix change is needed.
 5. Run `bun run check:oss` before finalizing, and pair it with `bun run typecheck` and `bun run test` when the change intersects executable behavior.
 
 ## Red Flags

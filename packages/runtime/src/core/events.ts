@@ -1,6 +1,6 @@
 /**
  * Typed event bus — single communication mechanism for frontends and runtime systems.
- * ArkTS-compatible: no dynamic property access, explicit types.
+ * Event bus with explicit event payload types.
  */
 
 import { extractErrorMessage } from "./errors.js";

@@ -10,7 +10,6 @@
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"],
   "exclude": ["src/**/*.test.ts"],
   "references": [
-    { "path": "../arkts" },
     { "path": "../providers" },
     { "path": "../runtime" }
   ]

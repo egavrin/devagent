@@ -23,18 +23,6 @@
         "typescript": "^5.9.3",
       },
     },
-    "packages/arkts": {
-      "name": "@devagent/arkts",
-      "version": "0.1.0",
-      "dependencies": {
-        "@devagent/runtime": "workspace:*",
-      },
-      "devDependencies": {
-        "eslint": "^9.0.0",
-        "typescript": "^5.7.0",
-        "vitest": "^3.0.0",
-      },
-    },
     "packages/cli": {
       "name": "@devagent/cli",
       "version": "0.1.0",
@@ -42,7 +30,6 @@
         "devagent": "dist/index.js",
       },
       "dependencies": {
-        "@devagent/arkts": "workspace:*",
         "@devagent/executor": "workspace:*",
         "@devagent/providers": "workspace:*",
         "@devagent/runtime": "workspace:*",
@@ -122,8 +109,6 @@
     "@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.2.5", "https://repo.huaweicloud.com/repository/npm/@alcalzone/ansi-tokenize/-/ansi-tokenize-0.2.5.tgz", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^5.0.0" } }, "sha512-3NX/MpTdroi0aKz134A6RC2Gb2iXVECN4QaAXnvCIxxIm3C3AVB1mkUe8NaaiyvOpDfsrqWhYtj+Q6a62RrTsw=="],
 
     "@devagent-sdk/types": ["@devagent-sdk/types@file:../devagent-sdk/packages/types", {}],
-
-    "@devagent/arkts": ["@devagent/arkts@workspace:packages/arkts"],
 
     "@devagent/cli": ["@devagent/cli@workspace:packages/cli"],
 

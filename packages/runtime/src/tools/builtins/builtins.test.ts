@@ -67,7 +67,7 @@ function getFileEdits(result: { readonly metadata?: Record<string, unknown> }): 
   return fileEdits as ReadonlyArray<Record<string, unknown>>;
 }
 
-function setupUnlockedSkill(name: string = "modernize-arkts"): {
+function setupUnlockedSkill(name: string = "modernize-code"): {
   readonly access: SkillAccessManager;
   readonly uri: (relativePath: string) => string;
 } {
@@ -97,7 +97,7 @@ function setupUnlockedSkill(name: string = "modernize-arkts"): {
   };
 }
 
-function setupBackedUnlockedSkill(name: string = "modernize-arkts"): {
+function setupBackedUnlockedSkill(name: string = "modernize-code"): {
   readonly access: SkillAccessManager;
   readonly uri: (relativePath: string) => string;
   readonly wrapperDir: string;
@@ -115,10 +115,10 @@ function setupBackedUnlockedSkill(name: string = "modernize-arkts"): {
   );
   writeFileSync(join(wrapperDir, "agents", "openai.yaml"), "model: gpt-5.4\n");
   writeFileSync(
-    join(wrapperDir, ".arkts-agent-kit-source.json"),
+    join(wrapperDir, ".devagent-skill-source.json"),
     JSON.stringify({
       source_repo: supportRoot,
-      source_dir: join(supportRoot, "arkts-skills", name),
+      source_dir: join(supportRoot, "skills", name),
     }),
     "utf-8",
   );
@@ -143,7 +143,7 @@ function setupBackedUnlockedSkill(name: string = "modernize-arkts"): {
     dirPath: wrapperDir,
     supportRootPath: supportRoot,
     sourceRepoPath: supportRoot,
-    sourceSkillDirPath: join(supportRoot, "arkts-skills", name),
+    sourceSkillDirPath: join(supportRoot, "skills", name),
     skillFilePath: join(wrapperDir, "SKILL.md"),
   }]);
   const access = new SkillAccessManager(registry);
@@ -281,7 +281,7 @@ describe("read_file", () => {
     const agentFile = await tool.handler({ path: skill.uri("agents/openai.yaml") }, ctx);
 
     expect(skillFile.success).toBe(true);
-    expect(skillFile.output).toContain("name: modernize-arkts");
+    expect(skillFile.output).toContain("name: modernize-code");
     expect(agentFile.success).toBe(true);
     expect(agentFile.output).toContain("model: gpt-5.4");
   });
@@ -433,7 +433,7 @@ describe("write_file", () => {
 
   it("rejects skill:// paths", async () => {
     await expect(
-      writeFileTool.handler({ path: "skill://modernize-arkts/docs/new.md", content: "nope\n" }, ctx),
+      writeFileTool.handler({ path: "skill://modernize-code/docs/new.md", content: "nope\n" }, ctx),
     ).rejects.toThrow(/read-only/i);
   });
 });
@@ -494,7 +494,7 @@ describe("replace_in_file", () => {
     await expect(
       replaceInFileTool.handler(
         {
-          path: "skill://modernize-arkts/docs/guide-usage.md",
+          path: "skill://modernize-code/docs/guide-usage.md",
           search: "Guide",
           replace: "Manual",
         },

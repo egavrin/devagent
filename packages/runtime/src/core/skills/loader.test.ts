@@ -116,19 +116,19 @@ describe("SkillLoader", () => {
 
   it("uses source_repo as the support root for backed skills", () => {
     const globalDir = join(TEST_DIR, "global-skills");
-    const supportRoot = join(TEST_DIR, "arkts-source");
+    const supportRoot = join(TEST_DIR, "skill-source");
     mkdirSync(supportRoot, { recursive: true });
     createSkillDir(
       globalDir,
-      "modernize-arkts",
-      "name: modernize-arkts\ndescription: Modernize ArkTS",
+      "modernize-code",
+      "name: modernize-code\ndescription: Modernize code",
       "Instructions",
     );
     writeFileSync(
-      join(globalDir, "modernize-arkts", ".arkts-agent-kit-source.json"),
+      join(globalDir, "modernize-code", ".devagent-skill-source.json"),
       JSON.stringify({
         source_repo: supportRoot,
-        source_dir: join(supportRoot, "arkts-skills", "modernize-arkts"),
+        source_dir: join(supportRoot, "skills", "modernize-code"),
       }),
       "utf-8",
     );
@@ -139,11 +139,11 @@ describe("SkillLoader", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.dirPath).toBe(join(globalDir, "modernize-arkts"));
+    expect(result[0]!.dirPath).toBe(join(globalDir, "modernize-code"));
     expect(result[0]!.supportRootPath).toBe(supportRoot);
     expect(result[0]!.sourceRepoPath).toBe(supportRoot);
     expect(result[0]!.sourceSkillDirPath).toBe(
-      join(supportRoot, "arkts-skills", "modernize-arkts"),
+      join(supportRoot, "skills", "modernize-code"),
     );
   });
 
@@ -271,7 +271,7 @@ describe("SkillLoader", () => {
 
   it("detects support directories in a distinct backing support root", () => {
     const globalDir = join(TEST_DIR, "global-skills");
-    const supportRoot = join(TEST_DIR, "arkts-source");
+    const supportRoot = join(TEST_DIR, "skill-source");
     createSkillDir(
       globalDir,
       "backed-skill",
@@ -280,7 +280,7 @@ describe("SkillLoader", () => {
     );
     mkdirSync(join(supportRoot, "references"), { recursive: true });
     writeFileSync(
-      join(globalDir, "backed-skill", ".arkts-agent-kit-source.json"),
+      join(globalDir, "backed-skill", ".devagent-skill-source.json"),
       JSON.stringify({ source_repo: supportRoot }),
       "utf-8",
     );
@@ -301,7 +301,7 @@ describe("SkillLoader", () => {
       "Instructions",
     );
     writeFileSync(
-      join(globalDir, "broken-backed-skill", ".arkts-agent-kit-source.json"),
+      join(globalDir, "broken-backed-skill", ".devagent-skill-source.json"),
       "{not-json",
       "utf-8",
     );

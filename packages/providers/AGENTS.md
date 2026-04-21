@@ -34,7 +34,7 @@ bun run test
 - `src/index.ts` registers the built-in providers and encodes provider-specific request shaping such as ChatGPT codex options, Copilot headers, and OpenAI-compatible base URLs.
 - Changes here can break production behavior without any CLI surface change. Keep endpoint, auth-header, and capability changes tightly scoped and test-backed.
 - Prefer adjusting the dedicated provider test alongside each behavior change rather than folding multiple providers into one broad refactor.
-- `providers` may depend on `runtime`, but it should remain independent from `cli`, `executor`, and `arkts`.
+- `providers` may depend on `runtime`, but it should remain independent from `cli` and `executor`.
 
 ## Generated Files, Conventions, and Pitfalls
 

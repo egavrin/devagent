@@ -50,10 +50,6 @@ describe("detectLanguage", () => {
     expect(detectLanguage("scripts/build.sh")).toBe("shellscript");
   });
 
-  it("maps .ets to arkts", () => {
-    expect(detectLanguage("entry/src/Index.ets")).toBe("arkts");
-  });
-
   it("returns null for unknown extensions", () => {
     expect(detectLanguage("data/config.toml")).toBeNull();
     expect(detectLanguage("README.md")).toBeNull();
@@ -81,8 +77,8 @@ describe("getLanguageEntry", () => {
 });
 
 describe("LANGUAGE_MAP", () => {
-  it("contains 8 language entries", () => {
-    expect(LANGUAGE_MAP).toHaveLength(8);
+  it("contains 7 language entries", () => {
+    expect(LANGUAGE_MAP).toHaveLength(7);
   });
 
   it("covers all target languages", () => {
@@ -94,7 +90,6 @@ describe("LANGUAGE_MAP", () => {
     expect(ids).toContain("cpp");
     expect(ids).toContain("rust");
     expect(ids).toContain("shellscript");
-    expect(ids).toContain("arkts");
   });
 
   it("has fallbackCheck for typescript", () => {
@@ -135,10 +130,6 @@ describe("LANGUAGE_MAP", () => {
     expect(entry?.fallbackCheck).toBeUndefined();
   });
 
-  it("does not have fallbackCheck for arkts (uses dedicated provider)", () => {
-    const entry = getLanguageEntry("arkts");
-    expect(entry?.fallbackCheck).toBeUndefined();
-  });
 });
 
 // ─── LSP Router ──────────────────────────────────────────────
@@ -530,8 +521,6 @@ describe("detectAvailableLSPServers", () => {
       expect(tsServers).toHaveLength(1);
       expect(tsServers[0]!.languages).toContain("typescript");
       expect(tsServers[0]!.languages).toContain("javascript");
-      // arkts also uses typescript-language-server
-      expect(tsServers[0]!.languages).toContain("arkts");
     }
   });
 

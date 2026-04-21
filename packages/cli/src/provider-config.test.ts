@@ -30,11 +30,6 @@ function makeConfig(): DevAgentConfig {
       midpointBriefingInterval: 15,
       briefingStrategy: "auto",
     },
-    arkts: {
-      enabled: false,
-      strictMode: false,
-      targetVersion: "5.0",
-    },
   };
 }
 
