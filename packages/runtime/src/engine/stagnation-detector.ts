@@ -21,6 +21,15 @@ import type { SessionState } from "./session-state.js";
 import type { EventBus, LLMProvider, Message } from "../core/index.js";
 import { MessageRole } from "../core/index.js";
 
+interface ToolErrorClassificationRequest {
+  readonly provider: LLMProvider;
+  readonly toolName: string;
+  readonly args: Record<string, unknown>;
+  readonly errorMessage: string;
+  readonly recentMessages: ReadonlyArray<Message>;
+  readonly iteration: number;
+}
+
 // ─── Constants ────────────────────────────────────────────────
 
 /** Number of identical failing tool calls (same name + same args) that triggers a doom loop warning. */
@@ -174,7 +183,7 @@ export class StagnationDetector {
    * - Warning is injected once per doom loop pattern
    * - Resets when any tool call succeeds (see recordToolResult)
    */
-  checkDoomLoop(toolCalls: ReadonlyArray<StagnationToolCall>): string | null {
+  checkDoomLoop(_toolCalls: ReadonlyArray<StagnationToolCall>): string | null {
     if (this.recentToolCalls.length < DOOM_LOOP_THRESHOLD) return null;
 
     // Check if all recent calls are identical (same tool + same args)
@@ -391,30 +400,61 @@ export class StagnationDetector {
    * Classify a tool error using the LLM judge to guide recovery strategy.
    * Rate-limited to 1 classification per 3 iterations. Skips short errors.
    */
-  async classifyToolError(
+  classifyToolError(
     provider: LLMProvider,
     toolName: string,
     args: Record<string, unknown>,
     errorMessage: string,
     recentMessages: ReadonlyArray<Message>,
     iteration: number,
+  ): Promise<string | null>;
+  classifyToolError(request: ToolErrorClassificationRequest): Promise<string | null>;
+  async classifyToolError(
+    ...args: [ToolErrorClassificationRequest] | [
+      LLMProvider,
+      string,
+      Record<string, unknown>,
+      string,
+      ReadonlyArray<Message>,
+      number,
+    ]
   ): Promise<string | null> {
-    if (errorMessage.length < 50) return null;
-    if (iteration - this.lastErrorClassificationIteration < 3) return null;
+    const request = normalizeToolErrorClassificationRequest(args);
+    if (request.errorMessage.length < 50) return null;
+    if (request.iteration - this.lastErrorClassificationIteration < 3) return null;
 
-    this.lastErrorClassificationIteration = iteration;
-    const recentContext = recentMessages
+    this.lastErrorClassificationIteration = request.iteration;
+    const recentContext = request.recentMessages
       .slice(-3)
       .map(formatMessageForJudge)
       .join("\n\n");
 
     const result = await classifyError(
-      provider, toolName, args, errorMessage, recentContext,
+      request.provider,
+      request.toolName,
+      request.args,
+      request.errorMessage,
+      recentContext,
     );
     if (!result) return null;
 
     return `[Error classification: ${result.category}/${result.severity}] ${result.recovery_hint}`;
   }
+}
+
+function normalizeToolErrorClassificationRequest(
+  args: [ToolErrorClassificationRequest] | [
+    LLMProvider,
+    string,
+    Record<string, unknown>,
+    string,
+    ReadonlyArray<Message>,
+    number,
+  ],
+): ToolErrorClassificationRequest {
+  if (args.length === 1) return args[0];
+  const [provider, toolName, toolArgs, errorMessage, recentMessages, iteration] = args;
+  return { provider, toolName, args: toolArgs, errorMessage, recentMessages, iteration };
 }
 
 // ─── Recovery hints ─────────────────────────────────────────

@@ -2,486 +2,294 @@
  * replace_in_file — Search and replace text in a file.
  * Category: mutating.
  *
- * Uses cascading fuzzy matching when exact search fails:
- * 1. Exact match
- * 2. Line-trimmed (whitespace at line start/end)
- * 3. Block-anchor (first/last line anchors + Levenshtein similarity)
- * 4. Whitespace-normalized (collapse internal whitespace)
- * 5. Indentation-flexible (different indent levels)
- * 6. Escape-normalized (handle escape sequences)
- * 7. Trimmed-boundary (leading/trailing block whitespace)
- * 8. Context-aware (block anchors + 50% middle-line match)
- *
- * Approach sourced from OpenCode, Cline, and Gemini CLI.
+ * Uses cascading fuzzy matching when exact search fails. The matcher itself
+ * lives in replace-in-file-fuzzy.ts so this module stays focused on tool I/O.
  */
 
-import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import { FileTime } from "./file-time.js";
 import { resolvePathInRepo } from "./path-guard.js";
+import {
+  BlockAnchorReplacer,
+  IndentationFlexibleReplacer,
+  LineTrimmedReplacer,
+  WhitespaceNormalizedReplacer,
+  fuzzyReplace,
+  levenshtein,
+  makeCtx,
+} from "./replace-in-file-fuzzy.js";
 import { ToolError, extractErrorMessage } from "../../core/errors.js";
 import { buildToolFileChangePreview } from "../../core/tool-file-change.js";
-import type { ToolSpec } from "../../core/types.js";
-
-// ─── Levenshtein Distance ───────────────────────────────────
-
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-
-  const matrix: number[][] = [];
-  for (let i = 0; i <= a.length; i++) {
-    matrix[i] = [i];
-  }
-  for (let j = 0; j <= b.length; j++) {
-    matrix[0]![j] = j;
-  }
-
-  for (let i = 1; i <= a.length; i++) {
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      matrix[i]![j] = Math.min(
-        matrix[i - 1]![j]! + 1,
-        matrix[i]![j - 1]! + 1,
-        matrix[i - 1]![j - 1]! + cost,
-      );
-    }
-  }
-
-  return matrix[a.length]![b.length]!;
-}
-
-// ─── Replacer Types ─────────────────────────────────────────
-
-/** Context passed to every replacer — lines are pre-split once for performance. */
-interface ReplacerCtx {
-  readonly content: string;
-  readonly lines: string[];
-  readonly find: string;
-  readonly findLines: string[];
-}
-
-/** A replacer yields candidate exact substrings from content that match the search intent. */
-type Replacer = (ctx: ReplacerCtx) => Generator<string>;
-
-// Similarity thresholds for block-anchor matching
-const SINGLE_CANDIDATE_SIMILARITY_THRESHOLD = 0.3;
-const MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD = 0.7;
-
-// ─── Individual Replacers ───────────────────────────────────
-
-/** 1. Exact match — yields the search string itself. */
-const SimpleReplacer: Replacer = function* ({ find }) {
-  yield find;
-};
-
-/** 2. Line-trimmed — matches when line-level whitespace differs. */
-const LineTrimmedReplacer: Replacer = function* ({ content, lines: originalLines, findLines }) {
-  const searchLines = [...findLines];
-
-  if (searchLines[searchLines.length - 1] === "") {
-    searchLines.pop();
-  }
-
-  for (let i = 0; i <= originalLines.length - searchLines.length; i++) {
-    let matches = true;
-
-    for (let j = 0; j < searchLines.length; j++) {
-      if (originalLines[i + j]!.trim() !== searchLines[j]!.trim()) {
-        matches = false;
-        break;
-      }
-    }
-
-    if (matches) {
-      let matchStartIndex = 0;
-      for (let k = 0; k < i; k++) {
-        matchStartIndex += originalLines[k]!.length + 1;
-      }
-
-      let matchEndIndex = matchStartIndex;
-      for (let k = 0; k < searchLines.length; k++) {
-        matchEndIndex += originalLines[i + k]!.length;
-        if (k < searchLines.length - 1) {
-          matchEndIndex += 1;
-        }
-      }
-
-      yield content.substring(matchStartIndex, matchEndIndex);
-    }
-  }
-};
-
-/** 3. Block-anchor — first/last lines as anchors, Levenshtein on middle. */
-const BlockAnchorReplacer: Replacer = function* ({ content, lines: originalLines, findLines }) {
-  const searchLines = [...findLines];
-
-  if (searchLines.length < 3) return;
-
-  if (searchLines[searchLines.length - 1] === "") {
-    searchLines.pop();
-  }
-
-  const firstLineSearch = searchLines[0]!.trim();
-  const lastLineSearch = searchLines[searchLines.length - 1]!.trim();
-  const searchBlockSize = searchLines.length;
-
-  // Collect candidate positions where both anchors match
-  const candidates: Array<{ startLine: number; endLine: number }> = [];
-  for (let i = 0; i < originalLines.length; i++) {
-    if (originalLines[i]!.trim() !== firstLineSearch) continue;
-
-    for (let j = i + 2; j < originalLines.length; j++) {
-      if (originalLines[j]!.trim() === lastLineSearch) {
-        candidates.push({ startLine: i, endLine: j });
-        break;
-      }
-    }
-  }
-
-  if (candidates.length === 0) return;
-
-  function extractSubstring(startLine: number, endLine: number): string {
-    let matchStartIndex = 0;
-    for (let k = 0; k < startLine; k++) {
-      matchStartIndex += originalLines[k]!.length + 1;
-    }
-    let matchEndIndex = matchStartIndex;
-    for (let k = startLine; k <= endLine; k++) {
-      matchEndIndex += originalLines[k]!.length;
-      if (k < endLine) matchEndIndex += 1;
-    }
-    return content.substring(matchStartIndex, matchEndIndex);
-  }
-
-  function calcSimilarity(startLine: number, endLine: number, threshold: number): number {
-    const actualBlockSize = endLine - startLine + 1;
-    const linesToCheck = Math.min(searchBlockSize - 2, actualBlockSize - 2);
-
-    if (linesToCheck <= 0) return 1.0;
-
-    let similarity = 0;
-    for (let j = 1; j < searchBlockSize - 1 && j < actualBlockSize - 1; j++) {
-      const originalLine = originalLines[startLine + j]!.trim();
-      const searchLine = searchLines[j]!.trim();
-      const maxLen = Math.max(originalLine.length, searchLine.length);
-      if (maxLen === 0) continue;
-      const distance = levenshtein(originalLine, searchLine);
-      similarity += (1 - distance / maxLen) / linesToCheck;
-      if (similarity >= threshold) break;
-    }
-    return similarity;
-  }
-
-  if (candidates.length === 1) {
-    const { startLine, endLine } = candidates[0]!;
-    if (calcSimilarity(startLine, endLine, SINGLE_CANDIDATE_SIMILARITY_THRESHOLD) >= SINGLE_CANDIDATE_SIMILARITY_THRESHOLD) {
-      yield extractSubstring(startLine, endLine);
-    }
-    return;
-  }
-
-  // Multiple candidates — pick the best
-  let bestMatch: { startLine: number; endLine: number } | null = null;
-  let maxSimilarity = -1;
-
-  for (const candidate of candidates) {
-    const sim = calcSimilarity(candidate.startLine, candidate.endLine, 0);
-    if (sim > maxSimilarity) {
-      maxSimilarity = sim;
-      bestMatch = candidate;
-    }
-  }
-
-  if (maxSimilarity >= MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD && bestMatch) {
-    yield extractSubstring(bestMatch.startLine, bestMatch.endLine);
-  }
-};
-
-/** 4. Whitespace-normalized — collapse all whitespace and match. */
-const WhitespaceNormalizedReplacer: Replacer = function* ({ find, lines, findLines }) {
-  const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
-  const normalizedFind = normalize(find);
-
-  // Single-line matches
-  for (const line of lines) {
-    if (normalize(line) === normalizedFind) {
-      yield line;
-    } else {
-      const normalizedLine = normalize(line);
-      if (normalizedLine.includes(normalizedFind)) {
-        const words = find.trim().split(/\s+/);
-        if (words.length > 0) {
-          const pattern = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
-          try {
-            const match = line.match(new RegExp(pattern));
-            if (match) yield match[0];
-          } catch {
-            // Invalid regex, skip
-          }
-        }
-      }
-    }
-  }
-
-  // Multi-line matches
-  if (findLines.length > 1) {
-    for (let i = 0; i <= lines.length - findLines.length; i++) {
-      const block = lines.slice(i, i + findLines.length);
-      if (normalize(block.join("\n")) === normalizedFind) {
-        yield block.join("\n");
-      }
-    }
-  }
-};
-
-/** 5. Indentation-flexible — matches when indent level differs. */
-const IndentationFlexibleReplacer: Replacer = function* ({ find, lines: contentLines, findLines }) {
-  const removeIndentation = (text: string) => {
-    const textLines = text.split("\n");
-    const nonEmpty = textLines.filter((l) => l.trim().length > 0);
-    if (nonEmpty.length === 0) return text;
-
-    const minIndent = Math.min(
-      ...nonEmpty.map((l) => {
-        const match = l.match(/^(\s*)/);
-        return match ? match[1]!.length : 0;
-      }),
-    );
-
-    return textLines.map((l) => (l.trim().length === 0 ? l : l.slice(minIndent))).join("\n");
-  };
-
-  const normalizedFind = removeIndentation(find);
-
-  for (let i = 0; i <= contentLines.length - findLines.length; i++) {
-    const block = contentLines.slice(i, i + findLines.length).join("\n");
-    if (removeIndentation(block) === normalizedFind) {
-      yield block;
-    }
-  }
-};
-
-/** 6. Escape-normalized — handle escape sequence differences. */
-const EscapeNormalizedReplacer: Replacer = function* ({ content, lines, find }) {
-  const unescape = (str: string): string =>
-    str.replace(/\\(n|t|r|'|"|`|\\|\n|\$)/g, (_match, ch: string) => {
-      switch (ch) {
-        case "n": return "\n";
-        case "t": return "\t";
-        case "r": return "\r";
-        case "'": return "'";
-        case '"': return '"';
-        case "`": return "`";
-        case "\\": return "\\";
-        case "\n": return "\n";
-        case "$": return "$";
-        default: return _match;
-      }
-    });
-
-  const unescapedFind = unescape(find);
-
-  if (content.includes(unescapedFind)) {
-    yield unescapedFind;
-  }
-
-  const unescapedFindLines = unescapedFind.split("\n");
-
-  for (let i = 0; i <= lines.length - unescapedFindLines.length; i++) {
-    const block = lines.slice(i, i + unescapedFindLines.length).join("\n");
-    if (unescape(block) === unescapedFind) {
-      yield block;
-    }
-  }
-};
-
-/** 7. Trimmed-boundary — leading/trailing whitespace on the overall block. */
-const TrimmedBoundaryReplacer: Replacer = function* ({ content, lines, find, findLines }) {
-  const trimmedFind = find.trim();
-  if (trimmedFind === find) return; // Already trimmed
-
-  if (content.includes(trimmedFind)) {
-    yield trimmedFind;
-  }
-
-  for (let i = 0; i <= lines.length - findLines.length; i++) {
-    const block = lines.slice(i, i + findLines.length).join("\n");
-    if (block.trim() === trimmedFind) {
-      yield block;
-    }
-  }
-};
-
-/** 8. Context-aware — block anchors + 50% middle-line similarity. */
-const ContextAwareReplacer: Replacer = function* ({ lines: contentLines, findLines }) {
-  const searchLines = [...findLines];
-  if (searchLines.length < 3) return;
-
-  if (searchLines[searchLines.length - 1] === "") {
-    searchLines.pop();
-  }
-
-  const firstLine = searchLines[0]!.trim();
-  const lastLine = searchLines[searchLines.length - 1]!.trim();
-
-  for (let i = 0; i < contentLines.length; i++) {
-    if (contentLines[i]!.trim() !== firstLine) continue;
-
-    for (let j = i + 2; j < contentLines.length; j++) {
-      if (contentLines[j]!.trim() !== lastLine) continue;
-
-      const blockLines = contentLines.slice(i, j + 1);
-
-      if (blockLines.length === searchLines.length) {
-        let matchingLines = 0;
-        let totalNonEmpty = 0;
-
-        for (let k = 1; k < blockLines.length - 1; k++) {
-          const blockLine = blockLines[k]!.trim();
-          const findLine = searchLines[k]!.trim();
-          if (blockLine.length > 0 || findLine.length > 0) {
-            totalNonEmpty++;
-            if (blockLine === findLine) matchingLines++;
-          }
-        }
-
-        if (totalNonEmpty === 0 || matchingLines / totalNonEmpty >= 0.5) {
-          yield blockLines.join("\n");
-          return;
-        }
-      }
-      break;
-    }
-  }
-};
-
-// ─── Cascading Replace ──────────────────────────────────────
-
-const REPLACERS: ReadonlyArray<Replacer> = [
-  SimpleReplacer,
-  LineTrimmedReplacer,
-  BlockAnchorReplacer,
-  WhitespaceNormalizedReplacer,
-  IndentationFlexibleReplacer,
-  EscapeNormalizedReplacer,
-  TrimmedBoundaryReplacer,
-  ContextAwareReplacer,
-];
-
-/** Build a ReplacerCtx from content and find strings, pre-splitting lines once. */
-function makeCtx(content: string, find: string): ReplacerCtx {
-  return {
-    content,
-    lines: content.split("\n"),
-    find,
-    findLines: find.split("\n"),
-  };
-}
-
-/**
- * Try each replacer in order. The first one that yields a match found in content wins.
- * Returns `{ newContent, count }` or throws if no replacer matches.
- */
-export function fuzzyReplace(
-  content: string,
-  oldString: string,
-  newString: string,
-  replaceAll: boolean,
-): { newContent: string; count: number } {
-  const ctx = makeCtx(content, oldString);
-
-  for (const replacer of REPLACERS) {
-    for (const candidate of replacer(ctx)) {
-      const index = content.indexOf(candidate);
-      if (index === -1) continue;
-
-      // Skip no-op: if the fuzzy candidate IS the replacement, replacing would change nothing
-      if (candidate === newString) continue;
-
-      if (replaceAll) {
-        const count = content.split(candidate).length - 1;
-        const newContent = content.replaceAll(candidate, newString);
-        // Guard against no-op even after replaceAll (e.g., candidate found but result identical)
-        if (newContent === content) continue;
-        return { newContent, count };
-      }
-
-      // Single replace: require unique match
-      const lastIndex = content.lastIndexOf(candidate);
-      if (index !== lastIndex) continue; // Ambiguous — skip this candidate
-
-      return {
-        newContent: content.substring(0, index) + newString + content.substring(index + candidate.length),
-        count: 1,
-      };
-    }
-  }
-
-  // All replacers exhausted — build rich error context
-  const { lines } = ctx;
-  const firstSearchLine = ctx.findLines[0]!.trim();
-  let hint = "";
-
-  if (firstSearchLine.length > 5) {
-    const token = firstSearchLine.substring(0, Math.min(40, firstSearchLine.length));
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i]!.includes(token)) {
-        const start = Math.max(0, i - 2);
-        const end = Math.min(lines.length, i + 3);
-        hint = `\nPartial match near line ${i + 1}:\n` +
-          lines.slice(start, end).map((l, idx) => `${start + idx + 1}: ${l}`).join("\n");
-        break;
-      }
-    }
-  }
-
-  if (!hint) {
-    const preview = lines.slice(0, 15).map((l, i) => `${i + 1}: ${l}`).join("\n");
-    hint = `\nFile has ${lines.length} lines. First 15:\n${preview}`;
-  }
-
-  // Distinguish: no match at all vs. multiple ambiguous matches
-  for (const replacer of REPLACERS) {
-    for (const candidate of replacer(ctx)) {
-      const index = content.indexOf(candidate);
-      if (index !== -1) {
-        const lastIndex = content.lastIndexOf(candidate);
-        if (index !== lastIndex) {
-          throw new Error(
-            "Found multiple matches for search string. Provide more surrounding context to make the match unique.",
-          );
-        }
-      }
-    }
-  }
-
-  throw new Error(`Search string not found. Re-read the file for exact text.${hint}`);
-}
-
-// ─── Tool Definition ────────────────────────────────────────
-
-// ─── Batch-mode types ────────────────────────────────────────
+import type { ToolResult, ToolSpec } from "../../core/types.js";
 
 interface ReplacementPair {
   readonly search: string;
   readonly replace: string;
 }
 
-interface ReplacementResult {
-  readonly search: string;
-  readonly replace: string;
+interface ReplacementResult extends ReplacementPair {
   readonly count: number;
   readonly success: boolean;
   readonly error?: string;
+}
+
+interface ReplaceRequest {
+  readonly filePath: string;
+  readonly displayPath: string;
+  readonly replacements?: ReplacementPair[];
+  readonly search?: string;
+  readonly replace?: string;
+  readonly replaceAll: boolean;
+  readonly expectedReplacements?: number;
 }
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 3) + "..." : s;
 }
 
-// ─── Tool Definition ────────────────────────────────────────
+function parseReplaceRequest(
+  params: Record<string, unknown>,
+  repoRoot: string,
+): ReplaceRequest {
+  const parseError = params["_parseError"] as string | undefined;
+  if (parseError) throw new ToolError("replace_in_file", parseError);
+
+  const displayPath = params["path"] as string;
+  const search = params["search"] as string | undefined;
+  const replace = params["replace"] as string | undefined;
+  const replacements = params["replacements"] as ReplacementPair[] | undefined;
+
+  if (replacements !== undefined && (search !== undefined || replace !== undefined)) {
+    throw new ToolError(
+      "replace_in_file",
+      "Cannot use both 'replacements' array and 'search'/'replace' params. Pick one mode.",
+    );
+  }
+
+  return {
+    filePath: resolvePathInRepo(repoRoot, displayPath, "replace_in_file"),
+    displayPath,
+    replacements,
+    search,
+    replace,
+    replaceAll: (params["all"] as boolean | undefined) ?? false,
+    expectedReplacements: params["expected_replacements"] as number | undefined,
+  };
+}
+
+function assertFileReady(request: ReplaceRequest): void {
+  if (!existsSync(request.filePath)) {
+    throw new ToolError("replace_in_file", `File not found: ${request.displayPath}`);
+  }
+
+  FileTime.assert(request.filePath);
+}
+
+function validateBatchReplacements(replacements: ReplacementPair[] | undefined): ReplacementPair[] {
+  if (!Array.isArray(replacements) || replacements.length === 0) {
+    throw new ToolError("replace_in_file", "Missing or empty 'replacements' array.");
+  }
+  return replacements;
+}
+
+function applyBatchReplacement(
+  content: string,
+  replacement: ReplacementPair,
+): { readonly content: string; readonly result: ReplacementResult } {
+  const { search, replace } = replacement;
+  if (search === replace) {
+    return {
+      content,
+      result: { search, replace, count: 0, success: true },
+    };
+  }
+
+  try {
+    const result = fuzzyReplace(content, search, replace, true);
+    if (result.newContent === content) {
+      return {
+        content,
+        result: {
+          search,
+          replace,
+          count: 0,
+          success: false,
+          error: "No-op: content unchanged after replacement",
+        },
+      };
+    }
+    return {
+      content: result.newContent,
+      result: { search, replace, count: result.count, success: true },
+    };
+  } catch (err) {
+    return {
+      content,
+      result: {
+        search,
+        replace,
+        count: 0,
+        success: false,
+        error: extractErrorMessage(err),
+      },
+    };
+  }
+}
+
+function runBatchReplacements(
+  content: string,
+  replacements: ReadonlyArray<ReplacementPair>,
+): { readonly content: string; readonly results: ReplacementResult[]; readonly totalCount: number } {
+  let nextContent = content;
+  let totalCount = 0;
+  const results: ReplacementResult[] = [];
+
+  for (const replacement of replacements) {
+    const next = applyBatchReplacement(nextContent, replacement);
+    nextContent = next.content;
+    totalCount += next.result.count;
+    results.push(next.result);
+  }
+
+  return { content: nextContent, results, totalCount };
+}
+
+function formatBatchLine(result: ReplacementResult): string {
+  const search = truncate(result.search, 50);
+  const replace = truncate(result.replace, 50);
+  if (result.success && result.count > 0) {
+    return `  ✓ '${search}' → '${replace}' (${result.count})`;
+  }
+  if (result.success) {
+    return `  - '${search}' → '${replace}' (no-op, identical)`;
+  }
+  return `  ✗ '${search}': ${result.error}`;
+}
+
+function buildBatchSummary(
+  displayPath: string,
+  totalCount: number,
+  results: ReadonlyArray<ReplacementResult>,
+): string {
+  const lines = results.map(formatBatchLine);
+  return `Applied ${totalCount} replacement(s) in ${displayPath}:\n${lines.join("\n")}`;
+}
+
+function buildFileEditMetadata(
+  displayPath: string,
+  before: string,
+  after: string,
+): { readonly fileEdits: unknown[] } {
+  return {
+    fileEdits: [
+      buildToolFileChangePreview({
+        path: displayPath,
+        kind: "update",
+        before,
+        after,
+      }),
+    ],
+  };
+}
+
+function handleBatchMode(request: ReplaceRequest): ToolResult {
+  const replacements = validateBatchReplacements(request.replacements);
+  const originalContent = readFileSync(request.filePath, "utf-8");
+  const batch = runBatchReplacements(originalContent, replacements);
+
+  if (batch.totalCount > 0) {
+    writeFileSync(request.filePath, batch.content, "utf-8");
+    FileTime.recordWrite(request.filePath);
+  }
+
+  const hasFailure = batch.results.some((result) => !result.success);
+  const summary = buildBatchSummary(request.displayPath, batch.totalCount, batch.results);
+
+  if (hasFailure) {
+    return {
+      success: false,
+      output: summary,
+      error: "Some replacements failed",
+      artifacts: batch.totalCount > 0 ? [request.filePath] : [],
+    };
+  }
+
+  return {
+    success: true,
+    output: summary,
+    error: null,
+    artifacts: [request.filePath],
+    metadata: buildFileEditMetadata(request.displayPath, originalContent, batch.content),
+  };
+}
+
+function validateSingleRequest(request: ReplaceRequest): asserts request is ReplaceRequest & {
+  readonly search: string;
+  readonly replace: string;
+} {
+  if (request.search === undefined || request.replace === undefined) {
+    throw new ToolError(
+      "replace_in_file",
+      `Missing required parameters: search=${request.search === undefined ? "missing" : "present"}, replace=${request.replace === undefined ? "missing" : "present"}. Check that tool arguments are valid JSON.`,
+    );
+  }
+
+  if (request.search === request.replace) {
+    throw new ToolError(
+      "replace_in_file",
+      "No changes to apply: search and replace strings are identical.",
+    );
+  }
+}
+
+function assertExpectedReplacementCount(
+  expectedReplacements: number | undefined,
+  actualCount: number,
+): void {
+  if (expectedReplacements === undefined || actualCount === expectedReplacements) return;
+  throw new ToolError(
+    "replace_in_file",
+    `Expected ${expectedReplacements} replacement(s), but made ${actualCount}. The edit was not applied.`,
+  );
+}
+
+function assertContentChanged(content: string, nextContent: string): void {
+  if (nextContent !== content) return;
+  throw new ToolError(
+    "replace_in_file",
+    "No-op replacement: fuzzy matching found text but replacement produced identical content. The file may already contain the target text.",
+  );
+}
+
+function handleSingleMode(request: ReplaceRequest): ToolResult {
+  validateSingleRequest(request);
+
+  const content = readFileSync(request.filePath, "utf-8");
+  const result = fuzzyReplace(content, request.search, request.replace, request.replaceAll);
+
+  assertExpectedReplacementCount(request.expectedReplacements, result.count);
+  assertContentChanged(content, result.newContent);
+
+  writeFileSync(request.filePath, result.newContent, "utf-8");
+  FileTime.recordWrite(request.filePath);
+
+  return {
+    success: true,
+    output: `Replaced ${result.count} occurrence(s) in ${request.displayPath}`,
+    error: null,
+    artifacts: [request.filePath],
+    metadata: buildFileEditMetadata(request.displayPath, content, result.newContent),
+  };
+}
+
+function handleReplaceInFile(params: Record<string, unknown>, repoRoot: string): ToolResult {
+  const request = parseReplaceRequest(params, repoRoot);
+  assertFileReady(request);
+  return request.replacements === undefined
+    ? handleSingleMode(request)
+    : handleBatchMode(request);
+}
 
 export const replaceInFileTool: ToolSpec = {
   name: "replace_in_file",
@@ -535,200 +343,17 @@ export const replaceInFileTool: ToolSpec = {
     },
   },
   handler: async (params, context) => {
-    // Detect malformed arguments from JSON parse fallback
-    const parseError = params["_parseError"] as string | undefined;
-    if (parseError) {
-      throw new ToolError("replace_in_file", parseError);
-    }
-
-    const filePath = resolvePathInRepo(
-      context.repoRoot,
-      params["path"] as string,
-      "replace_in_file",
-    );
-    const replacements = params["replacements"] as ReplacementPair[] | undefined;
-    const search = params["search"] as string | undefined;
-    const replace = params["replace"] as string | undefined;
-
-    // Mutual exclusion: batch mode vs single mode
-    if (replacements !== undefined && (search !== undefined || replace !== undefined)) {
-      throw new ToolError(
-        "replace_in_file",
-        "Cannot use both 'replacements' array and 'search'/'replace' params. Pick one mode.",
-      );
-    }
-
-    if (!existsSync(filePath)) {
-      throw new ToolError(
-        "replace_in_file",
-        `File not found: ${params["path"] as string}`,
-      );
-    }
-
-    // Enforce pre-read: file must have been read in this session
-    FileTime.assert(filePath);
-
-    // ─── Batch mode ────────────────────────────────────────
-    if (replacements !== undefined) {
-      if (!Array.isArray(replacements) || replacements.length === 0) {
-        throw new ToolError(
-          "replace_in_file",
-          "Missing or empty 'replacements' array.",
-        );
-      }
-
-      const originalContent = readFileSync(filePath, "utf-8");
-      let content = originalContent;
-      const results: ReplacementResult[] = [];
-      let totalCount = 0;
-      let hasFailure = false;
-
-      for (const { search: s, replace: r } of replacements) {
-        if (s === r) {
-          results.push({ search: s, replace: r, count: 0, success: true });
-          continue;
-        }
-
-        try {
-          const result = fuzzyReplace(content, s, r, true);
-          if (result.newContent === content) {
-            results.push({
-              search: s, replace: r, count: 0, success: false,
-              error: "No-op: content unchanged after replacement",
-            });
-            hasFailure = true;
-            continue;
-          }
-          content = result.newContent;
-          totalCount += result.count;
-          results.push({ search: s, replace: r, count: result.count, success: true });
-        } catch (err) {
-          const message = extractErrorMessage(err);
-          results.push({ search: s, replace: r, count: 0, success: false, error: message });
-          hasFailure = true;
-        }
-      }
-
-      if (totalCount > 0) {
-        writeFileSync(filePath, content, "utf-8");
-        FileTime.recordWrite(filePath);
-      }
-
-      const lines: string[] = [];
-      for (const r of results) {
-        if (r.success && r.count > 0) {
-          lines.push(`  ✓ '${truncate(r.search, 50)}' → '${truncate(r.replace, 50)}' (${r.count})`);
-        } else if (r.success && r.count === 0) {
-          lines.push(`  - '${truncate(r.search, 50)}' → '${truncate(r.replace, 50)}' (no-op, identical)`);
-        } else {
-          lines.push(`  ✗ '${truncate(r.search, 50)}': ${r.error}`);
-        }
-      }
-
-      const summary = `Applied ${totalCount} replacement(s) in ${params["path"] as string}:\n${lines.join("\n")}`;
-      const nextContent = readFileSync(filePath, "utf-8");
-
-      if (hasFailure) {
-        return {
-          success: false,
-          output: summary,
-          error: "Some replacements failed",
-          artifacts: totalCount > 0 ? [filePath] : [],
-        };
-      }
-
-      return {
-        success: true,
-        output: summary,
-        error: null,
-        artifacts: [filePath],
-        metadata: {
-          fileEdits: [
-            buildToolFileChangePreview({
-              path: params["path"] as string,
-              kind: "update",
-              before: originalContent,
-              after: nextContent,
-            }),
-          ],
-        },
-      };
-    }
-
-    // ─── Single mode (original behavior) ───────────────────
-
-    // Guard against undefined params (from malformed JSON that parsed to {})
-    if (search === undefined || replace === undefined) {
-      throw new ToolError(
-        "replace_in_file",
-        `Missing required parameters: search=${search === undefined ? "missing" : "present"}, replace=${replace === undefined ? "missing" : "present"}. Check that tool arguments are valid JSON.`,
-      );
-    }
-
-    const replaceAll = (params["all"] as boolean | undefined) ?? false;
-    const expectedReplacements = params["expected_replacements"] as number | undefined;
-
-    if (search === replace) {
-      throw new ToolError(
-        "replace_in_file",
-        "No changes to apply: search and replace strings are identical.",
-      );
-    }
-
-    const content = readFileSync(filePath, "utf-8");
-
     try {
-      const result = fuzzyReplace(content, search, replace, replaceAll);
-
-      if (
-        expectedReplacements !== undefined &&
-        result.count !== expectedReplacements
-      ) {
-        throw new ToolError(
-          "replace_in_file",
-          `Expected ${expectedReplacements} replacement(s), but made ${result.count}. The edit was not applied.`,
-        );
-      }
-
-      // Fail fast: if fuzzyReplace returned but content is unchanged, report the no-op
-      if (result.newContent === content) {
-        throw new ToolError(
-          "replace_in_file",
-          "No-op replacement: fuzzy matching found text but replacement produced identical content. The file may already contain the target text.",
-        );
-      }
-
-      writeFileSync(filePath, result.newContent, "utf-8");
-      FileTime.recordWrite(filePath);
-
-      return {
-        success: true,
-        output: `Replaced ${result.count} occurrence(s) in ${params["path"] as string}`,
-        error: null,
-        artifacts: [filePath],
-        metadata: {
-          fileEdits: [
-            buildToolFileChangePreview({
-              path: params["path"] as string,
-              kind: "update",
-              before: content,
-              after: result.newContent,
-            }),
-          ],
-        },
-      };
+      return handleReplaceInFile(params, context.repoRoot);
     } catch (err) {
       if (err instanceof ToolError) throw err;
-      throw new ToolError(
-        "replace_in_file",
-        extractErrorMessage(err),
-      );
+      throw new ToolError("replace_in_file", extractErrorMessage(err));
     }
   },
 };
 
-// Export replacers and helpers for testing
 export {
+  fuzzyReplace,
   levenshtein,
   makeCtx,
   LineTrimmedReplacer,

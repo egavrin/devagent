@@ -7,12 +7,13 @@ import { NodeHtmlMarkdown } from "node-html-markdown";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { extname, join } from "node:path";
+import { join } from "node:path";
 
+import { buildSavedFilename, sanitizePathSegment } from "./fetch-url-filename.js";
 import { ToolError, extractErrorMessage } from "../../core/errors.js";
 import { createProxyAwareFetch as createCoreProxyAwareFetch } from "../../core/proxy-fetch.js";
 import type { FetchFn, ProxyAwareFetchOptions } from "../../core/proxy-fetch.js";
-import type { ToolSpec } from "../../core/types.js";
+import type { ToolResult, ToolSpec } from "../../core/types.js";
 
 const TOOL_NAME = "fetch_url";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -37,6 +38,12 @@ const HTML_TO_MARKDOWN = new NodeHtmlMarkdown({
   ],
   ignore: ["script", "style", "noscript", "iframe", "svg", "canvas"],
 });
+
+interface FetchUrlRequest {
+  readonly url: string;
+  readonly saveBinary: boolean;
+  readonly timeoutMs: number;
+}
 
 export const fetchUrlTool: ToolSpec = {
   name: TOOL_NAME,
@@ -85,120 +92,22 @@ export const fetchUrlTool: ToolSpec = {
       { match: "Response too large", hint: "The page is larger than the fetch_url cap. Try a more specific page instead of a large download endpoint." },
       { match: "Request timed out", hint: "The site did not respond within the timeout. Retry with a larger timeout_ms or use a smaller/faster URL." },
     ],
+
   },
   handler: async (params, context) => {
-    const url = String(params["url"] ?? "");
-    assertHttpUrl(url);
-
-    const saveBinary = params["save_binary"] === true;
-    const timeoutMs = Math.min(
-      Number(params["timeout_ms"] ?? DEFAULT_TIMEOUT_MS),
-      MAX_TIMEOUT_MS,
-    );
-
+    const request = parseFetchUrlRequest(params);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(new Error("timeout")), request.timeoutMs);
 
     try {
-      const response = await createProxyAwareFetch()(url, {
-        method: "GET",
-        redirect: "follow",
-        signal: controller.signal,
-        headers: {
-          Accept: "text/html, text/plain, application/json, application/xml, text/xml;q=0.9, */*;q=0.1",
-          "Accept-Language": "en-US,en;q=0.8",
-          "User-Agent": "DevAgent/0.2 (+https://github.com/egavrin/devagent)",
-        },
-      });
-
-      if (!response.ok) {
-        throw new ToolError(TOOL_NAME, `Request failed with status ${response.status}`);
-      }
-
-      const rawContentType = response.headers.get("content-type") ?? "";
-      const contentType = rawContentType || "application/octet-stream";
-      const disposition = response.headers.get("content-disposition") ?? "";
-      const isAttachment = disposition.toLowerCase().includes("attachment");
-      if (isAttachment && !saveBinary) {
-        throw new ToolError(TOOL_NAME, "Unsupported content type: attachment download");
-      }
-
-      const contentLength = response.headers.get("content-length");
-      if (contentLength) {
-        const declaredSize = Number(contentLength);
-        if (Number.isFinite(declaredSize) && declaredSize > MAX_RESPONSE_BYTES) {
-          throw new ToolError(TOOL_NAME, `Response too large (${declaredSize} bytes)`);
-        }
-      }
-
-      const body = await readResponseBody(response, controller, MAX_RESPONSE_BYTES);
-      const mime = extractMimeType(rawContentType);
-      const finalUrl = response.url || url;
-      const isTextResponse = isConfidentlyTextualResponse(mime, body);
-
-      if (!isTextResponse && !saveBinary) {
-        throw new ToolError(TOOL_NAME, `Unsupported content type: ${mime || "unknown"}`);
-      }
-
-      if (saveBinary && (isAttachment || !isTextResponse)) {
-        const download = await saveBinaryResponse({
-          sessionId: context.sessionId,
-          finalUrl,
-          contentType,
-          disposition,
-          body,
-        });
-
-        return {
-          success: true,
-          output: buildDownloadOutput({
-            requestedUrl: url,
-            finalUrl,
-            contentType,
-            savedPath: download.savedPath,
-            savedSizeBytes: download.savedSizeBytes,
-            sha256: download.sha256,
-          }),
-          error: null,
-          artifacts: [download.savedPath],
-          metadata: {
-            requestedUrl: url,
-            finalUrl,
-            contentType,
-            status: response.status,
-            savedPath: download.savedPath,
-            savedSizeBytes: download.savedSizeBytes,
-            sha256: download.sha256,
-            downloaded: true,
-          },
-        };
-      }
-
-      const content = normalizeResponseBody(body, mime);
-      return {
-        success: true,
-        output: buildOutput({
-          requestedUrl: url,
-          finalUrl,
-          contentType,
-          content,
-        }),
-        error: null,
-        artifacts: [],
-        metadata: {
-          requestedUrl: url,
-          finalUrl,
-          contentType,
-          status: response.status,
-          downloaded: false,
-        },
-      };
+      const response = await fetchResponse(request, controller);
+      return await buildFetchUrlResult(response, request, context.sessionId, controller);
     } catch (error) {
       if (error instanceof ToolError) {
         throw error;
       }
       if (controller.signal.aborted && isTimeoutAbort(controller.signal.reason)) {
-        throw new ToolError(TOOL_NAME, `Request timed out after ${timeoutMs}ms`);
+        throw new ToolError(TOOL_NAME, `Request timed out after ${request.timeoutMs}ms`);
       }
       throw new ToolError(TOOL_NAME, extractErrorMessage(error));
     } finally {
@@ -206,6 +115,161 @@ export const fetchUrlTool: ToolSpec = {
     }
   },
 };
+
+function parseFetchUrlRequest(params: Record<string, unknown>): FetchUrlRequest {
+  const url = String(params["url"] ?? "");
+  assertHttpUrl(url);
+  return {
+    url,
+    saveBinary: params["save_binary"] === true,
+    timeoutMs: Math.min(Number(params["timeout_ms"] ?? DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS),
+  };
+}
+
+async function fetchResponse(
+  request: FetchUrlRequest,
+  controller: AbortController,
+): Promise<Response> {
+  const response = await createProxyAwareFetch()(request.url, {
+    method: "GET",
+    redirect: "follow",
+    signal: controller.signal,
+    headers: {
+      Accept: "text/html, text/plain, application/json, application/xml, text/xml;q=0.9, */*;q=0.1",
+      "Accept-Language": "en-US,en;q=0.8",
+      "User-Agent": "DevAgent/0.2 (+https://github.com/egavrin/devagent)",
+    },
+  });
+
+  if (!response.ok) {
+    throw new ToolError(TOOL_NAME, `Request failed with status ${response.status}`);
+  }
+  return response;
+}
+
+async function buildFetchUrlResult(
+  response: Response,
+  request: FetchUrlRequest,
+  sessionId: string,
+  controller: AbortController,
+): Promise<ToolResult> {
+  const responseInfo = await readFetchResponseInfo(response, request.url, controller);
+  if (responseInfo.isAttachment && !request.saveBinary) {
+    throw new ToolError(TOOL_NAME, "Unsupported content type: attachment download");
+  }
+  if (!responseInfo.isTextResponse && !request.saveBinary) {
+    throw new ToolError(TOOL_NAME, `Unsupported content type: ${responseInfo.mime || "unknown"}`);
+  }
+  return request.saveBinary && (responseInfo.isAttachment || !responseInfo.isTextResponse)
+    ? await buildBinaryFetchResult(responseInfo, request.url, sessionId, response.status)
+    : buildTextFetchResult(responseInfo, request.url, response.status);
+}
+
+interface FetchResponseInfo {
+  readonly finalUrl: string;
+  readonly contentType: string;
+  readonly disposition: string;
+  readonly mime: string;
+  readonly isAttachment: boolean;
+  readonly isTextResponse: boolean;
+  readonly body: Uint8Array;
+}
+
+async function readFetchResponseInfo(
+  response: Response,
+  requestedUrl: string,
+  controller: AbortController,
+): Promise<FetchResponseInfo> {
+  const rawContentType = response.headers.get("content-type") ?? "";
+  assertDeclaredResponseSize(response.headers.get("content-length"));
+
+  const body = await readResponseBody(response, controller, MAX_RESPONSE_BYTES);
+  const mime = extractMimeType(rawContentType);
+  const disposition = response.headers.get("content-disposition") ?? "";
+
+  return {
+    finalUrl: response.url || requestedUrl,
+    contentType: rawContentType || "application/octet-stream",
+    disposition,
+    mime,
+    isAttachment: disposition.toLowerCase().includes("attachment"),
+    isTextResponse: isConfidentlyTextualResponse(mime, body),
+    body,
+  };
+}
+
+function assertDeclaredResponseSize(contentLength: string | null): void {
+  if (!contentLength) return;
+  const declaredSize = Number(contentLength);
+  if (Number.isFinite(declaredSize) && declaredSize > MAX_RESPONSE_BYTES) {
+    throw new ToolError(TOOL_NAME, `Response too large (${declaredSize} bytes)`);
+  }
+}
+
+async function buildBinaryFetchResult(
+  response: FetchResponseInfo,
+  requestedUrl: string,
+  sessionId: string,
+  status: number,
+): Promise<ToolResult> {
+  const download = await saveBinaryResponse({
+    sessionId,
+    finalUrl: response.finalUrl,
+    contentType: response.contentType,
+    disposition: response.disposition,
+    body: response.body,
+  });
+
+  return {
+    success: true,
+    output: buildDownloadOutput({
+      requestedUrl,
+      finalUrl: response.finalUrl,
+      contentType: response.contentType,
+      savedPath: download.savedPath,
+      savedSizeBytes: download.savedSizeBytes,
+      sha256: download.sha256,
+    }),
+    error: null,
+    artifacts: [download.savedPath],
+    metadata: {
+      requestedUrl,
+      finalUrl: response.finalUrl,
+      contentType: response.contentType,
+      status,
+      savedPath: download.savedPath,
+      savedSizeBytes: download.savedSizeBytes,
+      sha256: download.sha256,
+      downloaded: true,
+    },
+  };
+}
+
+function buildTextFetchResult(
+  response: FetchResponseInfo,
+  requestedUrl: string,
+  status: number,
+): ToolResult {
+  const content = normalizeResponseBody(response.body, response.mime);
+  return {
+    success: true,
+    output: buildOutput({
+      requestedUrl,
+      finalUrl: response.finalUrl,
+      contentType: response.contentType,
+      content,
+    }),
+    error: null,
+    artifacts: [],
+    metadata: {
+      requestedUrl,
+      finalUrl: response.finalUrl,
+      contentType: response.contentType,
+      status,
+      downloaded: false,
+    },
+  };
+}
 
 function assertHttpUrl(url: string): void {
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -570,116 +634,6 @@ async function saveBinaryResponse(input: {
     savedSizeBytes: input.body.byteLength,
     sha256,
   };
-}
-
-function buildSavedFilename(input: {
-  readonly disposition: string;
-  readonly finalUrl: string;
-  readonly contentType: string;
-  readonly sha256: string;
-}): string {
-  const rawName = getDispositionFilename(input.disposition)
-    ?? getUrlFilename(input.finalUrl)
-    ?? "download";
-  const safeName = sanitizeFilename(rawName, input.contentType);
-  const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, "");
-  return `${timestamp}-${input.sha256.slice(0, 12)}-${safeName}`;
-}
-
-function getDispositionFilename(disposition: string): string | null {
-  const encodedMatch = disposition.match(/filename\*\s*=\s*([^;]+)/i);
-  if (encodedMatch) {
-    const rawValue = encodedMatch[1]?.trim().replace(/^"(.*)"$/, "$1") ?? "";
-    const encodedPart = rawValue.split("''")[1] ?? rawValue;
-    try {
-      const decoded = decodeURIComponent(encodedPart);
-      if (decoded) {
-        return decoded;
-      }
-    } catch {
-      if (encodedPart) {
-        return encodedPart;
-      }
-    }
-  }
-
-  const plainMatch = disposition.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i);
-  const filename = plainMatch?.[1] ?? plainMatch?.[2] ?? "";
-  return filename.trim() || null;
-}
-
-function getUrlFilename(finalUrl: string): string | null {
-  try {
-    const pathname = new URL(finalUrl).pathname;
-    const decoded = decodeURIComponent(pathname);
-    const candidate = decoded.split(/[\\/]/).filter(Boolean).pop() ?? "";
-    return candidate || null;
-  } catch {
-    return null;
-  }
-}
-
-function sanitizeFilename(filename: string, contentType: string): string {
-  const basename = filename.split(/[\\/]/).filter(Boolean).pop() ?? filename;
-  const sanitizedBase = basename
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .trim()
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^\.+/, "")
-    .replace(/\.+$/, "");
-
-  const providedExtension = extname(sanitizedBase);
-  const stem = (providedExtension
-    ? sanitizedBase.slice(0, -providedExtension.length)
-    : sanitizedBase)
-    .replace(/[^\w.-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^\.+/, "")
-    .replace(/\.+$/, "")
-    || "download";
-  const extension = sanitizeExtension(providedExtension || extensionFromMime(contentType));
-
-  return `${stem}${extension}`;
-}
-
-function sanitizeExtension(extension: string): string {
-  if (!extension) return "";
-  const safe = extension
-    .replace(/[^a-zA-Z0-9.]/g, "")
-    .replace(/^\.+/, ".");
-  return safe === "." ? "" : safe;
-}
-
-function extensionFromMime(contentType: string): string {
-  const mime = extractMimeType(contentType);
-  switch (mime) {
-    case "application/pdf":
-      return ".pdf";
-    case "application/zip":
-      return ".zip";
-    case "application/gzip":
-      return ".gz";
-    case "image/jpeg":
-      return ".jpg";
-    case "image/png":
-      return ".png";
-    case "image/gif":
-      return ".gif";
-    case "image/webp":
-      return ".webp";
-    case "image/svg+xml":
-      return ".svg";
-    case "application/json":
-      return ".json";
-    default:
-      return "";
-  }
-}
-
-function sanitizePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, "-") || "session";
 }
 
 export function createProxyAwareFetch(

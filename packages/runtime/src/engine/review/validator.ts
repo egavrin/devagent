@@ -40,26 +40,7 @@ export function collectPatchReviewData(files: FileEntry[]): PatchReviewData {
     if (typeof path !== "string") continue;
 
     parsedFiles.add(path);
-
-    const added: Record<number, string> = {};
-    const removed: Record<number, string> = {};
-
-    for (const hunk of fileEntry.hunks ?? []) {
-      for (const a of hunk.addedLines ?? []) {
-        const ln = a.lineNumber;
-        const c = a.content;
-        if (typeof ln === "number" && typeof c === "string") {
-          added[ln] = c;
-        }
-      }
-      for (const r of hunk.removedLines ?? []) {
-        const ln = r.lineNumber;
-        const c = r.content;
-        if (typeof ln === "number" && typeof c === "string") {
-          removed[ln] = c;
-        }
-      }
-    }
+    const { added, removed } = collectFileReviewLines(fileEntry);
 
     if (Object.keys(added).length > 0) {
       addedLines[path] = added;
@@ -70,6 +51,32 @@ export function collectPatchReviewData(files: FileEntry[]): PatchReviewData {
   }
 
   return { addedLines, removedLines, parsedFiles };
+}
+
+function collectFileReviewLines(fileEntry: FileEntry): {
+  readonly added: Record<number, string>;
+  readonly removed: Record<number, string>;
+} {
+  const added: Record<number, string> = {};
+  const removed: Record<number, string> = {};
+
+  for (const hunk of fileEntry.hunks ?? []) {
+    copyLineEntries(added, hunk.addedLines ?? []);
+    copyLineEntries(removed, hunk.removedLines ?? []);
+  }
+
+  return { added, removed };
+}
+
+function copyLineEntries(
+  target: Record<number, string>,
+  entries: ReadonlyArray<{ readonly lineNumber?: number; readonly content?: string }>,
+): void {
+  for (const entry of entries) {
+    if (typeof entry.lineNumber === "number" && typeof entry.content === "string") {
+      target[entry.lineNumber] = entry.content;
+    }
+  }
 }
 
 // ── Severity / change-type normalisation maps ────────────────────────────────
@@ -136,102 +143,129 @@ export function validateReviewResponse(
   const discarded: string[] = [];
 
   for (const entry of violations) {
-    if (typeof entry !== "object" || entry === null) continue;
-
-    const raw = entry as Record<string, unknown>;
-
-    const filePath = raw.file;
-    const lineNumber = raw.line;
-    const snippet = raw.codeSnippet ?? raw.code_snippet;
-
-    // Normalise change type
-    const ctRaw = String(raw.changeType ?? raw.change_type ?? "added")
-      .trim()
-      .toLowerCase();
-    const changeType: ReviewChangeType = CHANGE_TYPE_ALIASES[ctRaw] ?? "added";
-
-    // Normalise severity
-    let normSev: Severity = "warning";
-    const sevRaw = raw.severity;
-    if (typeof sevRaw === "string") {
-      const candidate = sevRaw.trim().toLowerCase();
-      const aliased = SEVERITY_ALIASES[candidate] ?? candidate;
-      if (ALLOWED_SEVERITIES.has(aliased as Severity)) {
-        normSev = aliased as Severity;
-      }
-    }
-
-    // Basic type checks
-    if (typeof filePath !== "string" || typeof lineNumber !== "number") {
-      discarded.push(JSON.stringify(entry));
+    const validation = validateViolationEntry(entry, addedLines);
+    if (validation.kind === "skip") continue;
+    if (validation.kind === "discard") {
+      discarded.push(validation.reason);
       continue;
     }
-
-    // Discard violations on removed lines
-    if (changeType === "removed") {
-      discarded.push(`${filePath}:${lineNumber} (removed)`);
-      continue;
-    }
-
-    // File must be in the patch
-    const addedForFile = addedLines[filePath];
-    if (addedForFile === undefined) {
-      discarded.push(`${filePath}:${lineNumber} (not in patch)`);
-      continue;
-    }
-
-    // Line must be an added line
-    const actualLine = addedForFile[lineNumber];
-    if (actualLine === undefined) {
-      discarded.push(`${filePath}:${lineNumber} (line not added)`);
-      continue;
-    }
-
-    // Snippet content match (when provided)
-    if (
-      typeof snippet === "string" &&
-      snippet.trim() !== actualLine.trim()
-    ) {
-      discarded.push(`${filePath}:${lineNumber} (content mismatch)`);
-      continue;
-    }
-
-    const sanitized: Violation = {
-      file: filePath,
-      line: lineNumber,
-      severity: normSev,
-      message: typeof raw.message === "string" ? raw.message : "",
-      changeType,
-    };
-
-    if (typeof raw.rule === "string") {
-      sanitized.rule = raw.rule;
-    }
-
-    if (typeof snippet === "string") {
-      sanitized.codeSnippet = snippet;
-    }
-
-    validViolations.push(sanitized);
+    validViolations.push(validation.violation);
   }
 
-  // Build normalised summary
+  const normSummary = buildReviewSummary(summary, validViolations, discarded, parsedFiles);
+  return { violations: validViolations, summary: normSummary };
+}
+
+type ViolationValidation =
+  | { readonly kind: "skip" }
+  | { readonly kind: "discard"; readonly reason: string }
+  | { readonly kind: "valid"; readonly violation: Violation };
+
+function validateViolationEntry(
+  entry: unknown,
+  addedLines: Record<string, Record<number, string>>,
+): ViolationValidation {
+  if (typeof entry !== "object" || entry === null) return { kind: "skip" };
+
+  const raw = entry as Record<string, unknown>;
+  const filePath = raw.file;
+  const lineNumber = raw.line;
+  const snippet = raw.codeSnippet ?? raw.code_snippet;
+  const changeType = normalizeChangeType(raw);
+  const severity = normalizeSeverity(raw.severity);
+
+  if (typeof filePath !== "string" || typeof lineNumber !== "number") {
+    return { kind: "discard", reason: JSON.stringify(entry) };
+  }
+
+  if (changeType === "removed") {
+    return { kind: "discard", reason: `${filePath}:${lineNumber} (removed)` };
+  }
+
+  const addedForFile = addedLines[filePath];
+  if (addedForFile === undefined) {
+    return { kind: "discard", reason: `${filePath}:${lineNumber} (not in patch)` };
+  }
+
+  const actualLine = addedForFile[lineNumber];
+  if (actualLine === undefined) {
+    return { kind: "discard", reason: `${filePath}:${lineNumber} (line not added)` };
+  }
+
+  if (isSnippetMismatch(snippet, actualLine)) {
+    return { kind: "discard", reason: `${filePath}:${lineNumber} (content mismatch)` };
+  }
+
+  return { kind: "valid", violation: buildViolation(raw, {
+    filePath,
+    lineNumber,
+    severity,
+    changeType,
+    snippet,
+  }) };
+}
+
+function isSnippetMismatch(snippet: unknown, actualLine: string): boolean {
+  return typeof snippet === "string" && snippet.trim() !== actualLine.trim();
+}
+
+function normalizeChangeType(raw: Record<string, unknown>): ReviewChangeType {
+  const ctRaw = String(raw.changeType ?? raw.change_type ?? "added")
+    .trim()
+    .toLowerCase();
+  return CHANGE_TYPE_ALIASES[ctRaw] ?? "added";
+}
+
+function normalizeSeverity(severity: unknown): Severity {
+  if (typeof severity !== "string") return "warning";
+  const candidate = severity.trim().toLowerCase();
+  const aliased = SEVERITY_ALIASES[candidate] ?? candidate;
+  return ALLOWED_SEVERITIES.has(aliased as Severity) ? aliased as Severity : "warning";
+}
+
+function buildViolation(
+  raw: Record<string, unknown>,
+  input: {
+    readonly filePath: string;
+    readonly lineNumber: number;
+    readonly severity: Severity;
+    readonly changeType: ReviewChangeType;
+    readonly snippet: unknown;
+  },
+): Violation {
+  const violation: Violation = {
+    file: input.filePath,
+    line: input.lineNumber,
+    severity: input.severity,
+    message: typeof raw.message === "string" ? raw.message : "",
+    changeType: input.changeType,
+  };
+
+  if (typeof raw.rule === "string") violation.rule = raw.rule;
+  if (typeof input.snippet === "string") violation.codeSnippet = input.snippet;
+  return violation;
+}
+
+function buildReviewSummary(
+  summary: Record<string, unknown>,
+  validViolations: ReadonlyArray<Violation>,
+  discarded: ReadonlyArray<string>,
+  parsedFiles: Set<string>,
+): ReviewSummary {
   const normSummary: ReviewSummary = {
     totalViolations: validViolations.length,
     filesReviewed: parsedFiles.size,
-    ruleName:
-      typeof summary.ruleName === "string"
-        ? summary.ruleName
-        : typeof summary.rule_name === "string"
-          ? summary.rule_name
-          : "",
+    ruleName: normalizeRuleName(summary),
   };
 
-  if (discarded.length > 0) {
-    normSummary.discardedViolations = discarded.length;
-  }
+  if (discarded.length > 0) normSummary.discardedViolations = discarded.length;
+  return normSummary;
+}
 
-  return { violations: validViolations, summary: normSummary };
+function normalizeRuleName(summary: Record<string, unknown>): string {
+  if (typeof summary.ruleName === "string") return summary.ruleName;
+  if (typeof summary.rule_name === "string") return summary.rule_name;
+  return "";
 }
 
 // ── Deduplication ────────────────────────────────────────────────────────────

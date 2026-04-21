@@ -10,13 +10,6 @@ interface DelegationRequest {
   readonly parentContext?: string;
 }
 
-interface AgentMeta {
-  readonly agentId: string;
-  readonly parentId: string | null;
-  readonly depth: number;
-  readonly agentType: AgentType;
-}
-
 export function buildExplorationLaneRequest(input: {
   readonly objective: string;
   readonly laneLabel: string;
@@ -36,7 +29,6 @@ export function buildExplorationLaneRequest(input: {
     ...(input.parentContext?.trim() ? { parentContext: input.parentContext.trim() } : {}),
   };
 }
-
 export function normalizeDelegationRequest(
   request: unknown,
   legacyTask: unknown,
@@ -45,27 +37,7 @@ export function normalizeDelegationRequest(
     const raw = request as Record<string, unknown>;
     const objective = raw["objective"];
     if (typeof objective === "string" && objective.trim().length > 0) {
-      return {
-        objective: objective.trim(),
-        ...(typeof raw["laneLabel"] === "string" && raw["laneLabel"].trim().length > 0
-          ? { laneLabel: raw["laneLabel"].trim() }
-          : {}),
-        ...(typeof raw["scope"] === "string" && raw["scope"].trim().length > 0
-          ? { scope: raw["scope"].trim() }
-          : {}),
-        ...(Array.isArray(raw["constraints"])
-          ? { constraints: raw["constraints"].filter((item): item is string => typeof item === "string" && item.trim().length > 0) }
-          : {}),
-        ...(Array.isArray(raw["exclusions"])
-          ? { exclusions: raw["exclusions"].filter((item): item is string => typeof item === "string" && item.trim().length > 0) }
-          : {}),
-        ...(Array.isArray(raw["successCriteria"])
-          ? { successCriteria: raw["successCriteria"].filter((item): item is string => typeof item === "string" && item.trim().length > 0) }
-          : {}),
-        ...(typeof raw["parentContext"] === "string" && raw["parentContext"].trim().length > 0
-          ? { parentContext: raw["parentContext"].trim() }
-          : {}),
-      };
+      return buildDelegationRequestFromRaw(objective, raw);
     }
   }
 
@@ -74,6 +46,40 @@ export function normalizeDelegationRequest(
   }
 
   return null;
+}
+
+function buildDelegationRequestFromRaw(
+  objective: string,
+  raw: Record<string, unknown>,
+): DelegationRequest {
+  return {
+    objective: objective.trim(),
+    ...optionalStringField("laneLabel", raw["laneLabel"]),
+    ...optionalStringField("scope", raw["scope"]),
+    ...optionalStringArrayField("constraints", raw["constraints"]),
+    ...optionalStringArrayField("exclusions", raw["exclusions"]),
+    ...optionalStringArrayField("successCriteria", raw["successCriteria"]),
+    ...optionalStringField("parentContext", raw["parentContext"]),
+  };
+}
+
+function optionalStringField<K extends keyof DelegationRequest>(
+  key: K,
+  value: unknown,
+): Pick<DelegationRequest, K> | Record<string, never> {
+  if (typeof value !== "string" || value.trim().length === 0) return {};
+  return { [key]: value.trim() } as Pick<DelegationRequest, K>;
+}
+
+function optionalStringArrayField<K extends keyof DelegationRequest>(
+  key: K,
+  value: unknown,
+): Pick<DelegationRequest, K> | Record<string, never> {
+  if (!Array.isArray(value)) return {};
+  const items = value.filter((item): item is string =>
+    typeof item === "string" && item.trim().length > 0,
+  );
+  return items.length > 0 ? { [key]: items } as unknown as Pick<DelegationRequest, K> : {};
 }
 
 export function buildDelegationQuery(
@@ -134,50 +140,48 @@ function parseJSONObject(text: string): Record<string, unknown> | null {
 
   return null;
 }
-
 function extractLeadingJSONObject(text: string): string | null {
   const trimmed = text.trimStart();
   if (!trimmed.startsWith("{")) return null;
 
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
+  const state = { depth: 0, inString: false, escaped: false };
 
   for (let index = 0; index < trimmed.length; index++) {
-    const char = trimmed[index]!;
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === "\"") {
-      inString = true;
-      continue;
-    }
-    if (char === "{") {
-      depth++;
-      continue;
-    }
-    if (char === "}") {
-      depth--;
-      if (depth === 0) {
-        return trimmed.slice(0, index + 1);
-      }
-    }
+    const complete = scanJSONObjectChar(state, trimmed[index]!);
+    if (complete) return trimmed.slice(0, index + 1);
   }
 
   return null;
+}
+
+function scanJSONObjectChar(
+  state: { depth: number; inString: boolean; escaped: boolean },
+  char: string,
+): boolean {
+  if (state.inString) return scanStringChar(state, char);
+  if (char === "\"") {
+    state.inString = true;
+    return false;
+  }
+  if (char === "{") state.depth++;
+  if (char === "}") state.depth--;
+  return state.depth === 0;
+}
+
+function scanStringChar(
+  state: { depth: number; inString: boolean; escaped: boolean },
+  char: string,
+): boolean {
+  if (state.escaped) {
+    state.escaped = false;
+    return false;
+  }
+  if (char === "\\") {
+    state.escaped = true;
+    return false;
+  }
+  if (char === "\"") state.inString = false;
+  return false;
 }
 
 export function parseStructuredAgentOutput(

@@ -23,6 +23,33 @@ export interface DeferredToolStub {
   readonly category: ToolCategory;
 }
 
+interface ScoredDeferredTool {
+  readonly stub: DeferredToolStub;
+  readonly score: number;
+}
+
+function scoreDeferredTools(
+  entries: Iterable<{ readonly stub: DeferredToolStub }>,
+  terms: ReadonlyArray<string>,
+): ReadonlyArray<ScoredDeferredTool> {
+  return [...entries]
+    .map(({ stub }) => ({ stub, score: scoreDeferredTool(stub, terms) }))
+    .filter((result) => result.score > 0)
+    .sort((a, b) => b.score - a.score);
+}
+
+function scoreDeferredTool(stub: DeferredToolStub, terms: ReadonlyArray<string>): number {
+  const name = stub.name.toLowerCase();
+  const text = `${stub.name} ${stub.description}`.toLowerCase();
+  return terms.reduce((score, term) => score + scoreTermMatch(name, text, term), 0);
+}
+
+function scoreTermMatch(name: string, text: string, term: string): number {
+  if (name.includes(term)) return 3;
+  if (text.includes(term)) return 1;
+  return 0;
+}
+
 // ─── ToolRegistry ───────────────────────────────────────────
 
 export class ToolRegistry {
@@ -83,33 +110,23 @@ export class ToolRegistry {
     const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0);
     if (terms.length === 0) return [];
 
-    const scored: Array<{ stub: DeferredToolStub; score: number }> = [];
-    for (const { stub } of this.deferred.values()) {
-      const text = `${stub.name} ${stub.description}`.toLowerCase();
-      let score = 0;
-      for (const term of terms) {
-        if (stub.name.toLowerCase().includes(term)) score += 3;
-        else if (text.includes(term)) score += 1;
-      }
-      if (score > 0) scored.push({ stub, score });
-    }
-
-    scored.sort((a, b) => b.score - a.score);
+    const scored = scoreDeferredTools(this.deferred.values(), terms);
     const results = scored.slice(0, maxResults).map((s) => s.stub);
+    if (this.resolveDeferredResults(results)) this.invalidateCache();
 
-    // Auto-resolve matched tools — batch the moves to avoid N cache invalidations
+    return results;
+  }
+
+  private resolveDeferredResults(results: ReadonlyArray<DeferredToolStub>): boolean {
     let resolved = false;
     for (const stub of results) {
       const entry = this.deferred.get(stub.name);
-      if (entry) {
-        this.deferred.delete(stub.name);
-        this.tools.set(stub.name, entry.full);
-        resolved = true;
-      }
+      if (!entry) continue;
+      this.deferred.delete(stub.name);
+      this.tools.set(stub.name, entry.full);
+      resolved = true;
     }
-    if (resolved) this.invalidateCache();
-
-    return results;
+    return resolved;
   }
 
   /** Get a tool by name (loaded or deferred — resolves deferred on access). */

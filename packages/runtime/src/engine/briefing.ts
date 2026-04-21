@@ -83,35 +83,75 @@ export async function synthesizeBriefing(
 ): Promise<TurnBriefing> {
   const strategy = options?.strategy ?? "auto";
   const maxChars = options?.maxChars ?? DEFAULT_MAX_CHARS;
+  const context = { messages, turnNumber, options, maxChars };
+  return (STRATEGY_HANDLERS[strategy] ?? synthesizeHeuristicStrategy)(context);
+}
 
-  if (strategy === "heuristic") {
+interface BriefingStrategyContext {
+  readonly messages: ReadonlyArray<Message>;
+  readonly turnNumber: number;
+  readonly options?: SynthesizeBriefingOptions;
+  readonly maxChars: number;
+}
+
+type BriefingStrategyHandler = (context: BriefingStrategyContext) => Promise<TurnBriefing>;
+
+const STRATEGY_HANDLERS: Readonly<Record<BriefingStrategy, BriefingStrategyHandler>> = {
+  heuristic: synthesizeHeuristicStrategy,
+  llm: synthesizeLLMStrategy,
+  auto: synthesizeAutoStrategy,
+};
+
+async function synthesizeHeuristicStrategy(
+  context: BriefingStrategyContext,
+): Promise<TurnBriefing> {
+  return extractHeuristicBriefing(context.messages, context.turnNumber, context.maxChars);
+}
+
+async function synthesizeLLMStrategy(
+  context: BriefingStrategyContext,
+): Promise<TurnBriefing> {
+  return context.options?.provider
+    ? synthesizeLLMBriefing(
+        context.messages,
+        context.turnNumber,
+        context.options.provider,
+        context.maxChars,
+      )
+    : synthesizeHeuristicStrategy(context);
+}
+
+async function synthesizeAutoStrategy(
+  context: BriefingStrategyContext,
+): Promise<TurnBriefing> {
+  return shouldUseLLMBriefing(context.messages, context.options?.provider)
+    ? synthesizeAutoLLMBriefing(
+        context.messages,
+        context.turnNumber,
+        context.options.provider,
+        context.maxChars,
+      )
+    : synthesizeHeuristicStrategy(context);
+}
+
+function shouldUseLLMBriefing(
+  messages: ReadonlyArray<Message>,
+  provider: LLMProvider | undefined,
+): provider is LLMProvider {
+  return Boolean(provider && countToolCalls(messages) >= LLM_TOOL_CALL_THRESHOLD);
+}
+
+async function synthesizeAutoLLMBriefing(
+  messages: ReadonlyArray<Message>,
+  turnNumber: number,
+  provider: LLMProvider,
+  maxChars: number,
+): Promise<TurnBriefing> {
+  try {
+    return await synthesizeLLMBriefing(messages, turnNumber, provider, maxChars);
+  } catch {
     return extractHeuristicBriefing(messages, turnNumber, maxChars);
   }
-
-  if (strategy === "llm" && options?.provider) {
-    return synthesizeLLMBriefing(messages, turnNumber, options.provider, maxChars);
-  }
-
-  if (strategy === "auto") {
-    const toolCallCount = countToolCalls(messages);
-    if (toolCallCount >= LLM_TOOL_CALL_THRESHOLD && options?.provider) {
-      try {
-        return await synthesizeLLMBriefing(
-          messages,
-          turnNumber,
-          options.provider,
-          maxChars,
-        );
-      } catch {
-        // Fall back to heuristic if LLM fails
-        return extractHeuristicBriefing(messages, turnNumber, maxChars);
-      }
-    }
-    return extractHeuristicBriefing(messages, turnNumber, maxChars);
-  }
-
-  // Fallback
-  return extractHeuristicBriefing(messages, turnNumber, maxChars);
 }
 
 // ─── Heuristic Strategy ─────────────────────────────────────
@@ -236,48 +276,43 @@ function condenseForSynthesis(
 
   for (const msg of messages) {
     if (totalChars >= maxChars) break;
-
-    let line: string;
-    switch (msg.role) {
-      case MessageRole.SYSTEM:
-        // Skip system messages (they're the system prompt)
-        continue;
-
-      case MessageRole.USER:
-        line = `[User]: ${truncate(msg.content ?? "", 500)}`;
-        break;
-
-      case MessageRole.ASSISTANT:
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
-          const toolNames = msg.toolCalls.map((tc) => tc.name).join(", ");
-          line = `[Assistant]: Called tools: ${toolNames}`;
-          if (msg.content?.trim()) {
-            line += `\n  Text: ${truncate(msg.content, 200)}`;
-          }
-        } else {
-          line = `[Assistant]: ${truncate(msg.content ?? "", 500)}`;
-        }
-        break;
-
-      case MessageRole.TOOL:
-        // Only include errors and brief summaries
-        if (msg.content?.startsWith("Error:")) {
-          line = `[Tool result]: ${truncate(msg.content, 200)}`;
-        } else {
-          // Truncate heavily — tool output is the main context bloat
-          line = `[Tool result]: ${truncate(msg.content ?? "", 100)}`;
-        }
-        break;
-
-      default:
-        continue;
-    }
-
+    const line = formatMessageForSynthesis(msg);
+    if (!line) continue;
     lines.push(line);
     totalChars += line.length;
   }
 
   return lines.join("\n");
+}
+
+function formatMessageForSynthesis(message: Message): string | null {
+  switch (message.role) {
+    case MessageRole.USER:
+      return `[User]: ${truncate(message.content ?? "", 500)}`;
+    case MessageRole.ASSISTANT:
+      return formatAssistantForSynthesis(message);
+    case MessageRole.TOOL:
+      return formatToolResultForSynthesis(message);
+    case MessageRole.SYSTEM:
+    default:
+      return null;
+  }
+}
+
+function formatAssistantForSynthesis(message: Message): string {
+  if (!message.toolCalls || message.toolCalls.length === 0) {
+    return `[Assistant]: ${truncate(message.content ?? "", 500)}`;
+  }
+  const toolNames = message.toolCalls.map((toolCall) => toolCall.name).join(", ");
+  const text = message.content?.trim()
+    ? `\n  Text: ${truncate(message.content, 200)}`
+    : "";
+  return `[Assistant]: Called tools: ${toolNames}${text}`;
+}
+
+function formatToolResultForSynthesis(message: Message): string {
+  const limit = message.content?.startsWith("Error:") ? 200 : 100;
+  return `[Tool result]: ${truncate(message.content ?? "", limit)}`;
 }
 
 /**
@@ -288,78 +323,80 @@ function parseLLMBriefing(
   turnNumber: number,
   messages: ReadonlyArray<Message>,
 ): TurnBriefing {
-  // Extract sections by heading
-  const goalMatch = response.match(/## Goal\s*\n([\s\S]*?)(?=\n## |$)/);
-  const decisionsMatch = response.match(
-    /## Key Decisions[^\n]*\n([\s\S]*?)(?=\n## |$)/,
-  );
-  const accomplishedMatch = response.match(
-    /## Accomplished\s*\n([\s\S]*?)(?=\n## |$)/,
-  );
-  const planMatch = response.match(
-    /## Plan Status\s*\n([\s\S]*?)(?=\n## |$)/,
-  );
-  const pendingMatch = response.match(/## Pending\s*\n([\s\S]*?)(?=\n## |$)/);
-  const filesMatch = response.match(
-    /## Relevant Files\s*\n([\s\S]*?)(?=\n## |$)/,
-  );
-
-  const goal = goalMatch?.[1]?.trim() ?? "";
-  const decisions = decisionsMatch?.[1]?.trim() ?? "";
-  const accomplished = accomplishedMatch?.[1]?.trim() ?? "";
-  const planText = planMatch?.[1]?.trim() ?? "";
-  const pending = pendingMatch?.[1]?.trim() ?? "";
-  const files = filesMatch?.[1]?.trim() ?? "";
-
-  // Build priorTaskSummary from goal + accomplished
-  const summaryParts: string[] = [];
-  if (goal) summaryParts.push(`Goal: ${goal}`);
-  if (accomplished) summaryParts.push(`Done: ${accomplished}`);
-  const priorTaskSummary = summaryParts.join("\n");
-
-  // activeContext from decisions
-  const activeContext = decisions;
-
-  // planSteps from LLM response, with heuristic fallback
-  let planSteps: PlanStep[] | null = null;
-  if (planText && !planText.toLowerCase().includes("no plan")) {
-    const stepLines = planText.split("\n").filter((l) => l.trim().startsWith("- ["));
-    if (stepLines.length > 0) {
-      planSteps = stepLines.map((line) => {
-        const match = line.match(/\[(pending|in_progress|completed)\]\s*(.*)/);
-        return {
-          status: (match?.[1] ?? "pending") as PlanStep["status"],
-          description: match?.[2]?.trim() ?? line.trim(),
-        };
-      });
-    }
-  }
-  // Fallback: if LLM didn't produce plan steps, try heuristic extraction
-  if (!planSteps) {
-    planSteps = extractPlanSteps(messages);
-  }
-
-  // pendingWork
-  const pendingWork =
-    pending && !pending.toLowerCase().includes("nothing pending")
-      ? pending
-      : derivePendingWorkFromPlanSteps(planSteps);
-
-  // keyArtifacts from files section + heuristic extraction
-  const fileArtifacts = extractFilePathsFromText(files);
-  const heuristicArtifacts = extractArtifacts(messages);
-  const allArtifacts = [
-    ...new Set([...fileArtifacts, ...heuristicArtifacts]),
-  ];
+  const sections = parseBriefingSections(response);
+  const planSteps = parseLLMPlanSteps(sections.planText) ?? extractPlanSteps(messages);
+  const pendingWork = getPendingWorkFromLLM(sections.pending, planSteps);
+  const allArtifacts = mergeArtifacts(sections.files, messages);
 
   return {
     turnNumber,
-    priorTaskSummary,
-    activeContext,
+    priorTaskSummary: buildLLMPriorTaskSummary(sections),
+    activeContext: sections.decisions,
     pendingWork,
     keyArtifacts: allArtifacts.slice(0, 20),
     planSteps,
   };
+}
+
+interface ParsedBriefingSections {
+  readonly goal: string;
+  readonly decisions: string;
+  readonly accomplished: string;
+  readonly planText: string;
+  readonly pending: string;
+  readonly files: string;
+}
+
+function parseBriefingSections(response: string): ParsedBriefingSections {
+  return {
+    goal: extractHeadingSection(response, /## Goal\s*\n([\s\S]*?)(?=\n## |$)/),
+    decisions: extractHeadingSection(response, /## Key Decisions[^\n]*\n([\s\S]*?)(?=\n## |$)/),
+    accomplished: extractHeadingSection(response, /## Accomplished\s*\n([\s\S]*?)(?=\n## |$)/),
+    planText: extractHeadingSection(response, /## Plan Status\s*\n([\s\S]*?)(?=\n## |$)/),
+    pending: extractHeadingSection(response, /## Pending\s*\n([\s\S]*?)(?=\n## |$)/),
+    files: extractHeadingSection(response, /## Relevant Files\s*\n([\s\S]*?)(?=\n## |$)/),
+  };
+}
+
+function extractHeadingSection(response: string, pattern: RegExp): string {
+  return response.match(pattern)?.[1]?.trim() ?? "";
+}
+
+function buildLLMPriorTaskSummary(sections: ParsedBriefingSections): string {
+  return [
+    sections.goal ? `Goal: ${sections.goal}` : null,
+    sections.accomplished ? `Done: ${sections.accomplished}` : null,
+  ].filter((part): part is string => part !== null).join("\n");
+}
+
+function parseLLMPlanSteps(planText: string): PlanStep[] | null {
+  if (!planText || planText.toLowerCase().includes("no plan")) return null;
+  const stepLines = planText.split("\n").filter((line) => line.trim().startsWith("- ["));
+  return stepLines.length > 0 ? stepLines.map(parsePlanStepLine) : null;
+}
+
+function parsePlanStepLine(line: string): PlanStep {
+  const match = line.match(/\[(pending|in_progress|completed)\]\s*(.*)/);
+  return {
+    status: (match?.[1] ?? "pending") as PlanStep["status"],
+    description: match?.[2]?.trim() ?? line.trim(),
+  };
+}
+
+function getPendingWorkFromLLM(
+  pending: string,
+  planSteps: ReadonlyArray<PlanStep> | null,
+): string | null {
+  return pending && !pending.toLowerCase().includes("nothing pending")
+    ? pending
+    : derivePendingWorkFromPlanSteps(planSteps);
+}
+
+function mergeArtifacts(
+  filesSection: string,
+  messages: ReadonlyArray<Message>,
+): string[] {
+  return [...new Set([...extractFilePathsFromText(filesSection), ...extractArtifacts(messages)])];
 }
 
 // ─── Extraction Helpers ─────────────────────────────────────
@@ -403,29 +440,24 @@ function findFinalAssistantResponse(
   }
   return null;
 }
-
 function extractArtifacts(messages: ReadonlyArray<Message>): string[] {
   const paths = new Set<string>();
 
   for (const msg of messages) {
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) {
-        // Common param names for file paths
-        for (const key of ["path", "file_path", "file", "filename"]) {
-          const val = tc.arguments[key];
-          if (typeof val === "string" && val.trim()) {
-            paths.add(val);
-          }
-        }
-        // Pattern for find_files
-        if (tc.arguments["pattern"] && typeof tc.arguments["pattern"] === "string") {
-          // Don't add patterns — they're not file paths
-        }
-      }
-    }
+    for (const tc of msg.toolCalls ?? []) addToolCallArtifactPaths(tc.arguments, paths);
   }
 
   return Array.from(paths);
+}
+
+function addToolCallArtifactPaths(
+  args: Readonly<Record<string, unknown>>,
+  paths: Set<string>,
+): void {
+  for (const key of ["path", "file_path", "file", "filename"]) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) paths.add(value);
+  }
 }
 
 function extractToolSummary(messages: ReadonlyArray<Message>): string | null {
@@ -445,50 +477,70 @@ function extractToolSummary(messages: ReadonlyArray<Message>): string | null {
     .map(([name, count]) => (count > 1 ? `${name}(x${count})` : name))
     .join(", ");
 }
-
 function extractPlanSteps(
   messages: ReadonlyArray<Message>,
 ): PlanStep[] | null {
   // Build set of failed/denied tool call IDs so we skip those plans
-  const failedCallIds = new Set<string>();
-  for (const msg of messages) {
-    if (
-      msg.role === MessageRole.TOOL &&
-      msg.toolCallId &&
-      msg.content?.startsWith("Error: ")
-    ) {
-      failedCallIds.add(msg.toolCallId);
-    }
-  }
+  const failedCallIds = collectFailedToolCallIds(messages);
 
   // Find the LAST *successful* update_plan call (most up-to-date plan state)
   let lastPlan: PlanStep[] | null = null;
 
   for (const msg of messages) {
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) {
-        if (tc.name === "update_plan" && !failedCallIds.has(tc.callId)) {
-          let steps = tc.arguments["steps"];
-          // Handle string-encoded JSON (common from LLM tool calls)
-          if (typeof steps === "string") {
-            try {
-              steps = JSON.parse(steps) as unknown;
-            } catch {
-              continue;
-            }
-          }
-          if (Array.isArray(steps)) {
-            lastPlan = (steps as Array<Record<string, unknown>>).map((s) => ({
-              description: (s["description"] as string) ?? "",
-              status: ((s["status"] as string) ?? "pending") as PlanStep["status"],
-            }));
-          }
-        }
-      }
+    for (const toolCall of msg.toolCalls ?? []) {
+      const parsedPlan = parseSuccessfulPlanToolCall(toolCall, failedCallIds);
+      if (parsedPlan) lastPlan = parsedPlan;
     }
   }
 
   return lastPlan;
+}
+
+function collectFailedToolCallIds(messages: ReadonlyArray<Message>): Set<string> {
+  const failedCallIds = new Set<string>();
+  for (const message of messages) {
+    if (isFailedToolResult(message)) failedCallIds.add(message.toolCallId);
+  }
+  return failedCallIds;
+}
+
+function isFailedToolResult(
+  message: Message,
+): message is Message & { readonly toolCallId: string } {
+  return Boolean(
+    message.role === MessageRole.TOOL &&
+      message.toolCallId &&
+      message.content?.startsWith("Error: "),
+  );
+}
+
+function parseSuccessfulPlanToolCall(
+  toolCall: NonNullable<Message["toolCalls"]>[number],
+  failedCallIds: ReadonlySet<string>,
+): PlanStep[] | null {
+  if (toolCall.name !== "update_plan" || failedCallIds.has(toolCall.callId)) {
+    return null;
+  }
+  const steps = parsePlanStepsPayload(toolCall.arguments["steps"]);
+  return steps ? steps.map(planStepFromPayload) : null;
+}
+
+function parsePlanStepsPayload(steps: unknown): Array<Record<string, unknown>> | null {
+  if (Array.isArray(steps)) return steps as Array<Record<string, unknown>>;
+  if (typeof steps !== "string") return null;
+  try {
+    const parsed = JSON.parse(steps) as unknown;
+    return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : null;
+  } catch {
+    return null;
+  }
+}
+
+function planStepFromPayload(step: Record<string, unknown>): PlanStep {
+  return {
+    description: (step["description"] as string) ?? "",
+    status: ((step["status"] as string) ?? "pending") as PlanStep["status"],
+  };
 }
 
 function extractActiveContext(

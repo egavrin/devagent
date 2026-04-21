@@ -31,10 +31,14 @@ function throwingProvider(): LLMProvider {
 describe("subagent-judge — judgeSubagentOutput", () => {
   it("returns null on provider error", async () => {
     const provider = throwingProvider();
-    const result = await judgeSubagentOutput(
-      provider, "Analyze the auth system", "general",
-      "Found several issues in the auth module.", 10, 30,
-    );
+    const result = await judgeSubagentOutput({
+      provider,
+      task: "Analyze the auth system",
+      agentType: "general",
+      output: "Found several issues in the auth module.",
+      iterationsUsed: 10,
+      maxIterations: 30,
+    });
     expect(result).toBeNull();
   });
 
@@ -42,9 +46,14 @@ describe("subagent-judge — judgeSubagentOutput", () => {
     const provider = mockProvider(
       '{"quality_score": 0.9, "completeness": "complete", "note": "Good output"}',
     );
-    const result = await judgeSubagentOutput(
-      provider, "Simple task", "general", "Done.", 3, 30,
-    );
+    const result = await judgeSubagentOutput({
+      provider,
+      task: "Simple task",
+      agentType: "general",
+      output: "Done.",
+      iterationsUsed: 3,
+      maxIterations: 30,
+    });
     expect(result).toBeNull();
     expect(provider.chat).not.toHaveBeenCalled();
   });
@@ -53,12 +62,14 @@ describe("subagent-judge — judgeSubagentOutput", () => {
     const provider = mockProvider(
       '{"quality_score": 0.9, "completeness": "complete", "note": "Thorough analysis with actionable findings"}',
     );
-    const result = await judgeSubagentOutput(
-      provider, "Review the authentication module",
-      "reviewer",
-      "Found 3 issues: 1) Missing input validation in login(), 2) SQL injection in query(), 3) No rate limiting. Recommended fixes for each.",
-      15, 30,
-    );
+    const result = await judgeSubagentOutput({
+      provider,
+      task: "Review the authentication module",
+      agentType: "reviewer",
+      output: "Found 3 issues: 1) Missing input validation in login(), 2) SQL injection in query(), 3) No rate limiting. Recommended fixes for each.",
+      iterationsUsed: 15,
+      maxIterations: 30,
+    });
     expect(result).not.toBeNull();
     expect(result!.quality_score).toBe(0.9);
     expect(result!.completeness).toBe("complete");
@@ -68,12 +79,14 @@ describe("subagent-judge — judgeSubagentOutput", () => {
     const provider = mockProvider(
       '{"quality_score": 0.1, "completeness": "off_topic", "note": "Output does not address the assigned task"}',
     );
-    const result = await judgeSubagentOutput(
-      provider, "Implement the caching layer",
-      "general",
-      "I looked at some files but could not determine what to do.",
-      25, 30,
-    );
+    const result = await judgeSubagentOutput({
+      provider,
+      task: "Implement the caching layer",
+      agentType: "general",
+      output: "I looked at some files but could not determine what to do.",
+      iterationsUsed: 25,
+      maxIterations: 30,
+    });
     expect(result).not.toBeNull();
     expect(result!.quality_score).toBe(0.1);
     expect(result!.completeness).toBe("off_topic");
@@ -83,12 +96,14 @@ describe("subagent-judge — judgeSubagentOutput", () => {
     const provider = mockProvider(
       '{"quality_score": 0.2, "completeness": "partial", "note": "Agent exhausted iteration budget without reaching a conclusion"}',
     );
-    const result = await judgeSubagentOutput(
-      provider, "Refactor the database layer",
-      "general",
-      "Still investigating...",
-      30, 30, // hit max
-    );
+    const result = await judgeSubagentOutput({
+      provider,
+      task: "Refactor the database layer",
+      agentType: "general",
+      output: "Still investigating...",
+      iterationsUsed: 30,
+      maxIterations: 30,
+    });
     expect(result).not.toBeNull();
     expect(result!.quality_score).toBe(0.2);
     expect(result!.completeness).toBe("partial");
@@ -98,9 +113,14 @@ describe("subagent-judge — judgeSubagentOutput", () => {
     const provider = mockProvider(
       '{"quality_score": 0.8, "completeness": "complete", "note": "ok"}',
     );
-    await judgeSubagentOutput(
-      provider, "task", "general", "output", 28, 30,
-    );
+    await judgeSubagentOutput({
+      provider,
+      task: "task",
+      agentType: "general",
+      output: "output",
+      iterationsUsed: 28,
+      maxIterations: 30,
+    });
     const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]!;
     const messages = chatCall[0] as Array<{ content: string | null }>;
     const userMsg = messages.find((m) => m.content?.includes("28/30"));

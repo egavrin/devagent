@@ -294,7 +294,6 @@ export function formatDeferredToolsSection(
     toolLines.join("\n")
   );
 }
-
 export function assembleAgentSystemPrompt(
   options: AssembleAgentSystemPromptOptions,
 ): string {
@@ -310,47 +309,49 @@ export function assembleAgentSystemPrompt(
   sections.push(commonPrompt);
   sections.push(options.rolePrompt.replace(/\{\{repoRoot\}\}/g, options.repoRoot));
   sections.push(...buildAgentCapabilityFragments(options.agentType, capabilities));
-
-  const envLines = [
-    `Working directory: ${options.repoRoot}`,
-    `Date: ${new Date().toISOString().split("T")[0]}`,
-  ];
-  if (options.approvalMode) {
-    envLines.push(`Safety mode: ${options.approvalMode}`);
-  }
-  if (options.providerLabel) {
-    envLines.push(`Provider: ${options.providerLabel}`);
-  }
-  sections.push(`## Environment\n\n${envLines.join("\n")}`);
-
-  const projectInstructions = options.projectInstructions ?? loadAgentProjectInstructions(options.repoRoot);
-  if (projectInstructions) {
-    sections.push(projectInstructions);
-  }
-
-  const skillList = options.skills?.list() ?? [];
-  if (skillList.length > 0) {
-    sections.push(
-      "## Available Skills\n\n" +
-      skillList.map((skill) => formatSkillMatchLine(skill)).join("\n") +
-      "\n\n" +
-      formatSkillPromptGuidance(),
-    );
-  }
-
-  if (options.deferredTools && options.deferredTools.length > 0) {
-    sections.push(formatDeferredToolsSection(options.deferredTools));
-  }
-
-  if (options.briefing) {
-    sections.push(
-      `## Session Context\n\nYou are continuing a conversation. Here is a summary of prior work:\n\n${formatBriefing(options.briefing)}`,
-    );
-  }
+  sections.push(formatEnvironmentSection(options));
+  sections.push(...buildOptionalPromptSections(options));
 
   const result = sections.join("\n\n");
   promptCache.set(cacheKey, result);
   return result;
+}
+
+function formatEnvironmentSection(options: AssembleAgentSystemPromptOptions) {
+  return `## Environment\n\n${buildEnvironmentLines(options).join("\n")}`;
+}
+
+function buildEnvironmentLines(options: AssembleAgentSystemPromptOptions) {
+  return [
+    `Working directory: ${options.repoRoot}`,
+    `Date: ${new Date().toISOString().split("T")[0]}`,
+    options.approvalMode ? `Safety mode: ${options.approvalMode}` : null,
+    options.providerLabel ? `Provider: ${options.providerLabel}` : null,
+  ].filter((line): line is string => line !== null);
+}
+
+function buildOptionalPromptSections(options: AssembleAgentSystemPromptOptions): string[] {
+  return [
+    options.projectInstructions ?? loadAgentProjectInstructions(options.repoRoot),
+    formatAvailableSkillsSection(options),
+    options.deferredTools?.length ? formatDeferredToolsSection(options.deferredTools) : null,
+    options.briefing ? formatBriefingSection(options.briefing) : null,
+  ].filter((section): section is string => Boolean(section));
+}
+
+function formatAvailableSkillsSection(options: AssembleAgentSystemPromptOptions): string | null {
+  const skillList = options.skills?.list() ?? [];
+  if (skillList.length === 0) return null;
+  return (
+    "## Available Skills\n\n" +
+    skillList.map((skill) => formatSkillMatchLine(skill)).join("\n") +
+    "\n\n" +
+    formatSkillPromptGuidance()
+  );
+}
+
+function formatBriefingSection(briefing: NonNullable<AssembleAgentSystemPromptOptions["briefing"]>) {
+  return `## Session Context\n\nYou are continuing a conversation. Here is a summary of prior work:\n\n${formatBriefing(briefing)}`;
 }
 
 /** Build a cache key from prompt assembly inputs. */

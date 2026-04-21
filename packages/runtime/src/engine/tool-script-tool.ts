@@ -15,6 +15,40 @@ export interface ToolScriptToolContext {
   readonly bus: EventBus;
 }
 
+const TOOL_SCRIPT_PARAM_SCHEMA = {
+  type: "object",
+  properties: {
+    steps: {
+      type: "array",
+      description:
+        "Array of tool steps to execute sequentially. " +
+        "Reference previous step outputs with $stepId (full output) or $stepId.lines[N] (specific line, 0-indexed). " +
+        "Use canonical tool names only (no functions./function./tools. prefixes).",
+      items: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description: "Unique identifier for this step, used for inter-step references.",
+          },
+          tool: {
+            type: "string",
+            description: "Canonical tool name (e.g. read_file, find_files, search_files).",
+          },
+          args: {
+            type: "string",
+            description:
+              'JSON-encoded tool parameters, e.g. {"path":"src/foo.ts"} or {} for no arguments.',
+          },
+        },
+        required: ["id", "tool", "args"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["steps"],
+};
+
 export function createToolScriptTool(ctx: ToolScriptToolContext): ToolSpec {
   return {
     name: "execute_tool_script",
@@ -34,110 +68,80 @@ export function createToolScriptTool(ctx: ToolScriptToolContext): ToolSpec {
         { match: "Invalid steps", hint: "The steps parameter must be a JSON array of {id, tool, args} objects. Each args value must be a JSON string, not an object." },
       ],
     },
-    paramSchema: {
-      type: "object",
-      properties: {
-        steps: {
-          type: "array",
-          description:
-            "Array of tool steps to execute sequentially. " +
-            "Reference previous step outputs with $stepId (full output) or $stepId.lines[N] (specific line, 0-indexed). " +
-            "Use canonical tool names only (no functions./function./tools. prefixes).",
-          items: {
-            type: "object",
-            properties: {
-              id: {
-                type: "string",
-                description: "Unique identifier for this step, used for inter-step references.",
-              },
-              tool: {
-                type: "string",
-                description: "Canonical tool name (e.g. read_file, find_files, search_files).",
-              },
-              args: {
-                type: "string",
-                description:
-                  'JSON-encoded tool parameters, e.g. {"path":"src/foo.ts"} or {} for no arguments.',
-              },
-            },
-            required: ["id", "tool", "args"],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ["steps"],
-    },
+    paramSchema: TOOL_SCRIPT_PARAM_SCHEMA,
     resultSchema: { type: "object" },
-    handler: async (
-      params: Record<string, unknown>,
-      toolContext: ToolContext,
-    ) => {
-      const steps = parseToolScriptStepsArg(params["steps"]);
-      if (!steps) {
-        return {
-          success: false,
-          output: "",
-          error: "Invalid steps parameter: must be an array of {id, tool, args} objects (or a JSON string encoding one)",
-          artifacts: [],
-        };
-      }
-
-      // Execute via engine
-      const engine = new ToolScriptEngine({
-        registry: ctx.registry,
-        context: toolContext,
-        bus: ctx.bus,
-      });
-
-      const result = await engine.execute({ steps });
-
-      // Check if validation failed
-      if (
-        result.steps.length === 1 &&
-        result.steps[0]!.id === "__validation__"
-      ) {
-        return {
-          success: false,
-          output: "",
-          error: result.steps[0]!.error ?? "Validation failed",
-          artifacts: [],
-        };
-      }
-
-      // Format output
-      const sections: string[] = [];
-      let succeededCount = 0;
-
-      for (const step of result.steps) {
-        if (step.success) {
-          succeededCount++;
-          sections.push(
-            `=== Step ${step.id} (${step.tool}) [${step.durationMs}ms] ===\n${step.output}`,
-          );
-        } else {
-          sections.push(
-            `=== Step ${step.id} (${step.tool}) [FAILED] ===\nError: ${step.error}`,
-          );
-        }
-      }
-
-      const summary = `\n[Script completed: ${succeededCount}/${result.steps.length} steps succeeded in ${result.totalDurationMs}ms]`;
-      if (result.truncated) {
-        sections.push("[Output truncated — limit exceeded]");
-      }
-      sections.push(summary);
-
-      const allSucceeded = succeededCount === result.steps.length;
-      return {
-        success: allSucceeded,
-        output: sections.join("\n\n"),
-        error: allSucceeded
-          ? null
-          : succeededCount === 0
-            ? "All steps failed"
-            : `${result.steps.length - succeededCount}/${result.steps.length} steps failed`,
-        artifacts: [],
-      };
-    },
+    handler: async (params, toolContext) => runToolScriptTool(ctx, params, toolContext),
   };
+}
+
+async function runToolScriptTool(
+  ctx: ToolScriptToolContext,
+  params: Record<string, unknown>,
+  toolContext: ToolContext,
+) {
+  const steps = parseToolScriptStepsArg(params["steps"]);
+  if (!steps) return invalidStepsResult();
+
+  const result = await new ToolScriptEngine({
+    registry: ctx.registry,
+    context: toolContext,
+    bus: ctx.bus,
+  }).execute({ steps });
+
+  if (isValidationFailure(result.steps)) {
+    return {
+      success: false,
+      output: "",
+      error: result.steps[0]!.error ?? "Validation failed",
+      artifacts: [],
+    };
+  }
+
+  return formatToolScriptResult(result);
+}
+
+function invalidStepsResult() {
+  return {
+    success: false,
+    output: "",
+    error: "Invalid steps parameter: must be an array of {id, tool, args} objects (or a JSON string encoding one)",
+    artifacts: [],
+  };
+}
+
+function isValidationFailure(steps: ReadonlyArray<{ readonly id: string }>) {
+  return steps.length === 1 && steps[0]!.id === "__validation__";
+}
+
+function formatToolScriptResult(
+  result: Awaited<ReturnType<ToolScriptEngine["execute"]>>,
+) {
+  const sections: string[] = [];
+  let succeededCount = 0;
+
+  for (const step of result.steps) {
+    if (step.success) {
+      succeededCount++;
+      sections.push(`=== Step ${step.id} (${step.tool}) [${step.durationMs}ms] ===\n${step.output}`);
+    } else {
+      sections.push(`=== Step ${step.id} (${step.tool}) [FAILED] ===\nError: ${step.error}`);
+    }
+  }
+
+  if (result.truncated) sections.push("[Output truncated — limit exceeded]");
+  sections.push(`\n[Script completed: ${succeededCount}/${result.steps.length} steps succeeded in ${result.totalDurationMs}ms]`);
+
+  const allSucceeded = succeededCount === result.steps.length;
+  return {
+    success: allSucceeded,
+    output: sections.join("\n\n"),
+    error: toolScriptError(allSucceeded, succeededCount, result.steps.length),
+    artifacts: [],
+  };
+}
+
+function toolScriptError(allSucceeded: boolean, succeededCount: number, totalCount: number) {
+  if (allSucceeded) return null;
+  if (succeededCount === 0) return "All steps failed";
+  return `${totalCount - succeededCount}/${totalCount} steps failed`;
 }

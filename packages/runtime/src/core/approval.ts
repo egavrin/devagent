@@ -14,6 +14,7 @@ import { ApprovalDeniedError } from "./errors.js";
 import type { EventBus } from "./events.js";
 import type {
   ApprovalPolicy,
+  ApprovalPolicyMode,
   ToolCategory,
 } from "./types.js";
 import { ApprovalMode, SafetyMode } from "./types.js";
@@ -21,6 +22,56 @@ import { ApprovalMode, SafetyMode } from "./types.js";
 // ─── Decision Types ──────────────────────────────────────────
 
 export type ApprovalDecision = "allow" | "deny" | "ask";
+
+interface NormalizedApprovalRequest {
+  readonly filePath: string | null;
+  readonly isInsideRepo: boolean;
+  readonly isOutsideRepo: boolean;
+  readonly hasSensitivePath: boolean;
+  readonly command: string | null;
+  readonly commandRunsInRepo: boolean;
+}
+
+const SENSITIVE_PATH_MATCHERS: ReadonlyArray<(path: string) => boolean> = [
+  (path) => path.includes("/.ssh/"),
+  (path) => path.includes("/.aws/"),
+  (path) => path.includes("/.config/"),
+  (path) => path.endsWith("/.npmrc"),
+  (path) => path.endsWith("/.pypirc"),
+  (path) => path.endsWith("/.git-credentials"),
+  (path) => path.endsWith("/credentials"),
+  (path) => path.endsWith("/config"),
+  (path) => path.includes("/secrets"),
+  (path) => path.endsWith("/id_rsa"),
+  (path) => path.endsWith("/id_ed25519"),
+  (path) => path.includes("/.env"),
+];
+
+const UNSAFE_COMMAND_PATTERNS: ReadonlyArray<RegExp> = [
+  /\b(npm|pnpm|yarn|bun)\s+(install|add|remove|unlink|update|upgrade)\b/,
+  /\b(rm|chmod|chown|sudo|curl|wget|scp|ssh|mv|cp|tee|launchctl|systemctl)\b/,
+  /\bsed\s+-i\b/,
+  /\bgit\s+(commit|push|tag|merge|rebase|reset|checkout\s+-b|switch\s+-c|branch\s+-d|branch\s+-D|publish)\b/,
+];
+
+const SAFE_COMMAND_PATTERNS: ReadonlyArray<RegExp> = [
+  /^(ls|pwd|cat|head|tail|wc|rg|grep|find)\b/,
+  /^sed\s+-n\b/,
+  /^(bun|npm|pnpm|yarn)\s+(test|run test|run lint|run build|run dev|run typecheck|check|check:oss)\b/,
+  /^(pytest|go test|cargo (test|check|build)|vitest|jest)\b/,
+  /^git\s+(status|diff|log|show|rev-parse|remote -v|branch --show-current)\b/,
+];
+
+const SHELL_OPERATOR_PATTERNS: ReadonlyArray<string> = [
+  "&&",
+  "||",
+  ";",
+  "|",
+  "`",
+  "$(",
+  ">",
+  "<",
+];
 
 export interface ApprovalRequest {
   readonly toolName: string;
@@ -150,7 +201,6 @@ export class ApprovalGate {
     }
     return null;
   }
-
   private decideByMode(request: ApprovalRequest): ApprovalDecision {
     if (this.shouldUseLegacyMode()) {
       return this.decideByLegacyMode(request.toolCategory);
@@ -165,55 +215,13 @@ export class ApprovalGate {
       return "allow";
     }
 
-    if (request.toolCategory === "external") {
-      return approvalPolicy === "never" || networkAccess === "on" ? "allow" : "ask";
-    }
-
-    if (normalized.hasSensitivePath) {
-      return approvalPolicy === "never" ? "allow" : "ask";
-    }
-
-    if (request.toolCategory === "readonly") {
-      if (normalized.filePath && normalized.isOutsideRepo) {
-        return approvalPolicy === "never" ? "allow" : "ask";
-      }
-      return "allow";
-    }
-
-    if (request.toolCategory === "mutating") {
-      if (request.toolName === "git_commit") {
-        return approvalPolicy === "never" ? "allow" : "ask";
-      }
-      if (approvalPolicy === "never") {
-        return "allow";
-      }
-      if (approvalPolicy === "strict") {
-        return "ask";
-      }
-      if (sandboxMode === "danger-full-access") {
-        return "allow";
-      }
-      if (normalized.filePath && normalized.isInsideRepo && !normalized.hasSensitivePath) {
-        return "allow";
-      }
-      return "ask";
-    }
-
-    if (request.toolCategory === "workflow") {
-      const command = normalized.command;
-      if (approvalPolicy === "never") {
-        return "allow";
-      }
-      if (approvalPolicy === "strict") {
-        return "ask";
-      }
-      if (!command || !normalized.commandRunsInRepo) {
-        return "ask";
-      }
-      return isDefaultSafeCommand(command) ? "allow" : "ask";
-    }
-
-    return "ask";
+    return decideModernRequest({
+      request,
+      normalized,
+      approvalPolicy,
+      sandboxMode,
+      networkAccess,
+    });
   }
 
   private shouldUseLegacyMode(): boolean {
@@ -222,6 +230,9 @@ export class ApprovalGate {
       case ApprovalMode.AUTO_EDIT:
       case ApprovalMode.FULL_AUTO:
         return true;
+      case SafetyMode.DEFAULT:
+      case SafetyMode.AUTOPILOT:
+        return false;
       default:
         return false;
     }
@@ -235,6 +246,9 @@ export class ApprovalGate {
         return this.decideAutoEditMode(category);
       case ApprovalMode.FULL_AUTO:
         return this.decideFullAutoMode(category);
+      case SafetyMode.DEFAULT:
+      case SafetyMode.AUTOPILOT:
+        return "ask";
       default:
         return "ask";
     }
@@ -274,7 +288,7 @@ export class ApprovalGate {
     }
   }
 
-  private decideFullAutoMode(category: ToolCategory): ApprovalDecision {
+  private decideFullAutoMode(_category: ToolCategory): ApprovalDecision {
     // Everything allowed in legacy full-auto mode
     return "allow";
   }
@@ -338,6 +352,13 @@ export class ApprovalGate {
           sandboxMode: "workspace-write",
           networkAccess: "off",
         };
+      case ApprovalMode.SUGGEST:
+      case ApprovalMode.AUTO_EDIT:
+      case ApprovalMode.FULL_AUTO:
+        return {
+          ...this.policy,
+          mode,
+        };
       default:
         return {
           ...this.policy,
@@ -356,41 +377,14 @@ export class ApprovalGate {
     }
     return `${request.toolName}:${request.description}`;
   }
-
-  private normalizeRequest(request: ApprovalRequest): {
-    readonly filePath: string | null;
-    readonly isInsideRepo: boolean;
-    readonly isOutsideRepo: boolean;
-    readonly hasSensitivePath: boolean;
-    readonly command: string | null;
-    readonly commandRunsInRepo: boolean;
-  } {
+  private normalizeRequest(request: ApprovalRequest): NormalizedApprovalRequest {
     const repoRoot = request.repoRoot ? resolve(request.repoRoot) : null;
-    const rawFilePath = request.filePath;
-    const normalizedFilePath = rawFilePath && repoRoot
-      ? resolvePath(rawFilePath, repoRoot)
-      : rawFilePath;
-    const isInsideRepo = normalizedFilePath && repoRoot
-      ? isSubpath(normalizedFilePath, repoRoot)
-      : false;
-    const command = typeof request.arguments?.["command"] === "string"
-      ? normalizeCommand(request.arguments["command"])
-      : null;
-    const commandCwd = typeof request.arguments?.["cwd"] === "string"
-      ? request.arguments["cwd"]
-      : ".";
-    const resolvedCommandCwd = repoRoot ? resolvePath(commandCwd, repoRoot) : null;
-    const commandRunsInRepo = resolvedCommandCwd && repoRoot
-      ? isSubpath(resolvedCommandCwd, repoRoot)
-      : true;
+    const pathState = normalizeRequestPath(request.filePath, repoRoot);
+    const commandState = normalizeRequestCommand(request.arguments, repoRoot);
 
     return {
-      filePath: normalizedFilePath ?? null,
-      isInsideRepo,
-      isOutsideRepo: Boolean(normalizedFilePath && repoRoot && !isInsideRepo),
-      hasSensitivePath: Boolean(normalizedFilePath && isSensitivePath(normalizedFilePath)),
-      command,
-      commandRunsInRepo,
+      ...pathState,
+      ...commandState,
     };
   }
 }
@@ -423,58 +417,128 @@ function isSubpath(targetPath: string, rootPath: string): boolean {
   return targetPath === rootPath || targetPath.startsWith(normalizedRoot);
 }
 
+function normalizeRequestPath(
+  rawFilePath: string | null,
+  repoRoot: string | null,
+): Pick<
+  NormalizedApprovalRequest,
+  "filePath" | "isInsideRepo" | "isOutsideRepo" | "hasSensitivePath"
+> {
+  const filePath = rawFilePath && repoRoot
+    ? resolvePath(rawFilePath, repoRoot)
+    : rawFilePath;
+  const isInsideRepo = Boolean(filePath && repoRoot && isSubpath(filePath, repoRoot));
+  return {
+    filePath: filePath ?? null,
+    isInsideRepo,
+    isOutsideRepo: Boolean(filePath && repoRoot && !isInsideRepo),
+    hasSensitivePath: Boolean(filePath && isSensitivePath(filePath)),
+  };
+}
+
+function normalizeRequestCommand(
+  args: Readonly<Record<string, unknown>> | undefined,
+  repoRoot: string | null,
+): Pick<NormalizedApprovalRequest, "command" | "commandRunsInRepo"> {
+  const command = typeof args?.["command"] === "string"
+    ? normalizeCommand(args["command"])
+    : null;
+  const cwd = typeof args?.["cwd"] === "string" ? args["cwd"] : ".";
+  const resolvedCwd = repoRoot ? resolvePath(cwd, repoRoot) : null;
+  return {
+    command,
+    commandRunsInRepo: resolvedCwd && repoRoot ? isSubpath(resolvedCwd, repoRoot) : true,
+  };
+}
+
+function decideModernRequest(options: {
+  readonly request: ApprovalRequest;
+  readonly normalized: NormalizedApprovalRequest;
+  readonly approvalPolicy: ApprovalPolicyMode;
+  readonly sandboxMode: string;
+  readonly networkAccess: string;
+}): ApprovalDecision {
+  if (options.request.toolCategory === "external") {
+    return allowWhen(options.approvalPolicy === "never" || options.networkAccess === "on");
+  }
+  if (options.normalized.hasSensitivePath) {
+    return allowWhen(options.approvalPolicy === "never");
+  }
+  if (options.request.toolCategory === "readonly") {
+    return decideReadonlyRequest(options.normalized, options.approvalPolicy);
+  }
+  if (options.request.toolCategory === "mutating") {
+    return decideMutatingRequest(options);
+  }
+  if (options.request.toolCategory === "workflow") {
+    return decideWorkflowRequest(options.normalized, options.approvalPolicy);
+  }
+  return "ask";
+}
+
+function decideReadonlyRequest(
+  normalized: NormalizedApprovalRequest,
+  approvalPolicy: ApprovalPolicyMode,
+): ApprovalDecision {
+  if (normalized.filePath && normalized.isOutsideRepo) {
+    return allowWhen(approvalPolicy === "never");
+  }
+  return "allow";
+}
+
+function decideMutatingRequest(options: {
+  readonly request: ApprovalRequest;
+  readonly normalized: NormalizedApprovalRequest;
+  readonly approvalPolicy: ApprovalPolicyMode;
+  readonly sandboxMode: string;
+}): ApprovalDecision {
+  if (options.request.toolName === "git_commit") {
+    return allowWhen(options.approvalPolicy === "never");
+  }
+  if (options.approvalPolicy === "never" || options.sandboxMode === "danger-full-access") {
+    return "allow";
+  }
+  if (options.approvalPolicy === "strict") {
+    return "ask";
+  }
+  return allowWhen(Boolean(options.normalized.filePath && options.normalized.isInsideRepo));
+}
+
+function decideWorkflowRequest(
+  normalized: NormalizedApprovalRequest,
+  approvalPolicy: ApprovalPolicyMode,
+): ApprovalDecision {
+  if (approvalPolicy === "never") {
+    return "allow";
+  }
+  if (approvalPolicy === "strict" || !normalized.commandRunsInRepo) {
+    return "ask";
+  }
+  return normalized.command && isDefaultSafeCommand(normalized.command) ? "allow" : "ask";
+}
+
+function allowWhen(condition: boolean): ApprovalDecision {
+  return condition ? "allow" : "ask";
+}
+
 function isSensitivePath(filePath: string): boolean {
   const lowered = filePath.toLowerCase();
-  return (
-    lowered.includes("/.ssh/") ||
-    lowered.includes("/.aws/") ||
-    lowered.includes("/.config/") ||
-    lowered.endsWith("/.npmrc") ||
-    lowered.endsWith("/.pypirc") ||
-    lowered.endsWith("/.git-credentials") ||
-    lowered.endsWith("/credentials") ||
-    lowered.endsWith("/config") ||
-    lowered.includes("/secrets") ||
-    lowered.endsWith("/id_rsa") ||
-    lowered.endsWith("/id_ed25519") ||
-    lowered.includes("/.env")
-  );
+  return SENSITIVE_PATH_MATCHERS.some((matches) => matches(lowered));
 }
 
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, " ");
 }
-
 function isDefaultSafeCommand(command: string): boolean {
   const lower = command.toLowerCase();
 
-  if (
-    lower.includes("&&") ||
-    lower.includes("||") ||
-    lower.includes(";") ||
-    lower.includes("|") ||
-    lower.includes("`") ||
-    lower.includes("$(") ||
-    lower.includes(">") ||
-    lower.includes("<")
-  ) {
+  if (SHELL_OPERATOR_PATTERNS.some((operator) => lower.includes(operator))) {
     return false;
   }
 
-  if (
-    /\b(npm|pnpm|yarn|bun)\s+(install|add|remove|unlink|update|upgrade)\b/.test(lower) ||
-    /\b(rm|chmod|chown|sudo|curl|wget|scp|ssh|mv|cp|tee|launchctl|systemctl)\b/.test(lower) ||
-    /\bsed\s+-i\b/.test(lower) ||
-    /\bgit\s+(commit|push|tag|merge|rebase|reset|checkout\s+-b|switch\s+-c|branch\s+-d|branch\s+-D|publish)\b/.test(lower)
-  ) {
+  if (UNSAFE_COMMAND_PATTERNS.some((pattern) => pattern.test(lower))) {
     return false;
   }
 
-  return (
-    /^(ls|pwd|cat|head|tail|wc|rg|grep|find)\b/.test(lower) ||
-    /^sed\s+-n\b/.test(lower) ||
-    /^(bun|npm|pnpm|yarn)\s+(test|run test|run lint|run build|run dev|run typecheck|check|check:oss)\b/.test(lower) ||
-    /^(pytest|go test|cargo (test|check|build)|vitest|jest)\b/.test(lower) ||
-    /^git\s+(status|diff|log|show|rev-parse|remote -v|branch --show-current)\b/.test(lower)
-  );
+  return SAFE_COMMAND_PATTERNS.some((pattern) => pattern.test(lower));
 }

@@ -10,7 +10,7 @@
  *   $stepId.lines[N] → Nth line (0-indexed) of that step's output
  */
 
-import type { ToolSpec, ToolResult, ToolContext , EventBus } from "../core/index.js";
+import type { ToolResult, ToolContext , EventBus } from "../core/index.js";
 import { extractErrorMessage, extractToolFileChangePreviewSummary } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
 
@@ -32,45 +32,50 @@ export interface ToolScript {
  * Returns null if the input is malformed.
  */
 export function parseToolScriptStepsArg(raw: unknown): ToolScriptStep[] | null {
-  let entries: unknown[];
-  if (Array.isArray(raw)) {
-    entries = raw;
-  } else if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return null;
-      entries = parsed;
-    } catch {
-      return null;
-    }
-  } else {
+  const entries = parseStepEntries(raw);
+  if (!entries) return null;
+  const steps = entries.map(parseToolScriptStepEntry);
+  return steps.every((step): step is ToolScriptStep => step !== null) ? steps : null;
+}
+
+function parseStepEntries(raw: unknown): unknown[] | null {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
     return null;
   }
+}
 
-  const steps: ToolScriptStep[] = [];
-  for (const entry of entries) {
-    if (!entry || typeof entry !== "object") return null;
-    const step = entry as Record<string, unknown>;
-    const id = step["id"];
-    const tool = step["tool"];
-    let args = step["args"];
-    if (typeof args === "string") {
-      try {
-        args = JSON.parse(args);
-      } catch {
-        return null;
-      }
-    }
-    if (typeof id !== "string" || typeof tool !== "string" || !args || typeof args !== "object") {
-      return null;
-    }
-    steps.push({
-      id,
-      tool,
-      args: { ...(args as Record<string, unknown>) },
-    });
+function parseToolScriptStepEntry(entry: unknown): ToolScriptStep | null {
+  if (!entry || typeof entry !== "object") return null;
+  const step = entry as Record<string, unknown>;
+  const args = parseStepArgs(step["args"]);
+  if (typeof step["id"] !== "string" || typeof step["tool"] !== "string" || !args) {
+    return null;
   }
-  return steps;
+  return {
+    id: step["id"],
+    tool: step["tool"],
+    args,
+  };
+}
+
+function parseStepArgs(rawArgs: unknown): Record<string, unknown> | null {
+  const args = typeof rawArgs === "string" ? parseJsonObject(rawArgs) : rawArgs;
+  return args && typeof args === "object" && !Array.isArray(args)
+    ? { ...(args as Record<string, unknown>) }
+    : null;
+}
+
+function parseJsonObject(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 export interface StepResult {
@@ -106,6 +111,14 @@ const BLOCKED_TOOLS = new Set(["execute_tool_script"]);
 
 /** Pattern: $stepId or $stepId.lines[N] */
 const REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_]*)(?:\.lines\[(\d+)\])?/g;
+
+interface ExecuteScriptState {
+  readonly results: Map<string, StepResult>;
+  readonly completed: Set<string>;
+  readonly stepResults: StepResult[];
+  cumulativeOutputBytes: number;
+  truncated: boolean;
+}
 
 // ─── Engine ─────────────────────────────────────────────────
 
@@ -149,81 +162,52 @@ export class ToolScriptEngine {
     }
 
     const totalStart = Date.now();
-    const results = new Map<string, StepResult>();
-    let cumulativeOutputBytes = 0;
-    let truncated = false;
-
-    // Build dependency graph: stepId → set of stepIds it depends on
-    const deps = new Map<string, Set<string>>();
-    for (const step of script.steps) {
-      const refs = this.extractReferences(step.args);
-      deps.set(step.id, new Set(refs));
-    }
-
-    // Topological execution in waves: each wave contains steps whose
-    // dependencies are all resolved. Steps within a wave run in parallel.
-    const stepMap = new Map(script.steps.map((s) => [s.id, s]));
-    const completed = new Set<string>();
-    const stepResults: StepResult[] = [];
-
-    while (completed.size < script.steps.length && !truncated) {
-      // Find all steps ready to run (all deps satisfied)
-      const ready: ToolScriptStep[] = [];
-      for (const step of script.steps) {
-        if (completed.has(step.id)) continue;
-        const stepDeps = deps.get(step.id)!;
-        const allDepsReady = [...stepDeps].every((d) => completed.has(d));
-        if (allDepsReady) {
-          ready.push(step);
-        }
-      }
-
-      if (ready.length === 0) {
-        // Should not happen with valid topological ordering (validation catches cycles)
-        break;
-      }
-
-      // Execute the wave — single step runs directly, multiple run in parallel
-      const waveResults = ready.length === 1
-        ? [await this.executeStep(ready[0]!, results)]
-        : await Promise.all(
-            ready.map((step) => this.executeStep(step, results)),
-          );
-
-      // Record results in original script order (stable ordering)
-      for (const stepResult of waveResults) {
-        results.set(stepResult.id, stepResult);
-        completed.add(stepResult.id);
-        stepResults.push(stepResult);
-
-        // Track cumulative output size
-        cumulativeOutputBytes += Buffer.byteLength(stepResult.output, "utf8");
-        if (cumulativeOutputBytes > this.maxOutputBytes) {
-          truncated = true;
-          // Mark remaining steps as skipped
-          for (const step of script.steps) {
-            if (!completed.has(step.id)) {
-              stepResults.push({
-                id: step.id,
-                tool: step.tool,
-                success: false,
-                output: "",
-                error: `Skipped: output limit exceeded (${this.maxOutputBytes} bytes)`,
-                durationMs: 0,
-              });
-              completed.add(step.id);
-            }
-          }
-          break;
-        }
-      }
-    }
+    const deps = buildDependencyGraph(script.steps, (args) => this.extractReferences(args));
+    const state = makeExecuteScriptState();
+    await this.executeReadyWaves(script.steps, deps, state);
 
     return {
-      steps: stepResults,
+      steps: state.stepResults,
       totalDurationMs: Date.now() - totalStart,
-      truncated,
+      truncated: state.truncated,
     };
+  }
+
+  private async executeReadyWaves(
+    steps: ReadonlyArray<ToolScriptStep>,
+    deps: ReadonlyMap<string, ReadonlySet<string>>,
+    state: ExecuteScriptState,
+  ): Promise<void> {
+    while (state.completed.size < steps.length && !state.truncated) {
+      const ready = getReadySteps(steps, deps, state.completed);
+      if (ready.length === 0) break;
+      const waveResults = await this.executeWave(ready, state.results);
+      this.recordWaveResults(waveResults, steps, state);
+    }
+  }
+
+  private async executeWave(
+    ready: ReadonlyArray<ToolScriptStep>,
+    results: Map<string, StepResult>,
+  ): Promise<StepResult[]> {
+    return ready.length === 1
+      ? [await this.executeStep(ready[0]!, results)]
+      : Promise.all(ready.map((step) => this.executeStep(step, results)));
+  }
+
+  private recordWaveResults(
+    waveResults: ReadonlyArray<StepResult>,
+    steps: ReadonlyArray<ToolScriptStep>,
+    state: ExecuteScriptState,
+  ): void {
+    for (const stepResult of waveResults) {
+      recordStepResult(stepResult, state);
+      if (state.cumulativeOutputBytes > this.maxOutputBytes) {
+        state.truncated = true;
+        appendSkippedSteps(steps, state, this.maxOutputBytes);
+        break;
+      }
+    }
   }
 
   // ─── Step Execution ─────────────────────────────────────────
@@ -303,54 +287,25 @@ export class ToolScriptEngine {
     const declaredIds: string[] = [];
 
     for (const step of script.steps) {
-      // Validate step ID
-      if (!step.id || typeof step.id !== "string") {
-        return `Step missing required 'id' field`;
-      }
-
-      // Check duplicate IDs
-      if (seenIds.has(step.id)) {
-        return `Duplicate step ID: "${step.id}"`;
-      }
-      seenIds.add(step.id);
-
-      // Namespaced tool names are invalid — use canonical registry names.
-      const namespacedHint = namespacedToolHint(step.tool, this.registry);
-      if (namespacedHint) {
-        return namespacedHint;
-      }
-
-      // Check blocked tools (recursion guard)
-      if (BLOCKED_TOOLS.has(step.tool)) {
-        return `Tool "${step.tool}" cannot be used inside scripts (recursion prevention)`;
-      }
-
-      // Check tool exists
-      if (!this.registry.has(step.tool)) {
-        return `Unknown tool: "${step.tool}"`;
-      }
-
-      // Check tool is readonly
-      const tool = this.registry.get(step.tool);
-      if (tool.category !== "readonly") {
-        return `Only readonly tools are allowed in scripts. "${step.tool}" is "${tool.category}"`;
-      }
-
-      // Check for self-references and forward references
-      const refs = this.extractReferences(step.args);
-      for (const refId of refs) {
-        if (refId === step.id) {
-          return `Step "${step.id}" references itself`;
-        }
-        if (!declaredIds.includes(refId)) {
-          return `Step "${step.id}" has forward reference to undeclared step "${refId}"`;
-        }
-      }
+      const validationError = this.validateStep(step, seenIds, declaredIds);
+      if (validationError) return validationError;
 
       declaredIds.push(step.id);
     }
 
     return null;
+  }
+
+  private validateStep(
+    step: ToolScriptStep,
+    seenIds: Set<string>,
+    declaredIds: ReadonlyArray<string>,
+  ): string | null {
+    const idError = validateStepId(step, seenIds);
+    if (idError) return idError;
+    const toolError = validateStepTool(step, this.registry);
+    if (toolError) return toolError;
+    return validateStepReferences(step, declaredIds, this.extractReferences(step.args));
   }
 
   // ─── Reference Resolution ──────────────────────────────────
@@ -440,6 +395,106 @@ export class ToolScriptEngine {
 
     return refs;
   }
+}
+
+function makeExecuteScriptState(): ExecuteScriptState {
+  return {
+    results: new Map(),
+    completed: new Set(),
+    stepResults: [],
+    cumulativeOutputBytes: 0,
+    truncated: false,
+  };
+}
+
+function buildDependencyGraph(
+  steps: ReadonlyArray<ToolScriptStep>,
+  extractReferences: (args: Record<string, unknown>) => ReadonlyArray<string>,
+): Map<string, Set<string>> {
+  const deps = new Map<string, Set<string>>();
+  for (const step of steps) {
+    deps.set(step.id, new Set(extractReferences(step.args)));
+  }
+  return deps;
+}
+
+function getReadySteps(
+  steps: ReadonlyArray<ToolScriptStep>,
+  deps: ReadonlyMap<string, ReadonlySet<string>>,
+  completed: ReadonlySet<string>,
+): ToolScriptStep[] {
+  return steps.filter((step) => {
+    if (completed.has(step.id)) return false;
+    const stepDeps = deps.get(step.id) ?? new Set<string>();
+    return [...stepDeps].every((dependency) => completed.has(dependency));
+  });
+}
+
+function recordStepResult(stepResult: StepResult, state: ExecuteScriptState): void {
+  state.results.set(stepResult.id, stepResult);
+  state.completed.add(stepResult.id);
+  state.stepResults.push(stepResult);
+  state.cumulativeOutputBytes += Buffer.byteLength(stepResult.output, "utf8");
+}
+
+function appendSkippedSteps(
+  steps: ReadonlyArray<ToolScriptStep>,
+  state: ExecuteScriptState,
+  maxOutputBytes: number,
+): void {
+  for (const step of steps) {
+    if (state.completed.has(step.id)) continue;
+    state.stepResults.push({
+      id: step.id,
+      tool: step.tool,
+      success: false,
+      output: "",
+      error: `Skipped: output limit exceeded (${maxOutputBytes} bytes)`,
+      durationMs: 0,
+    });
+    state.completed.add(step.id);
+  }
+}
+
+function validateStepId(
+  step: ToolScriptStep,
+  seenIds: Set<string>,
+): string | null {
+  if (!step.id || typeof step.id !== "string") {
+    return `Step missing required 'id' field`;
+  }
+  if (seenIds.has(step.id)) {
+    return `Duplicate step ID: "${step.id}"`;
+  }
+  seenIds.add(step.id);
+  return null;
+}
+
+function validateStepTool(step: ToolScriptStep, registry: ToolRegistry): string | null {
+  const namespacedHint = namespacedToolHint(step.tool, registry);
+  if (namespacedHint) return namespacedHint;
+  if (BLOCKED_TOOLS.has(step.tool)) {
+    return `Tool "${step.tool}" cannot be used inside scripts (recursion prevention)`;
+  }
+  if (!registry.has(step.tool)) return `Unknown tool: "${step.tool}"`;
+  const tool = registry.get(step.tool);
+  return tool.category === "readonly"
+    ? null
+    : `Only readonly tools are allowed in scripts. "${step.tool}" is "${tool.category}"`;
+}
+
+function validateStepReferences(
+  step: ToolScriptStep,
+  declaredIds: ReadonlyArray<string>,
+  refs: ReadonlyArray<string>,
+): string | null {
+  for (const refId of refs) {
+    if (refId === step.id) return `Step "${step.id}" references itself`;
+    if (!declaredIds.includes(refId)) {
+      return `Step "${step.id}" has forward reference to undeclared step "${refId}"`;
+    }
+  }
+  return null;
 }
 
 function namespacedToolHint(toolName: string, registry: ToolRegistry): string | null {

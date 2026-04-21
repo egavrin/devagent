@@ -437,298 +437,296 @@ describe("write_file", () => {
     ).rejects.toThrow(/read-only/i);
   });
 });
+it("replaces text in file", async () => {
+  // Pre-read required by FileTime enforcement
+  await readFileTool.handler({ path: "src/index.ts" }, ctx);
 
-describe("replace_in_file", () => {
-  it("replaces text in file", async () => {
-    // Pre-read required by FileTime enforcement
-    await readFileTool.handler({ path: "src/index.ts" }, ctx);
+  const result = await replaceInFileTool.handler(
+    { path: "src/index.ts", search: "const x = 1", replace: "const x = 42" },
+    ctx,
+  );
+  expect(result.success).toBe(true);
+  expect(result.output).toContain("1 occurrence");
+  const fileEdits = getFileEdits(result);
+  expect(fileEdits).toHaveLength(1);
+  expect(fileEdits[0]).toMatchObject({
+    path: "src/index.ts",
+    kind: "update",
+    additions: 1,
+    deletions: 1,
+    truncated: false,
+    before: expect.stringContaining("export const x = 1;"),
+    after: expect.stringContaining("export const x = 42;"),
+    structuredDiff: expect.objectContaining({
+      hunks: expect.any(Array),
+    }),
+  });
+  expect(fileEdits[0]?.["unifiedDiff"]).toContain("-export const x = 1;");
+  expect(fileEdits[0]?.["unifiedDiff"]).toContain("+export const x = 42;");
 
-    const result = await replaceInFileTool.handler(
+  const read = await readFileTool.handler({ path: "src/index.ts" }, ctx);
+  expect(read.output).toContain("const x = 42");
+});
+
+it("throws when search string not found", async () => {
+  await readFileTool.handler({ path: "src/index.ts" }, ctx);
+
+  await expect(
+    replaceInFileTool.handler(
+      { path: "src/index.ts", search: "nonexistent", replace: "x" },
+      ctx,
+    ),
+  ).rejects.toThrow("Search string not found");
+});
+
+it("throws when file not pre-read (FileTime enforcement)", async () => {
+  await expect(
+    replaceInFileTool.handler(
       { path: "src/index.ts", search: "const x = 1", replace: "const x = 42" },
       ctx,
-    );
-    expect(result.success).toBe(true);
-    expect(result.output).toContain("1 occurrence");
-    const fileEdits = getFileEdits(result);
-    expect(fileEdits).toHaveLength(1);
-    expect(fileEdits[0]).toMatchObject({
-      path: "src/index.ts",
-      kind: "update",
-      additions: 1,
-      deletions: 1,
-      truncated: false,
-      before: expect.stringContaining("export const x = 1;"),
-      after: expect.stringContaining("export const x = 42;"),
-      structuredDiff: expect.objectContaining({
-        hunks: expect.any(Array),
-      }),
-    });
-    expect(fileEdits[0]?.["unifiedDiff"]).toContain("-export const x = 1;");
-    expect(fileEdits[0]?.["unifiedDiff"]).toContain("+export const x = 42;");
+    ),
+  ).rejects.toThrow("must read file");
+});
 
-    const read = await readFileTool.handler({ path: "src/index.ts" }, ctx);
-    expect(read.output).toContain("const x = 42");
-  });
-
-  it("throws when search string not found", async () => {
-    await readFileTool.handler({ path: "src/index.ts" }, ctx);
-
-    await expect(
-      replaceInFileTool.handler(
-        { path: "src/index.ts", search: "nonexistent", replace: "x" },
-        ctx,
-      ),
-    ).rejects.toThrow("Search string not found");
-  });
-
-  it("throws when file not pre-read (FileTime enforcement)", async () => {
-    await expect(
-      replaceInFileTool.handler(
-        { path: "src/index.ts", search: "const x = 1", replace: "const x = 42" },
-        ctx,
-      ),
-    ).rejects.toThrow("must read file");
-  });
-
-  it("rejects skill:// paths", async () => {
-    await expect(
-      replaceInFileTool.handler(
-        {
-          path: "skill://modernize-code/docs/guide-usage.md",
-          search: "Guide",
-          replace: "Manual",
-        },
-        ctx,
-      ),
-    ).rejects.toThrow(/read-only/i);
-  });
-
-  it("defaults to single-replace mode and rejects ambiguous matches", async () => {
-    writeFileSync(join(tmpDir, "src", "dupe.ts"), "foo\nfoo\n");
-    await readFileTool.handler({ path: "src/dupe.ts" }, ctx);
-
-    await expect(
-      replaceInFileTool.handler(
-        { path: "src/dupe.ts", search: "foo", replace: "bar" },
-        ctx,
-      ),
-    ).rejects.toThrow("multiple matches");
-  });
-
-  it("supports all=true with expected_replacements when count matches", async () => {
-    writeFileSync(join(tmpDir, "src", "dupe2.ts"), "foo\nfoo\n");
-    await readFileTool.handler({ path: "src/dupe2.ts" }, ctx);
-
-    const result = await replaceInFileTool.handler(
+it("rejects skill:// paths", async () => {
+  await expect(
+    replaceInFileTool.handler(
       {
-        path: "src/dupe2.ts",
+        path: "skill://modernize-code/docs/guide-usage.md",
+        search: "Guide",
+        replace: "Manual",
+      },
+      ctx,
+    ),
+  ).rejects.toThrow(/read-only/i);
+});
+
+it("defaults to single-replace mode and rejects ambiguous matches", async () => {
+  writeFileSync(join(tmpDir, "src", "dupe.ts"), "foo\nfoo\n");
+  await readFileTool.handler({ path: "src/dupe.ts" }, ctx);
+
+  await expect(
+    replaceInFileTool.handler(
+      { path: "src/dupe.ts", search: "foo", replace: "bar" },
+      ctx,
+    ),
+  ).rejects.toThrow("multiple matches");
+});
+
+it("supports all=true with expected_replacements when count matches", async () => {
+  writeFileSync(join(tmpDir, "src", "dupe2.ts"), "foo\nfoo\n");
+  await readFileTool.handler({ path: "src/dupe2.ts" }, ctx);
+
+  const result = await replaceInFileTool.handler(
+    {
+      path: "src/dupe2.ts",
+      search: "foo",
+      replace: "bar",
+      all: true,
+      expected_replacements: 2,
+    },
+    ctx,
+  );
+  expect(result.success).toBe(true);
+  expect(result.output).toContain("2 occurrence");
+});
+
+it("fails when expected_replacements does not match actual replacement count", async () => {
+  writeFileSync(join(tmpDir, "src", "dupe3.ts"), "foo\nfoo\n");
+  await readFileTool.handler({ path: "src/dupe3.ts" }, ctx);
+
+  await expect(
+    replaceInFileTool.handler(
+      {
+        path: "src/dupe3.ts",
         search: "foo",
         replace: "bar",
         all: true,
-        expected_replacements: 2,
+        expected_replacements: 1,
       },
       ctx,
-    );
-    expect(result.success).toBe(true);
-    expect(result.output).toContain("2 occurrence");
-  });
-
-  it("fails when expected_replacements does not match actual replacement count", async () => {
-    writeFileSync(join(tmpDir, "src", "dupe3.ts"), "foo\nfoo\n");
-    await readFileTool.handler({ path: "src/dupe3.ts" }, ctx);
-
-    await expect(
-      replaceInFileTool.handler(
-        {
-          path: "src/dupe3.ts",
-          search: "foo",
-          replace: "bar",
-          all: true,
-          expected_replacements: 1,
-        },
-        ctx,
-      ),
-    ).rejects.toThrow("Expected 1 replacement(s), but made 2");
-  });
-
-  it("rejects replacing text outside repo root", async () => {
-    const outsidePath = join(
-      tmpdir(),
-      `devagent-tools-outside-replace-${Date.now()}.txt`,
-    );
-    writeFileSync(outsidePath, "outside value=1\n");
-    FileTime.recordRead(outsidePath);
-
-    try {
-      await expect(
-        replaceInFileTool.handler(
-          { path: outsidePath, search: "value=1", replace: "value=2" },
-          ctx,
-        ),
-      ).rejects.toThrow(/repo root|outside/i);
-      expect(readFileSync(outsidePath, "utf-8")).toContain("value=1");
-    } finally {
-      rmSync(outsidePath, { force: true });
-    }
-  });
-
-  it("rejects replacing through symlinks that escape repo root", async () => {
-    const outsidePath = join(
-      tmpdir(),
-      `devagent-tools-outside-replacelink-${Date.now()}.txt`,
-    );
-    writeFileSync(outsidePath, "outside value=1\n");
-    const linkPath = join(tmpDir, "src", "outside-replace-link.txt");
-    symlinkSync(outsidePath, linkPath);
-    FileTime.recordRead(linkPath);
-
-    try {
-      await expect(
-        replaceInFileTool.handler(
-          {
-            path: "src/outside-replace-link.txt",
-            search: "value=1",
-            replace: "value=2",
-          },
-          ctx,
-        ),
-      ).rejects.toThrow(/repo root|outside/i);
-      expect(readFileSync(outsidePath, "utf-8")).toContain("value=1");
-    } finally {
-      rmSync(linkPath, { force: true });
-      rmSync(outsidePath, { force: true });
-    }
-  });
-
-  it("omits replace snapshots when the file exceeds the snapshot size limit", async () => {
-    const hugeContent = `prefix-${"a".repeat(70 * 1024)}\n`;
-    writeFileSync(join(tmpDir, "src", "huge.ts"), hugeContent, "utf-8");
-    await readFileTool.handler({ path: "src/huge.ts" }, ctx);
-
-    const result = await replaceInFileTool.handler(
-      { path: "src/huge.ts", search: "prefix-", replace: "updated-" },
-      ctx,
-    );
-
-    const fileEdits = getFileEdits(result);
-    expect(fileEdits[0]?.["before"]).toBeUndefined();
-    expect(fileEdits[0]?.["after"]).toBeUndefined();
-    expect(fileEdits[0]?.["structuredDiff"]).toBeUndefined();
-    expect(fileEdits[0]?.["unifiedDiff"]).toContain("--- a/src/huge.ts");
-  });
-  // ─── Batch mode (replacements array) ──────────────────────
-
-  it("batch mode: applies multiple replacements to a single file", async () => {
-    writeFileSync(
-      join(tmpDir, "src", "ani.cpp"),
-      [
-        'auto mod = env->FindModule("@ohos.data.share");',
-        'auto cls = env->FindClass("std.core.String");',
-        'auto ns  = env->FindNamespace("escompat.Array");',
-      ].join("\n") + "\n",
-    );
-    await readFileTool.handler({ path: "src/ani.cpp" }, ctx);
-
-    const result = await replaceInFileTool.handler(
-      {
-        path: "src/ani.cpp",
-        replacements: [
-          { search: "@ohos.data.share", replace: "@ohos:data.share" },
-          { search: "std.core.String", replace: "std:core.String" },
-          { search: "escompat.Array", replace: "escompat:Array" },
-        ],
-      },
-      ctx,
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.output).toContain("3 replacement(s)");
-
-    const content = readFileSync(join(tmpDir, "src", "ani.cpp"), "utf-8");
-    expect(content).toContain("@ohos:data.share");
-    expect(content).toContain("std:core.String");
-    expect(content).toContain("escompat:Array");
-    expect(content).not.toContain("@ohos.data.share");
-  });
-
-  it("batch mode: reports per-pair status in output", async () => {
-    writeFileSync(
-      join(tmpDir, "src", "multi.cpp"),
-      'auto a = "foo.bar";\nauto b = "baz.qux";\n',
-    );
-    await readFileTool.handler({ path: "src/multi.cpp" }, ctx);
-
-    const result = await replaceInFileTool.handler(
-      {
-        path: "src/multi.cpp",
-        replacements: [
-          { search: "foo.bar", replace: "foo:bar" },
-          { search: "baz.qux", replace: "baz:qux" },
-        ],
-      },
-      ctx,
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.output).toContain("foo.bar");
-    expect(result.output).toContain("foo:bar");
-    expect(result.output).toContain("baz.qux");
-    expect(result.output).toContain("baz:qux");
-  });
-
-  it("batch mode: partial write on mid-batch failure", async () => {
-    writeFileSync(join(tmpDir, "src", "partial.cpp"), 'auto a = "foo.bar";\n');
-    await readFileTool.handler({ path: "src/partial.cpp" }, ctx);
-
-    const result = await replaceInFileTool.handler(
-      {
-        path: "src/partial.cpp",
-        replacements: [
-          { search: "foo.bar", replace: "foo:bar" },
-          { search: "nonexistent.pattern", replace: "x:y" },
-        ],
-      },
-      ctx,
-    );
-
-    // First replacement applied, second failed → success: false but partial write
-    expect(result.success).toBe(false);
-    expect(result.output).toContain("foo:bar");
-    expect(result.output).toContain("nonexistent.pattern");
-    expect(result.metadata?.["fileEdits"]).toBeUndefined();
-
-    const content = readFileSync(join(tmpDir, "src", "partial.cpp"), "utf-8");
-    expect(content).toContain("foo:bar");
-  });
-
-  it("batch mode: rejects when both search and replacements provided", async () => {
-    await readFileTool.handler({ path: "src/index.ts" }, ctx);
-
-    await expect(
-      replaceInFileTool.handler(
-        {
-          path: "src/index.ts",
-          search: "const x = 1",
-          replace: "const x = 42",
-          replacements: [{ search: "a", replace: "b" }],
-        },
-        ctx,
-      ),
-    ).rejects.toThrow(/mutually exclusive|Cannot use both/i);
-  });
-
-  // Note: OpenAI strict schema sends null for unused params (e.g. replacements: null).
-  // Null stripping is handled upstream in stripNullArgs (openai.ts provider layer), so
-  // the handler never sees null — only undefined. See openai.test.ts "stripNullArgs".
-
-  it("batch mode: schema has additionalProperties: false on nested items (OpenAI compat)", () => {
-    const schema = replaceInFileTool.paramSchema as Record<string, unknown>;
-    const props = schema.properties as Record<string, Record<string, unknown>>;
-    const items = props.replacements.items as Record<string, unknown>;
-    expect(items.type).toBe("object");
-    expect(items.additionalProperties).toBe(false);
-  });
+    ),
+  ).rejects.toThrow("Expected 1 replacement(s), but made 2");
 });
+
+it("rejects replacing text outside repo root", async () => {
+  const outsidePath = join(
+    tmpdir(),
+    `devagent-tools-outside-replace-${Date.now()}.txt`,
+  );
+  writeFileSync(outsidePath, "outside value=1\n");
+  FileTime.recordRead(outsidePath);
+
+  try {
+    await expect(
+      replaceInFileTool.handler(
+        { path: outsidePath, search: "value=1", replace: "value=2" },
+        ctx,
+      ),
+    ).rejects.toThrow(/repo root|outside/i);
+    expect(readFileSync(outsidePath, "utf-8")).toContain("value=1");
+  } finally {
+    rmSync(outsidePath, { force: true });
+  }
+});
+
+it("rejects replacing through symlinks that escape repo root", async () => {
+  const outsidePath = join(
+    tmpdir(),
+    `devagent-tools-outside-replacelink-${Date.now()}.txt`,
+  );
+  writeFileSync(outsidePath, "outside value=1\n");
+  const linkPath = join(tmpDir, "src", "outside-replace-link.txt");
+  symlinkSync(outsidePath, linkPath);
+  FileTime.recordRead(linkPath);
+
+  try {
+    await expect(
+      replaceInFileTool.handler(
+        {
+          path: "src/outside-replace-link.txt",
+          search: "value=1",
+          replace: "value=2",
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/repo root|outside/i);
+    expect(readFileSync(outsidePath, "utf-8")).toContain("value=1");
+  } finally {
+    rmSync(linkPath, { force: true });
+    rmSync(outsidePath, { force: true });
+  }
+});
+
+it("omits replace snapshots when the file exceeds the snapshot size limit", async () => {
+  const hugeContent = `prefix-${"a".repeat(70 * 1024)}\n`;
+  writeFileSync(join(tmpDir, "src", "huge.ts"), hugeContent, "utf-8");
+  await readFileTool.handler({ path: "src/huge.ts" }, ctx);
+
+  const result = await replaceInFileTool.handler(
+    { path: "src/huge.ts", search: "prefix-", replace: "updated-" },
+    ctx,
+  );
+
+  const fileEdits = getFileEdits(result);
+  expect(fileEdits[0]?.["before"]).toBeUndefined();
+  expect(fileEdits[0]?.["after"]).toBeUndefined();
+  expect(fileEdits[0]?.["structuredDiff"]).toBeUndefined();
+  expect(fileEdits[0]?.["unifiedDiff"]).toContain("--- a/src/huge.ts");
+});
+// ─── Batch mode (replacements array) ──────────────────────
+
+it("batch mode: applies multiple replacements to a single file", async () => {
+  writeFileSync(
+    join(tmpDir, "src", "ani.cpp"),
+    [
+      'auto mod = env->FindModule("@ohos.data.share");',
+      'auto cls = env->FindClass("std.core.String");',
+      'auto ns  = env->FindNamespace("escompat.Array");',
+    ].join("\n") + "\n",
+  );
+  await readFileTool.handler({ path: "src/ani.cpp" }, ctx);
+
+  const result = await replaceInFileTool.handler(
+    {
+      path: "src/ani.cpp",
+      replacements: [
+        { search: "@ohos.data.share", replace: "@ohos:data.share" },
+        { search: "std.core.String", replace: "std:core.String" },
+        { search: "escompat.Array", replace: "escompat:Array" },
+      ],
+    },
+    ctx,
+  );
+
+  expect(result.success).toBe(true);
+  expect(result.output).toContain("3 replacement(s)");
+
+  const content = readFileSync(join(tmpDir, "src", "ani.cpp"), "utf-8");
+  expect(content).toContain("@ohos:data.share");
+  expect(content).toContain("std:core.String");
+  expect(content).toContain("escompat:Array");
+  expect(content).not.toContain("@ohos.data.share");
+});
+
+it("batch mode: reports per-pair status in output", async () => {
+  writeFileSync(
+    join(tmpDir, "src", "multi.cpp"),
+    'auto a = "foo.bar";\nauto b = "baz.qux";\n',
+  );
+  await readFileTool.handler({ path: "src/multi.cpp" }, ctx);
+
+  const result = await replaceInFileTool.handler(
+    {
+      path: "src/multi.cpp",
+      replacements: [
+        { search: "foo.bar", replace: "foo:bar" },
+        { search: "baz.qux", replace: "baz:qux" },
+      ],
+    },
+    ctx,
+  );
+
+  expect(result.success).toBe(true);
+  expect(result.output).toContain("foo.bar");
+  expect(result.output).toContain("foo:bar");
+  expect(result.output).toContain("baz.qux");
+  expect(result.output).toContain("baz:qux");
+});
+
+it("batch mode: partial write on mid-batch failure", async () => {
+  writeFileSync(join(tmpDir, "src", "partial.cpp"), 'auto a = "foo.bar";\n');
+  await readFileTool.handler({ path: "src/partial.cpp" }, ctx);
+
+  const result = await replaceInFileTool.handler(
+    {
+      path: "src/partial.cpp",
+      replacements: [
+        { search: "foo.bar", replace: "foo:bar" },
+        { search: "nonexistent.pattern", replace: "x:y" },
+      ],
+    },
+    ctx,
+  );
+
+  // First replacement applied, second failed → success: false but partial write
+  expect(result.success).toBe(false);
+  expect(result.output).toContain("foo:bar");
+  expect(result.output).toContain("nonexistent.pattern");
+  expect(result.metadata?.["fileEdits"]).toBeUndefined();
+
+  const content = readFileSync(join(tmpDir, "src", "partial.cpp"), "utf-8");
+  expect(content).toContain("foo:bar");
+});
+
+it("batch mode: rejects when both search and replacements provided", async () => {
+  await readFileTool.handler({ path: "src/index.ts" }, ctx);
+
+  await expect(
+    replaceInFileTool.handler(
+      {
+        path: "src/index.ts",
+        search: "const x = 1",
+        replace: "const x = 42",
+        replacements: [{ search: "a", replace: "b" }],
+      },
+      ctx,
+    ),
+  ).rejects.toThrow(/mutually exclusive|Cannot use both/i);
+});
+
+// Note: OpenAI strict schema sends null for unused params (e.g. replacements: null).
+// Null stripping is handled upstream in stripNullArgs (openai.ts provider layer), so
+// the handler never sees null — only undefined. See openai.test.ts "stripNullArgs".
+
+it("batch mode: schema has additionalProperties: false on nested items (OpenAI compat)", () => {
+  const schema = replaceInFileTool.paramSchema as Record<string, unknown>;
+  const props = schema.properties as Record<string, Record<string, unknown>>;
+  const items = props.replacements.items as Record<string, unknown>;
+  expect(items.type).toBe("object");
+  expect(items.additionalProperties).toBe(false);
+});
+
 
 describe("find_files", () => {
   it("finds files by pattern", async () => {

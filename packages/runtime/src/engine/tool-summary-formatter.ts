@@ -38,80 +38,72 @@ export function formatToolSummary(
   toolCall: ToolCallInfo,
   originalOutput: string,
 ): string {
+  const formatter = TOOL_SUMMARY_FORMATTERS[toolCall.name];
+  return formatter
+    ? formatter(toolCall, originalOutput)
+    : originalOutput.slice(0, SUMMARY_MAX_CHARS);
+}
 
-  if (toolCall.name === "replace_in_file") {
-    const search = toolCall.arguments["search"] as string | undefined;
-    const replace = toolCall.arguments["replace"] as string | undefined;
-    const replacements = toolCall.arguments["replacements"] as unknown[] | undefined;
-    // Extract count from output like "Replaced 4 occurrence(s)" or "Applied 3 replacement(s)"
-    const countMatch = originalOutput.match(/(\d+)\s+(?:replacement|occurrence)/);
-    const count = countMatch ? countMatch[1] : "?";
+type ToolSummaryFormatter = (toolCall: ToolCallInfo, output: string) => string;
 
-    if (replacements && Array.isArray(replacements)) {
-      return `batch: ${replacements.length} pairs (${count} total replacements)`;
-    }
+const TOOL_SUMMARY_FORMATTERS: Readonly<Record<string, ToolSummaryFormatter>> = {
+  replace_in_file: formatReplaceInFileSummary,
+  write_file: formatWriteFileSummary,
+  read_file: formatReadFileSummary,
+  search_files: formatSearchFilesSummary,
+  find_files: formatFindFilesSummary,
+  git_diff: (_toolCall, output) => summarizeDiff(output),
+  git_status: (_toolCall, output) => formatGitStatusSummary(output),
+  run_command: formatRunCommandSummary,
+  diagnostics: (_toolCall, output) => formatDiagnosticsSummary(output),
+  symbols: (_toolCall, output) => formatSymbolsSummary(output),
+};
 
-    if (search && replace) {
-      // Truncate search/replace to keep summary compact
-      const s = search.length > 40 ? search.slice(0, 37) + "..." : search;
-      const r = replace.length > 40 ? replace.slice(0, 37) + "..." : replace;
-      return `'${s}' → '${r}' (${count} occurrences)`;
-    }
+function formatReplaceInFileSummary(
+  toolCall: ToolCallInfo,
+  originalOutput: string,
+): string {
+  const search = toolCall.arguments["search"] as string | undefined;
+  const replace = toolCall.arguments["replace"] as string | undefined;
+  const replacements = toolCall.arguments["replacements"] as unknown[] | undefined;
+  const count = originalOutput.match(/(\d+)\s+(?:replacement|occurrence)/)?.[1] ?? "?";
+
+  if (Array.isArray(replacements)) {
+    return `batch: ${replacements.length} pairs (${count} total replacements)`;
   }
+  if (!search || !replace) return originalOutput.slice(0, SUMMARY_MAX_CHARS);
+  return `'${truncateInline(search)}' → '${truncateInline(replace)}' (${count} occurrences)`;
+}
 
-  if (toolCall.name === "write_file") {
-    const path = toolCall.arguments["path"] as string | undefined;
-    if (path) return `Wrote ${path}`;
-  }
+function formatWriteFileSummary(toolCall: ToolCallInfo, originalOutput: string): string {
+  const path = toolCall.arguments["path"] as string | undefined;
+  return path ? `Wrote ${path}` : originalOutput.slice(0, SUMMARY_MAX_CHARS);
+}
 
-  // Readonly tools: compact summaries to avoid bloating session state
-  if (toolCall.name === "read_file") {
-    const lines = originalOutput.split("\n");
-    const lineCount = lines.length;
-    const startLine = toolCall.arguments["start_line"] as number | undefined;
-    const endLine = toolCall.arguments["end_line"] as number | undefined;
-    const rangeHint = startLine !== undefined || endLine !== undefined
-      ? ` (lines ${startLine ?? 1}-${endLine ?? "end"})`
-      : "";
-    const digest = extractStructuralDigest(originalOutput, 1000);
-    // Include content context: first and last non-blank lines for orientation
-    const contentSnippets = extractContentSnippets(lines, 500);
-    const parts = [`Read ${lineCount} lines${rangeHint}`];
-    if (digest) parts.push(digest);
-    if (contentSnippets) parts.push(contentSnippets);
-    return parts.join(": ");
-  }
+function formatReadFileSummary(
+  toolCall: ToolCallInfo,
+  originalOutput: string,
+): string {
+  const lines = originalOutput.split("\n");
+  const parts = [buildReadFileHeader(toolCall, lines.length)];
+  const digest = extractStructuralDigest(originalOutput, 1000);
+  const contentSnippets = extractContentSnippets(lines, 500);
+  if (digest) parts.push(digest);
+  if (contentSnippets) parts.push(contentSnippets);
+  return parts.join(": ");
+}
 
-  if (toolCall.name === "search_files") {
-    return formatSearchFilesSummary(toolCall, originalOutput);
-  }
+function buildReadFileHeader(toolCall: ToolCallInfo, lineCount: number): string {
+  const startLine = toolCall.arguments["start_line"] as number | undefined;
+  const endLine = toolCall.arguments["end_line"] as number | undefined;
+  const rangeHint = startLine !== undefined || endLine !== undefined
+    ? ` (lines ${startLine ?? 1}-${endLine ?? "end"})`
+    : "";
+  return `Read ${lineCount} lines${rangeHint}`;
+}
 
-  if (toolCall.name === "find_files") {
-    return formatFindFilesSummary(toolCall, originalOutput);
-  }
-
-  if (toolCall.name === "git_diff") {
-    return summarizeDiff(originalOutput);
-  }
-
-  if (toolCall.name === "git_status") {
-    return formatGitStatusSummary(originalOutput);
-  }
-
-  if (toolCall.name === "run_command") {
-    return formatRunCommandSummary(toolCall, originalOutput);
-  }
-
-  if (toolCall.name === "diagnostics") {
-    return formatDiagnosticsSummary(originalOutput);
-  }
-
-  if (toolCall.name === "symbols") {
-    return formatSymbolsSummary(originalOutput);
-  }
-
-  // Default: truncated original output (no DoubleCheck noise)
-  return originalOutput.slice(0, SUMMARY_MAX_CHARS);
+function truncateInline(value: string): string {
+  return value.length > 40 ? `${value.slice(0, 37)}...` : value;
 }
 
 // ─── Per-Tool Formatters ────────────────────────────────────
@@ -311,79 +303,69 @@ function formatSymbolsSummary(output: string): string {
  */
 export function summarizeTestOutput(output: string): string | null {
   const parts: string[] = [];
-  let isTestOutput = false;
+  const lines = output.split("\n").map((line) => line.trim());
+  const hasTestCounts = collectTestCountParts(output, parts);
+  const hasTypeScriptErrors = collectTypeScriptParts(output, lines, parts);
+  const hasFailures = collectFailLines(lines, parts);
+  collectAssertionLines(lines, parts);
 
-  // Vitest/Jest pass/fail counts
+  if (!hasTestCounts && !hasTypeScriptErrors && !hasFailures) return null;
+
+  return truncateToSummary(parts.join("\n"));
+}
+
+function collectTestCountParts(output: string, parts: string[]): boolean {
   const testCountMatch = output.match(/Tests?:\s*(.+total)/i);
   if (testCountMatch) {
     parts.push(testCountMatch[0]);
-    isTestOutput = true;
+    return true;
   }
-
-  // Bun test counts
   const bunTestMatch = output.match(/(\d+)\s+pass(?:ed)?.*?(\d+)\s+fail/i);
-  if (!testCountMatch && bunTestMatch) {
-    parts.push(`${bunTestMatch[1]} passed, ${bunTestMatch[2]} failed`);
-    isTestOutput = true;
-  }
+  if (!bunTestMatch) return false;
+  parts.push(`${bunTestMatch[1]} passed, ${bunTestMatch[2]} failed`);
+  return true;
+}
 
-  // TypeScript error count
-  const tsErrorMatch = output.match(/Found (\d+) errors? in (\d+) files?\./);
-  if (tsErrorMatch) {
-    parts.push(`${tsErrorMatch[1]} errors in ${tsErrorMatch[2]} files`);
-    isTestOutput = true;
-  }
+function collectTypeScriptParts(
+  output: string,
+  lines: ReadonlyArray<string>,
+  parts: string[],
+): boolean {
+  const matchedCount = collectTypeScriptErrorCount(output, parts);
+  const matchedErrors = collectTypeScriptErrorLines(lines, parts);
+  return matchedCount || matchedErrors;
+}
 
-  // Individual TS errors (e.g., "error TS2322:")
-  const tsErrors: string[] = [];
-  for (const line of output.split("\n")) {
-    const trimmed = line.trim();
-    if (/error TS\d+/.test(trimmed)) {
-      tsErrors.push(trimmed);
-    }
-  }
-  if (tsErrors.length > 0) {
-    isTestOutput = true;
-    for (const e of tsErrors.slice(0, 10)) {
-      parts.push(e);
-    }
-    if (tsErrors.length > 10) {
-      parts.push(`... +${tsErrors.length - 10} more errors`);
-    }
-  }
+function collectTypeScriptErrorCount(output: string, parts: string[]): boolean {
+  const match = output.match(/Found (\d+) errors? in (\d+) files?\./);
+  if (!match) return false;
+  parts.push(`${match[1]} errors in ${match[2]} files`);
+  return true;
+}
 
-  // Failing test files (FAIL lines)
-  const failLines: string[] = [];
-  for (const line of output.split("\n")) {
-    const trimmed = line.trim();
-    if (/^FAIL\s/.test(trimmed)) {
-      failLines.push(trimmed);
-    }
-  }
-  if (failLines.length > 0) {
-    isTestOutput = true;
-    for (const f of failLines.slice(0, 5)) {
-      parts.push(f);
-    }
-  }
+function collectTypeScriptErrorLines(
+  lines: ReadonlyArray<string>,
+  parts: string[],
+): boolean {
+  const tsErrors = lines.filter((line) => /error TS\d+/.test(line));
+  if (tsErrors.length === 0) return false;
+  parts.push(...tsErrors.slice(0, 10));
+  if (tsErrors.length > 10) parts.push(`... +${tsErrors.length - 10} more errors`);
+  return true;
+}
 
-  // Error assertion lines (bullet test name)
-  const assertionLines: string[] = [];
-  for (const line of output.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("\u25CF") || trimmed.startsWith("\u2715") || trimmed.startsWith("\u00D7")) {
-      assertionLines.push(trimmed);
-    }
-  }
-  if (assertionLines.length > 0) {
-    for (const a of assertionLines.slice(0, 5)) {
-      parts.push(a);
-    }
-  }
+function collectFailLines(lines: ReadonlyArray<string>, parts: string[]): boolean {
+  const failLines = lines.filter((line) => /^FAIL\s/.test(line));
+  parts.push(...failLines.slice(0, 5));
+  return failLines.length > 0;
+}
 
-  if (!isTestOutput) return null;
+function collectAssertionLines(lines: ReadonlyArray<string>, parts: string[]): void {
+  parts.push(...lines.filter(isAssertionLine).slice(0, 5));
+}
 
-  return truncateToSummary(parts.join("\n"));
+function isAssertionLine(line: string): boolean {
+  return line.startsWith("\u25CF") || line.startsWith("\u2715") || line.startsWith("\u00D7");
 }
 
 // ─── Structural Digest ───────────────────────────────────────
@@ -418,24 +400,8 @@ export function extractStructuralDigest(
   const seen = new Set<string>();
 
   for (const line of source.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (
-      trimmed.startsWith("//")
-      || trimmed.startsWith("#")
-      || trimmed.startsWith("/*")
-      || trimmed.startsWith("*")
-    ) {
-      continue;
-    }
-    if (!STRUCTURAL_LINE_PATTERNS.some((pattern) => pattern.test(trimmed))) continue;
-
-    const normalized = trimmed
-      .replace(/\s*\{\s*$/, "")
-      .replace(/\s+/g, " ");
-    const snippet = normalized.length > 80
-      ? `${normalized.slice(0, 77)}...`
-      : normalized;
+    const snippet = extractDeclarationSnippet(line);
+    if (!snippet) continue;
     if (seen.has(snippet)) continue;
     seen.add(snippet);
     declarations.push(snippet);
@@ -450,6 +416,32 @@ export function extractStructuralDigest(
   return `${joined.slice(0, maxChars - 3)}...`;
 }
 
+function extractDeclarationSnippet(line: string): string | null {
+  const trimmed = line.trim();
+  if (!isStructuralLine(trimmed)) return null;
+  const normalized = trimmed
+    .replace(/\s*\{\s*$/, "")
+    .replace(/\s+/g, " ");
+  return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
+}
+
+function isStructuralLine(trimmed: string): boolean {
+  return Boolean(
+    trimmed &&
+      !isCommentLine(trimmed) &&
+      STRUCTURAL_LINE_PATTERNS.some((pattern) => pattern.test(trimmed)),
+  );
+}
+
+function isCommentLine(trimmed: string): boolean {
+  return (
+    trimmed.startsWith("//") ||
+    trimmed.startsWith("#") ||
+    trimmed.startsWith("/*") ||
+    trimmed.startsWith("*")
+  );
+}
+
 /**
  * Extract a few meaningful non-blank lines from source content for summary context.
  * Captures first 2 and last 2 non-blank, non-comment lines so the LLM
@@ -459,10 +451,7 @@ function extractContentSnippets(lines: string[], maxChars: number): string {
   const meaningful: string[] = [];
   for (const line of lines) {
     const trimmed = line.replace(/^\d+\t/, "").trim(); // strip line number prefix
-    if (!trimmed) continue;
-    if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("/*") || trimmed.startsWith("*")) continue;
-    if (trimmed === "{" || trimmed === "}" || trimmed === ");") continue;
-    meaningful.push(trimmed);
+    if (isMeaningfulContentLine(trimmed)) meaningful.push(trimmed);
   }
   if (meaningful.length === 0) return "";
 
@@ -478,6 +467,16 @@ function extractContentSnippets(lines: string[], maxChars: number): string {
   return joined.length <= maxChars ? joined : joined.slice(0, maxChars - 3) + "...";
 }
 
+function isMeaningfulContentLine(trimmed: string): boolean {
+  return Boolean(
+    trimmed &&
+      !isCommentLine(trimmed) &&
+      trimmed !== "{" &&
+      trimmed !== "}" &&
+      trimmed !== ");",
+  );
+}
+
 // ─── Diff Summary ────────────────────────────────────────────
 
 /**
@@ -487,24 +486,37 @@ function extractContentSnippets(lines: string[], maxChars: number): string {
  * that captures WHAT changed, not just how many lines.
  */
 export function summarizeDiff(diffOutput: string): string {
-  // Check for diffstat first (e.g., "3 files changed, 10 insertions(+), 5 deletions(-)")
-  const statMatch = diffOutput.match(/(\d+)\s+files?\s+changed/);
-  if (statMatch) {
-    const insertions = diffOutput.match(/(\d+)\s+insertions?\(\+\)/);
-    const deletions = diffOutput.match(/(\d+)\s+deletions?\(-\)/);
-    const parts = [`${statMatch[1]} files changed`];
-    if (insertions) parts.push(`+${insertions[1]}`);
-    if (deletions) parts.push(`-${deletions[1]}`);
-    return parts.join(", ");
-  }
+  const statSummary = summarizeDiffStat(diffOutput);
+  if (statSummary) return statSummary;
 
-  // Parse unified diff: extract hunk headers and count changes
   const lines = diffOutput.split("\n");
-  const hunks: Array<{ context: string; added: number; removed: number }> = [];
+  const hunks = parseDiffHunks(lines);
+  if (hunks.length === 0) return `diff: ${lines.length} lines`;
+  return formatHunkSummary(hunks);
+}
+
+interface DiffHunkSummary {
+  readonly context: string;
+  readonly added: number;
+  readonly removed: number;
+}
+
+function summarizeDiffStat(diffOutput: string): string | null {
+  const statMatch = diffOutput.match(/(\d+)\s+files?\s+changed/);
+  if (!statMatch) return null;
+  const insertions = diffOutput.match(/(\d+)\s+insertions?\(\+\)/);
+  const deletions = diffOutput.match(/(\d+)\s+deletions?\(-\)/);
+  const parts = [`${statMatch[1]} files changed`];
+  if (insertions) parts.push(`+${insertions[1]}`);
+  if (deletions) parts.push(`-${deletions[1]}`);
+  return parts.join(", ");
+}
+
+function parseDiffHunks(lines: ReadonlyArray<string>): DiffHunkSummary[] {
+  const hunks: DiffHunkSummary[] = [];
   let currentHunk: { context: string; added: number; removed: number } | null = null;
 
   for (const line of lines) {
-    // Hunk header: @@ -a,b +c,d @@ optional context
     const hunkMatch = line.match(/^@@\s+[^@]+@@\s*(.*)$/);
     if (hunkMatch) {
       if (currentHunk) hunks.push(currentHunk);
@@ -516,22 +528,25 @@ export function summarizeDiff(diffOutput: string): string {
       continue;
     }
 
-    if (currentHunk) {
-      if (line.startsWith("+") && !line.startsWith("+++")) {
-        currentHunk.added++;
-      } else if (line.startsWith("-") && !line.startsWith("---")) {
-        currentHunk.removed++;
-      }
-    }
+    addDiffLineToHunk(currentHunk, line);
   }
   if (currentHunk) hunks.push(currentHunk);
+  return hunks;
+}
 
-  if (hunks.length === 0) {
-    const lineCount = lines.length;
-    return `diff: ${lineCount} lines`;
+function addDiffLineToHunk(
+  hunk: { added: number; removed: number } | null,
+  line: string,
+): void {
+  if (!hunk) return;
+  if (line.startsWith("+") && !line.startsWith("+++")) {
+    hunk.added++;
+  } else if (line.startsWith("-") && !line.startsWith("---")) {
+    hunk.removed++;
   }
+}
 
-  // Build summary from hunks — take up to 4 most significant
+function formatHunkSummary(hunks: ReadonlyArray<DiffHunkSummary>): string {
   const sorted = [...hunks].sort((a, b) =>
     (b.added + b.removed) - (a.added + a.removed),
   );

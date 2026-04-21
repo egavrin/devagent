@@ -20,206 +20,204 @@ function makeDestroyedStreamError(): Error & { code: string } {
     { code: "ERR_STREAM_DESTROYED" },
   );
 }
+it("creates a client with options", () => {
+  const client = new LSPClient({
+    command: "typescript-language-server",
+    args: ["--stdio"],
+    rootPath: "/tmp/test",
+    languageId: "typescript",
+  });
+  expect(client.isRunning()).toBe(false);
+});
 
-describe("LSPClient", () => {
-  it("creates a client with options", () => {
-    const client = new LSPClient({
-      command: "typescript-language-server",
-      args: ["--stdio"],
-      rootPath: "/tmp/test",
-      languageId: "typescript",
-    });
-    expect(client.isRunning()).toBe(false);
+it("throws if used before start", async () => {
+  const client = new LSPClient({
+    command: "echo",
+    args: [],
+    rootPath: "/tmp",
+    languageId: "typescript",
   });
 
-  it("throws if used before start", async () => {
-    const client = new LSPClient({
-      command: "echo",
-      args: [],
-      rootPath: "/tmp",
-      languageId: "typescript",
-    });
+  await expect(client.getDiagnostics("test.ts")).rejects.toThrow(
+    "not initialized",
+  );
+});
 
-    await expect(client.getDiagnostics("test.ts")).rejects.toThrow(
-      "not initialized",
-    );
+it("does not return stale diagnostics on repeated checks for the same file", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-test-"));
+  const fileName = "test.ts";
+  writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+
+  const client = new LSPClient({
+    command: "echo",
+    args: [],
+    rootPath: tempDir,
+    languageId: "typescript",
+    diagnosticTimeout: 500,
   });
 
-  it("does not return stale diagnostics on repeated checks for the same file", async () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-test-"));
-    const fileName = "test.ts";
-    writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+  const diagnosticsStore = (client as unknown as {
+    diagnosticsStore: Map<string, unknown[]>;
+  }).diagnosticsStore;
+  let openCount = 0;
 
-    const client = new LSPClient({
-      command: "echo",
-      args: [],
-      rootPath: tempDir,
-      languageId: "typescript",
-      diagnosticTimeout: 500,
-    });
+  const fakeConnection = {
+    sendNotification: (method: string, params: Record<string, unknown>) => {
+      if (method !== "textDocument/didOpen") return;
+      openCount++;
+      const textDoc = params["textDocument"] as
+        | { uri?: string }
+        | undefined;
+      const uri = textDoc?.uri;
+      if (!uri) return;
 
-    const diagnosticsStore = (client as unknown as {
-      diagnosticsStore: Map<string, unknown[]>;
-    }).diagnosticsStore;
-    let openCount = 0;
-
-    const fakeConnection = {
-      sendNotification: (method: string, params: Record<string, unknown>) => {
-        if (method !== "textDocument/didOpen") return;
-        openCount++;
-        const textDoc = params["textDocument"] as
-          | { uri?: string }
-          | undefined;
-        const uri = textDoc?.uri;
-        if (!uri) return;
-
-        if (openCount === 1) {
-          setTimeout(() => {
-            diagnosticsStore.set(uri, [{
-              range: {
-                start: { line: 0, character: 0 },
-                end: { line: 0, character: 1 },
-              },
-              message: "first run error",
-              severity: 1,
-            }]);
-          }, 20);
-        } else {
-          setTimeout(() => {
-            diagnosticsStore.set(uri, []);
-          }, 20);
-        }
-      },
-    };
-
-    (client as unknown as {
-      initialized: boolean;
-      connection: unknown;
-    }).initialized = true;
-    (client as unknown as {
-      initialized: boolean;
-      connection: unknown;
-    }).connection = fakeConnection;
-
-    try {
-      const first = await client.getDiagnostics(fileName);
-      expect(first.diagnostics).toHaveLength(1);
-
-      const second = await client.getDiagnostics(fileName);
-      expect(second.diagnostics).toHaveLength(0);
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not use readFileSync (async I/O only)", async () => {
-    // Verify the module doesn't import readFileSync
-    const clientSource = readFileSync(
-      join(__dirname, "client.ts"),
-      "utf-8",
-    );
-    expect(clientSource).not.toContain("readFileSync");
-  });
-
-  it("cleans up timeout timer after successful LSP request", async () => {
-    vi.useFakeTimers();
-    const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-timeout-"));
-    const fileName = "test.ts";
-    writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
-
-    const client = new LSPClient({
-      command: "echo",
-      args: [],
-      rootPath: tempDir,
-      languageId: "typescript",
-      timeout: 5000,
-    });
-
-    const fakeConnection = {
-      sendNotification: () => {},
-      sendRequest: (_method: string) => {
-        // Simulate a fast LSP response
-        return Promise.resolve({
-          uri: `file://${tempDir}/${fileName}`,
-          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
-        });
-      },
-    };
-
-    (client as unknown as { initialized: boolean; connection: unknown }).initialized = true;
-    (client as unknown as { initialized: boolean; connection: unknown }).connection = fakeConnection;
-
-    try {
-      const timersBefore = vi.getTimerCount();
-      await client.getDefinition(fileName, 1, 1);
-      const timersAfter = vi.getTimerCount();
-
-      // withTimeout should clean up its timer after the request resolves.
-      // If it leaks, timersAfter > timersBefore.
-      expect(timersAfter).toBe(timersBefore);
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("returns quickly when server publishes an empty diagnostics array", async () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-empty-"));
-    const fileName = "test.ts";
-    writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
-
-    const client = new LSPClient({
-      command: "echo",
-      args: [],
-      rootPath: tempDir,
-      languageId: "typescript",
-      diagnosticTimeout: 1000,
-    });
-
-    const diagnosticsStore = (client as unknown as {
-      diagnosticsStore: Map<string, unknown[]>;
-    }).diagnosticsStore;
-
-    const fakeConnection = {
-      sendNotification: (method: string, params: Record<string, unknown>) => {
-        if (method !== "textDocument/didOpen") return;
-        const textDoc = params["textDocument"] as
-          | { uri?: string }
-          | undefined;
-        const uri = textDoc?.uri;
-        if (!uri) return;
-
+      if (openCount === 1) {
+        setTimeout(() => {
+          diagnosticsStore.set(uri, [{
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 1 },
+            },
+            message: "first run error",
+            severity: 1,
+          }]);
+        }, 20);
+      } else {
         setTimeout(() => {
           diagnosticsStore.set(uri, []);
         }, 20);
-      },
-    };
+      }
+    },
+  };
 
-    (client as unknown as {
-      initialized: boolean;
-      connection: unknown;
-    }).initialized = true;
-    (client as unknown as {
-      initialized: boolean;
-      connection: unknown;
-    }).connection = fakeConnection;
+  (client as unknown as {
+    initialized: boolean;
+    connection: unknown;
+  }).initialized = true;
+  (client as unknown as {
+    initialized: boolean;
+    connection: unknown;
+  }).connection = fakeConnection;
 
-    try {
-      // Verify the client returns quickly when the server publishes empty diagnostics
-      // (exits poll loop early instead of waiting full diagnosticTimeout of 1000ms).
-      const startTime = Date.now();
-      const result = await client.getDiagnostics(fileName);
-      const elapsed = Date.now() - startTime;
+  try {
+    const first = await client.getDiagnostics(fileName);
+    expect(first.diagnostics).toHaveLength(1);
 
-      expect(result.diagnostics).toHaveLength(0);
-      // Should resolve well before the 1000ms timeout.
-      // The server pushes [] at 20ms, poll interval is 100ms, so ~100-300ms.
-      expect(elapsed).toBeLessThan(500);
-      await sleep(30);
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
+    const second = await client.getDiagnostics(fileName);
+    expect(second.diagnostics).toHaveLength(0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
+
+it("does not use readFileSync (async I/O only)", async () => {
+  // Verify the module doesn't import readFileSync
+  const clientSource = readFileSync(
+    join(__dirname, "client.ts"),
+    "utf-8",
+  );
+  expect(clientSource).not.toContain("readFileSync");
+});
+
+it("cleans up timeout timer after successful LSP request", async () => {
+  vi.useFakeTimers();
+  const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-timeout-"));
+  const fileName = "test.ts";
+  writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+
+  const client = new LSPClient({
+    command: "echo",
+    args: [],
+    rootPath: tempDir,
+    languageId: "typescript",
+    timeout: 5000,
+  });
+
+  const fakeConnection = {
+    sendNotification: () => {},
+    sendRequest: (_method: string) => {
+      // Simulate a fast LSP response
+      return Promise.resolve({
+        uri: `file://${tempDir}/${fileName}`,
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      });
+    },
+  };
+
+  (client as unknown as { initialized: boolean; connection: unknown }).initialized = true;
+  (client as unknown as { initialized: boolean; connection: unknown }).connection = fakeConnection;
+
+  try {
+    const timersBefore = vi.getTimerCount();
+    await client.getDefinition(fileName, 1, 1);
+    const timersAfter = vi.getTimerCount();
+
+    // withTimeout should clean up its timer after the request resolves.
+    // If it leaks, timersAfter > timersBefore.
+    expect(timersAfter).toBe(timersBefore);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+it("returns quickly when server publishes an empty diagnostics array", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-empty-"));
+  const fileName = "test.ts";
+  writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+
+  const client = new LSPClient({
+    command: "echo",
+    args: [],
+    rootPath: tempDir,
+    languageId: "typescript",
+    diagnosticTimeout: 1000,
+  });
+
+  const diagnosticsStore = (client as unknown as {
+    diagnosticsStore: Map<string, unknown[]>;
+  }).diagnosticsStore;
+
+  const fakeConnection = {
+    sendNotification: (method: string, params: Record<string, unknown>) => {
+      if (method !== "textDocument/didOpen") return;
+      const textDoc = params["textDocument"] as
+        | { uri?: string }
+        | undefined;
+      const uri = textDoc?.uri;
+      if (!uri) return;
+
+      setTimeout(() => {
+        diagnosticsStore.set(uri, []);
+      }, 20);
+    },
+  };
+
+  (client as unknown as {
+    initialized: boolean;
+    connection: unknown;
+  }).initialized = true;
+  (client as unknown as {
+    initialized: boolean;
+    connection: unknown;
+  }).connection = fakeConnection;
+
+  try {
+    // Verify the client returns quickly when the server publishes empty diagnostics
+    // (exits poll loop early instead of waiting full diagnosticTimeout of 1000ms).
+    const startTime = Date.now();
+    const result = await client.getDiagnostics(fileName);
+    const elapsed = Date.now() - startTime;
+
+    expect(result.diagnostics).toHaveLength(0);
+    // Should resolve well before the 1000ms timeout.
+    // The server pushes [] at 20ms, poll interval is 100ms, so ~100-300ms.
+    expect(elapsed).toBeLessThan(500);
+    await sleep(30);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 
   it("caches open files and sends didChange instead of didOpen/didClose for repeated access", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-cache-"));

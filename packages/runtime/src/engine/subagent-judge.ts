@@ -19,6 +19,15 @@ export interface SubagentJudgeResult {
   note: string;
 }
 
+interface SubagentJudgeRequest {
+  readonly provider: LLMProvider;
+  readonly task: string;
+  readonly agentType: AgentType | string;
+  readonly output: string;
+  readonly iterationsUsed: number;
+  readonly maxIterations: number;
+}
+
 // ─── System prompt ───────────────────────────────────────────
 
 const BASE_SUBAGENT_JUDGE_SYSTEM_PROMPT = `You assess whether a subagent completed its assigned task.
@@ -42,27 +51,19 @@ const TYPE_SPECIFIC_GUIDANCE: Record<AgentType, string> = {
 };
 
 // ─── Judge function ──────────────────────────────────────────
-
 export async function judgeSubagentOutput(
-  provider: LLMProvider,
-  task: string,
-  agentType: AgentType | string,
-  output: string,
-  iterationsUsed: number,
-  maxIterations: number,
+  request: SubagentJudgeRequest,
 ): Promise<SubagentJudgeResult | null> {
   // Gating: skip trivial tasks
-  if (iterationsUsed < 5) return null;
+  if (request.iterationsUsed < 5) return null;
 
   try {
-    const truncatedOutput = output.length > 2000
-      ? output.slice(0, 2000) + "..."
-      : output;
+    const truncatedOutput = truncateSubagentOutput(request.output);
 
     const parts: string[] = [
-      `## Task assigned to subagent\n${task}`,
-      `## Agent type: ${agentType}`,
-      `## Iterations used: ${iterationsUsed}/${maxIterations}`,
+      `## Task assigned to subagent\n${request.task}`,
+      `## Agent type: ${request.agentType}`,
+      `## Iterations used: ${request.iterationsUsed}/${request.maxIterations}`,
       `## Subagent output\n${truncatedOutput}`,
       "\nAssess the subagent output quality. Respond with JSON only.",
     ];
@@ -70,14 +71,18 @@ export async function judgeSubagentOutput(
     const messages = [
       {
         role: MessageRole.SYSTEM as const,
-        content: `${BASE_SUBAGENT_JUDGE_SYSTEM_PROMPT}\n\n${TYPE_SPECIFIC_GUIDANCE[parseAgentType(agentType) ?? AgentType.GENERAL]}`,
+        content: `${BASE_SUBAGENT_JUDGE_SYSTEM_PROMPT}\n\n${TYPE_SPECIFIC_GUIDANCE[parseAgentType(request.agentType) ?? AgentType.GENERAL]}`,
       },
       { role: MessageRole.USER as const, content: parts.join("\n\n") },
     ];
 
-    const responseText = await collectStreamText(provider, messages);
+    const responseText = await collectStreamText(request.provider, messages);
     return parseJudgeResponse<SubagentJudgeResult>(responseText);
   } catch {
     return null;
   }
+}
+
+function truncateSubagentOutput(output: string) {
+  return output.length > 2000 ? output.slice(0, 2000) + "..." : output;
 }

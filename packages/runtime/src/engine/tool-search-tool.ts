@@ -10,6 +10,21 @@
 import type { ToolSpec } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
 
+const TOOL_SEARCH_PARAM_SCHEMA = {
+  type: "object",
+  properties: {
+    query: {
+      type: "string",
+      description: "Search keywords (e.g., 'git diff', 'diagnostics', 'symbols')",
+    },
+    max_results: {
+      type: "number",
+      description: "Maximum number of tools to return (default: 5)",
+    },
+  },
+  required: ["query"],
+};
+
 /**
  * Create the tool_search tool bound to a specific registry.
  * Must be called per-session since it needs the registry instance.
@@ -22,20 +37,7 @@ export function createToolSearchTool(registry: ToolRegistry): ToolSpec {
       "Returns matching tool names and descriptions. Matched tools become available for use in the next response. " +
       "Use when you need a tool not currently in your tool list (e.g., git operations, LSP diagnostics, symbols).",
     category: "state",
-    paramSchema: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "Search keywords (e.g., 'git diff', 'diagnostics', 'symbols')",
-        },
-        max_results: {
-          type: "number",
-          description: "Maximum number of tools to return (default: 5)",
-        },
-      },
-      required: ["query"],
-    },
+    paramSchema: TOOL_SEARCH_PARAM_SCHEMA,
     resultSchema: {
       type: "object",
       properties: {
@@ -43,50 +45,40 @@ export function createToolSearchTool(registry: ToolRegistry): ToolSpec {
         count: { type: "number" },
       },
     },
-    handler: async (params) => {
-      const query = params["query"] as string;
-      const maxResults = (params["max_results"] as number | undefined) ?? 5;
+    handler: async (params) => runToolSearch(registry, params),
+  };
+}
 
-      if (!query?.trim()) {
-        return {
-          success: false,
-          output: "",
-          error: "Query is required",
-          artifacts: [],
-        };
-      }
+function runToolSearch(registry: ToolRegistry, params: Record<string, unknown>) {
+  const query = params["query"] as string;
+  const maxResults = (params["max_results"] as number | undefined) ?? 5;
 
-      const results = registry.search(query, maxResults);
+  if (!query?.trim()) {
+    return { success: false, output: "", error: "Query is required", artifacts: [] };
+  }
 
-      if (results.length === 0) {
-        // If no deferred tools match, check if the tool is already loaded
-        const loaded = registry.getLoaded();
-        const directMatch = loaded.find(
-          (t) => t.name.toLowerCase().includes(query.toLowerCase()),
-        );
-        if (directMatch) {
-          return {
-            success: true,
-            output: `Tool "${directMatch.name}" is already available. Use it directly.`,
-            error: null,
-            artifacts: [],
-          };
-        }
-        return {
-          success: true,
-          output: "No matching tools found.",
-          error: null,
-          artifacts: [],
-        };
-      }
+  const results = registry.search(query, maxResults);
+  if (results.length === 0) return formatEmptyToolSearch(registry, query);
 
-      const lines = results.map((t) => `- ${t.name} [${t.category}]: ${t.description}`);
-      return {
-        success: true,
-        output: `Resolved ${results.length} tool(s) — now available for use:\n${lines.join("\n")}`,
-        error: null,
-        artifacts: [],
-      };
-    },
+  const lines = results.map((t) => `- ${t.name} [${t.category}]: ${t.description}`);
+  return {
+    success: true,
+    output: `Resolved ${results.length} tool(s) — now available for use:\n${lines.join("\n")}`,
+    error: null,
+    artifacts: [],
+  };
+}
+
+function formatEmptyToolSearch(registry: ToolRegistry, query: string) {
+  const directMatch = registry.getLoaded().find(
+    (tool) => tool.name.toLowerCase().includes(query.toLowerCase()),
+  );
+  return {
+    success: true,
+    output: directMatch
+      ? `Tool "${directMatch.name}" is already available. Use it directly.`
+      : "No matching tools found.",
+    error: null,
+    artifacts: [],
   };
 }

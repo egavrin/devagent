@@ -40,8 +40,6 @@ function makeSafetyPolicy(
     ...overrides,
   };
 }
-
-describe("ApprovalGate", () => {
   describe("Suggest mode", () => {
     it("allows readonly tools", () => {
       const gate = new ApprovalGate(makePolicy());
@@ -565,4 +563,3 @@ describe("ApprovalGate", () => {
       expect(events).toHaveLength(0);
     });
   });
-});

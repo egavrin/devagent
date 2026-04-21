@@ -23,8 +23,34 @@ export interface Plan {
   readonly explanation: string | null;
 }
 
-// ─── Tool Definition ────────────────────────────────────────
+const PLAN_PARAM_SCHEMA = {
+  type: "object",
+  properties: {
+    steps: {
+      type: "string",
+      description:
+        'JSON array of step objects: [{"description": "...", "status": "pending|in_progress|completed"}, ...]',
+    },
+    explanation: {
+      type: "string",
+      description: "Brief explanation of plan changes (optional)",
+    },
+    allow_regression: {
+      type: "boolean",
+      description: "Set true only when intentionally resetting/removing previously completed steps.",
+    },
+  },
+  required: ["steps"],
+};
 
+const PLAN_RESULT_SCHEMA = {
+  type: "object",
+  properties: {
+    plan: { type: "string" },
+  },
+};
+
+// ─── Tool Definition ────────────────────────────────────────
 export function createPlanTool(
   bus: EventBus,
   getSessionState: () => SessionState | undefined,
@@ -40,230 +66,253 @@ export function createPlanTool(
     errorGuidance: {
       common: "Ensure steps is a valid JSON array of {description, status} objects. Valid statuses: pending, in_progress, completed.",
     },
-    paramSchema: {
-      type: "object",
-      properties: {
-        steps: {
-          type: "string",
-          description:
-            'JSON array of step objects: [{"description": "...", "status": "pending|in_progress|completed"}, ...]',
-        },
-        explanation: {
-          type: "string",
-          description: "Brief explanation of plan changes (optional)",
-        },
-        allow_regression: {
-          type: "boolean",
-          description: "Set true only when intentionally resetting/removing previously completed steps.",
-        },
-      },
-      required: ["steps"],
-    },
-    resultSchema: {
-      type: "object",
-      properties: {
-        plan: { type: "string" },
-      },
-    },
-    handler: async (params) => {
-      const stepsRaw = params["steps"] as string;
-      const explanation = (params["explanation"] as string | undefined) ?? null;
-      const allowRegression = params["allow_regression"] === true;
-
-      let steps: PlanStep[];
-      try {
-        const parsed = JSON.parse(stepsRaw) as Array<{
-          description: string;
-          status: string;
-        }>;
-        steps = parsed.map((s, i) => ({
-          description: validateDescription(s.description, i),
-          status: validateStatus(s.status),
-        }));
-      } catch (err) {
-        const message = extractErrorMessage(err);
-        // Surface validation errors directly; wrap parse errors with guidance
-        const isValidationError = message.startsWith("Invalid plan step status:") || message.startsWith("Invalid plan step description");
-        return {
-          success: false,
-          output: "",
-          error: isValidationError
-            ? message
-            : `Invalid steps JSON. Expected: [{"description": "...", "status": "pending|in_progress|completed"}]`,
-          artifacts: [],
-        };
-      }
-
-      if (steps.length === 0) {
-        return {
-          success: false,
-          output: "",
-          error: "Plan must have at least one step.",
-          artifacts: [],
-        };
-      }
-
-      // Single-pass status counting
-      let inProgressCount = 0;
-      let newCompleted = 0;
-      let mergeOccurred = false;
-      let preservedCount = 0;
-      for (const s of steps) {
-        if (s.status === "in_progress") inProgressCount++;
-        else if (s.status === "completed") newCompleted++;
-      }
-
-      if (inProgressCount > 1) {
-        return {
-          success: false,
-          output: "",
-          error: `Plan must have at most one in_progress step (found ${inProgressCount}).`,
-          artifacts: [],
-        };
-      }
-
-      // ── Transition metadata enrichment ──────────────────────
-      const oldPlan = getSessionState()?.getPlan();
-      const currentIter = getIteration?.() ?? 0;
-      const now = Date.now();
-      steps = steps.map((newStep) => {
-        const oldStep = oldPlan?.find((o) => isSamePlanStep(o.description, newStep.description));
-        if (!oldStep || oldStep.status !== newStep.status) {
-          // Status changed or new step — stamp transition
-          return {
-            ...newStep,
-            lastTransitionIteration: currentIter,
-            lastTransitionTimestamp: now,
-          };
-        }
-        // Unchanged — preserve prior metadata
-        return {
-          ...newStep,
-          lastTransitionIteration: oldStep.lastTransitionIteration,
-          lastTransitionTimestamp: oldStep.lastTransitionTimestamp,
-        };
-      });
-
-      // ── Regression guard ──────────────────────────────────
-      // Fail fast when an update reverts/drops completed steps unless
-      // caller explicitly opts into regression.
-      if (oldPlan && oldPlan.length > 0) {
-        const oldCompleted = oldPlan.filter((s) => s.status === "completed");
-        const newCompletedSteps = steps.filter((s) => s.status === "completed");
-        const revertedSteps = oldCompleted
-          .filter((oldStep) =>
-            !newCompletedSteps.some((newStep) =>
-              isSamePlanStep(oldStep.description, newStep.description)
-            )
-          )
-          .map((s) => s.description);
-
-        const hasIncompleteOld = oldPlan.some((s) => s.status !== "completed");
-        const matchedOldSteps = oldPlan.filter((oldStep) =>
-          steps.some((newStep) => isSamePlanStep(oldStep.description, newStep.description))
-        ).length;
-        const minMatchedForActivePlan = Math.max(1, Math.ceil(oldPlan.length * 0.5));
-        const churnDetected = hasIncompleteOld && matchedOldSteps < minMatchedForActivePlan;
-
-        if (churnDetected) {
-          if (!allowRegression) {
-            return {
-              success: false,
-              output: "",
-              error:
-                `Plan churn detected: this update keeps only ${matchedOldSteps}/${oldPlan.length} existing step(s) while the current plan is still in progress. Update statuses on existing steps instead of replacing the plan, or retry with allow_regression=true if reset is intentional.`,
-              artifacts: [],
-            };
-          }
-        }
-
-        if (revertedSteps.length > 0) {
-          bus.emit("plan:regression", {
-            oldCompleted: oldCompleted.length,
-            newCompleted: newCompletedSteps.length,
-            reverted: revertedSteps.length,
-          });
-          if (!allowRegression) {
-            return {
-              success: false,
-              output: "",
-              error: `Plan regression detected: this update reverts ${revertedSteps.length} previously completed step(s): ${revertedSteps.map((d) => `"${d}"`).join(", ")}. Preserve completed steps, or retry with allow_regression=true if reset is intentional.`,
-              artifacts: [],
-            };
-          }
-
-          // allow_regression=true: check if this is a catastrophic reset.
-          // Threshold: reverts >= max(3, 50% of completed) → auto-merge to prevent
-          // accidental loss of large amounts of completed work.
-          const catastropheThreshold = Math.max(3, Math.ceil(oldCompleted.length * 0.5));
-          if (revertedSteps.length >= catastropheThreshold) {
-            // Preserve all completed steps; append only genuinely new pending steps.
-            const newNonOverlapping = steps.filter(
-              (ns) => !oldCompleted.some((oc) => isSamePlanStep(oc.description, ns.description)),
-            );
-            steps = [...oldCompleted, ...newNonOverlapping];
-            newCompleted = steps.filter((s) => s.status === "completed").length;
-            preservedCount = oldCompleted.length;
-            mergeOccurred = true;
-          }
-        }
-      }
-
-      // Sync to session state sidecar (survives compaction)
-      getSessionState()?.setPlan(steps);
-
-      // Persist plan to human-readable markdown file (non-fatal)
-      if (options?.repoRoot && options?.sessionId) {
-        writePlanFile(options.sessionId, options.repoRoot, steps);
-      }
-
-      // Invoke plan quality judge callback if structural change occurred
-      let judgeFeedback: string | null = null;
-      if (onPlanUpdated && isStructuralChange(oldPlan ?? null, steps)) {
-        judgeFeedback = await onPlanUpdated(steps, oldPlan ?? null);
-      }
-
-      // Emit plan event
-      bus.emit("plan:updated", {
-        steps: steps.map((s) => ({
-          description: s.description,
-          status: s.status,
-          lastTransitionIteration: s.lastTransitionIteration,
-        })),
-        explanation,
-      });
-
-      // Format plan for display
-      const planDisplay = steps
-        .map((s) => {
-          const icon =
-            s.status === "completed"
-              ? "[x]"
-              : s.status === "in_progress"
-                ? "[>]"
-                : "[ ]";
-          return `${icon} ${s.description}`;
-        })
-        .join("\n");
-
-      const total = steps.length;
-      const mergeNote = mergeOccurred
-        ? ` (${preservedCount} previously completed step(s) auto-preserved)`
-        : "";
-
-      const judgeNote = judgeFeedback ? `\n\n${judgeFeedback}` : "";
-
-      return {
-        success: true,
-        output: `Plan updated (${newCompleted}/${total} completed)${mergeNote}:\n${planDisplay}${judgeNote}`,
-        error: null,
-        artifacts: [],
-      };
-    },
+    paramSchema: PLAN_PARAM_SCHEMA,
+    resultSchema: PLAN_RESULT_SCHEMA,
+    handler: createPlanHandler({ bus, getSessionState, getIteration, onPlanUpdated, options }),
   };
 }
 
 // ─── Helpers ────────────────────────────────────────────────
+
+function createPlanHandler(input: {
+  readonly bus: EventBus;
+  readonly getSessionState: () => SessionState | undefined;
+  readonly getIteration?: () => number;
+  readonly onPlanUpdated?: (steps: ReadonlyArray<PlanStep>, oldPlan: ReadonlyArray<PlanStep> | null) => Promise<string | null>;
+  readonly options?: { readonly repoRoot?: string; readonly sessionId?: string };
+}) {
+  return async (params: Record<string, unknown>) => {
+    const parsed = parsePlanSteps(params["steps"] as string);
+    if ("error" in parsed) return parsed.error;
+
+    const oldPlan = input.getSessionState()?.getPlan();
+    const guarded = buildGuardedPlanUpdate(parsed.steps, oldPlan, params, input);
+    if ("error" in guarded) return guarded.error;
+
+    const judgeFeedback = await persistAndJudgePlan(guarded.steps, oldPlan, input);
+    emitPlanUpdated(input.bus, guarded.steps, (params["explanation"] as string | undefined) ?? null);
+
+    return {
+      success: true,
+      output: formatPlanUpdateOutput(guarded.steps, guarded, judgeFeedback),
+      error: null,
+      artifacts: [],
+    };
+  };
+}
+
+function buildGuardedPlanUpdate(
+  steps: ReadonlyArray<PlanStep>,
+  oldPlan: ReadonlyArray<PlanStep> | null | undefined,
+  params: Record<string, unknown>,
+  input: {
+    readonly bus: EventBus;
+    readonly getIteration?: () => number;
+  },
+): RegressionGuardResult | { readonly error: ReturnType<typeof planError> } {
+  const enriched = enrichPlanTransitions(steps, oldPlan, input.getIteration?.() ?? 0);
+  return applyRegressionGuard(enriched, oldPlan ?? null, params["allow_regression"] === true, input.bus);
+}
+
+async function persistAndJudgePlan(
+  steps: ReadonlyArray<PlanStep>,
+  oldPlan: ReadonlyArray<PlanStep> | null | undefined,
+  input: {
+    readonly getSessionState: () => SessionState | undefined;
+    readonly onPlanUpdated?: (steps: ReadonlyArray<PlanStep>, oldPlan: ReadonlyArray<PlanStep> | null) => Promise<string | null>;
+    readonly options?: { readonly repoRoot?: string; readonly sessionId?: string };
+  },
+): Promise<string | null> {
+  input.getSessionState()?.setPlan([...steps]);
+  if (input.options?.repoRoot && input.options?.sessionId) {
+    writePlanFile(input.options.sessionId, input.options.repoRoot, steps);
+  }
+  if (input.onPlanUpdated && isStructuralChange(oldPlan ?? null, steps)) {
+    return await input.onPlanUpdated(steps, oldPlan ?? null);
+  }
+  return null;
+}
+
+function emitPlanUpdated(
+  bus: EventBus,
+  steps: ReadonlyArray<PlanStep>,
+  explanation: string | null,
+): void {
+  bus.emit("plan:updated", {
+    steps: steps.map((s) => ({
+      description: s.description,
+      status: s.status,
+      lastTransitionIteration: s.lastTransitionIteration,
+    })),
+    explanation,
+  });
+}
+
+function planError(error: string) {
+  return { success: false, output: "", error, artifacts: [] };
+}
+
+function parsePlanSteps(stepsRaw: string): { readonly steps: PlanStep[] } | { readonly error: ReturnType<typeof planError> } {
+  try {
+    const parsed = JSON.parse(stepsRaw) as Array<{ description: string; status: string }>;
+    const steps = parsed.map((s, i) => ({
+      description: validateDescription(s.description, i),
+      status: validateStatus(s.status),
+    }));
+    return validateParsedPlanSteps(steps);
+  } catch (err) {
+    return { error: planError(formatPlanParseError(extractErrorMessage(err))) };
+  }
+}
+
+function validateParsedPlanSteps(steps: PlanStep[]): { readonly steps: PlanStep[] } | { readonly error: ReturnType<typeof planError> } {
+  if (steps.length === 0) return { error: planError("Plan must have at least one step.") };
+  const inProgressCount = steps.filter((s) => s.status === "in_progress").length;
+  if (inProgressCount > 1) {
+    return { error: planError(`Plan must have at most one in_progress step (found ${inProgressCount}).`) };
+  }
+  return { steps };
+}
+
+function formatPlanParseError(message: string): string {
+  const isValidationError = message.startsWith("Invalid plan step status:")
+    || message.startsWith("Invalid plan step description");
+  return isValidationError
+    ? message
+    : `Invalid steps JSON. Expected: [{"description": "...", "status": "pending|in_progress|completed"}]`;
+}
+
+function enrichPlanTransitions(
+  steps: ReadonlyArray<PlanStep>,
+  oldPlan: ReadonlyArray<PlanStep> | null | undefined,
+  currentIter: number,
+): PlanStep[] {
+  const now = Date.now();
+  return steps.map((newStep) => enrichPlanStep(newStep, oldPlan, currentIter, now));
+}
+
+function enrichPlanStep(
+  newStep: PlanStep,
+  oldPlan: ReadonlyArray<PlanStep> | null | undefined,
+  currentIter: number,
+  now: number,
+): PlanStep {
+  const oldStep = oldPlan?.find((o) => isSamePlanStep(o.description, newStep.description));
+  if (!oldStep || oldStep.status !== newStep.status) {
+    return { ...newStep, lastTransitionIteration: currentIter, lastTransitionTimestamp: now };
+  }
+  return {
+    ...newStep,
+    lastTransitionIteration: oldStep.lastTransitionIteration,
+    lastTransitionTimestamp: oldStep.lastTransitionTimestamp,
+  };
+}
+
+interface RegressionGuardResult {
+  readonly steps: PlanStep[];
+  readonly mergeOccurred: boolean;
+  readonly preservedCount: number;
+}
+
+function applyRegressionGuard(
+  steps: PlanStep[],
+  oldPlan: ReadonlyArray<PlanStep> | null,
+  allowRegression: boolean,
+  bus: EventBus,
+): RegressionGuardResult | { readonly error: ReturnType<typeof planError> } {
+  if (!oldPlan || oldPlan.length === 0) {
+    return { steps, mergeOccurred: false, preservedCount: 0 };
+  }
+
+  const churn = detectPlanChurn(oldPlan, steps);
+  if (churn && !allowRegression) return { error: planError(churn.error) };
+
+  const regression = detectPlanRegression(oldPlan, steps);
+  if (regression.revertedSteps.length === 0) {
+    return { steps, mergeOccurred: false, preservedCount: 0 };
+  }
+
+  bus.emit("plan:regression", regression.event);
+  if (!allowRegression) return { error: planError(regression.error) };
+  return maybeAutoMergeCompletedSteps(steps, regression.oldCompleted, regression.revertedSteps);
+}
+
+function detectPlanChurn(
+  oldPlan: ReadonlyArray<PlanStep>,
+  steps: ReadonlyArray<PlanStep>,
+): { readonly error: string } | null {
+  const hasIncompleteOld = oldPlan.some((s) => s.status !== "completed");
+  const matchedOldSteps = oldPlan.filter((oldStep) =>
+    steps.some((newStep) => isSamePlanStep(oldStep.description, newStep.description)),
+  ).length;
+  const minMatchedForActivePlan = Math.max(1, Math.ceil(oldPlan.length * 0.5));
+  if (!hasIncompleteOld || matchedOldSteps >= minMatchedForActivePlan) return null;
+  return {
+    error: `Plan churn detected: this update keeps only ${matchedOldSteps}/${oldPlan.length} existing step(s) while the current plan is still in progress. Update statuses on existing steps instead of replacing the plan, or retry with allow_regression=true if reset is intentional.`,
+  };
+}
+
+function detectPlanRegression(oldPlan: ReadonlyArray<PlanStep>, steps: ReadonlyArray<PlanStep>) {
+  const oldCompleted = oldPlan.filter((s) => s.status === "completed");
+  const newCompletedSteps = steps.filter((s) => s.status === "completed");
+  const revertedSteps = oldCompleted
+    .filter((oldStep) =>
+      !newCompletedSteps.some((newStep) => isSamePlanStep(oldStep.description, newStep.description)),
+    )
+    .map((s) => s.description);
+  return {
+    oldCompleted,
+    revertedSteps,
+    event: {
+      oldCompleted: oldCompleted.length,
+      newCompleted: newCompletedSteps.length,
+      reverted: revertedSteps.length,
+    },
+    error: `Plan regression detected: this update reverts ${revertedSteps.length} previously completed step(s): ${revertedSteps.map((d) => `"${d}"`).join(", ")}. Preserve completed steps, or retry with allow_regression=true if reset is intentional.`,
+  };
+}
+
+function maybeAutoMergeCompletedSteps(
+  steps: PlanStep[],
+  oldCompleted: ReadonlyArray<PlanStep>,
+  revertedSteps: ReadonlyArray<string>,
+): RegressionGuardResult {
+  const catastropheThreshold = Math.max(3, Math.ceil(oldCompleted.length * 0.5));
+  if (revertedSteps.length < catastropheThreshold) {
+    return { steps, mergeOccurred: false, preservedCount: 0 };
+  }
+  const newNonOverlapping = steps.filter(
+    (ns) => !oldCompleted.some((oc) => isSamePlanStep(oc.description, ns.description)),
+  );
+  return {
+    steps: [...oldCompleted, ...newNonOverlapping],
+    mergeOccurred: true,
+    preservedCount: oldCompleted.length,
+  };
+}
+
+function formatPlanUpdateOutput(
+  steps: ReadonlyArray<PlanStep>,
+  guarded: RegressionGuardResult,
+  judgeFeedback: string | null,
+): string {
+  const newCompleted = steps.filter((s) => s.status === "completed").length;
+  const mergeNote = guarded.mergeOccurred
+    ? ` (${guarded.preservedCount} previously completed step(s) auto-preserved)`
+    : "";
+  const judgeNote = judgeFeedback ? `\n\n${judgeFeedback}` : "";
+  return `Plan updated (${newCompleted}/${steps.length} completed)${mergeNote}:\n${formatPlanDisplay(steps)}${judgeNote}`;
+}
+
+function formatPlanDisplay(steps: ReadonlyArray<PlanStep>): string {
+  return steps.map((s) => `${statusIcon(s.status)} ${s.description}`).join("\n");
+}
+
+function statusIcon(status: PlanStep["status"]): string {
+  if (status === "completed") return "[x]";
+  if (status === "in_progress") return "[>]";
+  return "[ ]";
+}
 
 function validateDescription(description: unknown, index: number): string {
   if (typeof description !== "string" || description.trim().length === 0) {

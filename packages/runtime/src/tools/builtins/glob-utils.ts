@@ -19,53 +19,42 @@ export function matchesGlob(regex: RegExp, candidates: readonly string[]): boole
 export function toPosixPath(path: string): string {
   return path.replaceAll("\\", "/");
 }
-
 function globToRegexFragment(pattern: string): string {
   let regex = "";
 
   for (let i = 0; i < pattern.length; i++) {
-    const char = pattern[i]!;
-
-    if (char === "*") {
-      const next = pattern[i + 1];
-      const afterNext = pattern[i + 2];
-      if (next === "*") {
-        if (afterNext === "/") {
-          regex += "(?:.*/)?";
-          i += 2;
-        } else {
-          regex += ".*";
-          i += 1;
-        }
-      } else {
-        regex += "[^/]*";
-      }
-      continue;
-    }
-
-    if (char === "?") {
-      regex += "[^/]";
-      continue;
-    }
-
-    if (char === "{") {
-      const closingBrace = findMatchingBrace(pattern, i);
-      if (closingBrace === -1) {
-        regex += "\\{";
-        continue;
-      }
-
-      const content = pattern.slice(i + 1, closingBrace);
-      const alternatives = splitAlternatives(content);
-      regex += `(?:${alternatives.map((part) => globToRegexFragment(part)).join("|")})`;
-      i = closingBrace;
-      continue;
-    }
-
-    regex += escapeRegexChar(char);
+    const token = consumeGlobToken(pattern, i);
+    regex += token.regex;
+    i = token.nextIndex;
   }
 
   return regex;
+}
+
+function consumeGlobToken(pattern: string, index: number): { regex: string; nextIndex: number } {
+  const char = pattern[index]!;
+  if (char === "*") return consumeStarToken(pattern, index);
+  if (char === "?") return { regex: "[^/]", nextIndex: index };
+  if (char === "{") return consumeBraceToken(pattern, index);
+  return { regex: escapeRegexChar(char), nextIndex: index };
+}
+
+function consumeStarToken(pattern: string, index: number): { regex: string; nextIndex: number } {
+  const next = pattern[index + 1];
+  if (next !== "*") return { regex: "[^/]*", nextIndex: index };
+  if (pattern[index + 2] === "/") return { regex: "(?:.*/)?", nextIndex: index + 2 };
+  return { regex: ".*", nextIndex: index + 1 };
+}
+
+function consumeBraceToken(pattern: string, index: number): { regex: string; nextIndex: number } {
+  const closingBrace = findMatchingBrace(pattern, index);
+  if (closingBrace === -1) return { regex: "\\{", nextIndex: index };
+
+  const alternatives = splitAlternatives(pattern.slice(index + 1, closingBrace));
+  return {
+    regex: `(?:${alternatives.map((part) => globToRegexFragment(part)).join("|")})`,
+    nextIndex: closingBrace,
+  };
 }
 
 function findMatchingBrace(value: string, start: number): number {

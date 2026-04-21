@@ -48,14 +48,12 @@ function getProxyRuntime(): ProxyRuntime {
 async function loadUndiciProxyModule(): Promise<UndiciProxyModule> {
   return await import("undici") as UndiciProxyModule;
 }
-
 async function getProxyDispatcher(options?: ProxyAwareFetchOptions): Promise<Dispatcher | null> {
   const signature = getProxySignature();
   if (!signature) return null;
   const runtime = options?.runtime ?? getProxyRuntime();
   if (runtime === "bun") {
-    throw options?.createUnsupportedProxyError?.(BUN_PROXY_UNSUPPORTED_MESSAGE)
-      ?? new Error(BUN_PROXY_UNSUPPORTED_MESSAGE);
+    throw createUnsupportedProxyError(options);
   }
   if (signature === cachedProxySignature && cachedProxyDispatcher) {
     return cachedProxyDispatcher;
@@ -65,6 +63,11 @@ async function getProxyDispatcher(options?: ProxyAwareFetchOptions): Promise<Dis
   cachedProxySignature = signature;
   cachedProxyDispatcher = new EnvHttpProxyAgent();
   return cachedProxyDispatcher;
+}
+
+function createUnsupportedProxyError(options?: ProxyAwareFetchOptions) {
+  return options?.createUnsupportedProxyError?.(BUN_PROXY_UNSUPPORTED_MESSAGE)
+    ?? new Error(BUN_PROXY_UNSUPPORTED_MESSAGE);
 }
 
 function resolveRequestUrl(input: RequestInfo | URL): URL | null {

@@ -36,7 +36,6 @@ function defaultGlobalSkillPaths(): ReadonlyArray<string> {
   const home = process.env["HOME"];
   return home ? [join(home, ".agents", "skills")] : [];
 }
-
 function parseFrontmatter(content: string): ParsedFrontmatter {
   const trimmed = content.trimStart();
   if (!trimmed.startsWith("---")) {
@@ -54,44 +53,73 @@ function parseFrontmatter(content: string): ParsedFrontmatter {
   let activeListKey: string | null = null;
 
   for (const rawLine of frontmatter.split("\n")) {
-    const line = rawLine.trimEnd();
-    const trimmed = line.trim();
-    if (trimmed.length === 0 || trimmed.startsWith("#")) {
+    const parsed = parseFrontmatterLine(rawLine, activeListKey);
+    if (parsed.kind === "skip") continue;
+    if (parsed.kind === "list-item") {
+      appendFrontmatterListItem(fields, parsed.key, parsed.value);
       continue;
     }
-
-    if (activeListKey && trimmed.startsWith("- ")) {
-      const nextValue = trimmed.slice(2).trim().replace(/^["']|["']$/g, "");
-      const existing = fields[activeListKey];
-      if (Array.isArray(existing)) {
-        fields[activeListKey] = [...existing, nextValue];
-      } else if (typeof existing === "string" && existing.length > 0) {
-        fields[activeListKey] = [existing, nextValue];
-      } else {
-        fields[activeListKey] = [nextValue];
-      }
-      continue;
-    }
-
-    const colonIdx = trimmed.indexOf(":");
-    if (colonIdx <= 0) {
+    if (parsed.kind === "invalid") {
       activeListKey = null;
       continue;
     }
 
-    const key = trimmed.substring(0, colonIdx).trim();
-    const value = trimmed.substring(colonIdx + 1).trim();
-    if (value.length === 0) {
-      fields[key] = [];
-      activeListKey = key;
-      continue;
-    }
-
-    fields[key] = value.replace(/^["']|["']$/g, "");
-    activeListKey = null;
+    fields[parsed.key] = buildEmptyListValue(parsed.value);
+    activeListKey = parsed.value.length === 0 ? parsed.key : null;
   }
 
   return { fields, body };
+}
+
+type ParsedFrontmatterLine =
+  | { readonly kind: "skip" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "list-item"; readonly key: string; readonly value: string }
+  | { readonly kind: "field"; readonly key: string; readonly value: string };
+
+function parseFrontmatterLine(
+  rawLine: string,
+  activeListKey: string | null,
+): ParsedFrontmatterLine {
+  const trimmed = rawLine.trimEnd().trim();
+  if (trimmed.length === 0 || trimmed.startsWith("#")) return { kind: "skip" };
+  if (activeListKey && trimmed.startsWith("- ")) {
+    return {
+      kind: "list-item",
+      key: activeListKey,
+      value: stripQuotes(trimmed.slice(2).trim()),
+    };
+  }
+
+  const colonIdx = trimmed.indexOf(":");
+  if (colonIdx <= 0) return { kind: "invalid" };
+
+  const key = trimmed.substring(0, colonIdx).trim();
+  const value = trimmed.substring(colonIdx + 1).trim();
+  return { kind: "field", key, value: stripQuotes(value) };
+}
+
+function appendFrontmatterListItem(
+  fields: Record<string, string | ReadonlyArray<string>>,
+  key: string,
+  value: string,
+): void {
+  const existing = fields[key];
+  if (Array.isArray(existing)) {
+    fields[key] = [...existing, value];
+    return;
+  }
+  fields[key] = typeof existing === "string" && existing.length > 0
+    ? [existing, value]
+    : [value];
+}
+
+function stripQuotes(value: string): string {
+  return value.replace(/^["']|["']$/g, "");
+}
+
+function buildEmptyListValue(value: string): string | ReadonlyArray<string> {
+  return value.length === 0 ? [] : value;
 }
 
 function normalizeStringArray(
@@ -219,7 +247,6 @@ export class SkillLoader {
   }
 
   // ─── Private ────────────────────────────────────────────────
-
   private scanSkillsDirectory(
     dir: string,
     source: SkillSource,
@@ -235,71 +262,117 @@ export class SkillLoader {
     }
 
     for (const entry of entries) {
-      const entryPath = join(dir, entry);
-
-      try {
-        if (!statSync(entryPath).isDirectory()) continue;
-      } catch {
-        continue;
-      }
-
-      const skillFilePath = join(entryPath, "SKILL.md");
-      if (!existsSync(skillFilePath)) continue;
-
-      let content: string;
-      try {
-        content = readFileSync(skillFilePath, "utf-8");
-      } catch {
-        process.stderr.write(`[skills] Warning: cannot read ${skillFilePath}\n`);
-        continue;
-      }
-
-      const { fields } = parseFrontmatter(content);
-      const name = normalizeOptionalString(fields["name"]);
-      const description = normalizeOptionalString(fields["description"]);
-
-      if (!name || !description) {
-        process.stderr.write(
-          `[skills] Warning: ${skillFilePath} missing required name/description frontmatter\n`,
-        );
-        continue;
-      }
-
-      const dirName = basename(entryPath);
-      if (name !== dirName) {
-        process.stderr.write(
-          `[skills] Warning: skill name "${name}" does not match directory "${dirName}" in ${skillFilePath}\n`,
-        );
-        continue;
-      }
-
-      if (!isValidSkillName(name)) {
-        process.stderr.write(
-          `[skills] Warning: invalid skill name "${name}" in ${skillFilePath}\n`,
-        );
-        continue;
-      }
-
-      const supportRoots = parseSkillSupportRoots(entryPath);
-
-      const metadata: SkillMetadata = {
-        name,
-        description,
-        triggers: normalizeStringArray(fields["triggers"]),
-        paths: normalizeStringArray(fields["paths"]),
-        examples: normalizeStringArray(fields["examples"]),
-        source,
-        dirPath: entryPath,
-        skillFilePath,
-        supportRootPath: supportRoots.supportRootPath,
-        sourceRepoPath: supportRoots.sourceRepoPath,
-        sourceSkillDirPath: supportRoots.sourceSkillDirPath,
-        license: normalizeOptionalString(fields["license"]),
-        compatibility: normalizeStringArray(fields["compatibility"]),
-        metadata: undefined,
-      };
-
-      found.set(name, metadata);
+      const metadata = this.scanSkillEntry(dir, entry, source);
+      if (metadata) found.set(metadata.name, metadata);
     }
   }
+
+  private scanSkillEntry(
+    dir: string,
+    entry: string,
+    source: SkillSource,
+  ): SkillMetadata | null {
+    const entryPath = join(dir, entry);
+    if (!isDirectory(entryPath)) return null;
+
+    const skillFilePath = join(entryPath, "SKILL.md");
+    if (!existsSync(skillFilePath)) return null;
+
+    const content = readSkillFile(skillFilePath);
+    if (content === null) return null;
+
+    const { fields } = parseFrontmatter(content);
+    const identity = validateSkillIdentity(entryPath, skillFilePath, fields);
+    if (!identity) return null;
+
+    const supportRoots = parseSkillSupportRoots(entryPath);
+    return buildSkillMetadata({
+      fields,
+      identity,
+      source,
+      entryPath,
+      skillFilePath,
+      supportRoots,
+    });
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function readSkillFile(skillFilePath: string): string | null {
+  try {
+    return readFileSync(skillFilePath, "utf-8");
+  } catch {
+    process.stderr.write(`[skills] Warning: cannot read ${skillFilePath}\n`);
+    return null;
+  }
+}
+
+function validateSkillIdentity(
+  entryPath: string,
+  skillFilePath: string,
+  fields: Record<string, string | ReadonlyArray<string>>,
+): { readonly name: string; readonly description: string } | null {
+  const name = normalizeOptionalString(fields["name"]);
+  const description = normalizeOptionalString(fields["description"]);
+  if (!name || !description) {
+    process.stderr.write(
+      `[skills] Warning: ${skillFilePath} missing required name/description frontmatter\n`,
+    );
+    return null;
+  }
+  if (!validateSkillDirectoryName(name, entryPath, skillFilePath)) return null;
+  if (!validateSkillName(name, skillFilePath)) return null;
+  return { name, description };
+}
+
+function validateSkillDirectoryName(
+  name: string,
+  entryPath: string,
+  skillFilePath: string,
+): boolean {
+  const dirName = basename(entryPath);
+  if (name === dirName) return true;
+  process.stderr.write(
+    `[skills] Warning: skill name "${name}" does not match directory "${dirName}" in ${skillFilePath}\n`,
+  );
+  return false;
+}
+
+function validateSkillName(name: string, skillFilePath: string): boolean {
+  if (isValidSkillName(name)) return true;
+  process.stderr.write(`[skills] Warning: invalid skill name "${name}" in ${skillFilePath}\n`);
+  return false;
+}
+
+function buildSkillMetadata(input: {
+  readonly fields: Record<string, string | ReadonlyArray<string>>;
+  readonly identity: { readonly name: string; readonly description: string };
+  readonly source: SkillSource;
+  readonly entryPath: string;
+  readonly skillFilePath: string;
+  readonly supportRoots: ParsedSkillSupportRoots;
+}): SkillMetadata {
+  return {
+    name: input.identity.name,
+    description: input.identity.description,
+    triggers: normalizeStringArray(input.fields["triggers"]),
+    paths: normalizeStringArray(input.fields["paths"]),
+    examples: normalizeStringArray(input.fields["examples"]),
+    source: input.source,
+    dirPath: input.entryPath,
+    skillFilePath: input.skillFilePath,
+    supportRootPath: input.supportRoots.supportRootPath,
+    sourceRepoPath: input.supportRoots.sourceRepoPath,
+    sourceSkillDirPath: input.supportRoots.sourceSkillDirPath,
+    license: normalizeOptionalString(input.fields["license"]),
+    compatibility: normalizeStringArray(input.fields["compatibility"]),
+    metadata: undefined,
+  };
 }

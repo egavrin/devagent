@@ -16,6 +16,13 @@ interface SearchMatch {
   readonly content: string;
 }
 
+interface SearchFilesRequest {
+  readonly pattern: string;
+  readonly searchPath: string;
+  readonly filePattern?: string;
+  readonly maxResults: number;
+}
+
 export function createSearchFilesTool(options?: ReadonlyToolOptions): ToolSpec {
   return {
     name: "search_files",
@@ -58,74 +65,17 @@ export function createSearchFilesTool(options?: ReadonlyToolOptions): ToolSpec {
       },
     },
     handler: async (params, context) => {
-      const pattern = params["pattern"] as string;
-      const searchPath = params["path"] as string | undefined ?? ".";
-      const filePattern = params["file_pattern"] as string | undefined;
-      const maxResults = (params["max_results"] as number | undefined) ?? 50;
-
+      const request = parseSearchFilesRequest(params);
       const resolved = resolveReadonlyPath(
         context.repoRoot,
-        searchPath,
+        request.searchPath,
         "search_files",
         options,
       );
-      const effectivePattern = filePattern ? normalizeGlobPattern(filePattern) : null;
-      const fileRegex = effectivePattern ? globToRegex(effectivePattern) : null;
-      let regex: RegExp;
-
-      try {
-        regex = new RegExp(pattern, "gi");
-      } catch {
-        regex = new RegExp(escapeRegex(pattern), "gi");
-      }
-
-      const matches: SearchMatch[] = [];
-
-      outer:
-      for (const entry of walkDirectory(resolved.resolvedPath, resolved.rootPath)) {
-        if (matches.length >= maxResults) break;
-
-        if (fileRegex && !fileRegex.test(entry.relativePath)) continue;
-        if (isBinaryPath(entry.relativePath)) continue;
-
-        let content: string;
-        try {
-          content = readFileSync(entry.fullPath, "utf-8");
-        } catch {
-          continue;
-        }
-
-        const lines = content.split("\n");
-        for (let i = 0; i < lines.length; i++) {
-          if (matches.length >= maxResults) break outer;
-          const line = lines[i]!;
-          regex.lastIndex = 0;
-          if (regex.test(line)) {
-            matches.push({
-              file: toRootRelativePath(resolved.rootPath, entry.fullPath),
-              line: i + 1,
-              content: line.length > 200 ? line.substring(0, 200) + "..." : line,
-            });
-          }
-        }
-      }
-
-      if (matches.length === 0) {
-        return {
-          success: true,
-          output: "No matches found.",
-          error: null,
-          artifacts: [],
-        };
-      }
-
-      const output = matches
-        .map((m) => `${m.file}:${m.line}: ${m.content.trim()}`)
-        .join("\n");
-
+      const matches = collectSearchMatches(request, resolved);
       return {
         success: true,
-        output: `${matches.length} match(es):\n${output}`,
+        output: formatSearchMatches(matches),
         error: null,
         artifacts: [],
       };
@@ -134,6 +84,94 @@ export function createSearchFilesTool(options?: ReadonlyToolOptions): ToolSpec {
 }
 
 export const searchFilesTool: ToolSpec = createSearchFilesTool();
+
+function parseSearchFilesRequest(params: Record<string, unknown>): SearchFilesRequest {
+  return {
+    pattern: params["pattern"] as string,
+    searchPath: params["path"] as string | undefined ?? ".",
+    filePattern: params["file_pattern"] as string | undefined,
+    maxResults: (params["max_results"] as number | undefined) ?? 50,
+  };
+}
+
+function collectSearchMatches(
+  request: SearchFilesRequest,
+  resolved: { readonly resolvedPath: string; readonly rootPath: string },
+): SearchMatch[] {
+  const regex = createSearchRegex(request.pattern);
+  const fileRegex = createFilePatternRegex(request.filePattern);
+  const matches: SearchMatch[] = [];
+
+  outer:
+  for (const entry of walkDirectory(resolved.resolvedPath, resolved.rootPath)) {
+    if (matches.length >= request.maxResults) break;
+    if (shouldSkipSearchEntry(entry.relativePath, fileRegex)) continue;
+
+    const content = readTextFileOrNull(entry.fullPath);
+    if (content === null) continue;
+
+    for (const match of findLineMatches(content, regex, {
+      file: toRootRelativePath(resolved.rootPath, entry.fullPath),
+    })) {
+      if (matches.length >= request.maxResults) break outer;
+      matches.push(match);
+    }
+  }
+
+  return matches;
+}
+
+function createSearchRegex(pattern: string): RegExp {
+  try {
+    return new RegExp(pattern, "gi");
+  } catch {
+    return new RegExp(escapeRegex(pattern), "gi");
+  }
+}
+
+function createFilePatternRegex(filePattern: string | undefined): RegExp | null {
+  return filePattern ? globToRegex(normalizeGlobPattern(filePattern)) : null;
+}
+
+function shouldSkipSearchEntry(relativePath: string, fileRegex: RegExp | null): boolean {
+  return (fileRegex !== null && !fileRegex.test(relativePath)) || isBinaryPath(relativePath);
+}
+
+function readTextFileOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+function findLineMatches(
+  content: string,
+  regex: RegExp,
+  input: { readonly file: string },
+): SearchMatch[] {
+  const matches: SearchMatch[] = [];
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    regex.lastIndex = 0;
+    if (!regex.test(line)) continue;
+    matches.push({
+      file: input.file,
+      line: i + 1,
+      content: line.length > 200 ? line.substring(0, 200) + "..." : line,
+    });
+  }
+  return matches;
+}
+
+function formatSearchMatches(matches: ReadonlyArray<SearchMatch>): string {
+  if (matches.length === 0) return "No matches found.";
+  const output = matches
+    .map((m) => `${m.file}:${m.line}: ${m.content.trim()}`)
+    .join("\n");
+  return `${matches.length} match(es):\n${output}`;
+}
 
 function isBinaryPath(path: string): boolean {
   const binaryExtensions = [

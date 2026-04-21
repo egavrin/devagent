@@ -25,6 +25,17 @@ interface ResolvedConfiguredApiKey {
   readonly envVar?: string;
 }
 
+interface CredentialResolutionContext {
+  readonly providerId: string;
+  readonly credentialMode: ProviderCredentialMode;
+  readonly providerConfig?: ProviderConfig;
+  readonly providerConfigApiKey?: string | null;
+  readonly topLevelApiKey?: string;
+  readonly storedCredential: CredentialInfo | null;
+  readonly env: NodeJS.ProcessEnv;
+  readonly descriptor?: ProviderCredentialDescriptor;
+}
+
 const PROVIDER_CREDENTIALS: readonly ProviderCredentialDescriptor[] = [
   { id: "anthropic", envVar: "ANTHROPIC_API_KEY", hint: "set ANTHROPIC_API_KEY or devagent auth login", credentialMode: "api" },
   { id: "openai", envVar: "OPENAI_API_KEY", hint: "set OPENAI_API_KEY or devagent auth login", credentialMode: "api" },
@@ -78,7 +89,6 @@ function resolveConfiguredApiKey(
     apiKey: envValue,
   };
 }
-
 export function resolveProviderCredentialStatus(opts: {
   readonly providerId: string;
   readonly providerConfig?: ProviderConfig;
@@ -89,155 +99,115 @@ export function resolveProviderCredentialStatus(opts: {
 }): ResolvedProviderCredentialStatus {
   const descriptor = getProviderCredentialDescriptor(opts.providerId);
   const credentialMode = descriptor?.credentialMode ?? "api";
-  const providerConfig = opts.providerConfig;
-  const env = opts.env ?? process.env;
-  const storedCredential = opts.storedCredential ?? null;
+  const context: CredentialResolutionContext = {
+    providerId: opts.providerId,
+    credentialMode,
+    providerConfig: opts.providerConfig,
+    providerConfigApiKey: opts.providerConfigApiKey,
+    topLevelApiKey: opts.topLevelApiKey,
+    storedCredential: opts.storedCredential ?? null,
+    env: opts.env ?? process.env,
+    descriptor,
+  };
 
   if (credentialMode === "none") {
-    return {
-      providerId: opts.providerId,
-      credentialMode,
-      hasCredential: true,
-      source: "not-required",
-    };
+    return buildCredentialStatus(context, true, "not-required");
   }
 
   if (credentialMode === "oauth") {
-    if (providerConfig?.oauthToken) {
-      return {
-        providerId: opts.providerId,
-        credentialMode,
-        hasCredential: true,
-        source: "provider-config",
-      };
-    }
-    if (storedCredential?.type === "oauth") {
-      return {
-        providerId: opts.providerId,
-        credentialMode,
-        hasCredential: true,
-        source: "stored",
-      };
-    }
-    return {
-      providerId: opts.providerId,
-      credentialMode,
-      hasCredential: false,
-      source: "missing",
-    };
+    return resolveOAuthCredentialStatus(context);
   }
 
-  const providerConfigApiKey =
-    opts.providerConfigApiKey !== undefined
-      ? opts.providerConfigApiKey
-      : providerConfig?.apiKey;
-  const providerApiKey = resolveConfiguredApiKey(providerConfigApiKey, env);
-  if (providerApiKey.source === "literal") {
-    return {
-      providerId: opts.providerId,
-      credentialMode,
-      hasCredential: true,
-      source: "provider-config",
-      apiKey: providerApiKey.apiKey,
-    };
-  }
-  if (providerApiKey.source === "env") {
-    return {
-      providerId: opts.providerId,
-      credentialMode,
-      hasCredential: true,
-      source: "env",
-      envVar: providerApiKey.envVar,
-      apiKey: providerApiKey.apiKey,
-    };
-  }
-  if (providerApiKey.source === "missing-env") {
-    if (storedCredential?.type === "api") {
-      return {
-        providerId: opts.providerId,
-        credentialMode,
-        hasCredential: true,
-        source: "stored",
-        apiKey: storedCredential.key,
-      };
-    }
-    return {
-      providerId: opts.providerId,
-      credentialMode,
-      hasCredential: false,
-      source: "missing",
-      envVar: providerApiKey.envVar,
-    };
-  }
+  return resolveApiCredentialStatus(context);
+}
 
-  const topLevelApiKey = resolveConfiguredApiKey(opts.topLevelApiKey, env);
-  if (topLevelApiKey.source === "literal") {
-    return {
-      providerId: opts.providerId,
-      credentialMode,
-      hasCredential: true,
-      source: "top-level-config",
-      apiKey: topLevelApiKey.apiKey,
-    };
+function resolveOAuthCredentialStatus(
+  context: CredentialResolutionContext,
+): ResolvedProviderCredentialStatus {
+  if (context.providerConfig?.oauthToken) {
+    return buildCredentialStatus(context, true, "provider-config");
   }
-  if (topLevelApiKey.source === "env") {
-    return {
-      providerId: opts.providerId,
-      credentialMode,
-      hasCredential: true,
-      source: "env",
-      envVar: topLevelApiKey.envVar,
-      apiKey: topLevelApiKey.apiKey,
-    };
+  if (context.storedCredential?.type === "oauth") {
+    return buildCredentialStatus(context, true, "stored");
   }
-  if (topLevelApiKey.source === "missing-env") {
-    if (storedCredential?.type === "api") {
-      return {
-        providerId: opts.providerId,
-        credentialMode,
-        hasCredential: true,
-        source: "stored",
-        apiKey: storedCredential.key,
-      };
-    }
-    return {
-      providerId: opts.providerId,
-      credentialMode,
-      hasCredential: false,
-      source: "missing",
-      envVar: topLevelApiKey.envVar,
-    };
-  }
+  return buildCredentialStatus(context, false, "missing");
+}
 
-  if (descriptor?.envVar) {
-    const envValue = env[descriptor.envVar];
-    if (envValue) {
-      return {
-        providerId: opts.providerId,
-        credentialMode,
-        hasCredential: true,
-        source: "env",
-        envVar: descriptor.envVar,
-        apiKey: envValue,
-      };
-    }
-  }
+function resolveApiCredentialStatus(
+  context: CredentialResolutionContext,
+): ResolvedProviderCredentialStatus {
+  return resolveApiKeySource(context, "provider-config", getProviderApiKeyValue(context))
+    ?? resolveApiKeySource(context, "top-level-config", context.topLevelApiKey)
+    ?? resolveDescriptorEnvCredential(context)
+    ?? resolveStoredApiCredential(context)
+    ?? buildCredentialStatus(context, false, "missing");
+}
 
-  if (storedCredential?.type === "api") {
-    return {
-      providerId: opts.providerId,
-      credentialMode,
-      hasCredential: true,
-      source: "stored",
-      apiKey: storedCredential.key,
-    };
-  }
+function getProviderApiKeyValue(context: CredentialResolutionContext): string | null | undefined {
+  return context.providerConfigApiKey !== undefined
+    ? context.providerConfigApiKey
+    : context.providerConfig?.apiKey;
+}
 
+function resolveApiKeySource(
+  context: CredentialResolutionContext,
+  source: "provider-config" | "top-level-config",
+  value: string | null | undefined,
+): ResolvedProviderCredentialStatus | null {
+  const resolved = resolveConfiguredApiKey(value, context.env);
+  if (resolved.source === "literal") {
+    return buildCredentialStatus(context, true, source, { apiKey: resolved.apiKey });
+  }
+  if (resolved.source === "env") {
+    return buildCredentialStatus(context, true, "env", {
+      apiKey: resolved.apiKey,
+      envVar: resolved.envVar,
+    });
+  }
+  if (resolved.source === "missing-env") {
+    return resolveMissingEnvCredential(context, resolved.envVar);
+  }
+  return null;
+}
+
+function resolveMissingEnvCredential(
+  context: CredentialResolutionContext,
+  envVar: string | undefined,
+): ResolvedProviderCredentialStatus {
+  const stored = resolveStoredApiCredential(context);
+  return stored ?? buildCredentialStatus(context, false, "missing", { envVar });
+}
+
+function resolveDescriptorEnvCredential(
+  context: CredentialResolutionContext,
+): ResolvedProviderCredentialStatus | null {
+  const envVar = context.descriptor?.envVar;
+  const apiKey = envVar ? context.env[envVar] : undefined;
+  return envVar && apiKey
+    ? buildCredentialStatus(context, true, "env", { envVar, apiKey })
+    : null;
+}
+
+function resolveStoredApiCredential(
+  context: CredentialResolutionContext,
+): ResolvedProviderCredentialStatus | null {
+  return context.storedCredential?.type === "api"
+    ? buildCredentialStatus(context, true, "stored", { apiKey: context.storedCredential.key })
+    : null;
+}
+
+function buildCredentialStatus(
+  context: CredentialResolutionContext,
+  hasCredential: boolean,
+  source: ResolvedProviderCredentialStatus["source"],
+  values?: Pick<ResolvedProviderCredentialStatus, "apiKey" | "envVar">,
+): ResolvedProviderCredentialStatus {
   return {
-    providerId: opts.providerId,
-    credentialMode,
-    hasCredential: false,
-    source: "missing",
+    providerId: context.providerId,
+    credentialMode: context.credentialMode,
+    hasCredential,
+    source,
+    ...values,
   };
 }
 

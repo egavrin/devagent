@@ -1,5 +1,11 @@
 import { Buffer } from "node:buffer";
 
+import {
+  countCommonPrefix,
+  countCommonSuffix,
+  diffSnapshotLines,
+} from "./tool-file-change-diff.js";
+import type { DiffOperation } from "./tool-file-change-diff.js";
 import type {
   ToolFileChangePreview,
   ToolFileChangeLine,
@@ -12,7 +18,6 @@ const DEFAULT_MAX_DIFF_BYTES = 8 * 1024;
 const DEFAULT_MAX_FILES = 3;
 const DEFAULT_MAX_SNAPSHOT_BYTES = 64 * 1024;
 const DIFF_CONTEXT_LINES = 3;
-const MAX_LCS_CELLS = 200_000;
 const TRUNCATION_MARKER = "... diff truncated ...";
 
 interface BuildToolFileChangePreviewOptions {
@@ -37,11 +42,6 @@ interface ToolFileDiffAnalysis {
   readonly structuredDiff?: ToolFileStructuredDiff;
 }
 
-interface DiffOperation {
-  readonly type: "context" | "add" | "delete";
-  readonly text: string;
-}
-
 export function buildToolFileUnifiedDiff(
   options: BuildToolFileChangePreviewOptions,
 ): string {
@@ -61,7 +61,6 @@ export function buildToolFileStructuredDiff(
     hunks: groupLinesIntoHunks(numberDiffLines(operations)),
   };
 }
-
 export function buildToolFileStructuredDiffFromUnifiedDiff(
   diff: string,
 ): ToolFileStructuredDiff | undefined {
@@ -77,12 +76,7 @@ export function buildToolFileStructuredDiffFromUnifiedDiff(
   };
 
   for (const line of diff.split("\n")) {
-    if (line.length === 0 || line.startsWith("---") || line.startsWith("+++")) {
-      continue;
-    }
-    if (line === TRUNCATION_MARKER) {
-      continue;
-    }
+    if (shouldSkipUnifiedDiffLine(line)) continue;
     if (line.startsWith("@@")) {
       flushHunk();
       const parsed = parseHunkHeader(line);
@@ -90,39 +84,57 @@ export function buildToolFileStructuredDiffFromUnifiedDiff(
       newLine = parsed.newStart;
       continue;
     }
-    if (line.startsWith("+")) {
-      currentLines.push({
-        type: "add",
-        text: line.slice(1),
-        oldLine: null,
-        newLine,
-      });
-      newLine = (newLine ?? 0) + 1;
-      continue;
-    }
-    if (line.startsWith("-")) {
-      currentLines.push({
-        type: "delete",
-        text: line.slice(1),
-        oldLine,
-        newLine: null,
-      });
-      oldLine = (oldLine ?? 0) + 1;
-      continue;
-    }
-    currentLines.push({
-      type: "context",
-      text: line.startsWith(" ") ? line.slice(1) : line,
-      oldLine,
-      newLine,
-    });
-    oldLine = (oldLine ?? 0) + 1;
-    newLine = (newLine ?? 0) + 1;
+    const parsedLine = parseUnifiedDiffContentLine(line, oldLine, newLine);
+    currentLines.push(parsedLine.line);
+    oldLine = parsedLine.oldLine;
+    newLine = parsedLine.newLine;
   }
 
   flushHunk();
 
   return hunks.length > 0 ? { hunks } : undefined;
+}
+
+function shouldSkipUnifiedDiffLine(line: string): boolean {
+  return line.length === 0 ||
+    line.startsWith("---") ||
+    line.startsWith("+++") ||
+    line === TRUNCATION_MARKER;
+}
+
+function parseUnifiedDiffContentLine(
+  line: string,
+  oldLine: number | null,
+  newLine: number | null,
+): {
+  readonly line: ToolFileChangeLine;
+  readonly oldLine: number | null;
+  readonly newLine: number | null;
+} {
+  if (line.startsWith("+")) {
+    return {
+      line: { type: "add", text: line.slice(1), oldLine: null, newLine },
+      oldLine,
+      newLine: (newLine ?? 0) + 1,
+    };
+  }
+  if (line.startsWith("-")) {
+    return {
+      line: { type: "delete", text: line.slice(1), oldLine, newLine: null },
+      oldLine: (oldLine ?? 0) + 1,
+      newLine,
+    };
+  }
+  return {
+    line: {
+      type: "context",
+      text: line.startsWith(" ") ? line.slice(1) : line,
+      oldLine,
+      newLine,
+    },
+    oldLine: (oldLine ?? 0) + 1,
+    newLine: (newLine ?? 0) + 1,
+  };
 }
 
 export function buildToolFileChangePreview(
@@ -246,46 +258,41 @@ function clipUnifiedDiff(
     truncated,
   };
 }
-
 function analyzeToolFileChange(options: BuildToolFileChangePreviewOptions): ToolFileDiffAnalysis {
   const structuredDiff = buildToolFileStructuredDiff(options.before, options.after);
   if (structuredDiff) {
-    const additions = countStructuredDiffLines(structuredDiff, "add");
-    const deletions = countStructuredDiffLines(structuredDiff, "delete");
-    return {
-      additions,
-      deletions,
-      diffLines: buildUnifiedDiffLines(options.path, options.kind, structuredDiff),
-      structuredDiff,
-    };
+    return analyzeStructuredToolFileChange(options, structuredDiff);
   }
 
   const beforeLines = splitFileLines(options.before);
   const afterLines = splitFileLines(options.after);
+  return analyzeLineRangeToolFileChange(options, beforeLines, afterLines);
+}
 
-  let prefix = 0;
-  while (
-    prefix < beforeLines.length &&
-    prefix < afterLines.length &&
-    beforeLines[prefix] === afterLines[prefix]
-  ) {
-    prefix++;
-  }
+function analyzeStructuredToolFileChange(
+  options: BuildToolFileChangePreviewOptions,
+  structuredDiff: ToolFileStructuredDiff,
+): ToolFileDiffAnalysis {
+  return {
+    additions: countStructuredDiffLines(structuredDiff, "add"),
+    deletions: countStructuredDiffLines(structuredDiff, "delete"),
+    diffLines: buildUnifiedDiffLines(options.path, options.kind, structuredDiff),
+    structuredDiff,
+  };
+}
 
-  let suffix = 0;
-  while (
-    suffix < beforeLines.length - prefix &&
-    suffix < afterLines.length - prefix &&
-    beforeLines[beforeLines.length - 1 - suffix] === afterLines[afterLines.length - 1 - suffix]
-  ) {
-    suffix++;
-  }
+function analyzeLineRangeToolFileChange(
+  options: BuildToolFileChangePreviewOptions,
+  beforeLines: ReadonlyArray<string>,
+  afterLines: ReadonlyArray<string>,
+): ToolFileDiffAnalysis {
+  const prefix = countCommonPrefix(beforeLines, afterLines);
+  const suffix = countCommonSuffix(beforeLines, afterLines, prefix);
 
   const changedBefore = beforeLines.slice(prefix, beforeLines.length - suffix);
   const changedAfter = afterLines.slice(prefix, afterLines.length - suffix);
 
   const contextStart = Math.max(0, prefix - DIFF_CONTEXT_LINES);
-  const beforeContextEnd = Math.min(beforeLines.length - suffix, beforeLines.length);
   const afterContextEnd = Math.min(afterLines.length - suffix, afterLines.length);
   const leadingContext = beforeLines.slice(contextStart, prefix);
   const trailingContext = afterLines.slice(
@@ -346,95 +353,6 @@ function countStructuredDiffLines(
     }
   }
   return count;
-}
-
-function diffSnapshotLines(
-  before: ReadonlyArray<string>,
-  after: ReadonlyArray<string>,
-): ReadonlyArray<DiffOperation> | null {
-  let prefix = 0;
-  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) {
-    prefix++;
-  }
-
-  let suffix = 0;
-  while (
-    suffix < before.length - prefix &&
-    suffix < after.length - prefix &&
-    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
-  ) {
-    suffix++;
-  }
-
-  const beforeMiddle = before.slice(prefix, before.length - suffix);
-  const afterMiddle = after.slice(prefix, after.length - suffix);
-  const middle = buildMiddleDiffOperations(beforeMiddle, afterMiddle);
-  if (!middle) return null;
-
-  return [
-    ...before.slice(0, prefix).map((text) => ({ type: "context", text }) satisfies DiffOperation),
-    ...middle,
-    ...before.slice(before.length - suffix).map((text) => ({ type: "context", text }) satisfies DiffOperation),
-  ];
-}
-
-function buildMiddleDiffOperations(
-  before: ReadonlyArray<string>,
-  after: ReadonlyArray<string>,
-): ReadonlyArray<DiffOperation> | null {
-  if (before.length === 0) {
-    return after.map((text) => ({ type: "add", text }) satisfies DiffOperation);
-  }
-  if (after.length === 0) {
-    return before.map((text) => ({ type: "delete", text }) satisfies DiffOperation);
-  }
-
-  if ((before.length + 1) * (after.length + 1) > MAX_LCS_CELLS) {
-    return null;
-  }
-
-  const dp = Array.from({ length: before.length + 1 }, () => new Uint32Array(after.length + 1));
-
-  for (let oldIndex = before.length - 1; oldIndex >= 0; oldIndex--) {
-    for (let newIndex = after.length - 1; newIndex >= 0; newIndex--) {
-      dp[oldIndex]![newIndex] = before[oldIndex] === after[newIndex]
-        ? dp[oldIndex + 1]![newIndex + 1]! + 1
-        : Math.max(dp[oldIndex + 1]![newIndex]!, dp[oldIndex]![newIndex + 1]!);
-    }
-  }
-
-  const operations: DiffOperation[] = [];
-  let oldIndex = 0;
-  let newIndex = 0;
-
-  while (oldIndex < before.length && newIndex < after.length) {
-    if (before[oldIndex] === after[newIndex]) {
-      operations.push({ type: "context", text: before[oldIndex]! });
-      oldIndex++;
-      newIndex++;
-      continue;
-    }
-
-    if (dp[oldIndex + 1]![newIndex]! >= dp[oldIndex]![newIndex + 1]!) {
-      operations.push({ type: "delete", text: before[oldIndex]! });
-      oldIndex++;
-      continue;
-    }
-
-    operations.push({ type: "add", text: after[newIndex]! });
-    newIndex++;
-  }
-
-  while (oldIndex < before.length) {
-    operations.push({ type: "delete", text: before[oldIndex]! });
-    oldIndex++;
-  }
-  while (newIndex < after.length) {
-    operations.push({ type: "add", text: after[newIndex]! });
-    newIndex++;
-  }
-
-  return operations;
 }
 
 function numberDiffLines(
@@ -551,102 +469,125 @@ function parseHunkHeader(line: string): {
     newStart: Number(match[2]),
   };
 }
-
 function parseToolFileChangePreview(entry: unknown): ToolFileChangePreview | null {
-  if (
-    !entry ||
-    typeof entry !== "object" ||
-    typeof (entry as Record<string, unknown>)["path"] !== "string" ||
-    typeof (entry as Record<string, unknown>)["kind"] !== "string" ||
-    typeof (entry as Record<string, unknown>)["additions"] !== "number" ||
-    typeof (entry as Record<string, unknown>)["deletions"] !== "number" ||
-    typeof (entry as Record<string, unknown>)["unifiedDiff"] !== "string" ||
-    typeof (entry as Record<string, unknown>)["truncated"] !== "boolean"
-  ) {
-    return null;
-  }
+  if (!isToolFileChangePreviewRecord(entry)) return null;
+  const record = entry as Record<string, unknown>;
+  const kind = record["kind"] as ToolFileChangePreview["kind"];
 
-  const kind = (entry as Record<string, unknown>)["kind"];
-  if (kind !== "create" && kind !== "update" && kind !== "delete" && kind !== "move") {
-    return null;
-  }
-
-  const before = (entry as Record<string, unknown>)["before"];
-  const after = (entry as Record<string, unknown>)["after"];
+  const before = record["before"];
+  const after = record["after"];
   const structuredDiff =
-    parseToolFileStructuredDiff((entry as Record<string, unknown>)["structuredDiff"])
+    parseToolFileStructuredDiff(record["structuredDiff"])
     ?? (typeof before === "string" && typeof after === "string"
       ? buildToolFileStructuredDiff(before, after)
-      : buildToolFileStructuredDiffFromUnifiedDiff((entry as Record<string, unknown>)["unifiedDiff"] as string));
+      : buildToolFileStructuredDiffFromUnifiedDiff(record["unifiedDiff"] as string));
 
   return {
-    path: (entry as Record<string, unknown>)["path"] as string,
+    path: record["path"] as string,
     kind,
-    additions: (entry as Record<string, unknown>)["additions"] as number,
-    deletions: (entry as Record<string, unknown>)["deletions"] as number,
-    unifiedDiff: (entry as Record<string, unknown>)["unifiedDiff"] as string,
-    truncated: (entry as Record<string, unknown>)["truncated"] as boolean,
+    additions: record["additions"] as number,
+    deletions: record["deletions"] as number,
+    unifiedDiff: record["unifiedDiff"] as string,
+    truncated: record["truncated"] as boolean,
     ...(structuredDiff ? { structuredDiff } : {}),
     ...(typeof before === "string" && typeof after === "string" ? { before, after } : {}),
   };
 }
 
+function isToolFileChangePreviewRecord(entry: unknown): entry is Record<string, unknown> & {
+  readonly kind: ToolFileChangePreview["kind"];
+} {
+  if (!entry || typeof entry !== "object") return false;
+  const record = entry as Record<string, unknown>;
+  return typeof record["path"] === "string" &&
+    isToolFileChangeKind(record["kind"]) &&
+    typeof record["additions"] === "number" &&
+    typeof record["deletions"] === "number" &&
+    typeof record["unifiedDiff"] === "string" &&
+    typeof record["truncated"] === "boolean";
+}
+
+function isToolFileChangeKind(kind: unknown): kind is ToolFileChangePreview["kind"] {
+  return kind === "create" || kind === "update" || kind === "delete" || kind === "move";
+}
 function parseToolFileStructuredDiff(entry: unknown): ToolFileStructuredDiff | undefined {
-  if (!entry || typeof entry !== "object" || !Array.isArray((entry as Record<string, unknown>)["hunks"])) {
+  const rawHunks = getStructuredDiffHunks(entry);
+  if (!rawHunks) {
     return undefined;
   }
 
   const hunks: ToolFileChangeHunk[] = [];
-  for (const rawHunk of (entry as Record<string, unknown>)["hunks"] as ReadonlyArray<unknown>) {
-    if (
-      !rawHunk ||
-      typeof rawHunk !== "object" ||
-      typeof (rawHunk as Record<string, unknown>)["oldStart"] !== "number" ||
-      typeof (rawHunk as Record<string, unknown>)["oldLines"] !== "number" ||
-      typeof (rawHunk as Record<string, unknown>)["newStart"] !== "number" ||
-      typeof (rawHunk as Record<string, unknown>)["newLines"] !== "number" ||
-      !Array.isArray((rawHunk as Record<string, unknown>)["lines"])
-    ) {
-      return undefined;
-    }
-
-    const lines: ToolFileChangeLine[] = [];
-    for (const rawLine of (rawHunk as Record<string, unknown>)["lines"] as ReadonlyArray<unknown>) {
-      if (
-        !rawLine ||
-        typeof rawLine !== "object" ||
-        typeof (rawLine as Record<string, unknown>)["type"] !== "string" ||
-        typeof (rawLine as Record<string, unknown>)["text"] !== "string"
-      ) {
-        return undefined;
-      }
-
-      const type = (rawLine as Record<string, unknown>)["type"];
-      const oldLine = (rawLine as Record<string, unknown>)["oldLine"];
-      const newLine = (rawLine as Record<string, unknown>)["newLine"];
-      if (type !== "context" && type !== "add" && type !== "delete") {
-        return undefined;
-      }
-      if ((oldLine !== null && typeof oldLine !== "number") || (newLine !== null && typeof newLine !== "number")) {
-        return undefined;
-      }
-
-      lines.push({
-        type,
-        text: (rawLine as Record<string, unknown>)["text"] as string,
-        oldLine: (oldLine as number | null | undefined) ?? null,
-        newLine: (newLine as number | null | undefined) ?? null,
-      });
-    }
-
-    hunks.push({
-      oldStart: (rawHunk as Record<string, unknown>)["oldStart"] as number,
-      oldLines: (rawHunk as Record<string, unknown>)["oldLines"] as number,
-      newStart: (rawHunk as Record<string, unknown>)["newStart"] as number,
-      newLines: (rawHunk as Record<string, unknown>)["newLines"] as number,
-      lines,
-    });
+  for (const rawHunk of rawHunks) {
+    const hunk = parseToolFileStructuredHunk(rawHunk);
+    if (!hunk) return undefined;
+    hunks.push(hunk);
   }
 
   return { hunks };
+}
+
+function getStructuredDiffHunks(entry: unknown): ReadonlyArray<unknown> | null {
+  if (!entry || typeof entry !== "object") return null;
+  const hunks = (entry as Record<string, unknown>)["hunks"];
+  return Array.isArray(hunks) ? hunks : null;
+}
+
+function parseToolFileStructuredHunk(rawHunk: unknown): ToolFileChangeHunk | null {
+  if (!isStructuredHunkRecord(rawHunk)) return null;
+  const record = rawHunk as Record<string, unknown>;
+  const lines = parseToolFileStructuredLines(record["lines"] as ReadonlyArray<unknown>);
+  if (!lines) return null;
+  return {
+    oldStart: record["oldStart"] as number,
+    oldLines: record["oldLines"] as number,
+    newStart: record["newStart"] as number,
+    newLines: record["newLines"] as number,
+    lines,
+  };
+}
+
+function isStructuredHunkRecord(rawHunk: unknown): boolean {
+  if (!rawHunk || typeof rawHunk !== "object") return false;
+  const record = rawHunk as Record<string, unknown>;
+  return typeof record["oldStart"] === "number" &&
+    typeof record["oldLines"] === "number" &&
+    typeof record["newStart"] === "number" &&
+    typeof record["newLines"] === "number" &&
+    Array.isArray(record["lines"]);
+}
+
+function parseToolFileStructuredLines(
+  rawLines: ReadonlyArray<unknown>,
+): ToolFileChangeLine[] | null {
+  const lines: ToolFileChangeLine[] = [];
+  for (const rawLine of rawLines) {
+    const line = parseToolFileStructuredLine(rawLine);
+    if (!line) return null;
+    lines.push(line);
+  }
+  return lines;
+}
+
+function parseToolFileStructuredLine(rawLine: unknown): ToolFileChangeLine | null {
+  if (!rawLine || typeof rawLine !== "object") return null;
+  const record = rawLine as Record<string, unknown>;
+  const type = record["type"];
+  const oldLine = record["oldLine"];
+  const newLine = record["newLine"];
+  if (!isToolFileChangeLineType(type) || typeof record["text"] !== "string") return null;
+  if (!isStructuredLineNumber(oldLine) || !isStructuredLineNumber(newLine)) return null;
+  return {
+    type,
+    text: record["text"],
+    oldLine: oldLine ?? null,
+    newLine: newLine ?? null,
+  };
+}
+
+function isToolFileChangeLineType(type: unknown): type is ToolFileChangeLine["type"] {
+  return type === "context" || type === "add" || type === "delete";
+}
+
+function isStructuredLineNumber(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null || typeof value === "number";
 }

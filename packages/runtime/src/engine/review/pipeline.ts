@@ -23,7 +23,7 @@ import {
 } from "./context.js";
 import { extractAppliesToPattern } from "./rules.js";
 import { VIOLATION_SCHEMA } from "./schema.js";
-import type { Violation, ReviewResult, ReviewSummary } from "./schema.js";
+import type { Violation, ReviewResult } from "./schema.js";
 import {
   collectPatchReviewData,
   validateReviewResponse,
@@ -53,20 +53,7 @@ export interface ReviewPipelineInput {
 
 // ── Review prompt builder ───────────────────────────────────────────────────
 
-function buildReviewPrompt(
-  patchName: string,
-  patchDataset: string,
-  contextSection?: string,
-): string {
-  const contextBlock = contextSection
-    ? `\n## Additional Source Context\n\n${contextSection}\n`
-    : "";
-
-  return `# Code Review Task: ${patchName}
-
-You are reviewing a patch file against a specific coding rule. Your task is to identify violations with precision and accuracy.
-
-## Critical Instructions
+const REVIEW_WORKFLOW_TEXT = `## Critical Instructions
 
 1. **USE ONLY THE PRE-PARSED PATCH DATASET BELOW** as your source of truth
    - Do NOT attempt to read files using tools
@@ -118,7 +105,22 @@ Before submitting:
 - DO NOT use line numbers from context or removed lines
 - DO NOT guess or estimate line numbers
 - DO NOT read files with tools - use only the dataset below
-- DO NOT report the same violation multiple times
+- DO NOT report the same violation multiple times`;
+
+function buildReviewPrompt(
+  patchName: string,
+  patchDataset: string,
+  contextSection?: string,
+): string {
+  const contextBlock = contextSection
+    ? `\n## Additional Source Context\n\n${contextSection}\n`
+    : "";
+
+  return `# Code Review Task: ${patchName}
+
+You are reviewing a patch file against a specific coding rule. Your task is to identify violations with precision and accuracy.
+
+${REVIEW_WORKFLOW_TEXT}
 
 ## Required JSON Schema
 
@@ -186,24 +188,8 @@ export async function runReviewPipeline(
   input: ReviewPipelineInput,
 ): Promise<ReviewResult> {
   const config: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, ...options.config };
-  const { provider, workspaceRoot } = options;
-
-  // Read input files
-  const patchPath = resolve(workspaceRoot, input.patchFile);
-  const rulePath = resolve(workspaceRoot, input.ruleFile);
-
-  const patchContent = readFileSync(patchPath, "utf-8");
-  const ruleContent = readFileSync(rulePath, "utf-8");
-  const ruleName = basename(rulePath, ".md");
-
-  // Parse patch
-  const parser = new PatchParser(patchContent, true);
-  const filterPattern = extractAppliesToPattern(ruleContent);
-  const parsed: ParsedPatch = parser.parse(filterPattern);
-
-  let files: FileEntry[] = parsed.files.sort(
-    (a, b) => a.path.localeCompare(b.path) || (a._chunkIndex ?? 0) - (b._chunkIndex ?? 0),
-  );
+  const prepared = prepareReviewInput(options.workspaceRoot, input);
+  let files = sortPatchFiles(prepared.parsed.files);
 
   if (files.length === 0) {
     return {
@@ -211,37 +197,96 @@ export async function runReviewPipeline(
       summary: {
         totalViolations: 0,
         filesReviewed: 0,
-        ruleName,
+        ruleName: prepared.ruleName,
       },
     };
   }
 
-  // Dynamic limit computation
-  const dynamicLineLimit = computeDynamicLineLimit(config.maxLinesPerChunk, ruleContent, files);
+  const chunks = buildReviewChunks(files, prepared, config);
+  const contextOrchestrator = createContextOrchestrator(options);
 
-  // Split large files
-  files = splitLargeFileEntries(files, {
-    maxHunksPerChunk: config.maxHunksPerChunk,
-    maxLinesPerChunk: dynamicLineLimit > 0 ? dynamicLineLimit : config.maxLinesPerChunk,
-  }).sort(
+  const systemPrompt = `# Coding Rule: ${basename(prepared.rulePath)}
+
+${prepared.ruleContent}
+
+---
+
+The above rule has been pre-loaded for your review. Do NOT use tools to read it.
+Follow the workflow in the user prompt to analyze the patch against this rule.
+Output your findings as valid JSON matching the provided schema.`;
+
+  const review = await processReviewChunks({
+    provider: options.provider,
+    workspaceRoot: options.workspaceRoot,
+    patchName: basename(prepared.patchPath),
+    parsedPatch: prepared.parsed,
+    filterPattern: prepared.filterPattern,
+    contextOrchestrator,
+    systemPrompt,
+    chunks,
+  });
+  const deduplicated = deduplicateViolations(review.violations);
+
+  return {
+    violations: deduplicated,
+    summary: {
+      totalViolations: deduplicated.length,
+      filesReviewed: review.files.size,
+      ruleName: prepared.ruleName,
+    },
+  };
+}
+
+function prepareReviewInput(workspaceRoot: string, input: ReviewPipelineInput): {
+  readonly patchPath: string;
+  readonly rulePath: string;
+  readonly ruleContent: string;
+  readonly ruleName: string;
+  readonly filterPattern: string | null;
+  readonly parsed: ParsedPatch;
+} {
+  const patchPath = resolve(workspaceRoot, input.patchFile);
+  const rulePath = resolve(workspaceRoot, input.ruleFile);
+  const patchContent = readFileSync(patchPath, "utf-8");
+  const ruleContent = readFileSync(rulePath, "utf-8");
+  const filterPattern = extractAppliesToPattern(ruleContent);
+  return {
+    patchPath,
+    rulePath,
+    ruleContent,
+    ruleName: basename(rulePath, ".md"),
+    filterPattern,
+    parsed: new PatchParser(patchContent, true).parse(filterPattern),
+  };
+}
+
+function sortPatchFiles(files: FileEntry[]): FileEntry[] {
+  return files.sort(
     (a, b) => a.path.localeCompare(b.path) || (a._chunkIndex ?? 0) - (b._chunkIndex ?? 0),
   );
+}
 
-  // Compute dynamic file limit
-  const maxFilesPerChunk = computeDynamicFileLimit(config.maxFilesPerChunk, ruleContent, files);
-
-  // Chunk files
-  let chunks = chunkPatchFiles(files, {
+function buildReviewChunks(
+  files: FileEntry[],
+  input: { readonly ruleContent: string; readonly filterPattern: string | null },
+  config: ReviewConfig,
+): FileEntry[][] {
+  const dynamicLineLimit = computeDynamicLineLimit(config.maxLinesPerChunk, input.ruleContent, files);
+  const splitFiles = sortPatchFiles(splitLargeFileEntries(files, {
+    maxHunksPerChunk: config.maxHunksPerChunk,
+    maxLinesPerChunk: dynamicLineLimit > 0 ? dynamicLineLimit : config.maxLinesPerChunk,
+  }));
+  const maxFilesPerChunk = computeDynamicFileLimit(config.maxFilesPerChunk, input.ruleContent, splitFiles);
+  const chunks = chunkPatchFiles(splitFiles, {
     maxFilesPerChunk,
     maxLinesPerChunk: dynamicLineLimit,
     chunkOverlapLines: config.chunkOverlapLines,
   });
+  return refineChunksForTokenBudget(chunks, input.ruleContent, input.filterPattern ?? undefined, config.tokenBudget);
+}
 
-  // Refine chunks for token budget
-  chunks = refineChunksForTokenBudget(chunks, ruleContent, filterPattern ?? undefined, config.tokenBudget);
-
-  // Build context orchestrator
-  const contextOrchestrator = new ContextOrchestrator(
+function createContextOrchestrator(options: ReviewPipelineOptions): ContextOrchestrator {
+  return new ContextOrchestrator(
     [
       new SourceContextProvider({
         padLines: options.contextPadLines ?? 40,
@@ -250,77 +295,78 @@ export async function runReviewPipeline(
     ],
     { maxTotalLines: options.contextMaxTotalLines ?? 1500 },
   );
+}
 
-  // System prompt with rule content
-  const systemPrompt = `# Coding Rule: ${basename(rulePath)}
-
-${ruleContent}
-
----
-
-The above rule has been pre-loaded for your review. Do NOT use tools to read it.
-Follow the workflow in the user prompt to analyze the patch against this rule.
-Output your findings as valid JSON matching the provided schema.`;
-
-  // Process each chunk
+async function processReviewChunks(input: {
+  readonly provider: LLMProvider;
+  readonly workspaceRoot: string;
+  readonly patchName: string;
+  readonly parsedPatch: ParsedPatch;
+  readonly filterPattern: string | null;
+  readonly contextOrchestrator: ContextOrchestrator;
+  readonly systemPrompt: string;
+  readonly chunks: ReadonlyArray<FileEntry[]>;
+}): Promise<{ readonly violations: Violation[]; readonly files: Set<string> }> {
   const allViolations: Violation[] = [];
   const allFiles = new Set<string>();
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i]!;
-
-    // Build dataset text
-    const subPatch: ParsedPatch = {
-      patchInfo: parsed.patchInfo,
-      files: chunk,
-      summary: { totalFiles: 0, filesAdded: 0, filesModified: 0, filesDeleted: 0, totalAdditions: 0, totalDeletions: 0 },
-    };
-    const datasetText = formatPatchDataset(subPatch, filterPattern ?? undefined);
-
-    // Build context section
-    const contextSection = contextOrchestrator.buildSection(workspaceRoot, chunk);
-
-    // Build chunk header
-    const chunkHeader = chunks.length > 1
-      ? `(Chunk ${i + 1} of ${chunks.length})\n\n`
-      : "";
-
-    // Build user prompt
-    const userPrompt = buildReviewPrompt(
-      basename(patchPath),
-      chunkHeader + datasetText,
-      contextSection || undefined,
-    );
-
-    // Collect review data for validation
-    const { addedLines, removedLines, parsedFiles } = collectPatchReviewData(chunk);
-
+  for (let index = 0; index < input.chunks.length; index++) {
+    const chunk = input.chunks[index]!;
     try {
-      // Call LLM
-      const response = await callLLMForReview(provider, systemPrompt, userPrompt);
-
-      // Validate response
-      const validated = validateReviewResponse(response, addedLines, removedLines, parsedFiles);
-
-      allViolations.push(...validated.violations);
-      for (const f of parsedFiles) allFiles.add(f);
+      const result = await processReviewChunk(input, chunk, index);
+      allViolations.push(...result.violations);
+      for (const file of result.files) allFiles.add(file);
     } catch (err) {
-      // Log error but continue with other chunks
       const msg = extractErrorMessage(err);
-      console.error(`Review chunk ${i + 1}/${chunks.length} failed: ${msg}`);
+      console.error(`Review chunk ${index + 1}/${input.chunks.length} failed: ${msg}`);
       for (const f of chunk) allFiles.add(f.path);
     }
   }
 
-  // Deduplicate violations from overlapping chunks
-  const deduplicated = deduplicateViolations(allViolations);
+  return { violations: allViolations, files: allFiles };
+}
 
-  return {
-    violations: deduplicated,
-    summary: {
-      totalViolations: deduplicated.length,
-      filesReviewed: allFiles.size,
-      ruleName,
-    },
-  };
+async function processReviewChunk(
+  input: {
+    readonly provider: LLMProvider;
+    readonly workspaceRoot: string;
+    readonly patchName: string;
+    readonly parsedPatch: ParsedPatch;
+    readonly filterPattern: string | null;
+    readonly contextOrchestrator: ContextOrchestrator;
+    readonly systemPrompt: string;
+    readonly chunks: ReadonlyArray<FileEntry[]>;
+  },
+  chunk: FileEntry[],
+  index: number,
+): Promise<{ readonly violations: Violation[]; readonly files: Set<string> }> {
+  const userPrompt = buildReviewPrompt(
+    input.patchName,
+    buildChunkDataset(input, chunk, index),
+    input.contextOrchestrator.buildSection(input.workspaceRoot, chunk) || undefined,
+  );
+  const { addedLines, removedLines, parsedFiles } = collectPatchReviewData(chunk);
+  const response = await callLLMForReview(input.provider, input.systemPrompt, userPrompt);
+  const validated = validateReviewResponse(response, addedLines, removedLines, parsedFiles);
+  return { violations: validated.violations, files: parsedFiles };
+}
+
+function buildChunkDataset(
+  input: {
+    readonly parsedPatch: ParsedPatch;
+    readonly filterPattern: string | null;
+    readonly chunks: ReadonlyArray<FileEntry[]>;
+  },
+  chunk: FileEntry[],
+  index: number,
+): string {
+  const datasetText = formatPatchDataset({
+    patchInfo: input.parsedPatch.patchInfo,
+    files: chunk,
+    summary: { totalFiles: 0, filesAdded: 0, filesModified: 0, filesDeleted: 0, totalAdditions: 0, totalDeletions: 0 },
+  }, input.filterPattern ?? undefined);
+  const chunkHeader = input.chunks.length > 1
+    ? `(Chunk ${index + 1} of ${input.chunks.length})\n\n`
+    : "";
+  return chunkHeader + datasetText;
 }

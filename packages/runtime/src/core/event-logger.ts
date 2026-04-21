@@ -95,56 +95,10 @@ export class EventLogger {
       this.unsubscribers.push(unsub);
     }
   }
-
   private sanitizeEventData(eventType: keyof EventMap, data: unknown): unknown {
     if (eventType !== "tool:after") return data;
     const event = sanitizeToolAfterEvent(data as EventMap["tool:after"]);
-    if (event.name !== "delegate") return event;
-
-    const summary = event.result.metadata?.["delegateSummary"];
-    if (!summary || typeof summary !== "object") return data;
-
-    const delegateSummary = summary as Record<string, unknown>;
-    const quality = delegateSummary["quality"];
-    const detailParts: string[] = [];
-    if (typeof delegateSummary["durationMs"] === "number") {
-      detailParts.push(formatDuration(delegateSummary["durationMs"]));
-    }
-    if (typeof delegateSummary["iterations"] === "number") {
-      detailParts.push(`${delegateSummary["iterations"]} iterations`);
-    }
-    if (quality && typeof quality === "object") {
-      const qualityRecord = quality as Record<string, unknown>;
-      if (typeof qualityRecord["score"] === "number") {
-        detailParts.push(`score ${Number(qualityRecord["score"]).toFixed(2)}`);
-      }
-      if (typeof qualityRecord["completeness"] === "string") {
-        detailParts.push(qualityRecord["completeness"]);
-      }
-    }
-
-    const labelParts: string[] = [];
-    if (typeof delegateSummary["agentId"] === "string") labelParts.push(delegateSummary["agentId"]);
-    if (typeof delegateSummary["agentType"] === "string") labelParts.push(delegateSummary["agentType"]);
-    if (typeof delegateSummary["laneLabel"] === "string" && delegateSummary["laneLabel"].length > 0) {
-      labelParts.push(delegateSummary["laneLabel"]);
-    }
-    const summaryText = `${labelParts.join(" ")} completed${
-      detailParts.length > 0 ? ` (${detailParts.join(", ")})` : ""
-    }`;
-
-    return {
-      ...event,
-      result: {
-        ...event.result,
-        output: summaryText,
-        metadata: {
-          agentMeta: event.result.metadata?.["agentMeta"],
-          delegateSummary: event.result.metadata?.["delegateSummary"],
-          quality: event.result.metadata?.["quality"],
-        },
-      },
-    } satisfies EventMap["tool:after"];
+    return event.name === "delegate" ? sanitizeDelegateEvent(event, data) : event;
   }
 
   /**
@@ -275,6 +229,68 @@ export class EventLogger {
   }
 }
 
+function sanitizeDelegateEvent(
+  event: EventMap["tool:after"],
+  fallbackData: unknown,
+): EventMap["tool:after"] | unknown {
+  const summary = event.result.metadata?.["delegateSummary"];
+  if (!summary || typeof summary !== "object") return fallbackData;
+
+  const delegateSummary = summary as Record<string, unknown>;
+  const summaryText = formatDelegateSummaryText(delegateSummary);
+
+  return {
+    ...event,
+    result: {
+      ...event.result,
+      output: summaryText,
+      metadata: {
+        agentMeta: event.result.metadata?.["agentMeta"],
+        delegateSummary: event.result.metadata?.["delegateSummary"],
+        quality: event.result.metadata?.["quality"],
+      },
+    },
+  } satisfies EventMap["tool:after"];
+}
+
+function formatDelegateSummaryText(delegateSummary: Record<string, unknown>): string {
+  const labelParts = getDelegateLabelParts(delegateSummary);
+  const detailParts = getDelegateDetailParts(delegateSummary);
+  return `${labelParts.join(" ")} completed${
+    detailParts.length > 0 ? ` (${detailParts.join(", ")})` : ""
+  }`;
+}
+
+function getDelegateLabelParts(delegateSummary: Record<string, unknown>): string[] {
+  const parts: string[] = [];
+  for (const key of ["agentId", "agentType", "laneLabel"]) {
+    const value = delegateSummary[key];
+    if (typeof value === "string" && value.length > 0) parts.push(value);
+  }
+  return parts;
+}
+
+function getDelegateDetailParts(delegateSummary: Record<string, unknown>): string[] {
+  const parts: string[] = [];
+  if (typeof delegateSummary["durationMs"] === "number") {
+    parts.push(formatDuration(delegateSummary["durationMs"]));
+  }
+  if (typeof delegateSummary["iterations"] === "number") {
+    parts.push(`${delegateSummary["iterations"]} iterations`);
+  }
+  parts.push(...getDelegateQualityParts(delegateSummary["quality"]));
+  return parts;
+}
+
+function getDelegateQualityParts(quality: unknown): string[] {
+  if (!quality || typeof quality !== "object") return [];
+  const record = quality as Record<string, unknown>;
+  return [
+    ...(typeof record["score"] === "number" ? [`score ${Number(record["score"]).toFixed(2)}`] : []),
+    ...(typeof record["completeness"] === "string" ? [record["completeness"]] : []),
+  ];
+}
+
 function sanitizeToolAfterEvent(event: EventMap["tool:after"]): EventMap["tool:after"] {
   const metadata = event.result.metadata;
   const sanitizedMetadata = metadata && typeof metadata === "object"
@@ -350,17 +366,25 @@ function sanitizePersistedFileEdits(fileEdits: ReadonlyArray<unknown>): Readonly
     .filter(isToolFileChangePreviewLike)
     .map((fileEdit) => stripToolFileChangePresentationData(fileEdit));
 }
-
 function isToolFileChangePreviewLike(fileEdit: unknown): fileEdit is ToolFileChangePreview {
-  return !!fileEdit
-    && typeof fileEdit === "object"
-    && typeof (fileEdit as ToolFileChangePreview).path === "string"
-    && ((fileEdit as ToolFileChangePreview).kind === "create"
-      || (fileEdit as ToolFileChangePreview).kind === "update"
-      || (fileEdit as ToolFileChangePreview).kind === "delete"
-      || (fileEdit as ToolFileChangePreview).kind === "move")
-    && typeof (fileEdit as ToolFileChangePreview).additions === "number"
-    && typeof (fileEdit as ToolFileChangePreview).deletions === "number"
-    && typeof (fileEdit as ToolFileChangePreview).unifiedDiff === "string"
-    && typeof (fileEdit as ToolFileChangePreview).truncated === "boolean";
+  if (!fileEdit || typeof fileEdit !== "object") return false;
+  const preview = fileEdit as ToolFileChangePreview;
+  return hasToolFileChangeIdentity(preview) && hasToolFileChangeStats(preview);
+}
+
+function hasToolFileChangeIdentity(preview: ToolFileChangePreview): boolean {
+  return typeof preview.path === "string" && isToolFileChangeKind(preview.kind);
+}
+
+function hasToolFileChangeStats(preview: ToolFileChangePreview): boolean {
+  return (
+    typeof preview.additions === "number" &&
+    typeof preview.deletions === "number" &&
+    typeof preview.unifiedDiff === "string" &&
+    typeof preview.truncated === "boolean"
+  );
+}
+
+function isToolFileChangeKind(kind: unknown): kind is ToolFileChangePreview["kind"] {
+  return kind === "create" || kind === "update" || kind === "delete" || kind === "move";
 }

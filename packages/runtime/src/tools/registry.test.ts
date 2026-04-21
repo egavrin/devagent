@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import { ToolRegistry } from "./registry.js";
-import type { ToolSpec, ToolResult } from "../core/index.js";
+import type { ToolSpec } from "../core/index.js";
 
 function makeTool(name: string, category: "readonly" | "mutating" | "state" = "readonly"): ToolSpec {
   return {

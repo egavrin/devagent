@@ -11,22 +11,13 @@
  *   Workers are spawned via the delegate tool and communicate via the EventBus.
  */
 
-import type { ToolSpec, DevAgentConfig } from "../core/index.js";
+import type { ToolSpec } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
 
-// ─── Types ──────────────────────────────────────────────────
-
-interface CoordinatorConfig {
-  /** Enable coordinator mode. Default: false. */
-  readonly enabled: boolean;
-  /** Max concurrent workers. Default: 3. */
-  readonly maxWorkers?: number;
-}
-
 /** Task lifecycle states. */
-export type WorkerTaskStatus = "pending" | "running" | "completed" | "failed" | "killed";
+type WorkerTaskStatus = "pending" | "running" | "completed" | "failed" | "killed";
 
-export interface WorkerTask {
+interface WorkerTask {
   readonly taskId: string;
   readonly agentId: string | null;
   readonly objective: string;
@@ -185,103 +176,112 @@ export function filterCoordinatorTools(registry: ToolRegistry): ReadonlyArray<To
  */
 export function createTaskManagementTools(pool: CoordinatorTaskPool): ReadonlyArray<ToolSpec> {
   return [
-    {
-      name: "task_create",
-      description: "Create a new worker task. The task starts as pending and can be assigned to a worker via the delegate tool.",
-      category: "state",
-      paramSchema: {
-        type: "object",
-        properties: {
-          objective: {
-            type: "string",
-            description: "The task objective for the worker agent.",
-          },
-        },
-        required: ["objective"],
-      },
-      resultSchema: {
-        type: "object",
-        properties: {
-          task_id: { type: "string" },
-        },
-      },
-      handler: async (params) => {
-        const objective = params["objective"] as string;
-        if (!objective?.trim()) {
-          return { success: false, output: "", error: "Objective is required", artifacts: [] };
-        }
-        const taskId = pool.createTask(objective);
-        return {
-          success: true,
-          output: `Created task ${taskId}: ${objective}`,
-          error: null,
-          artifacts: [],
-        };
-      },
-    },
-    {
-      name: "task_list",
-      description: "List all worker tasks with their current status.",
-      category: "state",
-      paramSchema: { type: "object", properties: {} },
-      resultSchema: { type: "object", properties: { tasks: { type: "array" } } },
-      handler: async () => {
-        const tasks = pool.listTasks();
-        if (tasks.length === 0) {
-          return { success: true, output: "No tasks.", error: null, artifacts: [] };
-        }
-        const lines = tasks.map((t) => {
-          const duration = t.completedAt ? ` (${Math.round((t.completedAt - t.createdAt) / 1000)}s)` : "";
-          return `- ${t.taskId} [${t.status}]${duration}: ${t.objective}`;
-        });
-        return { success: true, output: lines.join("\n"), error: null, artifacts: [] };
-      },
-    },
-    {
-      name: "task_get",
-      description: "Get details of a specific worker task.",
-      category: "state",
-      paramSchema: {
-        type: "object",
-        properties: { task_id: { type: "string", description: "Task ID" } },
-        required: ["task_id"],
-      },
-      resultSchema: { type: "object" },
-      handler: async (params) => {
-        const taskId = params["task_id"] as string;
-        const task = pool.getTask(taskId);
-        if (!task) {
-          return { success: false, output: "", error: `Task ${taskId} not found`, artifacts: [] };
-        }
-        const info = [
-          `Task: ${task.taskId}`,
-          `Status: ${task.status}`,
-          `Objective: ${task.objective}`,
-          task.agentId ? `Agent: ${task.agentId}` : null,
-          task.result ? `Result: ${task.result.slice(0, 500)}` : null,
-          task.error ? `Error: ${task.error}` : null,
-        ].filter(Boolean).join("\n");
-        return { success: true, output: info, error: null, artifacts: [] };
-      },
-    },
-    {
-      name: "task_stop",
-      description: "Stop (kill) a running or pending worker task.",
-      category: "state",
-      paramSchema: {
-        type: "object",
-        properties: { task_id: { type: "string", description: "Task ID to stop" } },
-        required: ["task_id"],
-      },
-      resultSchema: { type: "object" },
-      handler: async (params) => {
-        const taskId = params["task_id"] as string;
-        const killed = pool.killTask(taskId);
-        if (!killed) {
-          return { success: false, output: "", error: `Cannot stop task ${taskId} (not running/pending)`, artifacts: [] };
-        }
-        return { success: true, output: `Task ${taskId} stopped.`, error: null, artifacts: [] };
-      },
-    },
+    createTaskCreateTool(pool),
+    createTaskListTool(pool),
+    createTaskGetTool(pool),
+    createTaskStopTool(pool),
   ];
+}
+
+function createTaskCreateTool(pool: CoordinatorTaskPool): ToolSpec {
+  return {
+    name: "task_create",
+    description: "Create a new worker task. The task starts as pending and can be assigned to a worker via the delegate tool.",
+    category: "state",
+    paramSchema: {
+      type: "object",
+      properties: { objective: { type: "string", description: "The task objective for the worker agent." } },
+      required: ["objective"],
+    },
+    resultSchema: { type: "object", properties: { task_id: { type: "string" } } },
+    handler: async (params) => createCoordinatorTask(pool, params),
+  };
+}
+
+function createTaskListTool(pool: CoordinatorTaskPool): ToolSpec {
+  return {
+    name: "task_list",
+    description: "List all worker tasks with their current status.",
+    category: "state",
+    paramSchema: { type: "object", properties: {} },
+    resultSchema: { type: "object", properties: { tasks: { type: "array" } } },
+    handler: async () => listCoordinatorTasks(pool),
+  };
+}
+
+function createTaskGetTool(pool: CoordinatorTaskPool): ToolSpec {
+  return {
+    name: "task_get",
+    description: "Get details of a specific worker task.",
+    category: "state",
+    paramSchema: {
+      type: "object",
+      properties: { task_id: { type: "string", description: "Task ID" } },
+      required: ["task_id"],
+    },
+    resultSchema: { type: "object" },
+    handler: async (params) => getCoordinatorTask(pool, params),
+  };
+}
+
+function createTaskStopTool(pool: CoordinatorTaskPool): ToolSpec {
+  return {
+    name: "task_stop",
+    description: "Stop (kill) a running or pending worker task.",
+    category: "state",
+    paramSchema: {
+      type: "object",
+      properties: { task_id: { type: "string", description: "Task ID to stop" } },
+      required: ["task_id"],
+    },
+    resultSchema: { type: "object" },
+    handler: async (params) => stopCoordinatorTask(pool, params),
+  };
+}
+
+function createCoordinatorTask(pool: CoordinatorTaskPool, params: Record<string, unknown>) {
+  const objective = params["objective"] as string;
+  if (!objective?.trim()) {
+    return { success: false, output: "", error: "Objective is required", artifacts: [] };
+  }
+  const taskId = pool.createTask(objective);
+  return { success: true, output: `Created task ${taskId}: ${objective}`, error: null, artifacts: [] };
+}
+
+function listCoordinatorTasks(pool: CoordinatorTaskPool) {
+  const tasks = pool.listTasks();
+  if (tasks.length === 0) return { success: true, output: "No tasks.", error: null, artifacts: [] };
+  return { success: true, output: tasks.map(formatCoordinatorTaskSummary).join("\n"), error: null, artifacts: [] };
+}
+
+function formatCoordinatorTaskSummary(t: WorkerTask) {
+  const duration = t.completedAt ? ` (${Math.round((t.completedAt - t.createdAt) / 1000)}s)` : "";
+  return `- ${t.taskId} [${t.status}]${duration}: ${t.objective}`;
+}
+
+function getCoordinatorTask(pool: CoordinatorTaskPool, params: Record<string, unknown>) {
+  const taskId = params["task_id"] as string;
+  const task = pool.getTask(taskId);
+  if (!task) return { success: false, output: "", error: `Task ${taskId} not found`, artifacts: [] };
+  return { success: true, output: formatCoordinatorTaskDetails(task), error: null, artifacts: [] };
+}
+
+function formatCoordinatorTaskDetails(task: WorkerTask) {
+  return [
+    `Task: ${task.taskId}`,
+    `Status: ${task.status}`,
+    `Objective: ${task.objective}`,
+    task.agentId ? `Agent: ${task.agentId}` : null,
+    task.result ? `Result: ${task.result.slice(0, 500)}` : null,
+    task.error ? `Error: ${task.error}` : null,
+  ].filter(Boolean).join("\n");
+}
+
+function stopCoordinatorTask(pool: CoordinatorTaskPool, params: Record<string, unknown>) {
+  const taskId = params["task_id"] as string;
+  const killed = pool.killTask(taskId);
+  if (!killed) {
+    return { success: false, output: "", error: `Cannot stop task ${taskId} (not running/pending)`, artifacts: [] };
+  }
+  return { success: true, output: `Task ${taskId} stopped.`, error: null, artifacts: [] };
 }

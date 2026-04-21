@@ -69,39 +69,10 @@ export function splitLargeFileEntries(
   const results: FileEntry[] = [];
 
   for (const fileEntry of files) {
-    const hunks: Hunk[] = fileEntry.hunks ?? [];
-
-    if (hunks.length === 0) {
+    const groups = splitEntryHunks(fileEntry.hunks ?? [], maxHunksPerGroup, maxLinesPerGroup);
+    if (groups.length === 0) {
       results.push(fileEntry);
       continue;
-    }
-
-    const groups: Hunk[][] = [];
-    let current: Hunk[] = [];
-    let hunkCounter = 0;
-    let lineCounter = 0;
-
-    for (const hunk of hunks) {
-      const impact = estimateHunkImpact(hunk);
-      const shouldSplit =
-        current.length > 0 &&
-        ((maxHunksPerGroup > 0 && hunkCounter >= maxHunksPerGroup) ||
-          (maxLinesPerGroup > 0 && lineCounter + impact > maxLinesPerGroup));
-
-      if (shouldSplit) {
-        groups.push(current);
-        current = [];
-        hunkCounter = 0;
-        lineCounter = 0;
-      }
-
-      current.push(hunk);
-      hunkCounter += 1;
-      lineCounter += impact;
-    }
-
-    if (current.length > 0) {
-      groups.push(current);
     }
 
     if (groups.length <= 1) {
@@ -123,6 +94,53 @@ export function splitLargeFileEntries(
   }
 
   return results;
+}
+
+function splitEntryHunks(
+  hunks: ReadonlyArray<Hunk>,
+  maxHunksPerGroup: number,
+  maxLinesPerGroup: number,
+): Hunk[][] {
+  if (hunks.length === 0) return [];
+
+  const groups: Hunk[][] = [];
+  let current: Hunk[] = [];
+  let hunkCounter = 0;
+  let lineCounter = 0;
+
+  for (const hunk of hunks) {
+    const impact = estimateHunkImpact(hunk);
+    if (shouldStartNewHunkGroup(current, hunkCounter, lineCounter, impact, {
+      maxHunksPerGroup,
+      maxLinesPerGroup,
+    })) {
+      groups.push(current);
+      current = [];
+      hunkCounter = 0;
+      lineCounter = 0;
+    }
+
+    current.push(hunk);
+    hunkCounter += 1;
+    lineCounter += impact;
+  }
+
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
+function shouldStartNewHunkGroup(
+  current: ReadonlyArray<Hunk>,
+  hunkCounter: number,
+  lineCounter: number,
+  nextImpact: number,
+  limits: { readonly maxHunksPerGroup: number; readonly maxLinesPerGroup: number },
+): boolean {
+  if (current.length === 0) return false;
+  return (
+    (limits.maxHunksPerGroup > 0 && hunkCounter >= limits.maxHunksPerGroup) ||
+    (limits.maxLinesPerGroup > 0 && lineCounter + nextImpact > limits.maxLinesPerGroup)
+  );
 }
 
 // ── Chunk grouping ───────────────────────────────────────────────────────────
@@ -154,14 +172,10 @@ export function chunkPatchFiles(
 
   for (const entry of files) {
     const entryLines = estimateEntryLines(entry);
-    const shouldSplit =
-      currentChunk.length > 0 &&
-      ((effectiveMaxFiles > 0 &&
-        currentChunk.length >= effectiveMaxFiles) ||
-        (effectiveMaxLines > 0 &&
-          currentLines + entryLines > effectiveMaxLines));
-
-    if (shouldSplit) {
+    if (shouldStartNewChunk(currentChunk, currentLines, entryLines, {
+      effectiveMaxFiles,
+      effectiveMaxLines,
+    })) {
       chunked.push(currentChunk);
       currentChunk = [];
       currentLines = 0;
@@ -180,6 +194,19 @@ export function chunkPatchFiles(
   }
 
   return chunked;
+}
+
+function shouldStartNewChunk(
+  currentChunk: ReadonlyArray<FileEntry>,
+  currentLines: number,
+  entryLines: number,
+  limits: { readonly effectiveMaxFiles: number; readonly effectiveMaxLines: number },
+): boolean {
+  if (currentChunk.length === 0) return false;
+  return (
+    (limits.effectiveMaxFiles > 0 && currentChunk.length >= limits.effectiveMaxFiles) ||
+    (limits.effectiveMaxLines > 0 && currentLines + entryLines > limits.effectiveMaxLines)
+  );
 }
 
 // ── Chunk overlap ────────────────────────────────────────────────────────────
@@ -364,15 +391,7 @@ export function formatPatchDataset(
     return lines.join("\n");
   }
 
-  let filteredFiles = files;
-  if (filterPattern) {
-    try {
-      const patternRe = new RegExp(filterPattern);
-      filteredFiles = files.filter((f) => f.path && patternRe.test(f.path));
-    } catch {
-      filteredFiles = files;
-    }
-  }
+  const filteredFiles = filterPatchFiles(files, filterPattern);
 
   if (filteredFiles.length === 0) {
     lines.push(
@@ -382,107 +401,91 @@ export function formatPatchDataset(
   }
 
   for (const fileEntry of filteredFiles) {
-    const path = fileEntry.path;
-    const changeType = fileEntry.changeType ?? "modified";
-    const language = fileEntry.language ?? "unknown";
-    const chunkIndex = fileEntry._chunkIndex;
-    const chunkTotal = fileEntry._chunkTotal;
-
-    let chunkSuffix = "";
-    if (
-      chunkIndex !== undefined &&
-      chunkTotal !== undefined &&
-      chunkTotal > 1
-    ) {
-      chunkSuffix = ` (segment ${chunkIndex + 1}/${chunkTotal})`;
-    }
-
-    lines.push(`FILE: ${path}${chunkSuffix}`);
-    lines.push(`  Change type: ${changeType}`);
-    lines.push(`  Language: ${language}`);
-
-    const hunks = fileEntry.hunks ?? [];
-    const totalAdded = hunks.reduce(
-      (s, h) => s + (h.addedLines?.length ?? 0),
-      0,
-    );
-    const totalRemoved = hunks.reduce(
-      (s, h) => s + (h.removedLines?.length ?? 0),
-      0,
-    );
-
-    lines.push(`  Total added lines: ${totalAdded}`);
-    lines.push(`  Total removed lines: ${totalRemoved}`);
-
-    if (hunks.length === 0) {
-      lines.push("  HUNK: (none)");
-      lines.push("    CONTEXT:\n      (none)");
-      lines.push("    ADDED LINES:\n      (none)");
-      lines.push("    REMOVED LINES:\n      (none)");
-      lines.push("");
-      continue;
-    }
-
-    for (const hunk of hunks) {
-      const header = (hunk.header ?? "").trim();
-      lines.push(`  HUNK: ${header || "(no header)"}`);
-
-      // Context lines
-      const context = hunk.contextLines ?? [];
-      lines.push("    CONTEXT:");
-      if (context.length > 0) {
-        for (const ctx of context) {
-          const ln = ctx.lineNumber;
-          const c = ctx.content ?? "";
-          if (typeof ln === "number") {
-            lines.push(`      ${String(ln).padStart(4)} | ${c}`);
-          } else {
-            lines.push(`      | ${c}`);
-          }
-        }
-      } else {
-        lines.push("      (none)");
-      }
-
-      // Added lines
-      const added = hunk.addedLines ?? [];
-      lines.push("    ADDED LINES:");
-      if (added.length > 0) {
-        for (const e of added) {
-          const ln = e.lineNumber;
-          const c = e.content ?? "";
-          if (typeof ln === "number") {
-            lines.push(`      ${String(ln).padStart(4)} + ${c}`);
-          } else {
-            lines.push(`      + ${c}`);
-          }
-        }
-      } else {
-        lines.push("      (none)");
-      }
-
-      // Removed lines
-      const removed = hunk.removedLines ?? [];
-      lines.push("    REMOVED LINES:");
-      if (removed.length > 0) {
-        for (const e of removed) {
-          const ln = e.lineNumber;
-          const c = e.content ?? "";
-          if (typeof ln === "number") {
-            lines.push(`      ${String(ln).padStart(4)} - ${c}`);
-          } else {
-            lines.push(`      - ${c}`);
-          }
-        }
-      } else {
-        lines.push("      (none)");
-      }
-
-      lines.push("");
-    }
-
-    lines.push("");
+    lines.push(...formatFileEntry(fileEntry), "");
   }
 
   return lines.join("\n").trimEnd();
+}
+
+function filterPatchFiles(files: FileEntry[], filterPattern?: string): FileEntry[] {
+  if (!filterPattern) return files;
+  try {
+    const patternRe = new RegExp(filterPattern);
+    return files.filter((f) => f.path && patternRe.test(f.path));
+  } catch {
+    return files;
+  }
+}
+
+function formatFileEntry(fileEntry: FileEntry): string[] {
+  const hunks = fileEntry.hunks ?? [];
+  return [
+    ...formatFileHeader(fileEntry, hunks),
+    ...(hunks.length === 0 ? formatEmptyHunk() : hunks.flatMap(formatHunk)),
+  ];
+}
+
+function formatFileHeader(fileEntry: FileEntry, hunks: ReadonlyArray<Hunk>): string[] {
+  const chunkSuffix = formatChunkSuffix(fileEntry);
+  const totalAdded = hunks.reduce((s, h) => s + (h.addedLines?.length ?? 0), 0);
+  const totalRemoved = hunks.reduce((s, h) => s + (h.removedLines?.length ?? 0), 0);
+
+  return [
+    `FILE: ${fileEntry.path}${chunkSuffix}`,
+    `  Change type: ${fileEntry.changeType ?? "modified"}`,
+    `  Language: ${fileEntry.language ?? "unknown"}`,
+    `  Total added lines: ${totalAdded}`,
+    `  Total removed lines: ${totalRemoved}`,
+  ];
+}
+
+function formatChunkSuffix(fileEntry: FileEntry): string {
+  const chunkIndex = fileEntry._chunkIndex;
+  const chunkTotal = fileEntry._chunkTotal;
+  return chunkIndex !== undefined && chunkTotal !== undefined && chunkTotal > 1
+    ? ` (segment ${chunkIndex + 1}/${chunkTotal})`
+    : "";
+}
+
+function formatEmptyHunk(): string[] {
+  return [
+    "  HUNK: (none)",
+    "    CONTEXT:\n      (none)",
+    "    ADDED LINES:\n      (none)",
+    "    REMOVED LINES:\n      (none)",
+    "",
+  ];
+}
+
+function formatHunk(hunk: Hunk): string[] {
+  const header = (hunk.header ?? "").trim();
+  return [
+    `  HUNK: ${header || "(no header)"}`,
+    ...formatLineSection("    CONTEXT:", hunk.contextLines ?? [], "|"),
+    ...formatLineSection("    ADDED LINES:", hunk.addedLines ?? [], "+"),
+    ...formatLineSection("    REMOVED LINES:", hunk.removedLines ?? [], "-"),
+    "",
+  ];
+}
+
+function formatLineSection(
+  title: string,
+  entries: ReadonlyArray<{ readonly lineNumber?: number; readonly content?: string }>,
+  marker: "|" | "+" | "-",
+): string[] {
+  if (entries.length === 0) return [title, "      (none)"];
+  return [
+    title,
+    ...entries.map((entry) => formatPatchLine(entry.lineNumber, entry.content ?? "", marker)),
+  ];
+}
+
+function formatPatchLine(
+  lineNumber: number | undefined,
+  content: string,
+  marker: "|" | "+" | "-",
+): string {
+  return typeof lineNumber === "number"
+    ? `      ${String(lineNumber).padStart(4)} ${marker} ${content}`
+    : `      ${marker} ${content}`;
 }

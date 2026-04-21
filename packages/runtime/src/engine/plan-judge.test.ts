@@ -39,9 +39,14 @@ describe("plan-judge — judgePlanQuality", () => {
       { description: "Step 3", status: "pending" },
     ];
 
-    const result = await judgePlanQuality(
-      provider, "Fix the login bug", steps, null, null, 10,
-    );
+    const result = await judgePlanQuality({
+      provider,
+      originalRequest: "Fix the login bug",
+      currentPlan: steps,
+      previousPlan: null,
+      sessionState: null,
+      iteration: 10,
+    });
     expect(result).toBeNull();
   });
 
@@ -55,9 +60,14 @@ describe("plan-judge — judgePlanQuality", () => {
       { description: "Add unit tests", status: "pending" },
     ];
 
-    const result = await judgePlanQuality(
-      provider, "Fix the login bug", steps, null, null, 10,
-    );
+    const result = await judgePlanQuality({
+      provider,
+      originalRequest: "Fix the login bug",
+      currentPlan: steps,
+      previousPlan: null,
+      sessionState: null,
+      iteration: 10,
+    });
     expect(result).not.toBeNull();
     expect(result!.quality_score).toBe(0.9);
     expect(result!.issues).toHaveLength(0);
@@ -73,9 +83,14 @@ describe("plan-judge — judgePlanQuality", () => {
       { description: "Verify", status: "pending" },
     ];
 
-    const result = await judgePlanQuality(
-      provider, "Refactor the auth system", steps, null, null, 10,
-    );
+    const result = await judgePlanQuality({
+      provider,
+      originalRequest: "Refactor the auth system",
+      currentPlan: steps,
+      previousPlan: null,
+      sessionState: null,
+      iteration: 10,
+    });
     expect(result).not.toBeNull();
     expect(result!.quality_score).toBe(0.3);
     expect(result!.issues.length).toBeGreaterThan(0);
@@ -96,9 +111,14 @@ describe("plan-judge — judgePlanQuality", () => {
       { description: "Add caching", status: "pending" },
     ];
 
-    const result = await judgePlanQuality(
-      provider, "Fix the login bug", newPlan, oldPlan, null, 15,
-    );
+    const result = await judgePlanQuality({
+      provider,
+      originalRequest: "Fix the login bug",
+      currentPlan: newPlan,
+      previousPlan: oldPlan,
+      sessionState: null,
+      iteration: 15,
+    });
     expect(result).not.toBeNull();
     expect(result!.quality_score).toBe(0.4);
     expect(result!.issues).toContain("Plan has drifted from original goal");
@@ -117,7 +137,14 @@ describe("plan-judge — judgePlanQuality", () => {
       { description: "Step 3", status: "pending" },
     ];
 
-    await judgePlanQuality(provider, "Fix auth", steps, null, state, 10);
+    await judgePlanQuality({
+      provider,
+      originalRequest: "Fix auth",
+      currentPlan: steps,
+      previousPlan: null,
+      sessionState: state,
+      iteration: 10,
+    });
 
     const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]!;
     const messages = chatCall[0] as Array<{ content: string | null }>;

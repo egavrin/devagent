@@ -24,50 +24,35 @@ function globToRegex(glob: string): string {
     const ch = glob[i]!;
 
     if (ch === "*") {
-      if (i + 1 < glob.length && glob[i + 1] === "*") {
-        // `**` -- match anything including path separators
-        result += ".*";
-        i += 2;
-        // Skip a trailing slash after ** (e.g. `**/`)
-        if (i < glob.length && glob[i] === "/") {
-          result += "(?:/|$)";
-          i += 1;
-        }
-      } else {
-        // single `*` -- match within one path segment
-        result += "[^/]*";
-        i += 1;
-      }
-    } else if (ch === "?") {
-      result += ".";
-      i += 1;
-    } else if (ch === ".") {
-      result += "\\.";
-      i += 1;
-    } else if (
-      ch === "(" ||
-      ch === ")" ||
-      ch === "[" ||
-      ch === "]" ||
-      ch === "{" ||
-      ch === "}" ||
-      ch === "+" ||
-      ch === "^" ||
-      ch === "$" ||
-      ch === "|" ||
-      ch === "\\"
-    ) {
-      // Escape regex special characters that are not glob metacharacters
-      result += "\\" + ch;
-      i += 1;
-    } else {
-      result += ch;
-      i += 1;
+      const star = consumeStarGlob(glob, i);
+      result += star.regex;
+      i = star.nextIndex;
+      continue;
     }
+    result += globCharToRegex(ch);
+    i += 1;
   }
 
   return result + "$";
 }
+
+function consumeStarGlob(glob: string, index: number): { readonly regex: string; readonly nextIndex: number } {
+  if (index + 1 >= glob.length || glob[index + 1] !== "*") {
+    return { regex: "[^/]*", nextIndex: index + 1 };
+  }
+  if (index + 2 < glob.length && glob[index + 2] === "/") {
+    return { regex: ".*(?:/|$)", nextIndex: index + 3 };
+  }
+  return { regex: ".*", nextIndex: index + 2 };
+}
+
+function globCharToRegex(ch: string): string {
+  if (ch === "?") return ".";
+  if (ch === ".") return "\\.";
+  return REGEX_SPECIAL_CHARS.has(ch) ? `\\${ch}` : ch;
+}
+
+const REGEX_SPECIAL_CHARS = new Set(["(", ")", "[", "]", "{", "}", "+", "^", "$", "|", "\\"]);
 
 // ── Pattern normalisation ───────────────────────────────────────────────────
 

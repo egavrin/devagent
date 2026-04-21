@@ -98,18 +98,13 @@ function parseSkillUri(rawPath: string): { skillName: string; path: string } | n
     path: innerPath,
   };
 }
-
 function resolveSkillPath(
   wrapperDirPath: string,
   supportRootPath: string | undefined,
   relativePath: string,
   toolName: string,
 ): { rootPath: string; resolvedPath: string } {
-  const supportRootExists = Boolean(
-    supportRootPath &&
-    supportRootPath !== wrapperDirPath &&
-    existsSync(supportRootPath),
-  );
+  const supportRootExists = hasSupportRoot(wrapperDirPath, supportRootPath);
 
   if (relativePath === "." && supportRootExists && supportRootPath) {
     return {
@@ -139,4 +134,12 @@ function resolveSkillPath(
     rootPath: resolveRepoRoot(wrapperDirPath),
     resolvedPath: resolvePathInRoot(wrapperDirPath, relativePath, toolName),
   };
+}
+
+function hasSupportRoot(wrapperDirPath: string, supportRootPath: string | undefined) {
+  return Boolean(
+    supportRootPath &&
+    supportRootPath !== wrapperDirPath &&
+    existsSync(supportRootPath),
+  );
 }

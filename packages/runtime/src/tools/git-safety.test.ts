@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import { ToolError } from "../core/index.js";
+import { gitDiffTool, gitCommitTool } from "./builtins/git.js";
 
 /**
  * We test the git tool safety validation by importing the internal
@@ -9,7 +10,6 @@ import { ToolError } from "../core/index.js";
  * The git_diff tool validates both `path` and `ref` params via assertSafeArg
  * and also rejects refs starting with `-`.
  */
-import { gitDiffTool, gitCommitTool } from "./builtins/git.js";
 
 // Minimal context stub for tool handlers
 const stubContext = {

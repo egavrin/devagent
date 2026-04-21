@@ -41,12 +41,7 @@ export function trySessionMemoryCompact(
   sessionState: SessionState,
   maxTokens: number,
 ): SessionMemoryCompactResult {
-  // Check if session state has enough content
-  const knowledgeCount = sessionState.getKnowledge().length;
-  const findingsCount = sessionState.getFindingsCount();
-  const summaryCount = sessionState.getToolSummaries().length;
-
-  if (knowledgeCount + findingsCount + summaryCount < MIN_ENTRIES_FOR_COMPACT) {
+  if (!hasEnoughSessionMemory(sessionState)) {
     return { messages: [], success: false };
   }
 
@@ -62,53 +57,14 @@ export function trySessionMemoryCompact(
     return { messages: [], success: false };
   }
 
-  // Preserve system prompt and first user message
-  const preserved: Message[] = [];
-  let preservedTokens = 0;
-
-  // System prompt (always first)
-  if (messages.length > 0 && messages[0]!.role === MessageRole.SYSTEM) {
-    preserved.push(messages[0]!);
-    preservedTokens += estimateMessageTokens([messages[0]!]);
-  }
-
-  // First user message
+  const { preserved, preservedTokens } = collectPreservedMessages(messages, summaryContent, summaryTokens);
   const firstUserIdx = messages.findIndex((m) => m.role === MessageRole.USER);
-  if (firstUserIdx > 0) {
-    preserved.push(messages[firstUserIdx]!);
-    preservedTokens += estimateMessageTokens([messages[firstUserIdx]!]);
-  }
-
-  // Add session memory summary
-  const summaryMsg: Message = {
-    role: MessageRole.ASSISTANT,
-    content: `[Session memory summary — compacted from conversation history]\n\n${summaryContent}`,
-  };
-  preserved.push(summaryMsg);
-  preservedTokens += summaryTokens;
-
-  // Fill remaining budget with most recent messages (newest first)
   const budgetForRecent = maxTokens - preservedTokens;
   if (budgetForRecent <= 0) {
     return { messages: [], success: false };
   }
 
-  const recentMessages: Message[] = [];
-  let recentTokens = 0;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]!;
-    // Skip messages already preserved
-    if (i === 0 || i === firstUserIdx) continue;
-    // Skip old session state markers
-    if (msg.role === MessageRole.SYSTEM && msg.content?.startsWith("[SESSION STATE")) continue;
-
-    const msgTokens = estimateMessageTokens([msg]);
-    if (recentTokens + msgTokens > budgetForRecent) break;
-
-    recentMessages.unshift(msg);
-    recentTokens += msgTokens;
-  }
+  const { recentMessages, recentTokens } = collectRecentMessages(messages, firstUserIdx, budgetForRecent);
 
   const result = [...preserved, ...recentMessages];
   const totalTokens = preservedTokens + recentTokens;
@@ -121,6 +77,76 @@ export function trySessionMemoryCompact(
 }
 
 // ─── Helpers ────────────────────────────────────────────────
+
+function hasEnoughSessionMemory(sessionState: SessionState) {
+  const totalEntries =
+    sessionState.getKnowledge().length +
+    sessionState.getFindingsCount() +
+    sessionState.getToolSummaries().length;
+  return totalEntries >= MIN_ENTRIES_FOR_COMPACT;
+}
+
+function collectPreservedMessages(
+  messages: ReadonlyArray<Message>,
+  summaryContent: string,
+  summaryTokens: number,
+) {
+  const preserved: Message[] = [];
+  let preservedTokens = 0;
+
+  const systemMessage = messages[0];
+  if (systemMessage?.role === MessageRole.SYSTEM) {
+    preserved.push(systemMessage);
+    preservedTokens += estimateMessageTokens([systemMessage]);
+  }
+
+  const firstUserIdx = messages.findIndex((m) => m.role === MessageRole.USER);
+  if (firstUserIdx > 0) {
+    preserved.push(messages[firstUserIdx]!);
+    preservedTokens += estimateMessageTokens([messages[firstUserIdx]!]);
+  }
+
+  preserved.push(createSessionMemorySummaryMessage(summaryContent));
+  return { preserved, preservedTokens: preservedTokens + summaryTokens };
+}
+
+function createSessionMemorySummaryMessage(summaryContent: string): Message {
+  return {
+    role: MessageRole.ASSISTANT,
+    content: `[Session memory summary — compacted from conversation history]\n\n${summaryContent}`,
+  };
+}
+
+function collectRecentMessages(
+  messages: ReadonlyArray<Message>,
+  firstUserIdx: number,
+  budgetForRecent: number,
+) {
+  const recentMessages: Message[] = [];
+  let recentTokens = 0;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]!;
+    if (isPreservedMessageIndex(i, firstUserIdx)) continue;
+    if (isOldSessionStateMarker(msg)) continue;
+
+    const msgTokens = estimateMessageTokens([msg]);
+    if (recentTokens + msgTokens > budgetForRecent) break;
+
+    recentMessages.unshift(msg);
+    recentTokens += msgTokens;
+  }
+
+  return { recentMessages, recentTokens };
+}
+
+function isPreservedMessageIndex(index: number, firstUserIdx: number) {
+  return index === 0 || index === firstUserIdx;
+}
+
+function isOldSessionStateMarker(msg: Message) {
+  return msg.role === MessageRole.SYSTEM && msg.content?.startsWith("[SESSION STATE");
+}
 
 function buildSessionMemorySummary(sessionState: SessionState): string {
   const sections: string[] = [];

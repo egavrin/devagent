@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 
 import { probeShellTools, formatProbeResults } from "./shell-probe.js";
 import type { ShellProbeResult } from "./shell-probe.js";

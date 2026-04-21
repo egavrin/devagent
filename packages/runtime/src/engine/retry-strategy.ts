@@ -16,7 +16,6 @@ import {
   RateLimitError,
   ProviderConnectionError,
   ProviderTimeoutError,
-  extractErrorMessage,
 } from "../core/index.js";
 
 // Import new error types — these are added in the same PR
@@ -81,42 +80,14 @@ export async function retryWithStrategy<T>(
       const value = await operation();
       return { success: true, value, shouldFallback: false, shouldCompact: false };
     } catch (err) {
-      if (!(err instanceof ProviderError)) {
-        // Non-provider errors are not retryable
-        throw err;
-      }
-
-      lastError = err;
-
-      // Context overflow — signal for external compaction handling
-      if (isContextOverflowError(err.message) && !options.overflowCompactionUsed) {
-        return { success: false, error: err, shouldFallback: false, shouldCompact: true };
-      }
-
-      // MaxOutputTokensError — not retryable here, handled at a higher level
-      if (err instanceof MaxOutputTokensError) {
-        return { success: false, error: err, shouldFallback: false, shouldCompact: false };
-      }
-
-      // Determine retry limits and delays based on error type
-      const { maxRetries, delayMs } = getRetryParams(err, attempt);
-
-      if (attempt >= maxRetries) {
-        break; // Exhausted retries for this error type
-      }
-
-      // Track consecutive overloads for fallback decision
-      if (err instanceof OverloadedError) {
-        consecutiveOverloads++;
-        if (consecutiveOverloads >= MAX_OVERLOAD_RETRIES) {
-          return { success: false, error: err, shouldFallback: true, shouldCompact: false };
-        }
-      } else {
-        consecutiveOverloads = 0;
-      }
-
-      options.onRetry?.(err, attempt + 1, delayMs);
-      await sleep(delayMs);
+      const next = handleRetryError(err, attempt, consecutiveOverloads, options);
+      if (next.action === "throw") throw err;
+      lastError = next.error;
+      if (next.action === "return") return next.result;
+      if (next.action === "break") break;
+      consecutiveOverloads = next.consecutiveOverloads;
+      options.onRetry?.(next.error, attempt + 1, next.delayMs);
+      await sleep(next.delayMs);
     }
   }
 
@@ -133,6 +104,57 @@ export async function retryWithStrategy<T>(
 }
 
 // ─── Helpers ────────────────────────────────────────────────
+
+type RetryErrorAction =
+  | { readonly action: "throw" }
+  | { readonly action: "break"; readonly error: ProviderError }
+  | { readonly action: "return"; readonly error: ProviderError; readonly result: RetryResult<never> }
+  | {
+      readonly action: "retry";
+      readonly error: ProviderError;
+      readonly delayMs: number;
+      readonly consecutiveOverloads: number;
+    };
+
+function handleRetryError(
+  err: unknown,
+  attempt: number,
+  consecutiveOverloads: number,
+  options: RetryOptions,
+): RetryErrorAction {
+  if (!(err instanceof ProviderError)) return { action: "throw" };
+  if (isContextOverflowError(err.message) && !options.overflowCompactionUsed) {
+    return {
+      action: "return",
+      error: err,
+      result: { success: false, error: err, shouldFallback: false, shouldCompact: true },
+    };
+  }
+  if (err instanceof MaxOutputTokensError) {
+    return {
+      action: "return",
+      error: err,
+      result: { success: false, error: err, shouldFallback: false, shouldCompact: false },
+    };
+  }
+
+  const { maxRetries, delayMs } = getRetryParams(err, attempt);
+  if (attempt >= maxRetries) return { action: "break", error: err };
+
+  const overloads = nextOverloadCount(err, consecutiveOverloads);
+  if (overloads >= MAX_OVERLOAD_RETRIES) {
+    return {
+      action: "return",
+      error: err,
+      result: { success: false, error: err, shouldFallback: true, shouldCompact: false },
+    };
+  }
+  return { action: "retry", error: err, delayMs, consecutiveOverloads: overloads };
+}
+
+function nextOverloadCount(error: ProviderError, current: number): number {
+  return error instanceof OverloadedError ? current + 1 : 0;
+}
 
 function getRetryParams(
   error: ProviderError,

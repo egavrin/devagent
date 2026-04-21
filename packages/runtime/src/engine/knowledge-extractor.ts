@@ -78,64 +78,62 @@ export async function extractPreCompactionKnowledge(
   originalTask: string | null,
 ): Promise<KnowledgeExtractionResult | null> {
   try {
-    const parts: string[] = [];
-
-    if (originalTask) {
-      parts.push(`## Original task\n${originalTask}`);
-    }
-
-    parts.push(`## Pre-compaction summary\n${preCompactionSummary}`);
-    parts.push(`## Session state\n${buildSessionStateContext(sessionState)}`);
-
-    // Include last N messages for recent context
-    const recentSlice = recentMessages.slice(-MAX_RECENT_MESSAGES);
-    if (recentSlice.length > 0) {
-      const formatted = recentSlice
-        .map((m) => formatMessageForJudge(m))
-        .join("\n\n");
-      parts.push(`## Recent messages (last ${recentSlice.length})\n${formatted}`);
-    }
-
-    parts.push("\nExtract the domain knowledge. Respond with JSON only.");
-
     const messages = [
       { role: MessageRole.SYSTEM as const, content: KNOWLEDGE_EXTRACTION_SYSTEM_PROMPT },
-      { role: MessageRole.USER as const, content: parts.join("\n\n") },
+      {
+        role: MessageRole.USER as const,
+        content: buildKnowledgeExtractionPrompt(
+          preCompactionSummary,
+          sessionState,
+          recentMessages,
+          originalTask,
+        ),
+      },
     ];
 
     const responseText = await collectStreamText(provider, messages);
     const parsed = parseJudgeResponse<{ entries?: unknown[] }>(responseText);
 
-    if (!parsed || !Array.isArray(parsed.entries)) {
-      return null;
-    }
-
-    // Filter and validate entries
-    const validEntries: KnowledgeExtractionEntry[] = [];
-    for (const entry of parsed.entries) {
-      if (
-        typeof entry === "object" &&
-        entry !== null &&
-        "key" in entry &&
-        "content" in entry &&
-        typeof (entry as Record<string, unknown>).key === "string" &&
-        typeof (entry as Record<string, unknown>).content === "string" &&
-        ((entry as Record<string, unknown>).key as string).length > 0 &&
-        ((entry as Record<string, unknown>).content as string).length > 0
-      ) {
-        validEntries.push({
-          key: (entry as Record<string, unknown>).key as string,
-          content: (entry as Record<string, unknown>).content as string,
-        });
-      }
-    }
-
-    if (validEntries.length === 0) {
-      return null;
-    }
-
-    return { entries: validEntries };
+    return buildKnowledgeExtractionResult(parsed);
   } catch {
     return null;
   }
+}
+
+function buildKnowledgeExtractionPrompt(
+  preCompactionSummary: string,
+  sessionState: SessionState | null,
+  recentMessages: ReadonlyArray<Message>,
+  originalTask: string | null,
+) {
+  return [
+    originalTask ? `## Original task\n${originalTask}` : null,
+    `## Pre-compaction summary\n${preCompactionSummary}`,
+    `## Session state\n${buildSessionStateContext(sessionState)}`,
+    formatRecentMessagesForExtraction(recentMessages),
+    "\nExtract the domain knowledge. Respond with JSON only.",
+  ].filter((part): part is string => part !== null).join("\n\n");
+}
+
+function formatRecentMessagesForExtraction(recentMessages: ReadonlyArray<Message>) {
+  const recentSlice = recentMessages.slice(-MAX_RECENT_MESSAGES);
+  if (recentSlice.length === 0) return null;
+  const formatted = recentSlice.map((m) => formatMessageForJudge(m)).join("\n\n");
+  return `## Recent messages (last ${recentSlice.length})\n${formatted}`;
+}
+
+function buildKnowledgeExtractionResult(
+  parsed: { entries?: unknown[] } | null,
+): KnowledgeExtractionResult | null {
+  if (!parsed || !Array.isArray(parsed.entries)) return null;
+  const entries = parsed.entries.flatMap(parseKnowledgeExtractionEntry);
+  return entries.length > 0 ? { entries } : null;
+}
+
+function parseKnowledgeExtractionEntry(entry: unknown): KnowledgeExtractionEntry[] {
+  if (typeof entry !== "object" || entry === null) return [];
+  const record = entry as Record<string, unknown>;
+  if (typeof record.key !== "string" || typeof record.content !== "string") return [];
+  if (record.key.length === 0 || record.content.length === 0) return [];
+  return [{ key: record.key, content: record.content }];
 }

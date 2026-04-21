@@ -15,13 +15,22 @@ import {
   normalizeDelegationRequest,
 } from "./subagent-contract.js";
 import { judgeSubagentOutput } from "./subagent-judge.js";
-import type { ToolSpec, LLMProvider, DevAgentConfig, Message , EventBus, ApprovalGate} from "../core/index.js";
+import type {
+  ApprovalGate,
+  CostRecord,
+  DevAgentConfig,
+  EventBus,
+  LLMProvider,
+  Message,
+  ReasoningEffort,
+  ToolResult,
+  ToolSpec,
+} from "../core/index.js";
 import { AgentType, extractErrorMessage } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
 
 /** Hard cap on subagent iterations to prevent runaway loops. */
 const SUBAGENT_MAX_ITERATIONS = 30;
-const MAX_DELEGATION_DEPTH = 1;
 
 /** Default per-agent-type iteration caps. */
 const DEFAULT_AGENT_ITERATION_CAPS: Readonly<Partial<Record<AgentType, number>>> = {
@@ -30,6 +39,25 @@ const DEFAULT_AGENT_ITERATION_CAPS: Readonly<Partial<Record<AgentType, number>>>
   [AgentType.ARCHITECT]: 20,
   [AgentType.EXPLORE]: 15,
 };
+
+interface QualityRetryOptions {
+  readonly agentType: AgentType;
+  readonly query: string;
+  readonly task: string;
+  readonly options: Parameters<typeof runAgent>[2];
+  readonly registry: AgentRegistry;
+  readonly cappedMax: number;
+  readonly judgeProvider: LLMProvider;
+}
+
+interface SubagentJudgeOptions {
+  readonly provider: LLMProvider;
+  readonly task: string;
+  readonly agentType: AgentType;
+  readonly output: string;
+  readonly iterationsUsed: number;
+  readonly maxIterations: number;
+}
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -53,24 +81,7 @@ export interface DelegateToolContext {
   readonly ambient?: AgentAmbientContext;
 }
 
-// ─── Factory ────────────────────────────────────────────────
-
-/**
- * Create the delegate tool bound to a specific execution context.
- * Must be called per-session since it needs the provider and tools.
- */
-export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
-  let subagentCounter = 0;
-
-  return {
-    name: "delegate",
-    description:
-      "Spawn a subagent to handle a subtask. Choose the agent type based on the task: 'explore' for codebase search, 'general' for implementation, 'reviewer' for code review, 'architect' for design/planning.",
-    category: "workflow",
-    errorGuidance: {
-      common: "Verify the agent type is valid (explore, general, reviewer, architect). Ensure the task description is specific and actionable.",
-    },
-    paramSchema: {
+const DELEGATE_PARAM_SCHEMA = {
       type: "object",
       properties: {
         agent_type: {
@@ -143,265 +154,376 @@ export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
       // rejects nullable object params unless the object variant itself is a
       // fully strict schema, so request must stay a plain object here.
       required: ["agent_type", "request"],
-    },
-    resultSchema: {
+    };
+
+const DELEGATE_RESULT_SCHEMA = {
       type: "object",
       properties: {
         output: { type: "string" },
         iterations: { type: "number" },
         cost: { type: "object" },
       },
+    };
+
+// ─── Factory ────────────────────────────────────────────────
+
+/**
+ * Create the delegate tool bound to a specific execution context.
+ * Must be called per-session since it needs the provider and tools.
+ */
+export function createDelegateTool(ctx: DelegateToolContext): ToolSpec {
+  let subagentCounter = 0;
+
+  return {
+    name: "delegate",
+    description:
+      "Spawn a subagent to handle a subtask. Choose the agent type based on the task: 'explore' for codebase search, 'general' for implementation, 'reviewer' for code review, 'architect' for design/planning.",
+    category: "workflow",
+    errorGuidance: {
+      common: "Verify the agent type is valid (explore, general, reviewer, architect). Ensure the task description is specific and actionable.",
     },
-    handler: async (params, toolContext) => {
-      const agentTypeStr = params["agent_type"] as string;
-      const forkMode = params["fork"] === true;
-      const request = normalizeDelegationRequest(params["request"], params["task"]);
+    paramSchema: DELEGATE_PARAM_SCHEMA,
+    resultSchema: DELEGATE_RESULT_SCHEMA,
+    handler: async (params, toolContext) => runDelegateTool(ctx, () => ++subagentCounter, params, toolContext),
+  };
+}
 
-      // Map string to AgentType enum
-      const agentType = parseAgentType(agentTypeStr);
-      if (!agentType) {
-        return {
-          success: false,
-          output: "",
-          error: `Invalid agent type: "${agentTypeStr}". Use 'explore', 'general', 'reviewer', or 'architect'.`,
-          artifacts: [],
-        };
+
+interface DelegateRunState {
+  readonly agentTypeStr: string;
+  readonly agentType: AgentType;
+  readonly request: NonNullable<ReturnType<typeof normalizeDelegationRequest>>;
+  readonly forkMode: boolean;
+  readonly agentId: string;
+  readonly cappedMax: number;
+  readonly modelOverride: string | undefined;
+  readonly subagentConfig: DevAgentConfig;
+  readonly resolvedReasoningEffort: ReasoningEffort | undefined;
+  readonly batchId: string | undefined;
+  readonly batchSize: number | undefined;
+  readonly startedAt: number;
+  readonly childDepth: number;
+  readonly query: string;
+}
+
+async function runDelegateTool(
+  ctx: DelegateToolContext,
+  nextSubagentNumber: () => number,
+  params: Record<string, unknown>,
+  toolContext: import("../core/index.js").ToolContext,
+) {
+  const prepared = prepareDelegateRun(ctx, nextSubagentNumber, params, toolContext);
+  if ("failure" in prepared) return prepared.failure;
+
+  const state = prepared.state;
+  try {
+    emitSubagentStart(ctx, state);
+    if (state.forkMode && ctx.getParentMessages && ctx.parentSystemPrompt) {
+      return await runForkDelegate(ctx, state);
+    }
+    return await runStandardDelegate(ctx, state);
+  } catch (err) {
+    return handleDelegateError(ctx, state, err);
+  }
+}
+
+function prepareDelegateRun(
+  ctx: DelegateToolContext,
+  nextSubagentNumber: () => number,
+  params: Record<string, unknown>,
+  toolContext: import("../core/index.js").ToolContext,
+): { state: DelegateRunState } | { failure: ToolResult } {
+  const agentTypeStr = params["agent_type"] as string;
+  const request = normalizeDelegationRequest(params["request"], params["task"]);
+  const agentType = parseAgentType(agentTypeStr);
+  const failure = validateDelegateRequest(ctx, agentTypeStr, agentType, request);
+  if (failure) return { failure };
+
+  const agentId = `${ctx.parentAgentId}-sub-${nextSubagentNumber()}`;
+  const cappedMax = resolveCappedAgentIterations(ctx.config, agentType!, request!);
+  const subagentConfig = buildSubagentConfig(ctx.config, agentType!, cappedMax);
+  return {
+    state: {
+      agentTypeStr,
+      agentType: agentType!,
+      request: request!,
+      forkMode: params["fork"] === true,
+      agentId,
+      cappedMax,
+      modelOverride: ctx.config.agentModelOverrides?.[agentType!],
+      subagentConfig,
+      resolvedReasoningEffort: resolveSubagentReasoning(ctx.config, subagentConfig, agentType!),
+      batchId: toolContext.batchId,
+      batchSize: toolContext.batchSize,
+      startedAt: Date.now(),
+      childDepth: (ctx.depth ?? 0) + 1,
+      query: buildDelegationQuery(request!, cappedMax),
+    },
+  };
+}
+
+function validateDelegateRequest(
+  ctx: DelegateToolContext,
+  agentTypeStr: string,
+  agentType: AgentType | null | undefined,
+  request: ReturnType<typeof normalizeDelegationRequest>,
+): ToolResult | null {
+  if (!agentType) {
+    return toolFailure(`Invalid agent type: "${agentTypeStr}". Use 'explore', 'general', 'reviewer', or 'architect'.`);
+  }
+  if (!request) return toolFailure("Missing delegation request. Provide `task` or `request.objective`.");
+  if (isAllowedChildAgent(ctx.parentAgentType ?? AgentType.GENERAL, agentType, ctx.config)) return null;
+  return toolFailure(`Subagent (${agentTypeStr}) is not allowed from parent ${String(ctx.parentAgentType ?? AgentType.GENERAL)}.`);
+}
+
+function toolFailure(error: string): ToolResult {
+  return { success: false, output: "", error, artifacts: [] };
+}
+
+function resolveCappedAgentIterations(
+  config: DevAgentConfig,
+  agentType: AgentType,
+  request: NonNullable<ReturnType<typeof normalizeDelegationRequest>>,
+) {
+  const agentCap = resolveAgentIterationCap(config, agentType, request);
+  return config.budget.maxIterations > 0 ? Math.min(config.budget.maxIterations, agentCap) : agentCap;
+}
+
+function buildSubagentConfig(config: DevAgentConfig, agentType: AgentType, cappedMax: number): DevAgentConfig {
+  const modelOverride = config.agentModelOverrides?.[agentType];
+  return {
+    ...config,
+    ...(modelOverride ? { model: modelOverride } : {}),
+    budget: { ...config.budget, maxIterations: cappedMax },
+  };
+}
+
+function resolveSubagentReasoning(
+  config: DevAgentConfig,
+  subagentConfig: DevAgentConfig,
+  agentType: AgentType,
+): ReasoningEffort | undefined {
+  return config.agentReasoningOverrides?.[agentType]
+    ?? subagentConfig.providers[subagentConfig.provider]?.reasoningEffort;
+}
+
+function emitSubagentStart(ctx: DelegateToolContext, state: DelegateRunState) {
+  ctx.bus.emit("subagent:start", {
+    agentId: state.agentId,
+    parentAgentId: ctx.parentAgentId,
+    depth: state.childDepth,
+    agentType: state.agentType,
+    laneLabel: state.request.laneLabel ?? null,
+    objective: state.request.objective,
+    model: state.subagentConfig.model,
+    reasoningEffort: state.resolvedReasoningEffort,
+    status: "running",
+    batchId: state.batchId,
+    batchSize: state.batchSize,
+  });
+}
+
+async function runForkDelegate(ctx: DelegateToolContext, state: DelegateRunState): Promise<ToolResult> {
+  const forkResult = await runForkedAgent(state.query, buildForkAgentOptions(ctx, state), ctx.agentRegistry);
+  const durationMs = Date.now() - state.startedAt;
+  emitSubagentEnd(ctx, state, {
+    durationMs,
+    iterations: forkResult.result.iterations,
+    cost: forkResult.cost,
+    parsedOutputKeys: [],
+  });
+  return {
+    success: true,
+    output: `Forked subagent completed [${forkResult.result.iterations} iterations, fork mode]:\n\n${forkResult.finalMessage}`,
+    error: null,
+    artifacts: [],
+    metadata: {
+      agentMeta: forkResult.agentMeta,
+      childSessionState: forkResult.childSessionState,
+      delegateSummary: buildDelegateSummary(state, durationMs, forkResult.result.iterations),
+    },
+  };
+}
+
+function buildForkAgentOptions(ctx: DelegateToolContext, state: DelegateRunState): Parameters<typeof runForkedAgent>[1] {
+  return {
+    provider: ctx.provider,
+    tools: ctx.tools,
+    bus: ctx.bus,
+    approvalGate: ctx.approvalGate,
+    config: state.subagentConfig,
+    repoRoot: ctx.repoRoot,
+    parentId: ctx.parentAgentId,
+    agentId: state.agentId,
+    parentSessionState: ctx.getParentSessionState?.(),
+    depth: state.childDepth,
+    ambient: ctx.ambient,
+    parentMessages: ctx.getParentMessages!(),
+    parentSystemPrompt: ctx.parentSystemPrompt!,
+    laneLabel: state.request.laneLabel ?? null,
+    batchId: state.batchId,
+    batchSize: state.batchSize,
+  };
+}
+
+async function runStandardDelegate(ctx: DelegateToolContext, state: DelegateRunState): Promise<ToolResult> {
+  const result = await runAgentWithQualityRetry({
+    agentType: state.agentType,
+    query: state.query,
+    task: state.request.objective,
+    options: buildStandardAgentOptions(ctx, state),
+    registry: ctx.agentRegistry,
+    cappedMax: state.cappedMax,
+    judgeProvider: ctx.provider,
+  });
+  const durationMs = Date.now() - state.startedAt;
+  const qualitySummary = formatQualitySummary(result.judgeResult);
+  emitSubagentEnd(ctx, state, {
+    durationMs,
+    iterations: result.run.result.iterations,
+    cost: result.run.cost,
+    parsedOutputKeys: result.run.parsedOutput ? Object.keys(result.run.parsedOutput) : [],
+    quality: qualitySummary,
+  });
+  return buildStandardDelegateResult(state, result, durationMs, qualitySummary);
+}
+
+function buildStandardAgentOptions(ctx: DelegateToolContext, state: DelegateRunState): Parameters<typeof runAgent>[2] {
+  return {
+    provider: ctx.provider,
+    tools: ctx.tools,
+    bus: ctx.bus,
+    approvalGate: ctx.approvalGate,
+    config: state.subagentConfig,
+    repoRoot: ctx.repoRoot,
+    parentId: ctx.parentAgentId,
+    agentId: state.agentId,
+    parentSessionState: ctx.getParentSessionState?.(),
+    depth: state.childDepth,
+    ambient: {
+      ...ctx.ambient,
+      providerLabel: state.modelOverride
+        ? `${state.subagentConfig.provider} / ${state.subagentConfig.model}`
+        : ctx.ambient?.providerLabel,
+    },
+    createDelegateTool,
+    laneLabel: state.request.laneLabel ?? null,
+    batchId: state.batchId,
+    batchSize: state.batchSize,
+  };
+}
+
+function buildStandardDelegateResult(
+  state: DelegateRunState,
+  result: Awaited<ReturnType<typeof runAgentWithQualityRetry>>,
+  durationMs: number,
+  qualitySummary: ReturnType<typeof formatQualitySummary>,
+): ToolResult {
+  const costSummary = `[${result.run.result.iterations} iterations, ${result.run.cost.inputTokens}+${result.run.cost.outputTokens} tokens]`;
+  const qualityNote = result.qualityNote ? `${result.qualityNote}\n\n` : "";
+  return {
+    success: true,
+    output: `${qualityNote}Subagent (${state.agentTypeStr}) completed ${costSummary}:\n\n${result.run.finalMessage}`,
+    error: null,
+    artifacts: [],
+    metadata: {
+      agentMeta: result.run.agentMeta,
+      parsedOutput: result.run.parsedOutput,
+      childSessionState: result.run.childSessionState,
+      quality: qualitySummary,
+      delegateSummary: {
+        ...buildDelegateSummary(state, durationMs, result.run.result.iterations),
+        quality: qualitySummary,
+      },
+    },
+  };
+}
+
+function formatQualitySummary(judgeResult: Awaited<ReturnType<typeof judgeSubagentOutput>>) {
+  return judgeResult
+    ? {
+        score: judgeResult.quality_score,
+        completeness: judgeResult.completeness,
+        note: judgeResult.note,
       }
-      if (!request) {
-        return {
-          success: false,
-          output: "",
-          error: "Missing delegation request. Provide `task` or `request.objective`.",
-          artifacts: [],
-        };
-      }
-      if (!isAllowedChildAgent(ctx.parentAgentType ?? AgentType.GENERAL, agentType, ctx.config)) {
-        return {
-          success: false,
-          output: "",
-          error: `Subagent (${agentTypeStr}) is not allowed from parent ${String(ctx.parentAgentType ?? AgentType.GENERAL)}.`,
-          artifacts: [],
-        };
-      }
+    : undefined;
+}
 
-      subagentCounter++;
-      const agentId = `${ctx.parentAgentId}-sub-${subagentCounter}`;
+function emitSubagentEnd(
+  ctx: DelegateToolContext,
+  state: DelegateRunState,
+  result: {
+    readonly durationMs: number;
+    readonly iterations: number;
+    readonly cost: CostRecord;
+    readonly parsedOutputKeys: ReadonlyArray<string>;
+    readonly quality?: ReturnType<typeof formatQualitySummary>;
+  },
+) {
+  ctx.bus.emit("subagent:end", {
+    agentId: state.agentId,
+    parentAgentId: ctx.parentAgentId,
+    depth: state.childDepth,
+    agentType: state.agentType,
+    laneLabel: state.request.laneLabel ?? null,
+    objective: state.request.objective,
+    model: state.subagentConfig.model,
+    reasoningEffort: state.resolvedReasoningEffort,
+    status: "completed",
+    durationMs: result.durationMs,
+    iterations: result.iterations,
+    cost: result.cost,
+    parsedOutputKeys: result.parsedOutputKeys,
+    ...(result.quality ? { quality: result.quality } : {}),
+    batchId: state.batchId,
+    batchSize: state.batchSize,
+  });
+}
 
-      const agentCap = resolveAgentIterationCap(ctx.config, agentType, request);
-      const parentMax = ctx.config.budget.maxIterations;
-      const cappedMax = parentMax > 0
-        ? Math.min(parentMax, agentCap)
-        : agentCap;
-      const modelOverride = ctx.config.agentModelOverrides?.[agentType];
-      const reasoningOverride = ctx.config.agentReasoningOverrides?.[agentType];
-      const subagentConfig: DevAgentConfig = {
-        ...ctx.config,
-        ...(modelOverride ? { model: modelOverride } : {}),
-        budget: { ...ctx.config.budget, maxIterations: cappedMax },
-      };
-      const resolvedReasoningEffort = reasoningOverride
-        ?? subagentConfig.providers[subagentConfig.provider]?.reasoningEffort;
-      const batchId = toolContext.batchId;
-      const batchSize = toolContext.batchSize;
-      const startedAt = Date.now();
-      const childDepth = (ctx.depth ?? 0) + 1;
+function buildDelegateSummary(state: DelegateRunState, durationMs: number, iterations: number) {
+  return {
+    agentId: state.agentId,
+    agentType: state.agentTypeStr,
+    laneLabel: state.request.laneLabel ?? null,
+    durationMs,
+    iterations,
+  };
+}
 
-      try {
-        ctx.bus.emit("subagent:start", {
-          agentId,
-          parentAgentId: ctx.parentAgentId,
-          depth: childDepth,
-          agentType,
-          laneLabel: request.laneLabel ?? null,
-          objective: request.objective,
-          model: subagentConfig.model,
-          reasoningEffort: resolvedReasoningEffort,
-          status: "running",
-          batchId,
-          batchSize,
-        });
-        const query = buildDelegationQuery(request, cappedMax);
-
-        // Fork mode: inherit parent's conversation context for prompt cache sharing
-        if (forkMode && ctx.getParentMessages && ctx.parentSystemPrompt) {
-          const forkResult = await runForkedAgent(
-            query,
-            {
-              provider: ctx.provider,
-              tools: ctx.tools,
-              bus: ctx.bus,
-              approvalGate: ctx.approvalGate,
-              config: subagentConfig,
-              repoRoot: ctx.repoRoot,
-              parentId: ctx.parentAgentId,
-              agentId,
-              parentSessionState: ctx.getParentSessionState?.(),
-              depth: childDepth,
-              ambient: ctx.ambient,
-              parentMessages: ctx.getParentMessages(),
-              parentSystemPrompt: ctx.parentSystemPrompt,
-              laneLabel: request.laneLabel ?? null,
-              batchId,
-              batchSize,
-            },
-            ctx.agentRegistry,
-          );
-          const durationMs = Date.now() - startedAt;
-          ctx.bus.emit("subagent:end", {
-            agentId,
-            parentAgentId: ctx.parentAgentId,
-            depth: childDepth,
-            agentType,
-            laneLabel: request.laneLabel ?? null,
-            objective: request.objective,
-            model: subagentConfig.model,
-            reasoningEffort: resolvedReasoningEffort,
-            status: "completed",
-            durationMs,
-            iterations: forkResult.result.iterations,
-            cost: forkResult.cost,
-            parsedOutputKeys: [],
-            batchId,
-            batchSize,
-          });
-          const costSummary = `[${forkResult.result.iterations} iterations, fork mode]`;
-          return {
-            success: true,
-            output: `Forked subagent completed ${costSummary}:\n\n${forkResult.finalMessage}`,
-            error: null,
-            artifacts: [],
-            metadata: {
-              agentMeta: forkResult.agentMeta,
-              childSessionState: forkResult.childSessionState,
-              delegateSummary: {
-                agentId,
-                agentType: agentTypeStr,
-                laneLabel: request.laneLabel ?? null,
-                durationMs,
-                iterations: forkResult.result.iterations,
-              },
-            },
-          };
-        }
-
-        const result = await runAgentWithQualityRetry(
-          agentType,
-          query,
-          request.objective,
-          {
-            provider: ctx.provider,
-            tools: ctx.tools,
-            bus: ctx.bus,
-            approvalGate: ctx.approvalGate,
-            config: subagentConfig,
-            repoRoot: ctx.repoRoot,
-            parentId: ctx.parentAgentId,
-            agentId,
-            parentSessionState: ctx.getParentSessionState?.(),
-            depth: childDepth,
-            ambient: {
-              ...ctx.ambient,
-              providerLabel: modelOverride
-                ? `${subagentConfig.provider} / ${subagentConfig.model}`
-                : ctx.ambient?.providerLabel,
-            },
-            createDelegateTool,
-            laneLabel: request.laneLabel ?? null,
-            batchId,
-            batchSize,
-          },
-          ctx.agentRegistry,
-          cappedMax,
-          ctx.provider,
-        );
-        const durationMs = Date.now() - startedAt;
-        const qualitySummary = result.judgeResult
-          ? {
-              score: result.judgeResult.quality_score,
-              completeness: result.judgeResult.completeness,
-              note: result.judgeResult.note,
-            }
-          : undefined;
-        ctx.bus.emit("subagent:end", {
-          agentId,
-          parentAgentId: ctx.parentAgentId,
-          depth: childDepth,
-          agentType,
-          laneLabel: request.laneLabel ?? null,
-          objective: request.objective,
-          model: subagentConfig.model,
-          reasoningEffort: resolvedReasoningEffort,
-          status: "completed",
-          durationMs,
-          iterations: result.run.result.iterations,
-          cost: result.run.cost,
-          parsedOutputKeys: result.run.parsedOutput ? Object.keys(result.run.parsedOutput) : [],
-          quality: qualitySummary,
-          batchId,
-          batchSize,
-        });
-
-        const costSummary = `[${result.run.result.iterations} iterations, ${result.run.cost.inputTokens}+${result.run.cost.outputTokens} tokens]`;
-        const qualityNote = result.qualityNote ? `${result.qualityNote}\n\n` : "";
-
-        return {
-          success: true,
-          output: `${qualityNote}Subagent (${agentTypeStr}) completed ${costSummary}:\n\n${result.run.finalMessage}`,
-          error: null,
-          artifacts: [],
-          metadata: {
-            agentMeta: result.run.agentMeta,
-            parsedOutput: result.run.parsedOutput,
-            childSessionState: result.run.childSessionState,
-            quality: qualitySummary,
-            delegateSummary: {
-              agentId,
-              agentType: agentTypeStr,
-              laneLabel: request.laneLabel ?? null,
-              durationMs,
-              iterations: result.run.result.iterations,
-              quality: qualitySummary,
-            },
-          },
-        };
-      } catch (err) {
-        const message = extractErrorMessage(err);
-        ctx.bus.emit("subagent:error", {
-          agentId,
-          parentAgentId: ctx.parentAgentId,
-          depth: childDepth,
-          agentType,
-          laneLabel: request.laneLabel ?? null,
-          objective: request.objective,
-          model: subagentConfig.model,
-          reasoningEffort: resolvedReasoningEffort,
-          status: "error",
-          durationMs: Date.now() - startedAt,
-          error: message,
-          batchId,
-          batchSize,
-        });
-        return {
-          success: false,
-          output: "",
-          error: `Subagent (${agentTypeStr}) failed: ${message}`,
-          artifacts: [],
-          metadata: {
-            agentMeta: {
-              agentId,
-              parentId: ctx.parentAgentId,
-              depth: childDepth,
-              agentType,
-            },
-          },
-        };
-      }
+function handleDelegateError(ctx: DelegateToolContext, state: DelegateRunState, err: unknown): ToolResult {
+  const message = extractErrorMessage(err);
+  ctx.bus.emit("subagent:error", {
+    agentId: state.agentId,
+    parentAgentId: ctx.parentAgentId,
+    depth: state.childDepth,
+    agentType: state.agentType,
+    laneLabel: state.request.laneLabel ?? null,
+    objective: state.request.objective,
+    model: state.subagentConfig.model,
+    reasoningEffort: state.resolvedReasoningEffort,
+    status: "error",
+    durationMs: Date.now() - state.startedAt,
+    error: message,
+    batchId: state.batchId,
+    batchSize: state.batchSize,
+  });
+  return {
+    success: false,
+    output: "",
+    error: `Subagent (${state.agentTypeStr}) failed: ${message}`,
+    artifacts: [],
+    metadata: {
+      agentMeta: {
+        agentId: state.agentId,
+        parentId: ctx.parentAgentId,
+        depth: state.childDepth,
+        agentType: state.agentType,
+      },
     },
   };
 }
 
 // ─── Helpers ────────────────────────────────────────────────
-
 function resolveAgentIterationCap(
   config: DevAgentConfig,
   agentType: AgentType,
@@ -410,21 +532,35 @@ function resolveAgentIterationCap(
   const override = config.agentIterationCaps?.[agentType];
   if (override !== undefined) return override;
 
-  const objective = request.objective.toLowerCase();
-  const shortLookup = objective.length < 80 &&
-    /(find|locate|where|search|which file|what calls)/.test(objective);
-  const broadAnalysis = objective.length > 160 ||
-    objective.includes("dependency graph") ||
-    objective.includes("across the codebase") ||
-    (request.constraints?.length ?? 0) > 2;
-
-  if (agentType === AgentType.EXPLORE) {
-    return shortLookup ? 8 : broadAnalysis ? 20 : DEFAULT_AGENT_ITERATION_CAPS[AgentType.EXPLORE]!;
-  }
+  const broadAnalysis = isBroadDelegationRequest(request);
+  if (agentType === AgentType.EXPLORE) return resolveExploreIterationCap(request, broadAnalysis);
   if (agentType === AgentType.REVIEWER || agentType === AgentType.ARCHITECT) {
     return broadAnalysis ? 24 : DEFAULT_AGENT_ITERATION_CAPS[agentType]!;
   }
   return broadAnalysis ? SUBAGENT_MAX_ITERATIONS : 18;
+}
+
+function resolveExploreIterationCap(
+  request: { objective: string; scope?: string; constraints?: ReadonlyArray<string> },
+  broadAnalysis: boolean,
+) {
+  if (isShortLookupRequest(request)) return 8;
+  return broadAnalysis ? 20 : DEFAULT_AGENT_ITERATION_CAPS[AgentType.EXPLORE]!;
+}
+
+function isShortLookupRequest(request: { objective: string }) {
+  const objective = request.objective.toLowerCase();
+  return objective.length < 80 && /(find|locate|where|search|which file|what calls)/.test(objective);
+}
+
+function isBroadDelegationRequest(
+  request: { objective: string; scope?: string; constraints?: ReadonlyArray<string> },
+) {
+  const objective = request.objective.toLowerCase();
+  return objective.length > 160 ||
+    objective.includes("dependency graph") ||
+    objective.includes("across the codebase") ||
+    (request.constraints?.length ?? 0) > 2;
 }
 
 function isAllowedChildAgent(
@@ -435,23 +571,14 @@ function isAllowedChildAgent(
   const allowed = config.allowedChildAgents?.[parentAgentType];
   return allowed === undefined || allowed.includes(childAgentType);
 }
-
-async function runAgentWithQualityRetry(
-  agentType: AgentType,
-  query: string,
-  task: string,
-  options: Parameters<typeof runAgent>[2],
-  registry: AgentRegistry,
-  cappedMax: number,
-  judgeProvider: LLMProvider,
-): Promise<{
+async function runAgentWithQualityRetry(params: QualityRetryOptions): Promise<{
   run: Awaited<ReturnType<typeof runAgent>>;
   judgeResult: Awaited<ReturnType<typeof judgeSubagentOutput>>;
   qualityNote: string;
 }> {
-  const firstRun = await runAgent(agentType, query, options, registry);
-  const firstJudge = await maybeJudgeSubagent(judgeProvider, task, agentType, firstRun.finalMessage, firstRun.result.iterations, cappedMax);
-  if (!firstJudge || firstJudge.quality_score >= judgeThreshold(agentType)) {
+  const firstRun = await runAgent(params.agentType, params.query, params.options, params.registry);
+  const firstJudge = await maybeJudgeSubagent(buildSubagentJudgeOptions(params, firstRun));
+  if (!firstJudge || firstJudge.quality_score >= judgeThreshold(params.agentType)) {
     // Secondary check: retry if completeness is "partial" even with high score,
     // but only when score is below the partial-retry threshold (0.75).
     // A score of 0.81 + "partial" is acceptable; 0.6 + "partial" warrants retry.
@@ -463,10 +590,10 @@ async function runAgentWithQualityRetry(
     }
   }
 
-  const retryQuery = `${query}\n\nRetry note: the previous attempt was judged ${firstJudge.completeness}. Fix this issue explicitly: ${firstJudge.note}`;
-  const secondRun = await runAgent(agentType, retryQuery, options, registry);
-  const secondJudge = await maybeJudgeSubagent(judgeProvider, task, agentType, secondRun.finalMessage, secondRun.result.iterations, cappedMax);
-  if (!secondJudge || secondJudge.quality_score >= judgeThreshold(agentType)) {
+  const retryQuery = `${params.query}\n\nRetry note: the previous attempt was judged ${firstJudge.completeness}. Fix this issue explicitly: ${firstJudge.note}`;
+  const secondRun = await runAgent(params.agentType, retryQuery, params.options, params.registry);
+  const secondJudge = await maybeJudgeSubagent(buildSubagentJudgeOptions(params, secondRun));
+  if (!secondJudge || secondJudge.quality_score >= judgeThreshold(params.agentType)) {
     return {
       run: secondRun,
       judgeResult: secondJudge,
@@ -481,24 +608,24 @@ async function runAgentWithQualityRetry(
   };
 }
 
-async function maybeJudgeSubagent(
-  provider: LLMProvider,
-  task: string,
-  agentType: AgentType,
-  output: string,
-  iterationsUsed: number,
-  maxIterations: number,
-) {
-  if (iterationsUsed < 5) return null;
+function buildSubagentJudgeOptions(
+  retry: QualityRetryOptions,
+  run: Awaited<ReturnType<typeof runAgent>>,
+): SubagentJudgeOptions {
+  return {
+    provider: retry.judgeProvider,
+    task: retry.task,
+    agentType: retry.agentType,
+    output: run.finalMessage,
+    iterationsUsed: run.result.iterations,
+    maxIterations: retry.cappedMax,
+  };
+}
+
+async function maybeJudgeSubagent(options: SubagentJudgeOptions) {
+  if (options.iterationsUsed < 5) return null;
   try {
-    return await judgeSubagentOutput(
-      provider,
-      task,
-      agentType,
-      output,
-      iterationsUsed,
-      maxIterations,
-    );
+    return await judgeSubagentOutput(options);
   } catch {
     return null;
   }

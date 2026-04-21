@@ -11,6 +11,8 @@
  */
 
 import type { PlanStep } from "./plan-tool.js";
+import { extractEnvFact } from "./session-state-env-facts.js";
+import type { EnvFact } from "./session-state-env-facts.js";
 import type { SessionStateConfigCore } from "../core/index.js";
 
 // ─── Constants (defaults) ──────────────────────────────────────
@@ -31,11 +33,6 @@ export const SESSION_STATE_MARKER = "[SESSION STATE";
 export const PRUNED_MARKER_PREFIX = "[Previously:";
 /** Marker prefix for superseded (deduplicated) tool output. */
 export const SUPERSEDED_MARKER_PREFIX = "[Superseded";
-
-export interface EnvFact {
-  readonly key: string;
-  readonly message: string;
-}
 
 export interface ToolResultSummary {
   readonly tool: string;
@@ -543,61 +540,53 @@ export class SessionState {
     }
 
     const ss = new SessionState(config);
-
-    if (data.plan) {
-      ss.plan = data.plan.map((s) => ({ ...s }));
-    }
-    for (const f of data.modifiedFiles ?? []) {
-      ss.modifiedFiles.push(f);
-    }
-    for (const { key, value } of data.envFacts ?? []) {
-      ss.envFacts.set(key, value);
-    }
-    for (const summary of data.toolSummaries ?? []) {
-      ss.toolSummaries.push({ ...summary });
-    }
-    for (const entry of data.readonlyCoverage ?? []) {
-      if (!entry || typeof entry.tool !== "string" || !Array.isArray(entry.targets)) continue;
-      ss.readonlyCoverage.set(entry.tool, entry.targets.filter((t): t is string => typeof t === "string"));
-    }
-    for (const finding of data.findings ?? []) {
-      ss.findings.push({ ...finding });
-    }
-    for (const entry of data.knowledge ?? []) {
-      ss.knowledge.push({ ...entry });
-    }
-
-    // Re-apply caps: persisted data may exceed configured limits
-    // (e.g., config was tightened after a prior session).
-    const cfg = ss.config;
-    if (ss.modifiedFiles.length > cfg.maxModifiedFiles) {
-      ss.modifiedFiles = ss.modifiedFiles.slice(ss.modifiedFiles.length - cfg.maxModifiedFiles);
-    }
-    if (ss.envFacts.size > cfg.maxEnvFacts) {
-      const keys = [...ss.envFacts.keys()];
-      for (let i = 0; i < keys.length - cfg.maxEnvFacts; i++) {
-        ss.envFacts.delete(keys[i]!);
-      }
-    }
-    if (ss.toolSummaries.length > cfg.maxToolSummaries) {
-      ss.toolSummaries = ss.toolSummaries.slice(ss.toolSummaries.length - cfg.maxToolSummaries);
-    }
-    for (const [tool, targets] of ss.readonlyCoverage.entries()) {
-      if (targets.length > cfg.maxReadonlyCoveragePerTool) {
-        ss.readonlyCoverage.set(
-          tool,
-          targets.slice(targets.length - cfg.maxReadonlyCoveragePerTool),
-        );
-      }
-    }
-    if (ss.findings.length > cfg.maxFindings) {
-      ss.findings = ss.findings.slice(ss.findings.length - cfg.maxFindings);
-    }
-    if (ss.knowledge.length > cfg.maxKnowledge) {
-      ss.knowledge = ss.knowledge.slice(ss.knowledge.length - cfg.maxKnowledge);
-    }
-
+    ss.hydrateFromJSON(data);
+    ss.applyCaps();
     return ss;
+  }
+
+  private hydrateFromJSON(data: SessionStateJSON): void {
+    this.plan = data.plan === null ? null : data.plan.map((s) => ({ ...s }));
+    this.modifiedFiles.push(...data.modifiedFiles);
+
+    for (const { key, value } of data.envFacts) this.envFacts.set(key, value);
+    for (const summary of data.toolSummaries) this.toolSummaries.push({ ...summary });
+    for (const entry of data.readonlyCoverage ?? []) this.hydrateReadonlyCoverage(entry);
+    for (const finding of data.findings ?? []) this.findings.push({ ...finding });
+    for (const entry of data.knowledge ?? []) this.knowledge.push({ ...entry });
+  }
+
+  private hydrateReadonlyCoverage(
+    entry: { readonly tool: string; readonly targets: string[] } | undefined,
+  ): void {
+    if (!entry || typeof entry.tool !== "string" || !Array.isArray(entry.targets)) return;
+    this.readonlyCoverage.set(
+      entry.tool,
+      entry.targets.filter((target): target is string => typeof target === "string"),
+    );
+  }
+
+  private applyCaps(): void {
+    const cfg = this.config;
+    this.modifiedFiles = keepLast(this.modifiedFiles, cfg.maxModifiedFiles);
+    this.toolSummaries = keepLast(this.toolSummaries, cfg.maxToolSummaries);
+    this.findings = keepLast(this.findings, cfg.maxFindings);
+    this.knowledge = keepLast(this.knowledge, cfg.maxKnowledge);
+    this.trimEnvFacts(cfg.maxEnvFacts);
+    this.trimReadonlyCoverage(cfg.maxReadonlyCoveragePerTool);
+  }
+
+  private trimEnvFacts(maxEnvFacts: number): void {
+    const keys = [...this.envFacts.keys()];
+    for (const key of keys.slice(0, Math.max(0, keys.length - maxEnvFacts))) {
+      this.envFacts.delete(key);
+    }
+  }
+
+  private trimReadonlyCoverage(maxTargets: number): void {
+    for (const [tool, targets] of this.readonlyCoverage.entries()) {
+      this.readonlyCoverage.set(tool, keepLast(targets, maxTargets));
+    }
   }
 
   // ─── System Message Serialization ──────────────────────────
@@ -647,219 +636,130 @@ export class SessionState {
   toSystemMessage(tier: "full" | "compact" | "minimal" = "full"): string | null {
     const sections: string[] = [];
 
-    // Evidence section — leads the message so LLM reads it before status labels.
-    // Omitted from minimal tier to keep it token-light.
     if (tier !== "minimal") {
       const evidenceSection = this.buildEvidenceSection();
       if (evidenceSection) sections.push(evidenceSection);
     }
 
-    // Plan section (always included if present)
-    if (this.plan !== null && this.plan.length > 0) {
-      const hasCompleted = this.plan.some((s) => s.status === "completed");
-      const instruction = hasCompleted
-        ? "IMPORTANT: The following plan steps reflect verified progress. Do NOT reset completed steps when calling update_plan. Continue from where the plan left off.\n"
-        : "IMPORTANT: This is the active plan. Do NOT replace or rename these steps — only update their statuses (pending → in_progress → completed).\n";
-      const lines = this.plan.map(
-        (s) => `- [${s.status}] ${s.description}`,
-      );
-      sections.push(`## Plan\n${instruction}${lines.join("\n")}`);
-    }
+    pushOptionalSection(sections, this.buildPlanSection());
 
     if (tier !== "minimal") {
-      // Modified files section
-      if (this.modifiedFiles.length > 0) {
-        const files = this.modifiedFiles;
-        const lines = files.map((f) => `- ${f}`);
-        const scopeHint =
-          "IMPORTANT: Treat this as the current review scope. Do NOT rerun broad discovery commands (for example `git diff --name-only`) unless this list is stale.\n";
-        sections.push(`## Modified files\n${scopeHint}${lines.join("\n")}`);
-      }
-
-      // Environment section
-      if (this.envFacts.size > 0) {
-        const lines = [...this.envFacts.values()].map((f) => `- ${f}`);
-        sections.push(`## Environment\n${lines.join("\n")}`);
-      }
+      pushOptionalSection(sections, this.buildModifiedFilesSection());
+      pushOptionalSection(sections, this.buildEnvironmentSection());
     }
 
-    // Tool summaries section — included in all tiers so compaction
-    // never drops critical "already reviewed" context.
-    if (this.toolSummaries.length > 0) {
-      const count = tier === "minimal" ? 5
-        : tier === "compact" ? 20
-        : this.toolSummaries.length;
-      const recent = this.toolSummaries.slice(-count);
-      const lines = recent.map(
-        (s) => {
-          const flatSummary = s.summary.replace(/\n/g, " | ");
-          return `- [iter ${s.iteration}] ${s.tool}(${s.target}): ${flatSummary}`;
-        },
-      );
-      const antiReread = "IMPORTANT: The files listed below have already been examined. Do NOT re-read them unless you need to verify a specific detail not captured in the summary. Use save_finding to persist analysis conclusions before context compaction.\n";
-      sections.push(`## Recent activity\n${antiReread}${lines.join("\n")}`);
-    }
-
-    // Readonly coverage section — compact index of successfully reviewed
-    // targets that survives tool-summary eviction.
-    if (this.readonlyCoverage.size > 0) {
-      const maxTools = tier === "minimal" ? 3
-        : tier === "compact" ? 6
-        : 12;
-      const maxTargetsPerTool = tier === "minimal" ? 5
-        : tier === "compact" ? 10
-        : 25;
-      const entries = [...this.readonlyCoverage.entries()];
-      const visibleTools = entries.slice(-maxTools);
-      const hiddenToolCount = entries.length - visibleTools.length;
-
-      const lines = visibleTools.map(([tool, targets]) => {
-        const recentTargets = targets.slice(-maxTargetsPerTool);
-        const hiddenTargets = targets.length - recentTargets.length;
-        const targetList = recentTargets.join(", ");
-        const overflow = hiddenTargets > 0 ? `, ... (+${hiddenTargets} more)` : "";
-        return `- ${tool} (${targets.length}): ${targetList}${overflow}`;
-      });
-      if (hiddenToolCount > 0) {
-        lines.push(`- ... (+${hiddenToolCount} more tools)`);
-      }
-
-      const totalTargets = this.getReadonlyCoverageTargetCount();
-      const instruction = `IMPORTANT: ${totalTargets} readonly inspection(s) below are tracked and will be SKIPPED if re-requested. Do NOT attempt to re-read these files — the results are cached. Only a mutating tool (edit/write) resets the cache for affected paths.\n`;
-      sections.push(`## Readonly coverage\n${instruction}${lines.join("\n")}`);
-    }
-
-    // Findings section — always included at all tiers (these are the LLM's
-    // persisted analysis conclusions and MUST survive compaction).
-    if (this.findings.length > 0) {
-      const lines = this.findings.map(
-        (f) => `- **${f.title}**: ${f.detail}`,
-      );
-      sections.push(`## Findings\n${lines.join("\n")}`);
-    }
-
-    // Knowledge section — always included at all tiers (extracted domain
-    // knowledge that MUST survive compaction to prevent re-reading).
-    if (this.knowledge.length > 0) {
-      const lines = this.knowledge.map(
-        (k) => `- **${k.key}**: ${k.content}`,
-      );
-      sections.push(`## Accumulated knowledge\n${lines.join("\n")}`);
-    }
+    pushOptionalSection(sections, this.buildToolSummariesSection(tier));
+    pushOptionalSection(sections, this.buildReadonlyCoverageSection(tier));
+    pushOptionalSection(sections, this.buildFindingsSection());
+    pushOptionalSection(sections, this.buildKnowledgeSection());
 
     if (sections.length === 0) return null;
 
     return `${SESSION_STATE_MARKER} — preserved across compaction]\n\n${sections.join("\n\n")}`;
   }
+
+  private buildPlanSection(): string | null {
+    if (this.plan === null || this.plan.length === 0) return null;
+    const hasCompleted = this.plan.some((s) => s.status === "completed");
+    const instruction = hasCompleted
+      ? "IMPORTANT: The following plan steps reflect verified progress. Do NOT reset completed steps when calling update_plan. Continue from where the plan left off.\n"
+      : "IMPORTANT: This is the active plan. Do NOT replace or rename these steps — only update their statuses (pending → in_progress → completed).\n";
+    const lines = this.plan.map((s) => `- [${s.status}] ${s.description}`);
+    return `## Plan\n${instruction}${lines.join("\n")}`;
+  }
+
+  private buildModifiedFilesSection(): string | null {
+    if (this.modifiedFiles.length === 0) return null;
+    const lines = this.modifiedFiles.map((f) => `- ${f}`);
+    const scopeHint =
+      "IMPORTANT: Treat this as the current review scope. Do NOT rerun broad discovery commands (for example `git diff --name-only`) unless this list is stale.\n";
+    return `## Modified files\n${scopeHint}${lines.join("\n")}`;
+  }
+
+  private buildEnvironmentSection(): string | null {
+    if (this.envFacts.size === 0) return null;
+    const lines = [...this.envFacts.values()].map((f) => `- ${f}`);
+    return `## Environment\n${lines.join("\n")}`;
+  }
+
+  private buildToolSummariesSection(tier: "full" | "compact" | "minimal"): string | null {
+    if (this.toolSummaries.length === 0) return null;
+    const count = getTierLimit(tier, { minimal: 5, compact: 20, full: this.toolSummaries.length });
+    const lines = this.toolSummaries.slice(-count).map(formatToolSummaryLine);
+    const antiReread = "IMPORTANT: The files listed below have already been examined. Do NOT re-read them unless you need to verify a specific detail not captured in the summary. Use save_finding to persist analysis conclusions before context compaction.\n";
+    return `## Recent activity\n${antiReread}${lines.join("\n")}`;
+  }
+
+  private buildReadonlyCoverageSection(tier: "full" | "compact" | "minimal"): string | null {
+    if (this.readonlyCoverage.size === 0) return null;
+    const maxTools = getTierLimit(tier, { minimal: 3, compact: 6, full: 12 });
+    const maxTargetsPerTool = getTierLimit(tier, { minimal: 5, compact: 10, full: 25 });
+    const lines = formatReadonlyCoverageLines([...this.readonlyCoverage.entries()], {
+      maxTools,
+      maxTargetsPerTool,
+    });
+    const totalTargets = this.getReadonlyCoverageTargetCount();
+    const instruction = `IMPORTANT: ${totalTargets} readonly inspection(s) below are tracked and will be SKIPPED if re-requested. Do NOT attempt to re-read these files — the results are cached. Only a mutating tool (edit/write) resets the cache for affected paths.\n`;
+    return `## Readonly coverage\n${instruction}${lines.join("\n")}`;
+  }
+
+  private buildFindingsSection(): string | null {
+    if (this.findings.length === 0) return null;
+    const lines = this.findings.map((f) => `- **${f.title}**: ${f.detail}`);
+    return `## Findings\n${lines.join("\n")}`;
+  }
+
+  private buildKnowledgeSection(): string | null {
+    if (this.knowledge.length === 0) return null;
+    const lines = this.knowledge.map((k) => `- **${k.key}**: ${k.content}`);
+    return `## Accumulated knowledge\n${lines.join("\n")}`;
+  }
 }
 
-// ─── extractEnvFact ─────────────────────────────────────────────
-
-/**
- * Heuristic extraction of structured environment facts from tool failure output.
- * Returns null if no actionable fact can be extracted.
- */
-export function extractEnvFact(
-  toolName: string,
-  error: string,
-  output: string,
-): EnvFact | null {
-  // Only extract from run_command failures
-  if (toolName !== "run_command") return null;
-
-  const combined = `${error}\n${output}`;
-
-  // Pattern: command not found (exit code 127)
-  const cmdNotFound = combined.match(/(?:command not found|not found):\s*(\S+)/i)
-    ?? combined.match(/(\S+):\s*(?:command not found|No such file)/i);
-  if (cmdNotFound?.[1]) {
-    const cmd = cmdNotFound[1];
-    return {
-      key: `cmd-not-found:${cmd}`,
-      message: `${cmd} is not installed on this system. Use an alternative command.`,
-    };
-  }
-
-  // Pattern: permission denied
-  const permDenied = combined.match(/(\S+):\s*[Pp]ermission denied/);
-  if (permDenied?.[1]) {
-    return {
-      key: `permission-denied:${permDenied[1]}`,
-      message: `Permission denied for ${permDenied[1]}. Check file permissions or use sudo.`,
-    };
-  }
-
-  // Pattern: build tool failure with missing crate/module/package
-  const missingDep = combined.match(/can't find crate for `([^`]+)`/)
-    ?? combined.match(/ModuleNotFoundError:\s*No module named '([^']+)'/)
-    ?? combined.match(/Cannot find module '([^']+)'/);
-  if (missingDep?.[1]) {
-    return {
-      key: `build-fail:missing-${missingDep[1]}`,
-      message: `Build fails — missing dependency: ${missingDep[1]}. Install it or skip build verification.`,
-    };
-  }
-
-  // Pattern: exit code 101 (Rust/cargo) or specific build codes
-  if (combined.includes("exit code: 101") || combined.includes("Exit code: 101")) {
-    if (combined.includes("cargo") || combined.includes("rustc") || combined.includes("error[E")) {
-      return {
-        key: "build-fail:cargo",
-        message: "cargo check/build fails in this environment. Skip cargo verification or fix native dependencies first.",
-      };
-    }
-  }
-
-  // Pattern: network / proxy failures
-  if (/Could not resolve host|Connection refused|ETIMEDOUT|ECONNREFUSED/i.test(combined)) {
-    return {
-      key: "network-failure",
-      message: "Network access appears unavailable or restricted. Use offline alternatives.",
-    };
-  }
-
-  // Pattern: disk space / quota
-  if (/No space left on device|Disk quota exceeded/i.test(combined)) {
-    return {
-      key: "disk-full",
-      message: "Disk is full or quota exceeded. Free space before writing files.",
-    };
-  }
-
-  // Pattern: runtime version mismatch
-  const versionMismatch = combined.match(/requires Node\.js (\d+)/)
-    ?? combined.match(/requires Python (\d+\.\d+)/);
-  if (versionMismatch) {
-    return {
-      key: "version-mismatch",
-      message: `Runtime version mismatch detected: ${versionMismatch[0]}. Use compatible syntax or check version.`,
-    };
-  }
-
-  // Pattern: git state issues
-  const gitIssue = combined.match(/fatal: not a git repository/)
-    ?? combined.match(/CONFLICT.*Merge conflict/i);
-  if (gitIssue) {
-    return {
-      key: "git-issue",
-      message: `Git state issue: ${gitIssue[0]}. Resolve before proceeding with file operations.`,
-    };
-  }
-
-  // Pattern: tool-specific timeout — detect search commands for targeted advice
-  if (combined.includes("timed out") || combined.includes("SIGTERM")) {
-    const isSearch = /\bgrep\s+-[rRl]*R|\bfind\b|\brg\b/.test(combined);
-    if (isSearch) {
-      return {
-        key: "search-timeout",
-        message: "Recursive search command timed out on this repo. Use scoped searches: specific subdirectories, --include/--glob filters, -maxdepth for find, or builtin search_files/find_files tools.",
-      };
-    }
-    return {
-      key: "tool-timeout",
-      message: "Command timed out. Use shorter-running commands or increase timeout.",
-    };
-  }
-
-  return null;
+function keepLast<T>(items: T[], maxItems: number): T[] {
+  return items.length > maxItems ? items.slice(items.length - maxItems) : items;
 }
+
+function pushOptionalSection(sections: string[], section: string | null): void {
+  if (section) sections.push(section);
+}
+
+function getTierLimit(
+  tier: "full" | "compact" | "minimal",
+  limits: { readonly full: number; readonly compact: number; readonly minimal: number },
+): number {
+  return limits[tier];
+}
+
+function formatToolSummaryLine(summary: ToolResultSummary): string {
+  const flatSummary = summary.summary.replace(/\n/g, " | ");
+  return `- [iter ${summary.iteration}] ${summary.tool}(${summary.target}): ${flatSummary}`;
+}
+
+function formatReadonlyCoverageLines(
+  entries: Array<[string, string[]]>,
+  limits: { readonly maxTools: number; readonly maxTargetsPerTool: number },
+): string[] {
+  const visibleTools = entries.slice(-limits.maxTools);
+  const lines = visibleTools.map(([tool, targets]) =>
+    formatReadonlyCoverageLine(tool, targets, limits.maxTargetsPerTool),
+  );
+  const hiddenToolCount = entries.length - visibleTools.length;
+  if (hiddenToolCount > 0) lines.push(`- ... (+${hiddenToolCount} more tools)`);
+  return lines;
+}
+
+function formatReadonlyCoverageLine(
+  tool: string,
+  targets: ReadonlyArray<string>,
+  maxTargets: number,
+): string {
+  const recentTargets = targets.slice(-maxTargets);
+  const hiddenTargets = targets.length - recentTargets.length;
+  const targetList = recentTargets.join(", ");
+  const overflow = hiddenTargets > 0 ? `, ... (+${hiddenTargets} more)` : "";
+  return `- ${tool} (${targets.length}): ${targetList}${overflow}`;
+}
+
+export { extractEnvFact };
+export type { EnvFact };

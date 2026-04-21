@@ -62,23 +62,31 @@ export interface DefaultToolRegistryOptions {
  */
 export function createDefaultToolRegistry(options?: DefaultToolRegistryOptions): ToolRegistry {
   const registry = new ToolRegistry();
-  const overrideMap = new Map(
-    (options?.overrides ?? []).map((tool) => [tool.name, tool]),
-  );
+  const overrides = options?.overrides ?? [];
+  const overrideMap = new Map(overrides.map((tool) => [tool.name, tool]));
   const deferredNames = options?.deferredToolNames ?? new Set<string>();
 
   for (const tool of DEFAULT_BUILTIN_TOOLS) {
-    const effective = overrideMap.get(tool.name) ?? tool;
-    if (deferredNames.has(tool.name)) {
-      registry.registerDeferred(effective);
-    } else {
-      registry.register(effective);
-    }
+    registerDefaultTool(registry, overrideMap.get(tool.name) ?? tool, deferredNames);
   }
-  for (const tool of options?.overrides ?? []) {
-    if (!registry.has(tool.name)) {
-      registry.register(tool);
-    }
-  }
+  registerAdditionalOverrides(registry, overrides);
   return registry;
+}
+
+function registerDefaultTool(
+  registry: ToolRegistry,
+  tool: ToolSpec,
+  deferredNames: ReadonlySet<string>,
+) {
+  if (deferredNames.has(tool.name)) {
+    registry.registerDeferred(tool);
+    return;
+  }
+  registry.register(tool);
+}
+
+function registerAdditionalOverrides(registry: ToolRegistry, overrides: ReadonlyArray<ToolSpec>) {
+  for (const tool of overrides) {
+    if (!registry.has(tool.name)) registry.register(tool);
+  }
 }

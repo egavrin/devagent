@@ -36,204 +36,202 @@ beforeEach(() => {
 });
 
 // ─── Live Engine Tests ──────────────────────────────────────
+it("find_files returns real files from the repo", async () => {
+  const engine = new ToolScriptEngine({ registry, context, bus });
 
-describe("ToolScriptEngine (live)", () => {
-  it("find_files returns real files from the repo", async () => {
-    const engine = new ToolScriptEngine({ registry, context, bus });
-
-    const result = await engine.execute({
-      steps: [
-        {
-          id: "find",
-          tool: "find_files",
-          args: { pattern: "packages/runtime/src/engine/tool-script*.ts" },
-        },
-      ],
-    });
-
-    expect(result.steps).toHaveLength(1);
-    expect(result.steps[0]!.success).toBe(true);
-    expect(result.steps[0]!.output).toContain("tool-script.ts");
-    expect(result.steps[0]!.output).toContain("tool-script-tool.ts");
+  const result = await engine.execute({
+    steps: [
+      {
+        id: "find",
+        tool: "find_files",
+        args: { pattern: "packages/runtime/src/engine/tool-script*.ts" },
+      },
+    ],
   });
 
-  it("find_files → read_file chain using $stepId.lines[N]", async () => {
-    const engine = new ToolScriptEngine({ registry, context, bus });
-
-    const result = await engine.execute({
-      steps: [
-        {
-          id: "find",
-          tool: "find_files",
-          args: { pattern: "packages/runtime/src/engine/index.ts" },
-        },
-        {
-          id: "read",
-          tool: "read_file",
-          args: { path: "$find.lines[0]" },
-        },
-      ],
-    });
-
-    expect(result.steps).toHaveLength(2);
-    expect(result.steps[0]!.success).toBe(true);
-    // The found file should contain "index.ts"
-    expect(result.steps[0]!.output).toContain("index.ts");
-
-    expect(result.steps[1]!.success).toBe(true);
-    // The file content should have our new exports
-    expect(result.steps[1]!.output).toContain("ToolScriptEngine");
-    expect(result.steps[1]!.output).toContain("createToolScriptTool");
-  });
-
-  it("search_files finds pattern in real source files", async () => {
-    const engine = new ToolScriptEngine({ registry, context, bus });
-
-    const result = await engine.execute({
-      steps: [
-        {
-          id: "search",
-          tool: "search_files",
-          args: {
-            pattern: "class ToolScriptEngine",
-            path: "packages/runtime/src/engine",
-            file_pattern: "**/*.ts",
-          },
-        },
-      ],
-    });
-
-    expect(result.steps).toHaveLength(1);
-    expect(result.steps[0]!.success).toBe(true);
-    expect(result.steps[0]!.output).toContain("tool-script.ts");
-    expect(result.steps[0]!.output).toContain("class ToolScriptEngine");
-  });
-
-  it("git_status returns clean repo info", async () => {
-    const engine = new ToolScriptEngine({ registry, context, bus });
-
-    const result = await engine.execute({
-      steps: [{ id: "status", tool: "git_status", args: {} }],
-    });
-
-    expect(result.steps).toHaveLength(1);
-    expect(result.steps[0]!.success).toBe(true);
-    // Should return some git status text (branch, changes, etc.)
-    expect(result.steps[0]!.output.length).toBeGreaterThan(0);
-  });
-
-  it("multi-tool batch: find → search → read in one script", async () => {
-    const engine = new ToolScriptEngine({ registry, context, bus });
-
-    const result = await engine.execute({
-      steps: [
-        {
-          id: "find",
-          tool: "find_files",
-          args: { pattern: "packages/runtime/src/core/types.ts" },
-        },
-        {
-          id: "search",
-          tool: "search_files",
-          args: {
-            pattern: "ToolCategory",
-            path: "packages/runtime/src/core",
-            file_pattern: "**/types.ts",
-            max_results: 5,
-          },
-        },
-        {
-          id: "read",
-          tool: "read_file",
-          args: { path: "$find.lines[0]", start_line: 1, end_line: 30 },
-        },
-      ],
-    });
-
-    expect(result.steps).toHaveLength(3);
-
-    // find_files: should find the file
-    expect(result.steps[0]!.success).toBe(true);
-    expect(result.steps[0]!.output).toContain("types.ts");
-
-    // search_files: should find ToolCategory references
-    expect(result.steps[1]!.success).toBe(true);
-    expect(result.steps[1]!.output).toContain("ToolCategory");
-
-    // read_file: should read beginning of types.ts (using resolved ref)
-    expect(result.steps[2]!.success).toBe(true);
-    expect(result.steps[2]!.output.length).toBeGreaterThan(0);
-  });
-
-  it("emits real tool:before and tool:after events during live execution", async () => {
-    const beforeNames: string[] = [];
-    const afterNames: string[] = [];
-
-    bus.on("tool:before", (e) => beforeNames.push(e.name));
-    bus.on("tool:after", (e) => afterNames.push(e.name));
-
-    const engine = new ToolScriptEngine({ registry, context, bus });
-
-    await engine.execute({
-      steps: [
-        {
-          id: "find",
-          tool: "find_files",
-          args: { pattern: "package.json", max_results: 5 },
-        },
-        { id: "status", tool: "git_status", args: {} },
-      ],
-    });
-
-    expect(beforeNames).toEqual(["find_files", "git_status"]);
-    expect(afterNames).toEqual(["find_files", "git_status"]);
-  });
-
-  it("handles read_file on nonexistent file gracefully (fail-forward)", async () => {
-    const engine = new ToolScriptEngine({ registry, context, bus });
-
-    const result = await engine.execute({
-      steps: [
-        {
-          id: "read_missing",
-          tool: "read_file",
-          args: { path: "this/file/does/not/exist.ts" },
-        },
-        { id: "status", tool: "git_status", args: {} },
-      ],
-    });
-
-    expect(result.steps).toHaveLength(2);
-    // First step fails but doesn't abort the script
-    expect(result.steps[0]!.success).toBe(false);
-    // Second step still runs
-    expect(result.steps[1]!.success).toBe(true);
-  });
-
-  it("reference from failed step produces error marker", async () => {
-    const engine = new ToolScriptEngine({ registry, context, bus });
-
-    const result = await engine.execute({
-      steps: [
-        {
-          id: "bad",
-          tool: "read_file",
-          args: { path: "nonexistent.ts" },
-        },
-        {
-          id: "use_bad",
-          tool: "read_file",
-          args: { path: "$bad" },
-        },
-      ],
-    });
-
-    expect(result.steps).toHaveLength(2);
-    expect(result.steps[0]!.success).toBe(false);
-    // The second step should have received an error marker as the path
-    expect(result.steps[1]!.success).toBe(false);
-  });
+  expect(result.steps).toHaveLength(1);
+  expect(result.steps[0]!.success).toBe(true);
+  expect(result.steps[0]!.output).toContain("tool-script.ts");
+  expect(result.steps[0]!.output).toContain("tool-script-tool.ts");
 });
+
+it("find_files → read_file chain using $stepId.lines[N]", async () => {
+  const engine = new ToolScriptEngine({ registry, context, bus });
+
+  const result = await engine.execute({
+    steps: [
+      {
+        id: "find",
+        tool: "find_files",
+        args: { pattern: "packages/runtime/src/engine/index.ts" },
+      },
+      {
+        id: "read",
+        tool: "read_file",
+        args: { path: "$find.lines[0]" },
+      },
+    ],
+  });
+
+  expect(result.steps).toHaveLength(2);
+  expect(result.steps[0]!.success).toBe(true);
+  // The found file should contain "index.ts"
+  expect(result.steps[0]!.output).toContain("index.ts");
+
+  expect(result.steps[1]!.success).toBe(true);
+  // The file content should have our new exports
+  expect(result.steps[1]!.output).toContain("ToolScriptEngine");
+  expect(result.steps[1]!.output).toContain("createToolScriptTool");
+});
+
+it("search_files finds pattern in real source files", async () => {
+  const engine = new ToolScriptEngine({ registry, context, bus });
+
+  const result = await engine.execute({
+    steps: [
+      {
+        id: "search",
+        tool: "search_files",
+        args: {
+          pattern: "class ToolScriptEngine",
+          path: "packages/runtime/src/engine",
+          file_pattern: "**/*.ts",
+        },
+      },
+    ],
+  });
+
+  expect(result.steps).toHaveLength(1);
+  expect(result.steps[0]!.success).toBe(true);
+  expect(result.steps[0]!.output).toContain("tool-script.ts");
+  expect(result.steps[0]!.output).toContain("class ToolScriptEngine");
+});
+
+it("git_status returns clean repo info", async () => {
+  const engine = new ToolScriptEngine({ registry, context, bus });
+
+  const result = await engine.execute({
+    steps: [{ id: "status", tool: "git_status", args: {} }],
+  });
+
+  expect(result.steps).toHaveLength(1);
+  expect(result.steps[0]!.success).toBe(true);
+  // Should return some git status text (branch, changes, etc.)
+  expect(result.steps[0]!.output.length).toBeGreaterThan(0);
+});
+
+it("multi-tool batch: find → search → read in one script", async () => {
+  const engine = new ToolScriptEngine({ registry, context, bus });
+
+  const result = await engine.execute({
+    steps: [
+      {
+        id: "find",
+        tool: "find_files",
+        args: { pattern: "packages/runtime/src/core/types.ts" },
+      },
+      {
+        id: "search",
+        tool: "search_files",
+        args: {
+          pattern: "ToolCategory",
+          path: "packages/runtime/src/core",
+          file_pattern: "**/types.ts",
+          max_results: 5,
+        },
+      },
+      {
+        id: "read",
+        tool: "read_file",
+        args: { path: "$find.lines[0]", start_line: 1, end_line: 30 },
+      },
+    ],
+  });
+
+  expect(result.steps).toHaveLength(3);
+
+  // find_files: should find the file
+  expect(result.steps[0]!.success).toBe(true);
+  expect(result.steps[0]!.output).toContain("types.ts");
+
+  // search_files: should find ToolCategory references
+  expect(result.steps[1]!.success).toBe(true);
+  expect(result.steps[1]!.output).toContain("ToolCategory");
+
+  // read_file: should read beginning of types.ts (using resolved ref)
+  expect(result.steps[2]!.success).toBe(true);
+  expect(result.steps[2]!.output.length).toBeGreaterThan(0);
+});
+
+it("emits real tool:before and tool:after events during live execution", async () => {
+  const beforeNames: string[] = [];
+  const afterNames: string[] = [];
+
+  bus.on("tool:before", (e) => beforeNames.push(e.name));
+  bus.on("tool:after", (e) => afterNames.push(e.name));
+
+  const engine = new ToolScriptEngine({ registry, context, bus });
+
+  await engine.execute({
+    steps: [
+      {
+        id: "find",
+        tool: "find_files",
+        args: { pattern: "package.json", max_results: 5 },
+      },
+      { id: "status", tool: "git_status", args: {} },
+    ],
+  });
+
+  expect(beforeNames).toEqual(["find_files", "git_status"]);
+  expect(afterNames).toEqual(["find_files", "git_status"]);
+});
+
+it("handles read_file on nonexistent file gracefully (fail-forward)", async () => {
+  const engine = new ToolScriptEngine({ registry, context, bus });
+
+  const result = await engine.execute({
+    steps: [
+      {
+        id: "read_missing",
+        tool: "read_file",
+        args: { path: "this/file/does/not/exist.ts" },
+      },
+      { id: "status", tool: "git_status", args: {} },
+    ],
+  });
+
+  expect(result.steps).toHaveLength(2);
+  // First step fails but doesn't abort the script
+  expect(result.steps[0]!.success).toBe(false);
+  // Second step still runs
+  expect(result.steps[1]!.success).toBe(true);
+});
+
+it("reference from failed step produces error marker", async () => {
+  const engine = new ToolScriptEngine({ registry, context, bus });
+
+  const result = await engine.execute({
+    steps: [
+      {
+        id: "bad",
+        tool: "read_file",
+        args: { path: "nonexistent.ts" },
+      },
+      {
+        id: "use_bad",
+        tool: "read_file",
+        args: { path: "$bad" },
+      },
+    ],
+  });
+
+  expect(result.steps).toHaveLength(2);
+  expect(result.steps[0]!.success).toBe(false);
+  // The second step should have received an error marker as the path
+  expect(result.steps[1]!.success).toBe(false);
+});
+
 
 // ─── Live Factory Tests ─────────────────────────────────────
 

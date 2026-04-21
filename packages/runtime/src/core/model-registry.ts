@@ -184,58 +184,79 @@ function loadModelFile(filePath: string): void {
   const content = readFileSync(filePath, "utf-8");
   parseModelToml(content);
 }
-
 function parseModelToml(content: string): void {
   const parsed = parseToml(content) as Record<string, unknown>;
 
   const provider = parsed["provider"] as string | undefined;
-  const baseUrl = parsed["base_url"] as string | undefined;
-
   if (!provider) return;
 
   for (const [key, value] of Object.entries(parsed)) {
-    if (key === "provider" || key === "base_url") continue;
-    if (typeof value !== "object" || value === null) continue;
-
-    const modelDef = value as Record<string, unknown>;
-
-    const providerRegistry = registryByProvider.get(provider) ?? new Map<string, ModelRegistryEntry>();
-    registryByProvider.set(provider, providerRegistry);
-    if (providerRegistry.has(key)) continue;
-
-    const defaultMaxTokens =
-      (modelDef["default_max_tokens"] as number | undefined) ??
-      (modelDef["response_headroom"] as number | undefined) ??
-      4096;
-
-    const capabilities: ModelCapabilities = {
-      useResponsesApi: (modelDef["use_responses_api"] as boolean | undefined) ?? false,
-      reasoning: inferReasoning(modelDef),
-      supportsTemperature: (modelDef["supports_temperature"] as boolean | undefined) ?? true,
-      defaultMaxTokens,
-    };
-
-    const inputPrice = modelDef["input_price_per_million"] as number | undefined;
-    const outputPrice = modelDef["output_price_per_million"] as number | undefined;
-    const pricing: ModelPricing | undefined =
-      inputPrice != null && outputPrice != null
-        ? { inputPricePerMillion: inputPrice, outputPricePerMillion: outputPrice }
-        : undefined;
-
-    const entry: ModelRegistryEntry = {
-      provider,
-      baseUrl,
-      contextWindow: (modelDef["context_window"] as number | undefined) ?? 128000,
-      responseHeadroom: (modelDef["response_headroom"] as number | undefined) ?? 4096,
-      capabilities,
-      pricing,
-    };
-
-    providerRegistry.set(key, entry);
-
-    const entries = registry.get(key) ?? [];
-    registry.set(key, [...entries, entry]);
+    if (!isModelTomlEntry(key, value)) continue;
+    registerModelTomlEntry(provider, parsed["base_url"] as string | undefined, key, value);
   }
+}
+
+function isModelTomlEntry(key: string, value: unknown): value is Record<string, unknown> {
+  if (key === "provider" || key === "base_url") return false;
+  return typeof value === "object" && value !== null;
+}
+
+function registerModelTomlEntry(
+  provider: string,
+  baseUrl: string | undefined,
+  key: string,
+  modelDef: Record<string, unknown>,
+) {
+  const providerRegistry = getProviderRegistry(provider);
+  if (providerRegistry.has(key)) return;
+
+  const entry = createModelRegistryEntry(provider, baseUrl, modelDef);
+  providerRegistry.set(key, entry);
+
+  const entries = registry.get(key) ?? [];
+  registry.set(key, [...entries, entry]);
+}
+
+function getProviderRegistry(provider: string) {
+  const providerRegistry = registryByProvider.get(provider) ?? new Map<string, ModelRegistryEntry>();
+  registryByProvider.set(provider, providerRegistry);
+  return providerRegistry;
+}
+
+function createModelRegistryEntry(
+  provider: string,
+  baseUrl: string | undefined,
+  modelDef: Record<string, unknown>,
+): ModelRegistryEntry {
+  return {
+    provider,
+    baseUrl,
+    contextWindow: (modelDef["context_window"] as number | undefined) ?? 128000,
+    responseHeadroom: (modelDef["response_headroom"] as number | undefined) ?? 4096,
+    capabilities: parseModelCapabilities(modelDef),
+    pricing: parseModelPricing(modelDef),
+  };
+}
+
+function parseModelCapabilities(modelDef: Record<string, unknown>): ModelCapabilities {
+  const defaultMaxTokens =
+    (modelDef["default_max_tokens"] as number | undefined) ??
+    (modelDef["response_headroom"] as number | undefined) ??
+    4096;
+  return {
+    useResponsesApi: (modelDef["use_responses_api"] as boolean | undefined) ?? false,
+    reasoning: inferReasoning(modelDef),
+    supportsTemperature: (modelDef["supports_temperature"] as boolean | undefined) ?? true,
+    defaultMaxTokens,
+  };
+}
+
+function parseModelPricing(modelDef: Record<string, unknown>): ModelPricing | undefined {
+  const inputPrice = modelDef["input_price_per_million"] as number | undefined;
+  const outputPrice = modelDef["output_price_per_million"] as number | undefined;
+  return inputPrice != null && outputPrice != null
+    ? { inputPricePerMillion: inputPrice, outputPricePerMillion: outputPrice }
+    : undefined;
 }
 
 function loadModelsFromEmbedded(): void {

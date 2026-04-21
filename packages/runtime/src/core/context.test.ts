@@ -21,6 +21,31 @@ function msg(role: MessageRole, content: string): Message {
   return { role, content };
 }
 
+function collectAssistantCallIds(messages: ReadonlyArray<Message>): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const toolCall of message.toolCalls ?? []) ids.add(toolCall.callId);
+  }
+  return ids;
+}
+
+function collectToolResultIds(messages: ReadonlyArray<Message>): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role === MessageRole.TOOL && message.toolCallId) {
+      ids.add(message.toolCallId);
+    }
+  }
+  return ids;
+}
+
+function expectBalancedToolPairs(messages: ReadonlyArray<Message>): void {
+  const callIds = collectAssistantCallIds(messages);
+  const resultIds = collectToolResultIds(messages);
+  for (const resultId of resultIds) expect(callIds.has(resultId)).toBe(true);
+  for (const callId of callIds) expect(resultIds.has(callId)).toBe(true);
+}
+
 describe("estimateTokens", () => {
   it("estimates ~1 token per 4 chars", () => {
     expect(estimateTokens("hello world")).toBe(3); // 11 chars / 4 = 2.75 → 3
@@ -42,8 +67,6 @@ describe("estimateMessageTokens", () => {
     expect(tokens).toBe(8); // ceil(21/4) + ceil(5/4) = 6 + 2 = 8
   });
 });
-
-describe("ContextManager", () => {
   it("does not truncate when under threshold", () => {
     const mgr = new ContextManager(makeConfig({ triggerRatio: 0.8 }));
     const messages: Message[] = [
@@ -160,7 +183,6 @@ describe("ContextManager", () => {
     );
     expect(summaryMsg).toBeDefined();
   });
-
   it("no orphaned TOOL messages when sliding window splits a tool-call pair", () => {
     // Bug: startIdx can fall between ASSISTANT+toolCalls and its TOOL result.
     // The ASSISTANT gets dropped but the TOOL result stays → orphaned TOOL.
@@ -201,31 +223,7 @@ describe("ContextManager", () => {
     const result = mgr.truncate(messages, 50);
     expect(result.truncated).toBe(true);
 
-    // Invariant: every TOOL message must have its ASSISTANT present
-    const assistantCallIds = new Set<string>();
-    for (const m of result.messages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        for (const tc of m.toolCalls) assistantCallIds.add(tc.callId);
-      }
-    }
-    for (const m of result.messages) {
-      if (m.role === MessageRole.TOOL && m.toolCallId) {
-        expect(assistantCallIds.has(m.toolCallId)).toBe(true);
-      }
-    }
-
-    // Invariant: every ASSISTANT+toolCalls must have all TOOL results present
-    const toolResultIds = new Set<string>();
-    for (const m of result.messages) {
-      if (m.role === MessageRole.TOOL && m.toolCallId) toolResultIds.add(m.toolCallId);
-    }
-    for (const m of result.messages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        for (const tc of m.toolCalls) {
-          expect(toolResultIds.has(tc.callId)).toBe(true);
-        }
-      }
-    }
+    expectBalancedToolPairs(result.messages);
   });
 
   it("no orphaned TOOL messages after further-prune loop", () => {
@@ -268,18 +266,7 @@ describe("ContextManager", () => {
     const result = mgr.truncate(messages, 15);
     expect(result.truncated).toBe(true);
 
-    // Invariant check
-    const assistantCallIds = new Set<string>();
-    for (const m of result.messages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        for (const tc of m.toolCalls) assistantCallIds.add(tc.callId);
-      }
-    }
-    for (const m of result.messages) {
-      if (m.role === MessageRole.TOOL && m.toolCallId) {
-        expect(assistantCallIds.has(m.toolCallId)).toBe(true);
-      }
-    }
+    expectBalancedToolPairs(result.messages);
   });
 
   it("no orphaned tool messages in hybrid truncation when boundary splits a pair", async () => {
@@ -323,18 +310,7 @@ describe("ContextManager", () => {
     const result = await mgr.truncateAsync(messages, 50);
     expect(result.truncated).toBe(true);
 
-    // Invariant check
-    const assistantCallIds = new Set<string>();
-    for (const m of result.messages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        for (const tc of m.toolCalls) assistantCallIds.add(tc.callId);
-      }
-    }
-    for (const m of result.messages) {
-      if (m.role === MessageRole.TOOL && m.toolCallId) {
-        expect(assistantCallIds.has(m.toolCallId)).toBe(true);
-      }
-    }
+    expectBalancedToolPairs(result.messages);
   });
 
   it("summarize callback receives sanitized messages (no orphaned tool-call pairs)", async () => {
@@ -386,25 +362,7 @@ describe("ContextManager", () => {
 
     // The summarize callback must NOT receive an ASSISTANT with toolCalls
     // that lacks its matching TOOL result
-    const callIdsInCallback = new Set<string>();
-    const resultIdsInCallback = new Set<string>();
-    for (const m of receivedMessages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        for (const tc of m.toolCalls) callIdsInCallback.add(tc.callId);
-      }
-      if (m.role === MessageRole.TOOL && m.toolCallId) {
-        resultIdsInCallback.add(m.toolCallId);
-      }
-    }
-
-    // Every ASSISTANT toolCall must have its TOOL result present
-    for (const callId of callIdsInCallback) {
-      expect(resultIdsInCallback.has(callId)).toBe(true);
-    }
-    // Every TOOL result must have its ASSISTANT toolCall present
-    for (const resultId of resultIdsInCallback) {
-      expect(callIdsInCallback.has(resultId)).toBe(true);
-    }
+    expectBalancedToolPairs(receivedMessages);
   });
 
   it("no orphaned TOOL when ASSISTANT has multiple toolCalls and boundary splits the results", () => {
@@ -464,18 +422,7 @@ describe("ContextManager", () => {
     const result = mgr.truncate(messages, 50);
     expect(result.truncated).toBe(true);
 
-    // Invariant: every TOOL must have a surviving ASSISTANT with matching callId
-    const survivingCallIds = new Set<string>();
-    for (const m of result.messages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        for (const tc of m.toolCalls) survivingCallIds.add(tc.callId);
-      }
-    }
-    for (const m of result.messages) {
-      if (m.role === MessageRole.TOOL && m.toolCallId) {
-        expect(survivingCallIds.has(m.toolCallId)).toBe(true);
-      }
-    }
+    expectBalancedToolPairs(result.messages);
   });
 
   it("multi-toolCall ASSISTANT partially in middle: summarize callback gets no orphans", async () => {
@@ -531,26 +478,7 @@ describe("ContextManager", () => {
 
     await mgr.truncateAsync(messages, 50);
 
-    // The callback must NOT receive orphaned TOOL messages
-    const callIdsInCallback = new Set<string>();
-    const resultIdsInCallback = new Set<string>();
-    for (const m of receivedMessages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        for (const tc of m.toolCalls) callIdsInCallback.add(tc.callId);
-      }
-      if (m.role === MessageRole.TOOL && m.toolCallId) {
-        resultIdsInCallback.add(m.toolCallId);
-      }
-    }
-
-    // Every TOOL result must have its ASSISTANT toolCall present
-    for (const resultId of resultIdsInCallback) {
-      expect(callIdsInCallback.has(resultId)).toBe(true);
-    }
-    // Every ASSISTANT toolCall must have its TOOL result present
-    for (const callId of callIdsInCallback) {
-      expect(resultIdsInCallback.has(callId)).toBe(true);
-    }
+    expectBalancedToolPairs(receivedMessages);
   });
 
   it("further-prune loop with multi-toolCall: removes ASSISTANT then cleans orphaned TOOLs", () => {
@@ -593,18 +521,7 @@ describe("ContextManager", () => {
     const result = mgr.truncate(messages, 15);
     expect(result.truncated).toBe(true);
 
-    // Invariant: every TOOL must have a surviving ASSISTANT with matching callId
-    const survivingCallIds = new Set<string>();
-    for (const m of result.messages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        for (const tc of m.toolCalls) survivingCallIds.add(tc.callId);
-      }
-    }
-    for (const m of result.messages) {
-      if (m.role === MessageRole.TOOL && m.toolCallId) {
-        expect(survivingCallIds.has(m.toolCallId)).toBe(true);
-      }
-    }
+    expectBalancedToolPairs(result.messages);
   });
 
   it("async truncation falls back to sliding window without callback", async () => {
@@ -721,7 +638,6 @@ describe("ContextManager", () => {
       msg(MessageRole.ASSISTANT, "Answer 3"),
     ];
 
-    const totalTokens = estimateMessageTokens(messages);
     // Set budget so charEstimate is UNDER the 80% threshold
     // totalTokens ≈ 18, so threshold at 0.8 = budget * 0.8
     // If budget = 30, threshold = 24. 18 < 24 → not truncated.
@@ -1135,4 +1051,3 @@ describe("ContextManager", () => {
       "Unable to fit context within token budget",
     );
   });
-});

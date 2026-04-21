@@ -67,6 +67,147 @@ export class ContextFitError extends Error {
   }
 }
 
+function collectToolResultIds(messages: ReadonlyArray<Message>): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role === MessageRole.TOOL && message.toolCallId) {
+      ids.add(message.toolCallId);
+    }
+  }
+  return ids;
+}
+
+function collectSurvivingCallIds(
+  messages: ReadonlyArray<Message>,
+  toolResultIds: ReadonlySet<string>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role === MessageRole.ASSISTANT && hasAllToolResults(message, toolResultIds)) {
+      for (const toolCall of message.toolCalls ?? []) ids.add(toolCall.callId);
+    }
+  }
+  return ids;
+}
+
+function sanitizeToolPairMessage(
+  message: Message,
+  pairs: ToolPairSets,
+): Message | null {
+  if (message.role === MessageRole.TOOL && message.toolCallId) {
+    return pairs.survivingCallIds.has(message.toolCallId) ? message : null;
+  }
+  if (message.role !== MessageRole.ASSISTANT || !message.toolCalls) {
+    return message;
+  }
+  if (hasAllToolResults(message, pairs.toolResultIds)) {
+    return message;
+  }
+  return message.content && message.content.trim().length > 0
+    ? { role: message.role, content: message.content }
+    : null;
+}
+
+function hasAllToolResults(
+  message: Message,
+  toolResultIds: ReadonlySet<string>,
+): boolean {
+  return Boolean(
+    message.toolCalls?.every((toolCall) => toolResultIds.has(toolCall.callId)),
+  );
+}
+
+function getSystemMessage(messages: ReadonlyArray<Message>): Message | null {
+  return messages[0]?.role === MessageRole.SYSTEM ? messages[0] : null;
+}
+
+function collectCriticalMessages(messages: ReadonlyArray<Message>): Set<Message> {
+  const preserved = new Set<Message>();
+  const systemMessage = getSystemMessage(messages);
+  const firstUser = messages.find((message) => message.role === MessageRole.USER);
+  if (systemMessage) preserved.add(systemMessage);
+  if (firstUser) preserved.add(firstUser);
+  return preserved;
+}
+
+function buildHybridResult(
+  messages: ReadonlyArray<Message>,
+  preserved: ReadonlySet<Message>,
+  recentMessages: ReadonlyArray<Message>,
+  summary: string,
+): Message[] {
+  const result = collectOlderPreservedMessages(messages, preserved, recentMessages);
+  const trimmedSummary = summary.trim();
+  if (trimmedSummary.length > 0) {
+    result.push({
+      role: MessageRole.ASSISTANT,
+      content: `[Conversation summary]: ${summary}`,
+    });
+  }
+  appendMissingRecentMessages(result, recentMessages);
+  return result;
+}
+
+function collectOlderPreservedMessages(
+  messages: ReadonlyArray<Message>,
+  preserved: ReadonlySet<Message>,
+  recentMessages: ReadonlyArray<Message>,
+): Message[] {
+  const recentSet = new Set(recentMessages);
+  return messages.filter((message) => preserved.has(message) && !recentSet.has(message));
+}
+
+function appendMissingRecentMessages(
+  result: Message[],
+  recentMessages: ReadonlyArray<Message>,
+): void {
+  const added = new Set(result);
+  for (const message of recentMessages) {
+    if (!added.has(message)) result.push(message);
+  }
+}
+
+function collectPinnedMessages(
+  messages: ReadonlyArray<Message>,
+  preserved: Set<Message>,
+): Set<string> {
+  const pinnedCallIds = new Set<string>();
+  for (const message of messages) {
+    if (!message.pinned) continue;
+    preserved.add(message);
+    if (message.role === MessageRole.TOOL && message.toolCallId) {
+      pinnedCallIds.add(message.toolCallId);
+    }
+  }
+  return pinnedCallIds;
+}
+
+function collectPinnedAssistantOwners(
+  messages: ReadonlyArray<Message>,
+  pinnedCallIds: ReadonlySet<string>,
+  preserved: Set<Message>,
+): void {
+  for (const message of messages) {
+    if (isPinnedAssistantOwner(message, pinnedCallIds)) preserved.add(message);
+  }
+}
+
+function isPinnedAssistantOwner(
+  message: Message,
+  pinnedCallIds: ReadonlySet<string>,
+): boolean {
+  return Boolean(
+    pinnedCallIds.size > 0 &&
+      message.role === MessageRole.ASSISTANT &&
+      message.toolCalls?.some((toolCall) => pinnedCallIds.has(toolCall.callId)),
+  );
+}
+
+interface ToolPairSets {
+  readonly toolResultIds: ReadonlySet<string>;
+  readonly survivingCallIds: ReadonlySet<string>;
+}
+
 export class ContextManager {
   private readonly config: ContextConfig;
   private summarize: SummarizeCallback | null = null;
@@ -191,51 +332,15 @@ export class ContextManager {
    * that also have text content, strip the toolCalls rather than removing.
    */
   private sanitizeToolCallPairs(messages: Message[]): Message[] {
-    // Phase 1: Determine which ASSISTANT+toolCalls messages survive.
-    // An ASSISTANT survives only if ALL its tool results are present.
-    // Build survivingCallIds from surviving ASSISTANTs only.
-    const toolResultIds = new Set<string>();
-    for (const m of messages) {
-      if (m.role === MessageRole.TOOL && m.toolCallId) {
-        toolResultIds.add(m.toolCallId);
-      }
-    }
-
-    const survivingCallIds = new Set<string>();
-    for (const m of messages) {
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        const allPresent = m.toolCalls.every((tc) => toolResultIds.has(tc.callId));
-        if (allPresent) {
-          for (const tc of m.toolCalls) {
-            survivingCallIds.add(tc.callId);
-          }
-        }
-      }
-    }
-
-    // Phase 2: Filter messages using survivingCallIds.
-    // TOOL messages are kept only if their callId is in survivingCallIds
-    // (i.e., the owning ASSISTANT has ALL its results present).
+    const toolResultIds = collectToolResultIds(messages);
+    const survivingCallIds = collectSurvivingCallIds(messages, toolResultIds);
     const result: Message[] = [];
     for (const m of messages) {
-      if (m.role === MessageRole.TOOL && m.toolCallId) {
-        if (!survivingCallIds.has(m.toolCallId)) continue;
-      }
-
-      if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-        const allPresent = m.toolCalls.every((tc) => toolResultIds.has(tc.callId));
-        if (!allPresent) {
-          // If the ASSISTANT also has text content, keep it but strip toolCalls
-          if (m.content && m.content.trim().length > 0) {
-            result.push({ role: m.role, content: m.content });
-            continue;
-          }
-          // Pure tool-call message with no text → drop entirely
-          continue;
-        }
-      }
-
-      result.push(m);
+      const sanitized = sanitizeToolPairMessage(m, {
+        toolResultIds,
+        survivingCallIds,
+      });
+      if (sanitized) result.push(sanitized);
     }
 
     return result;
@@ -248,29 +353,12 @@ export class ContextManager {
     messages: ReadonlyArray<Message>,
     maxTokens: number,
   ): ContextTruncationResult {
-    // Find critical messages to preserve
-    const systemMsg = messages[0]?.role === MessageRole.SYSTEM ? messages[0] : null;
-    const firstUserIdx = messages.findIndex((m) => m.role === MessageRole.USER);
-    const firstUserMsg = firstUserIdx >= 0 ? messages[firstUserIdx]! : null;
-
-    // Keep recent messages
-    const keepCount = this.config.keepRecentMessages;
-    const preserved = new Set<Message>();
-
-    // Always keep system message
-    if (systemMsg) {
-      preserved.add(systemMsg);
-    }
-
-    // Always keep first user message (original task)
-    if (firstUserMsg) {
-      preserved.add(firstUserMsg);
-    }
-
+    const systemMsg = getSystemMessage(messages);
+    const preserved = collectCriticalMessages(messages);
     this.collectPinned(messages, preserved);
 
     // Keep the N most recent messages
-    const startIdx = Math.max(systemMsg ? 1 : 0, messages.length - keepCount);
+    const startIdx = Math.max(systemMsg ? 1 : 0, messages.length - this.config.keepRecentMessages);
     const recentSet = new Set(messages.slice(startIdx));
 
     // Merge preserved + recent in original order, avoiding duplicates
@@ -312,20 +400,13 @@ export class ContextManager {
     }
 
     // Split into preserved, middle (to summarize), and recent
-    const systemMsg = messages[0]?.role === MessageRole.SYSTEM ? messages[0] : null;
-    const firstUserIdx = messages.findIndex((m) => m.role === MessageRole.USER);
-    const firstUserMsg = firstUserIdx >= 0 ? messages[firstUserIdx]! : null;
-    const keepCount = this.config.keepRecentMessages;
-    const recentStart = Math.max(systemMsg ? 1 : 0, messages.length - keepCount);
-    const middleStart = systemMsg ? 1 : 0;
-    const preserved = new Set<Message>();
-    if (systemMsg) preserved.add(systemMsg);
-    if (firstUserMsg) preserved.add(firstUserMsg);
-
+    const systemMsg = getSystemMessage(messages);
+    const recentStart = Math.max(systemMsg ? 1 : 0, messages.length - this.config.keepRecentMessages);
+    const preserved = collectCriticalMessages(messages);
     this.collectPinned(messages, preserved);
 
     const rawMiddle = messages
-      .slice(middleStart, recentStart)
+      .slice(systemMsg ? 1 : 0, recentStart)
       .filter((m) => !preserved.has(m));
     const recentMessages = messages.slice(recentStart);
 
@@ -341,27 +422,7 @@ export class ContextManager {
     // Summarize the middle portion
     const summary = await this.summarize(middleMessages);
 
-    // Build result: preserved messages in original order, then summary, then recent
-    const result: Message[] = [];
-    const recentSet = new Set(recentMessages);
-    const added = new Set<Message>();
-    for (const m of messages) {
-      if (preserved.has(m) && !recentSet.has(m)) {
-        result.push(m);
-        added.add(m);
-      }
-    }
-    if (summary.trim().length > 0) {
-      result.push({
-        role: MessageRole.ASSISTANT,
-        content: `[Conversation summary]: ${summary}`,
-      });
-    }
-    for (const m of recentMessages) {
-      if (!added.has(m)) {
-        result.push(m);
-      }
-    }
+    const result = buildHybridResult(messages, preserved, recentMessages, summary);
 
     // Sanitize: remove orphaned tool-call/tool-result messages
     // (the boundary between middle and recent can split tool-call pairs)
@@ -415,24 +476,8 @@ export class ContextManager {
     messages: ReadonlyArray<Message>,
     preserved: Set<Message>,
   ): void {
-    const pinnedCallIds = new Set<string>();
-    for (const m of messages) {
-      if (m.pinned) {
-        preserved.add(m);
-        if (m.role === MessageRole.TOOL && m.toolCallId) {
-          pinnedCallIds.add(m.toolCallId);
-        }
-      }
-    }
-    if (pinnedCallIds.size > 0) {
-      for (const m of messages) {
-        if (m.role === MessageRole.ASSISTANT && m.toolCalls) {
-          if (m.toolCalls.some((tc) => pinnedCallIds.has(tc.callId))) {
-            preserved.add(m);
-          }
-        }
-      }
-    }
+    const pinnedCallIds = collectPinnedMessages(messages, preserved);
+    collectPinnedAssistantOwners(messages, pinnedCallIds, preserved);
   }
 
   private didMessagesChange(

@@ -7,7 +7,6 @@ import { extractErrorMessage } from "./errors.js";
 import type {
   ToolResult,
   StreamChunk,
-  Message,
   ToolCallRequest,
   AgentType,
   CostRecord,

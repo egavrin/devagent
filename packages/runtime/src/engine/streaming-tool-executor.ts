@@ -15,7 +15,7 @@ import { extractErrorMessage } from "../core/index.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
-export interface StreamingToolCall {
+interface StreamingToolCall {
   readonly name: string;
   readonly arguments: Record<string, unknown>;
   readonly callId: string;

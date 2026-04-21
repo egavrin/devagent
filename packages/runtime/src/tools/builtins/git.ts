@@ -22,66 +22,74 @@ function assertSafeArg(
     );
   }
 }
-
 function parseQuotedArgs(input: string): string[] {
   const out: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | null = null;
-  let escaping = false;
+  const state: QuoteParseState = { current: "", quote: null, escaping: false };
 
   for (const ch of input) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-
-    if (ch === "\\") {
-      escaping = true;
-      continue;
-    }
-
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      continue;
-    }
-
-    if (/\s/.test(ch)) {
-      if (current.length > 0) {
-        out.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += ch;
+    consumeQuotedArgChar(state, ch, out);
   }
 
-  if (quote) {
+  if (state.quote) {
     throw new ToolError(
       "git_commit",
       "Invalid files: unterminated quote.",
     );
   }
 
-  if (escaping) {
-    current += "\\";
-  }
-
-  if (current.length > 0) {
-    out.push(current);
-  }
+  if (state.escaping) state.current += "\\";
+  if (state.current.length > 0) out.push(state.current);
 
   return out;
+}
+
+interface QuoteParseState {
+  current: string;
+  quote: '"' | "'" | null;
+  escaping: boolean;
+}
+
+function consumeQuotedArgChar(
+  state: QuoteParseState,
+  ch: string,
+  out: string[],
+): void {
+  if (state.escaping) {
+    state.current += ch;
+    state.escaping = false;
+    return;
+  }
+  if (ch === "\\") {
+    state.escaping = true;
+    return;
+  }
+  if (state.quote) {
+    consumeQuotedStringChar(state, ch);
+    return;
+  }
+  if (ch === '"' || ch === "'") {
+    state.quote = ch;
+    return;
+  }
+  if (/\s/.test(ch)) {
+    flushCurrentArg(state, out);
+    return;
+  }
+  state.current += ch;
+}
+
+function consumeQuotedStringChar(state: QuoteParseState, ch: string): void {
+  if (ch === state.quote) {
+    state.quote = null;
+    return;
+  }
+  state.current += ch;
+}
+
+function flushCurrentArg(state: QuoteParseState, out: string[]): void {
+  if (state.current.length === 0) return;
+  out.push(state.current);
+  state.current = "";
 }
 
 function parseFilesArg(files: string): string[] {
@@ -162,23 +170,7 @@ export const gitDiffTool: ToolSpec = {
     const staged = (params["staged"] as boolean | undefined) ?? false;
     const ref = params["ref"] as string | undefined;
 
-    if (path) {
-      assertSafeArg("git_diff", "path", path);
-    }
-    if (ref) {
-      assertSafeArg("git_diff", "ref", ref);
-      if (ref.startsWith("-")) {
-        throw new ToolError(
-          "git_diff",
-          "Invalid ref: option-style refs are not allowed.",
-        );
-      }
-    }
-
-    const args = ["diff"];
-    if (staged) args.push("--cached");
-    if (ref) args.push(ref);
-    if (path) args.push("--", path);
+    const args = buildGitDiffArgs({ path, staged, ref });
 
     const output = execGit(args, context.repoRoot);
     const result = output || "No changes";
@@ -202,6 +194,31 @@ export const gitDiffTool: ToolSpec = {
     };
   },
 };
+
+function buildGitDiffArgs(input: {
+  readonly path?: string;
+  readonly staged: boolean;
+  readonly ref?: string;
+}): string[] {
+  if (input.path) assertSafeArg("git_diff", "path", input.path);
+  if (input.ref) assertGitDiffRef(input.ref);
+
+  const args = ["diff"];
+  if (input.staged) args.push("--cached");
+  if (input.ref) args.push(input.ref);
+  if (input.path) args.push("--", input.path);
+  return args;
+}
+
+function assertGitDiffRef(ref: string): void {
+  assertSafeArg("git_diff", "ref", ref);
+  if (ref.startsWith("-")) {
+    throw new ToolError(
+      "git_diff",
+      "Invalid ref: option-style refs are not allowed.",
+    );
+  }
+}
 
 export const gitCommitTool: ToolSpec = {
   name: "git_commit",

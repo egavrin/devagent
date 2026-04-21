@@ -6,14 +6,25 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 
+import {
+  parseDoubleCheckConfig,
+  parseLoggingConfig,
+  parseLspConfig,
+  parseSessionStateConfig,
+} from "./config-optional-sections.js";
+import { getDefaultSubagentProfiles } from "./config-subagent-defaults.js";
+import type { SafetyConfig } from "./config-validation.js";
+import {
+  validateBudgetConfig,
+  validateContextConfig,
+  validateSafetyConfig,
+  validateSubagentConfig,
+} from "./config-validation.js";
 import { CredentialStore } from "./credentials.js";
-import { ConfigError , extractErrorMessage , OAuthError } from "./errors.js";
-import { LANGUAGE_EXTENSIONS } from "./languages.js";
-import { getOAuthProvider } from "./oauth-providers.js";
-import { refreshAccessToken, exchangeCopilotSessionToken } from "./oauth.js";
+import { ConfigError , extractErrorMessage } from "./errors.js";
 import { resolveProviderCredentialStatus } from "./provider-credentials.js";
 import type {
   DevAgentConfig,
@@ -27,17 +38,14 @@ import type {
   ModelCapabilities,
   AgentToolPermissionOverride,
   ReasoningEffort,
+  AgentType,
 } from "./types.js";
-import { AgentType, SafetyMode } from "./types.js";
+import { SafetyMode } from "./types.js";
+
+export { resolveProviderCredentials } from "./config-credentials.js";
+export { findProjectRoot } from "./project-root.js";
 
 // ─── Defaults ────────────────────────────────────────────────
-
-interface SafetyConfig {
-  readonly mode: SafetyMode;
-  readonly approvalPolicy: ApprovalPolicyMode;
-  readonly sandboxMode: SandboxMode;
-  readonly networkAccess: NetworkAccessMode;
-}
 
 const DEFAULT_SAFETY: SafetyConfig = {
   mode: SafetyMode.AUTOPILOT,
@@ -101,30 +109,32 @@ const VALID_REASONING_EFFORTS = new Set<ReasoningEffort>([
   "xhigh",
 ]);
 
-const OPENAI_FAMILY_SUBAGENT_MODEL_DEFAULTS: Partial<Record<AgentType, string>> = {
-  [AgentType.EXPLORE]: "gpt-5.4-mini",
-  [AgentType.REVIEWER]: "gpt-5.4",
-  [AgentType.ARCHITECT]: "gpt-5.4",
-};
+interface LoadedConfigContext {
+  readonly fileConfig: Record<string, unknown>;
+  readonly envModel: string | undefined;
+  readonly provider: string;
+  readonly providers: Record<string, ProviderConfig>;
+  readonly approval: ApprovalPolicy;
+  readonly budget: BudgetConfig;
+  readonly context: ContextConfig;
+  readonly overrides: Partial<DevAgentConfig> | undefined;
+}
 
-const OPENAI_FAMILY_SUBAGENT_REASONING_DEFAULTS: Partial<Record<AgentType, ReasoningEffort>> = {
-  [AgentType.EXPLORE]: "low",
-  [AgentType.REVIEWER]: "high",
-  [AgentType.ARCHITECT]: "high",
-};
-
-const DEVAGENT_API_SUBAGENT_REASONING_DEFAULTS: Partial<Record<AgentType, ReasoningEffort>> = {
-  [AgentType.EXPLORE]: "low",
-  [AgentType.REVIEWER]: "high",
-  [AgentType.ARCHITECT]: "high",
-};
+interface SubagentConfigSections {
+  readonly agentModelOverrides?: Partial<Record<AgentType, string>>;
+  readonly agentReasoningOverrides?: Partial<Record<AgentType, ReasoningEffort>>;
+  readonly agentIterationCaps?: Partial<Record<AgentType, number>>;
+  readonly agentPermissionOverrides?: Partial<Record<AgentType, AgentToolPermissionOverride>>;
+  readonly allowedChildAgents?: Partial<Record<AgentType, ReadonlyArray<AgentType>>>;
+  readonly subagentTimeoutMs?: number;
+}
 
 // ─── Config Loading ──────────────────────────────────────────
 
 /**
  * Search paths for config files, in priority order (first found wins per level).
  */
-function getConfigPaths(projectRoot?: string): ReadonlyArray<string> {
+function getConfigPaths(_projectRoot?: string): ReadonlyArray<string> {
   const home = process.env["HOME"] ?? homedir();
   return [join(home, ".config", "devagent", "config.toml")];
 }
@@ -212,22 +222,35 @@ function parseSafety(
     networkAccess: (raw["network_access"] ?? raw["networkAccess"]) as NetworkAccessMode | undefined,
   };
 }
-
 function mergeSafetyConfig(
   parsed: Partial<SafetyConfig>,
   overrides?: Partial<ApprovalPolicy>,
 ): SafetyConfig {
-  const overrideMode = overrides?.mode === SafetyMode.DEFAULT || overrides?.mode === SafetyMode.AUTOPILOT
-    ? overrides.mode
-    : undefined;
-  const mode = overrideMode ?? parsed.mode ?? DEFAULT_SAFETY.mode;
+  const mode = getConfiguredSafetyMode(parsed, overrides);
   const preset = getSafetyPreset(mode);
   return {
     mode,
-    approvalPolicy: overrides?.approvalPolicy ?? parsed.approvalPolicy ?? preset.approvalPolicy,
-    sandboxMode: overrides?.sandboxMode ?? parsed.sandboxMode ?? preset.sandboxMode,
-    networkAccess: overrides?.networkAccess ?? parsed.networkAccess ?? preset.networkAccess,
+    approvalPolicy: resolveSafetyField(overrides?.approvalPolicy, parsed.approvalPolicy, preset.approvalPolicy),
+    sandboxMode: resolveSafetyField(overrides?.sandboxMode, parsed.sandboxMode, preset.sandboxMode),
+    networkAccess: resolveSafetyField(overrides?.networkAccess, parsed.networkAccess, preset.networkAccess),
   };
+}
+
+function getConfiguredSafetyMode(
+  parsed: Partial<SafetyConfig>,
+  overrides?: Partial<ApprovalPolicy>,
+): SafetyMode {
+  return isSupportedSafetyMode(overrides?.mode)
+    ? overrides.mode
+    : parsed.mode ?? DEFAULT_SAFETY.mode;
+}
+
+function isSupportedSafetyMode(mode: unknown): mode is SafetyMode {
+  return mode === SafetyMode.DEFAULT || mode === SafetyMode.AUTOPILOT;
+}
+
+function resolveSafetyField<T>(overrideValue: T | undefined, parsedValue: T | undefined, presetValue: T): T {
+  return overrideValue ?? parsedValue ?? presetValue;
 }
 
 function getSafetyPreset(mode: SafetyMode): Omit<SafetyConfig, "mode"> {
@@ -346,133 +369,29 @@ function parseAllowedChildAgents(
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
-
 function parseAgentPermissionOverrides(
   raw: unknown,
 ): Partial<Record<AgentType, AgentToolPermissionOverride>> | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const out: Partial<Record<AgentType, AgentToolPermissionOverride>> = {};
   for (const [agentType, permissions] of Object.entries(raw as Record<string, unknown>)) {
-    if (!VALID_AGENT_TYPES.has(agentType) || !permissions || typeof permissions !== "object") {
-      continue;
-    }
-    const parsed: Partial<Record<string, "allow" | "deny">> = {};
-    for (const [category, action] of Object.entries(permissions as Record<string, unknown>)) {
-      if (!VALID_TOOL_CATEGORIES.has(category)) continue;
-      if (action === "allow" || action === "deny") {
-        parsed[category] = action;
-      }
-    }
-    if (Object.keys(parsed).length > 0) {
+    const parsed = parseAgentPermissionEntry(permissions);
+    if (VALID_AGENT_TYPES.has(agentType) && parsed) {
       out[agentType as AgentType] = parsed as AgentToolPermissionOverride;
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function validateBudgetConfig(budget: BudgetConfig): void {
-  if (!Number.isInteger(budget.maxIterations) || budget.maxIterations < 0) {
-    throw new ConfigError(
-      `Invalid budget.maxIterations: expected integer >= 0, got ${String(budget.maxIterations)}`,
-    );
-  }
-  if (!Number.isFinite(budget.maxContextTokens) || budget.maxContextTokens < 0) {
-    throw new ConfigError(
-      `Invalid budget.maxContextTokens: expected number >= 0, got ${String(budget.maxContextTokens)}`,
-    );
-  }
-  if (!Number.isFinite(budget.responseHeadroom) || budget.responseHeadroom < 0) {
-    throw new ConfigError(
-      `Invalid budget.responseHeadroom: expected number >= 0, got ${String(budget.responseHeadroom)}`,
-    );
-  }
-  if (budget.maxContextTokens > 0 && budget.responseHeadroom >= budget.maxContextTokens) {
-    throw new ConfigError(
-      `Invalid budget.responseHeadroom: must be < budget.maxContextTokens (${budget.responseHeadroom} >= ${budget.maxContextTokens})`,
-    );
-  }
-  if (!Number.isFinite(budget.costWarningThreshold) || budget.costWarningThreshold < 0) {
-    throw new ConfigError(
-      `Invalid budget.costWarningThreshold: expected number >= 0, got ${String(budget.costWarningThreshold)}`,
-    );
-  }
-}
-
-function validateContextConfig(context: ContextConfig): void {
-  const pruningStrategies = new Set(["sliding_window", "summarize", "hybrid"]);
-  if (!pruningStrategies.has(context.pruningStrategy)) {
-    throw new ConfigError(
-      `Invalid context.pruningStrategy: ${String(context.pruningStrategy)}`,
-    );
-  }
-  if (!Number.isFinite(context.triggerRatio) || context.triggerRatio <= 0 || context.triggerRatio > 1) {
-    throw new ConfigError(
-      `Invalid context.triggerRatio: expected number in (0, 1], got ${String(context.triggerRatio)}`,
-    );
-  }
-  if (!Number.isInteger(context.keepRecentMessages) || context.keepRecentMessages < 1) {
-    throw new ConfigError(
-      `Invalid context.keepRecentMessages: expected integer >= 1, got ${String(context.keepRecentMessages)}`,
-    );
-  }
-  if (
-    context.midpointBriefingInterval !== undefined &&
-    (!Number.isInteger(context.midpointBriefingInterval) || context.midpointBriefingInterval < 0)
-  ) {
-    throw new ConfigError(
-      `Invalid context.midpointBriefingInterval: expected integer >= 0, got ${String(context.midpointBriefingInterval)}`,
-    );
-  }
-  if (context.briefingStrategy !== undefined) {
-    const briefingStrategies = new Set(["heuristic", "llm", "auto"]);
-    if (!briefingStrategies.has(context.briefingStrategy)) {
-      throw new ConfigError(
-        `Invalid context.briefingStrategy: ${String(context.briefingStrategy)}`,
-      );
+function parseAgentPermissionEntry(permissions: unknown): Partial<Record<string, "allow" | "deny">> | undefined {
+  if (!permissions || typeof permissions !== "object") return undefined;
+  const parsed: Partial<Record<string, "allow" | "deny">> = {};
+  for (const [category, action] of Object.entries(permissions as Record<string, unknown>)) {
+    if (VALID_TOOL_CATEGORIES.has(category) && (action === "allow" || action === "deny")) {
+      parsed[category] = action;
     }
   }
-}
-
-function validateSafetyConfig(safety: SafetyConfig): void {
-  const validModes = new Set<SafetyMode>([
-    SafetyMode.DEFAULT,
-    SafetyMode.AUTOPILOT,
-  ]);
-  const validApprovalPolicies = new Set<ApprovalPolicyMode>(["strict", "on-request", "never"]);
-  const validSandboxModes = new Set<SandboxMode>(["read-only", "workspace-write", "danger-full-access"]);
-  const validNetworkAccess = new Set<NetworkAccessMode>(["off", "on"]);
-
-  if (!validModes.has(safety.mode)) {
-    throw new ConfigError(`Invalid safety.mode: ${String(safety.mode)}`);
-  }
-  if (!validApprovalPolicies.has(safety.approvalPolicy)) {
-    throw new ConfigError(`Invalid safety.approvalPolicy: ${String(safety.approvalPolicy)}`);
-  }
-  if (!validSandboxModes.has(safety.sandboxMode)) {
-    throw new ConfigError(`Invalid safety.sandboxMode: ${String(safety.sandboxMode)}`);
-  }
-  if (!validNetworkAccess.has(safety.networkAccess)) {
-    throw new ConfigError(`Invalid safety.networkAccess: ${String(safety.networkAccess)}`);
-  }
-}
-
-function validateSubagentConfig(config: DevAgentConfig): void {
-  for (const [agentType, cap] of Object.entries(config.agentIterationCaps ?? {})) {
-    if (!VALID_AGENT_TYPES.has(agentType) || !Number.isInteger(cap) || cap < 1) {
-      throw new ConfigError(
-        `Invalid agentIterationCaps.${agentType}: expected integer >= 1, got ${String(cap)}`,
-      );
-    }
-  }
-
-  if (
-    config.subagentTimeoutMs !== undefined &&
-    (!Number.isInteger(config.subagentTimeoutMs) || config.subagentTimeoutMs < 0)
-  ) {
-    throw new ConfigError(
-      `Invalid subagentTimeoutMs: expected integer >= 0, got ${String(config.subagentTimeoutMs)}`,
-    );
-  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
 }
 
 function mergeAgentMaps<T>(
@@ -486,27 +405,6 @@ function mergeAgentMaps<T>(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function getDefaultSubagentProfiles(
-  provider: string,
-): {
-  readonly agentModelOverrides?: Partial<Record<AgentType, string>>;
-  readonly agentReasoningOverrides?: Partial<Record<AgentType, ReasoningEffort>>;
-} {
-  if (provider !== "openai" && provider !== "chatgpt") {
-    if (provider === "devagent-api") {
-      return {
-        agentReasoningOverrides: DEVAGENT_API_SUBAGENT_REASONING_DEFAULTS,
-      };
-    }
-    return {};
-  }
-
-  return {
-    agentModelOverrides: OPENAI_FAMILY_SUBAGENT_MODEL_DEFAULTS,
-    agentReasoningOverrides: OPENAI_FAMILY_SUBAGENT_REASONING_DEFAULTS,
-  };
-}
-
 /**
  * Load configuration from TOML files + environment.
  * Fail fast: throws on invalid env references, never silently uses defaults for provider keys.
@@ -515,46 +413,12 @@ export function loadConfig(
   projectRoot?: string,
   overrides?: Partial<DevAgentConfig>,
 ): DevAgentConfig {
-  let fileConfig: Record<string, unknown> = {};
-
-  // Find and load the first available config file at each level
-  const paths = getConfigPaths(projectRoot);
-  for (const configPath of paths) {
-    if (existsSync(configPath)) {
-      try {
-        fileConfig = readTomlFile(configPath);
-        break; // Use first found config file
-      } catch (err) {
-        const message = extractErrorMessage(err);
-        throw new Error(
-          `Failed to parse config file "${configPath}": ${message}`,
-        );
-      }
-    }
-  }
-
-  // Check env overrides
+  const fileConfig = loadFileConfig(projectRoot);
   const envProvider = process.env["DEVAGENT_PROVIDER"];
   const envModel = process.env["DEVAGENT_MODEL"];
-
-  // Determine provider early so we can resolve active-provider credentials strictly.
-  const provider =
-    envProvider ??
-    overrides?.provider ??
-    (fileConfig["provider"] as string) ??
-    DEFAULT_CONFIG.provider;
-
-  // Build providers map
-  const rawProviders = (fileConfig["providers"] ?? {}) as Record<
-    string,
-    Record<string, unknown>
-  >;
-  const providers: Record<string, ProviderConfig> = {};
-  for (const [key, value] of Object.entries(rawProviders)) {
-    providers[key] = mergeProviderConfig(value, {
-      allowMissingApiKeyEnv: true,
-    });
-  }
+  const provider = resolveConfigProvider(fileConfig, overrides, envProvider);
+  const rawProviders = getRawProviders(fileConfig);
+  const providers = buildProviderConfigs(rawProviders);
 
   const credentialStore = new CredentialStore();
 
@@ -564,15 +428,78 @@ export function loadConfig(
     );
   }
 
-  const rawSafety = (fileConfig["safety"] ?? {}) as Record<string, unknown>;
-  const safety = mergeSafetyConfig(
-    parseSafety(rawSafety),
-    overrides?.approval,
-  );
-  validateSafetyConfig(safety);
+  const approval = buildApprovalPolicy(fileConfig, overrides);
+  const budget = buildBudgetConfig(fileConfig, overrides);
+  const context = buildContextConfig(fileConfig, overrides);
+  validateBudgetConfig(budget);
+  validateContextConfig(context);
 
-  // Merge approval (internal/runtime policy; file-backed by [safety], overrideable in code)
-  const approval: ApprovalPolicy = {
+  applyActiveCredential({
+    fileConfig,
+    envModel,
+    overrides,
+    provider,
+    providers,
+    rawProviders,
+    credentialStore,
+  });
+
+  const config = buildLoadedConfig({
+    fileConfig,
+    envModel,
+    provider,
+    providers,
+    approval,
+    budget,
+    context,
+    overrides,
+  });
+
+  validateSubagentConfig(config);
+  return config;
+}
+
+function loadFileConfig(projectRoot?: string): Record<string, unknown> {
+  for (const configPath of getConfigPaths(projectRoot)) {
+    if (!existsSync(configPath)) continue;
+    try {
+      return readTomlFile(configPath);
+    } catch (err) {
+      const message = extractErrorMessage(err);
+      throw new Error(`Failed to parse config file "${configPath}": ${message}`);
+    }
+  }
+  return {};
+}
+
+function resolveConfigProvider(
+  fileConfig: Record<string, unknown>,
+  overrides: Partial<DevAgentConfig> | undefined,
+  envProvider: string | undefined,
+) {
+  return envProvider ?? overrides?.provider ?? (fileConfig["provider"] as string) ?? DEFAULT_CONFIG.provider;
+}
+
+function getRawProviders(fileConfig: Record<string, unknown>) {
+  return (fileConfig["providers"] ?? {}) as Record<string, Record<string, unknown>>;
+}
+
+function buildProviderConfigs(rawProviders: Record<string, Record<string, unknown>>) {
+  const providers: Record<string, ProviderConfig> = {};
+  for (const [key, value] of Object.entries(rawProviders)) {
+    providers[key] = mergeProviderConfig(value, { allowMissingApiKeyEnv: true });
+  }
+  return providers;
+}
+
+function buildApprovalPolicy(
+  fileConfig: Record<string, unknown>,
+  overrides: Partial<DevAgentConfig> | undefined,
+): ApprovalPolicy {
+  const rawSafety = (fileConfig["safety"] ?? {}) as Record<string, unknown>;
+  const safety = mergeSafetyConfig(parseSafety(rawSafety), overrides?.approval);
+  validateSafetyConfig(safety);
+  return {
     ...DEFAULT_APPROVAL,
     mode: safety.mode,
     approvalPolicy: safety.approvalPolicy,
@@ -580,41 +507,143 @@ export function loadConfig(
     networkAccess: safety.networkAccess,
     ...overrides?.approval,
   };
+}
 
-  // Merge budget
-  const rawBudget = (fileConfig["budget"] ?? {}) as Record<
-    string,
-    unknown
-  >;
-  const budgetPartial = parseBudget(rawBudget);
-  const budget: BudgetConfig = {
+function buildBudgetConfig(
+  fileConfig: Record<string, unknown>,
+  overrides: Partial<DevAgentConfig> | undefined,
+): BudgetConfig {
+  const rawBudget = (fileConfig["budget"] ?? {}) as Record<string, unknown>;
+  return {
     ...DEFAULT_BUDGET,
-    ...stripUndefined(budgetPartial),
+    ...stripUndefined(parseBudget(rawBudget)),
     ...overrides?.budget,
   };
+}
 
-  // Merge context
+function buildContextConfig(
+  fileConfig: Record<string, unknown>,
+  overrides: Partial<DevAgentConfig> | undefined,
+): ContextConfig {
   const rawContext = (fileConfig["context"] ?? {}) as Record<string, unknown>;
-  const contextPartial = parseContext(rawContext);
-  const context: ContextConfig = {
+  return {
     ...DEFAULT_CONTEXT,
-    ...stripUndefined(contextPartial),
+    ...stripUndefined(parseContext(rawContext)),
     ...overrides?.context,
   };
+}
 
-  validateBudgetConfig(budget);
-  validateContextConfig(context);
+function applyActiveCredential(options: {
+  readonly fileConfig: Record<string, unknown>;
+  readonly envModel: string | undefined;
+  readonly overrides: Partial<DevAgentConfig> | undefined;
+  readonly provider: string;
+  readonly providers: Record<string, ProviderConfig>;
+  readonly rawProviders: Record<string, Record<string, unknown>>;
+  readonly credentialStore: CredentialStore;
+}) {
+  const activeCredential = resolveProviderCredentialStatus({
+    providerId: options.provider,
+    providerConfig: options.providers[options.provider],
+    providerConfigApiKey: getRawApiKeyValue(options.rawProviders[options.provider]) ?? null,
+    topLevelApiKey: options.fileConfig["api_key"] as string | undefined,
+    storedCredential: options.credentialStore.get(options.provider),
+  });
 
-  // Resolve top-level api_key: TOML > env var > stored credentials
-  const topLevelApiKey = fileConfig["api_key"] as string | undefined;
+  if (activeCredential.credentialMode === "api" && !activeCredential.hasCredential && activeCredential.envVar) {
+    throw new Error(`Environment variable "${activeCredential.envVar}" referenced in config but not set`);
+  }
+  if (activeCredential.credentialMode !== "api" || !activeCredential.apiKey) return;
 
+  applyApiCredential(options, activeCredential.apiKey);
+}
+
+function applyApiCredential(
+  options: {
+    readonly fileConfig: Record<string, unknown>;
+    readonly envModel: string | undefined;
+    readonly overrides: Partial<DevAgentConfig> | undefined;
+    readonly provider: string;
+    readonly providers: Record<string, ProviderConfig>;
+  },
+  apiKey: string,
+) {
+  const providerConfig = options.providers[options.provider];
+  if (providerConfig) {
+    if (!providerConfig.apiKey) options.providers[options.provider] = { ...providerConfig, apiKey };
+    return;
+  }
+
+  options.providers[options.provider] = {
+    model: resolveConfigModel(options.fileConfig, options.overrides, options.envModel),
+    apiKey,
+    baseUrl: options.fileConfig["base_url"] as string | undefined,
+  };
+}
+
+function buildLoadedConfig(ctx: LoadedConfigContext): DevAgentConfig {
+  const optionalSections = parseOptionalConfigSections(ctx.fileConfig);
+  return {
+    provider: ctx.provider,
+    model: resolveConfigModel(ctx.fileConfig, ctx.overrides, ctx.envModel),
+    providers: ctx.providers,
+    approval: ctx.approval,
+    budget: ctx.budget,
+    context: ctx.context,
+    ...optionalSections,
+    ...parseSubagentConfigSections(ctx.fileConfig, ctx.provider, ctx.overrides),
+  };
+}
+
+function resolveConfigModel(
+  fileConfig: Record<string, unknown>,
+  overrides: Partial<DevAgentConfig> | undefined,
+  envModel: string | undefined,
+) {
+  return envModel ?? overrides?.model ?? (fileConfig["model"] as string) ?? DEFAULT_CONFIG.model;
+}
+
+function parseOptionalConfigSections(fileConfig: Record<string, unknown>) {
+  const doubleCheck = parseDoubleCheckConfig(fileConfig["double_check"] as Record<string, unknown> | undefined);
+  const lsp = parseLspConfig(fileConfig["lsp"] as Record<string, unknown> | undefined);
+  const logging = parseLoggingConfig(fileConfig["logging"] as Record<string, unknown> | undefined);
+  const sessionState = parseSessionStateConfig(fileConfig["session_state"] as Record<string, unknown> | undefined);
+  return {
+    ...(logging ? { logging } : {}),
+    ...(doubleCheck ? { doubleCheck } : {}),
+    ...(lsp ? { lsp } : {}),
+    ...(sessionState ? { sessionState } : {}),
+  };
+}
+
+function parseSubagentConfigSections(
+  fileConfig: Record<string, unknown>,
+  provider: string,
+  overrides: Partial<DevAgentConfig> | undefined,
+): SubagentConfigSections {
   const rawSubagents = (fileConfig["subagents"] ?? {}) as Record<string, unknown>;
-  const explicitAgentModelOverrides = parseAgentStringMap(
-    rawSubagents["agent_model_overrides"] ?? rawSubagents["agentModelOverrides"],
+  const defaultProfiles = getDefaultSubagentProfiles(provider);
+  const agentModelOverrides = mergeAgentMaps(
+    defaultProfiles.agentModelOverrides,
+    parseAgentStringMap(rawSubagents["agent_model_overrides"] ?? rawSubagents["agentModelOverrides"]),
+    overrides?.agentModelOverrides,
   );
-  const explicitAgentReasoningOverrides = parseAgentReasoningMap(
-    rawSubagents["agent_reasoning_overrides"] ?? rawSubagents["agentReasoningOverrides"],
+  const agentReasoningOverrides = mergeAgentMaps(
+    defaultProfiles.agentReasoningOverrides,
+    parseAgentReasoningMap(rawSubagents["agent_reasoning_overrides"] ?? rawSubagents["agentReasoningOverrides"]),
+    overrides?.agentReasoningOverrides,
   );
+  const subagentTimeoutMs = (rawSubagents["subagent_timeout_ms"] ??
+    rawSubagents["subagentTimeoutMs"]) as number | undefined;
+  return {
+    ...(agentModelOverrides ? { agentModelOverrides } : {}),
+    ...(agentReasoningOverrides ? { agentReasoningOverrides } : {}),
+    ...parseSubagentMaps(rawSubagents),
+    ...(subagentTimeoutMs !== undefined ? { subagentTimeoutMs } : {}),
+  };
+}
+
+function parseSubagentMaps(rawSubagents: Record<string, unknown>): SubagentConfigSections {
   const agentIterationCaps = parseAgentNumberMap(
     rawSubagents["agent_iteration_caps"] ?? rawSubagents["agentIterationCaps"],
   );
@@ -624,166 +653,11 @@ export function loadConfig(
   const allowedChildAgents = parseAllowedChildAgents(
     rawSubagents["allowed_child_agents"] ?? rawSubagents["allowedChildAgents"],
   );
-  const subagentTimeoutMs = (rawSubagents["subagent_timeout_ms"] ??
-    rawSubagents["subagentTimeoutMs"]) as number | undefined;
-  const defaultSubagentProfiles = getDefaultSubagentProfiles(provider);
-  const agentModelOverrides = mergeAgentMaps(
-    defaultSubagentProfiles.agentModelOverrides,
-    explicitAgentModelOverrides,
-    overrides?.agentModelOverrides,
-  );
-  const agentReasoningOverrides = mergeAgentMaps(
-    defaultSubagentProfiles.agentReasoningOverrides,
-    explicitAgentReasoningOverrides,
-    overrides?.agentReasoningOverrides,
-  );
-
-  const activeCredential = resolveProviderCredentialStatus({
-    providerId: provider,
-    providerConfig: providers[provider],
-    providerConfigApiKey: getRawApiKeyValue(rawProviders[provider]) ?? null,
-    topLevelApiKey,
-    storedCredential: credentialStore.get(provider),
-  });
-
-  if (
-    activeCredential.credentialMode === "api" &&
-    !activeCredential.hasCredential &&
-    activeCredential.envVar
-  ) {
-    throw new Error(
-      `Environment variable "${activeCredential.envVar}" referenced in config but not set`,
-    );
-  }
-
-  if (activeCredential.credentialMode === "api" && activeCredential.apiKey) {
-    if (providers[provider]) {
-      if (!providers[provider].apiKey) {
-        providers[provider] = { ...providers[provider], apiKey: activeCredential.apiKey };
-      }
-    } else {
-      providers[provider] = {
-        model:
-          envModel ??
-          overrides?.model ??
-          (fileConfig["model"] as string) ??
-          DEFAULT_CONFIG.model,
-        apiKey: activeCredential.apiKey,
-        baseUrl: fileConfig["base_url"] as string | undefined,
-      };
-    }
-  }
-
-  // Parse optional double_check config
-  const rawDoubleCheck = fileConfig["double_check"] as Record<string, unknown> | undefined;
-  const doubleCheck = rawDoubleCheck
-    ? {
-        enabled: (rawDoubleCheck["enabled"] as boolean) ?? false,
-        checkDiagnostics: rawDoubleCheck["check_diagnostics"] as boolean | undefined,
-        runTests: rawDoubleCheck["run_tests"] as boolean | undefined,
-        testCommand: rawDoubleCheck["test_command"] as string | null | undefined,
-        diagnosticTimeout: rawDoubleCheck["diagnostic_timeout"] as number | undefined,
-      }
-    : undefined;
-
-  // Parse optional LSP config — supports both legacy single-server and new multi-server format
-  const rawLsp = fileConfig["lsp"] as Record<string, unknown> | undefined;
-  let lsp: import("./types.js").LSPConfig | undefined;
-
-  if (rawLsp) {
-    if (rawLsp["servers"]) {
-      // New multi-server format: [[lsp.servers]]
-      const rawServers = rawLsp["servers"] as Array<Record<string, unknown>>;
-      lsp = {
-        servers: rawServers.map((s) => ({
-          command: s["command"] as string,
-          args: (s["args"] as string[] | undefined) ?? ["--stdio"],
-          languages: (s["languages"] as string[] | undefined) ?? ["typescript"],
-          extensions: (s["extensions"] as string[] | undefined) ?? [".ts"],
-          timeout: (s["timeout"] as number | undefined) ?? 10_000,
-          diagnosticTimeout: s["diagnostic_timeout"] as number | undefined,
-        })),
-      };
-    } else if (rawLsp["command"]) {
-      // Legacy single-server format: [lsp] command = "..."
-      const languageId = (rawLsp["language_id"] as string | undefined) ?? "typescript";
-      const defaults = getLanguageDefaults(languageId);
-      lsp = {
-        servers: [{
-          command: rawLsp["command"] as string,
-          args: (rawLsp["args"] as string[] | undefined) ?? ["--stdio"],
-          languages: [languageId],
-          extensions: defaults?.extensions ?? [".ts"],
-          timeout: (rawLsp["timeout"] as number | undefined) ?? 10_000,
-          diagnosticTimeout: rawLsp["diagnostic_timeout"] as number | undefined,
-        }],
-      };
-    }
-  }
-
-  // Parse optional logging config
-  const rawLogging = fileConfig["logging"] as Record<string, unknown> | undefined;
-  const logging = rawLogging
-    ? {
-        enabled: (rawLogging["enabled"] as boolean) ?? true,
-        logDir: rawLogging["log_dir"] as string | undefined,
-        retentionDays: rawLogging["retention_days"] as number | undefined,
-      }
-    : undefined;
-
-  // Parse optional session_state config
-  const rawSessionState = fileConfig["session_state"] as Record<string, unknown> | undefined;
-  const sessionState = rawSessionState
-    ? {
-        persist: rawSessionState["persist"] as boolean | undefined,
-        trackPlan: rawSessionState["track_plan"] as boolean | undefined,
-        trackFiles: rawSessionState["track_files"] as boolean | undefined,
-        trackEnv: rawSessionState["track_env"] as boolean | undefined,
-        trackToolResults: rawSessionState["track_tool_results"] as boolean | undefined,
-        trackFindings: rawSessionState["track_findings"] as boolean | undefined,
-        maxModifiedFiles: rawSessionState["max_modified_files"] as number | undefined,
-        maxEnvFacts: rawSessionState["max_env_facts"] as number | undefined,
-        maxToolSummaries: rawSessionState["max_tool_summaries"] as number | undefined,
-        maxFindings: rawSessionState["max_findings"] as number | undefined,
-      }
-    : undefined;
-
-  const config: DevAgentConfig = {
-    provider,
-    model:
-    envModel ??
-      overrides?.model ??
-      (fileConfig["model"] as string) ??
-      DEFAULT_CONFIG.model,
-    providers,
-    approval,
-    budget,
-    context,
-    ...(logging ? { logging } : {}),
-    ...(doubleCheck ? { doubleCheck } : {}),
-    ...(lsp ? { lsp } : {}),
-    ...(sessionState ? { sessionState } : {}),
-    ...(agentModelOverrides ? { agentModelOverrides } : {}),
-    ...(agentReasoningOverrides ? { agentReasoningOverrides } : {}),
+  return {
     ...(agentIterationCaps ? { agentIterationCaps } : {}),
     ...(agentPermissionOverrides ? { agentPermissionOverrides } : {}),
     ...(allowedChildAgents ? { allowedChildAgents } : {}),
-    ...(subagentTimeoutMs !== undefined ? { subagentTimeoutMs } : {}),
   };
-
-  validateSubagentConfig(config);
-  return config;
-}
-
-/**
- * Get default file extensions for a language ID.
- * Used when converting legacy single-server LSP config to multi-server format.
- */
-function getLanguageDefaults(
-  languageId: string,
-): { extensions: string[] } | undefined {
-  const exts = LANGUAGE_EXTENSIONS[languageId];
-  return exts ? { extensions: [...exts] } : undefined;
 }
 
 /**
@@ -799,143 +673,4 @@ function stripUndefined<T extends Record<string, unknown>>(
     }
   }
   return result as Partial<T>;
-}
-
-/**
- * Resolve the project root by walking upward once, checking ALL markers at
- * each directory level. Priority order (highest first):
- *   1. .agents/skills                 — immediate return
- *   2. package.json (start dir only)  — remembered as fallback
- *   3. .git                           — first match remembered as fallback
- */
-export function findProjectRoot(startDir?: string): string | null {
-  const start = resolve(startDir ?? process.cwd());
-  const root = resolve("/");
-
-  let gitFallback: string | null = null;
-  let packageJsonFallback: string | null = null;
-  let dir = start;
-
-  while (dir !== root) {
-    // Standalone agent workspaces should not float up to a parent git root.
-    if (existsSync(join(dir, ".agents", "skills"))) {
-      return dir;
-    }
-
-    // package.json fallback — only at the starting directory
-    if (dir === start && packageJsonFallback === null && existsSync(join(dir, "package.json"))) {
-      packageJsonFallback = dir;
-    }
-
-    // .git fallback — keep the first (closest) match
-    if (gitFallback === null && existsSync(join(dir, ".git"))) {
-      gitFallback = dir;
-    }
-
-    const parent = resolve(dir, "..");
-    if (parent === dir) break;
-    dir = parent;
-  }
-
-  // Fall back: package.json at start dir takes priority over .git
-  return packageJsonFallback ?? gitFallback ?? null;
-}
-
-// ─── OAuth Credential Resolution ────────────────────────────
-
-import type { OAuthCredential } from "./credentials.js";
-
-/**
- * Resolve OAuth credentials for all providers that have stored OAuth tokens.
- * Refreshes expired tokens automatically. Call after loadConfig() in main().
- * Keeps loadConfig() synchronous — async refresh is deferred to this function.
- */
-export async function resolveProviderCredentials(
-  config: DevAgentConfig,
-): Promise<DevAgentConfig> {
-  const credentialStore = new CredentialStore();
-  const updatedProviders: Record<string, ProviderConfig> = { ...config.providers };
-
-  // Check the active provider for OAuth credentials
-  const providersToCheck = new Set(Object.keys(updatedProviders));
-  providersToCheck.add(config.provider);
-
-  for (const key of providersToCheck) {
-    const provConfig = updatedProviders[key];
-    // Skip if already has apiKey or oauthToken
-    if (provConfig?.apiKey || provConfig?.oauthToken) continue;
-
-    const stored = credentialStore.get(key);
-    if (stored?.type !== "oauth") continue;
-
-    let accessToken = stored.accessToken;
-
-    // Refresh if expired (1-minute buffer).
-    // Skip refresh for tokens without expiresAt (e.g., GitHub OAuth — non-expiring).
-    const isExpired = stored.expiresAt != null && stored.expiresAt < Date.now() + 60_000;
-    if (isExpired && stored.refreshToken) {
-      const oauthConfig = getOAuthProvider(key);
-      if (!oauthConfig) {
-        throw new OAuthError(
-          `OAuth token for "${key}" is expired but no OAuth config found to refresh. Run "devagent auth login" to re-authenticate.`,
-        );
-      }
-
-      try {
-        const newTokens = await refreshAccessToken(
-          oauthConfig.tokenUrl,
-          stored.refreshToken,
-          oauthConfig.clientId,
-        );
-        const updated: OAuthCredential = {
-          type: "oauth",
-          accessToken: newTokens.access_token,
-          ...(newTokens.refresh_token ? { refreshToken: newTokens.refresh_token } : {}),
-          ...(newTokens.expires_in ? { expiresAt: Date.now() + newTokens.expires_in * 1000 } : {}),
-          accountId: stored.accountId,
-          storedAt: Date.now(),
-        };
-        credentialStore.set(key, updated);
-        accessToken = updated.accessToken;
-      } catch (err) {
-        const msg = extractErrorMessage(err);
-        throw new OAuthError(
-          `Failed to refresh OAuth token for "${key}": ${msg}. Run "devagent auth login" to re-authenticate.`,
-        );
-      }
-    } else if (isExpired && !stored.refreshToken) {
-      throw new OAuthError(
-        `OAuth token for "${key}" is expired and cannot be refreshed (no refresh token). Run "devagent auth login" to re-authenticate.`,
-      );
-    }
-
-    // Inject OAuth token into provider config
-    const existingConfig = updatedProviders[key] ?? { model: config.model };
-
-    if (key === "github-copilot") {
-      // GitHub Copilot requires exchanging the GitHub OAuth token for a
-      // short-lived Copilot session JWT before API calls.
-      try {
-        const session = await exchangeCopilotSessionToken(accessToken);
-        updatedProviders[key] = {
-          ...existingConfig,
-          oauthToken: session.token,
-          baseUrl: session.endpoint ?? existingConfig.baseUrl,
-        };
-      } catch (err) {
-        const msg = extractErrorMessage(err);
-        throw new OAuthError(
-          `Failed to obtain Copilot session token: ${msg}. Run "devagent auth login" to re-authenticate.`,
-        );
-      }
-    } else {
-      updatedProviders[key] = {
-        ...existingConfig,
-        oauthToken: accessToken,
-        oauthAccountId: stored.accountId,
-      };
-    }
-  }
-
-  return { ...config, providers: updatedProviders };
 }

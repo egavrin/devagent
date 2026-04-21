@@ -90,47 +90,57 @@ export function buildPreCompactionSummary(
 ): string {
   const parts: string[] = [`Iteration: ${iteration}`];
 
-  if (sessionState) {
-    const plan = sessionState.getPlan();
-    if (plan && plan.length > 0) {
-      const inProgress = plan.find((s) => s.status === "in_progress");
-      if (inProgress) {
-        parts.push(`Active plan step: ${inProgress.description}`);
-      }
-      const completed = sessionState.getPlanCompletedCount();
-      const total = sessionState.getTotalPlanCount();
-      parts.push(`Plan progress: ${completed}/${total}`);
-    }
-
-    const modifiedFiles = sessionState.getModifiedFiles();
-    if (modifiedFiles.length > 0) {
-      parts.push(`Modified files: ${modifiedFiles.join(", ")}`);
-    }
-
-    const findings = sessionState.getFindings();
-    if (findings.length > 0) {
-      parts.push(`Findings: ${findings.length}`);
-    }
-
-    const summaries = sessionState.getToolSummaries();
-    const recentSummaries = summaries.slice(-3);
-    if (recentSummaries.length > 0) {
-      parts.push("Recent tool activity:");
-      for (const s of recentSummaries) {
-        parts.push(`  ${s.tool}: ${s.summary.slice(0, 100)}`);
-      }
-    }
-  }
-
-  // Last user message
-  const userMessages = messages.filter((m) => m.role === MessageRole.USER && m.content);
-  const lastUser = userMessages[userMessages.length - 1];
-  if (lastUser?.content) {
-    const truncated = lastUser.content.length > 500
-      ? lastUser.content.slice(0, 500) + "..."
-      : lastUser.content;
-    parts.push(`Last user message: ${truncated}`);
-  }
+  if (sessionState) parts.push(...buildSessionStateSummaryParts(sessionState));
+  const lastUserMessage = formatLastUserMessage(messages);
+  if (lastUserMessage) parts.push(lastUserMessage);
 
   return parts.join("\n");
+}
+
+function buildSessionStateSummaryParts(sessionState: SessionState): string[] {
+  return [
+    ...formatPlanProgress(sessionState),
+    ...formatModifiedFiles(sessionState),
+    ...formatFindings(sessionState),
+    ...formatRecentToolActivity(sessionState),
+  ];
+}
+
+function formatPlanProgress(sessionState: SessionState): string[] {
+  const plan = sessionState.getPlan();
+  if (!plan || plan.length === 0) return [];
+  const inProgress = plan.find((s) => s.status === "in_progress");
+  return [
+    inProgress ? `Active plan step: ${inProgress.description}` : null,
+    `Plan progress: ${sessionState.getPlanCompletedCount()}/${sessionState.getTotalPlanCount()}`,
+  ].filter((part): part is string => part !== null);
+}
+
+function formatModifiedFiles(sessionState: SessionState): string[] {
+  const modifiedFiles = sessionState.getModifiedFiles();
+  return modifiedFiles.length > 0 ? [`Modified files: ${modifiedFiles.join(", ")}`] : [];
+}
+
+function formatFindings(sessionState: SessionState): string[] {
+  const findings = sessionState.getFindings();
+  return findings.length > 0 ? [`Findings: ${findings.length}`] : [];
+}
+
+function formatRecentToolActivity(sessionState: SessionState): string[] {
+  const recentSummaries = sessionState.getToolSummaries().slice(-3);
+  if (recentSummaries.length === 0) return [];
+  return [
+    "Recent tool activity:",
+    ...recentSummaries.map((summary) => `  ${summary.tool}: ${summary.summary.slice(0, 100)}`),
+  ];
+}
+
+function formatLastUserMessage(messages: ReadonlyArray<Message>): string | null {
+  const userMessages = messages.filter((m) => m.role === MessageRole.USER && m.content);
+  const lastUser = userMessages[userMessages.length - 1];
+  if (!lastUser?.content) return null;
+  const truncated = lastUser.content.length > 500
+    ? lastUser.content.slice(0, 500) + "..."
+    : lastUser.content;
+  return `Last user message: ${truncated}`;
 }

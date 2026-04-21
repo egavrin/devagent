@@ -46,7 +46,6 @@ export class SourceContextProvider implements ContextProvider {
     this.padLines = options?.padLines ?? 20;
     this.maxLinesPerItem = options?.maxLinesPerItem ?? 160;
   }
-
   buildItems(workspaceRoot: string, fileEntry: FileEntry): ContextItem[] {
     const relPath = fileEntry.path;
     if (typeof relPath !== "string") return [];
@@ -63,25 +62,18 @@ export class SourceContextProvider implements ContextProvider {
     let totalLines = 0;
 
     for (const [start, end] of merged) {
-      const clampedStart = Math.max(1, start);
-      const clampedEnd = Math.min(lines.length, end);
-      const snippetLines: string[] = [];
+      const snippet = buildSourceContextSnippet(lines, start, end);
+      if (!snippet) continue;
 
-      for (let idx = clampedStart; idx <= clampedEnd; idx++) {
-        snippetLines.push(`${String(idx).padStart(5)}: ${lines[idx - 1]}`);
-      }
-
-      if (snippetLines.length === 0) continue;
-
-      totalLines += snippetLines.length;
+      totalLines += snippet.lineCount;
       if (totalLines > this.maxLinesPerItem && items.length > 0) break;
 
       items.push({
         kind: "code",
-        title: `${relPath}:${clampedStart}-${clampedEnd}`,
+        title: `${relPath}:${snippet.start}-${snippet.end}`,
         path: relPath,
-        span: [clampedStart, clampedEnd],
-        body: snippetLines.join("\n"),
+        span: [snippet.start, snippet.end],
+        body: snippet.body,
       });
     }
 
@@ -161,6 +153,29 @@ export class SourceContextProvider implements ContextProvider {
   }
 }
 
+function buildSourceContextSnippet(
+  lines: ReadonlyArray<string>,
+  start: number,
+  end: number,
+): { readonly start: number; readonly end: number; readonly lineCount: number; readonly body: string } | null {
+  const clampedStart = Math.max(1, start);
+  const clampedEnd = Math.min(lines.length, end);
+  const snippetLines: string[] = [];
+
+  for (let idx = clampedStart; idx <= clampedEnd; idx++) {
+    snippetLines.push(`${String(idx).padStart(5)}: ${lines[idx - 1]}`);
+  }
+
+  return snippetLines.length === 0
+    ? null
+    : {
+      start: clampedStart,
+      end: clampedEnd,
+      lineCount: snippetLines.length,
+      body: snippetLines.join("\n"),
+    };
+}
+
 // ── ContextOrchestrator ─────────────────────────────────────────────────────
 
 export class ContextOrchestrator {
@@ -174,45 +189,57 @@ export class ContextOrchestrator {
     this.providers = [...providers];
     this.maxTotalLines = options?.maxTotalLines ?? 320;
   }
-
   buildSection(workspaceRoot: string, fileEntries: FileEntry[]): string {
-    const collected: ContextItem[] = [];
-    const seenKeys = new Set<string>();
-
-    for (const entry of fileEntries) {
-      for (const provider of this.providers) {
-        let items: ContextItem[];
-        try {
-          items = provider.buildItems(workspaceRoot, entry);
-        } catch {
-          continue;
-        }
-
-        for (const item of items) {
-          const key = `${item.kind}|${item.path}|${item.span?.[0]},${item.span?.[1]}|${item.body}`;
-          if (seenKeys.has(key)) continue;
-          seenKeys.add(key);
-          collected.push(item);
-        }
-      }
-    }
-
-    if (collected.length === 0) return "";
-
-    const trimmed: ContextItem[] = [];
-    let totalLines = 0;
-
-    for (const item of collected) {
-      const lines = contextItemLineCount(item);
-      if (totalLines + lines > this.maxTotalLines && trimmed.length > 0) {
-        continue;
-      }
-      trimmed.push(item);
-      totalLines += lines;
-    }
-
+    const collected = this.collectContextItems(workspaceRoot, fileEntries);
+    const trimmed = trimContextItems(collected, this.maxTotalLines);
     return trimmed.length > 0 ? formatContextItems(trimmed) : "";
   }
+
+  private collectContextItems(workspaceRoot: string, fileEntries: FileEntry[]): ContextItem[] {
+    const collected: ContextItem[] = [];
+    const seenKeys = new Set<string>();
+    for (const entry of fileEntries) {
+      for (const provider of this.providers) {
+        addProviderItems(collected, seenKeys, provider, workspaceRoot, entry);
+      }
+    }
+    return collected;
+  }
+}
+
+function addProviderItems(
+  collected: ContextItem[],
+  seenKeys: Set<string>,
+  provider: ContextProvider,
+  workspaceRoot: string,
+  entry: FileEntry,
+): void {
+  let items: ContextItem[];
+  try {
+    items = provider.buildItems(workspaceRoot, entry);
+  } catch {
+    return;
+  }
+  for (const item of items) {
+    const key = `${item.kind}|${item.path}|${item.span?.[0]},${item.span?.[1]}|${item.body}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    collected.push(item);
+  }
+}
+
+function trimContextItems(items: ReadonlyArray<ContextItem>, maxTotalLines: number): ContextItem[] {
+  const trimmed: ContextItem[] = [];
+  let totalLines = 0;
+  for (const item of items) {
+    const lines = contextItemLineCount(item);
+    if (totalLines + lines > maxTotalLines && trimmed.length > 0) {
+      continue;
+    }
+    trimmed.push(item);
+    totalLines += lines;
+  }
+  return trimmed;
 }
 
 // ── Formatting ──────────────────────────────────────────────────────────────

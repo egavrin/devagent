@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { it, expect, vi } from "vitest";
 
 import { SessionState } from "./session-state.js";
 import { StagnationDetector } from "./stagnation-detector.js";
@@ -82,173 +82,170 @@ function makeMessagesWithToolCalls(): Message[] {
 }
 
 // ─── Tests ───────────────────────────────────────────────────
+it("skips judge below MIN_JUDGE_ITERATION", async () => {
+  const { detector } = makeDetector();
+  const provider = mockProvider('{"analysis":"ok","stagnation_confidence":0.9}');
+  const messages = makeMessages();
 
-describe("StagnationDetector — LLM-as-judge", () => {
-  it("skips judge below MIN_JUDGE_ITERATION", async () => {
-    const { detector } = makeDetector();
-    const provider = mockProvider('{"analysis":"ok","stagnation_confidence":0.9}');
-    const messages = makeMessages();
+  const result = await detector.checkStagnationWithLLM(provider, messages, 5);
+  expect(result).toBeNull();
+  expect(provider.chat).not.toHaveBeenCalled();
+});
 
-    const result = await detector.checkStagnationWithLLM(provider, messages, 5);
-    expect(result).toBeNull();
-    expect(provider.chat).not.toHaveBeenCalled();
-  });
+it("skips judge within interval", async () => {
+  const { detector } = makeDetector();
+  const provider = mockProvider('{"analysis":"no stagnation","stagnation_confidence":0.1}');
+  const messages = makeMessages();
 
-  it("skips judge within interval", async () => {
-    const { detector } = makeDetector();
-    const provider = mockProvider('{"analysis":"no stagnation","stagnation_confidence":0.1}');
-    const messages = makeMessages();
+  // First call at iteration 15 — fires (within gating rules)
+  const first = await detector.checkStagnationWithLLM(provider, messages, 15);
+  expect(first).toBeNull(); // confidence 0.1 < threshold
+  expect(provider.chat).toHaveBeenCalledTimes(1);
 
-    // First call at iteration 15 — fires (within gating rules)
-    const first = await detector.checkStagnationWithLLM(provider, messages, 15);
-    expect(first).toBeNull(); // confidence 0.1 < threshold
-    expect(provider.chat).toHaveBeenCalledTimes(1);
+  // Second call at iteration 16 — skipped (within interval)
+  const second = await detector.checkStagnationWithLLM(provider, messages, 16);
+  expect(second).toBeNull();
+  expect(provider.chat).toHaveBeenCalledTimes(1); // not called again
+});
 
-    // Second call at iteration 16 — skipped (within interval)
-    const second = await detector.checkStagnationWithLLM(provider, messages, 16);
-    expect(second).toBeNull();
-    expect(provider.chat).toHaveBeenCalledTimes(1); // not called again
-  });
+it("returns nudge when confidence exceeds threshold", async () => {
+  const { detector } = makeDetector();
+  const provider = mockProvider(
+    '{"analysis":"Agent is repeating search patterns without making edits","stagnation_confidence":0.92}',
+  );
+  const messages = makeMessages();
 
-  it("returns nudge when confidence exceeds threshold", async () => {
-    const { detector } = makeDetector();
-    const provider = mockProvider(
-      '{"analysis":"Agent is repeating search patterns without making edits","stagnation_confidence":0.92}',
-    );
-    const messages = makeMessages();
+  const result = await detector.checkStagnationWithLLM(provider, messages, 15);
+  expect(result).not.toBeNull();
+  expect(result).toContain("STAGNATION DETECTED");
+  expect(result).toContain("repeating search patterns");
+  expect(result).toContain("0.92");
+});
 
-    const result = await detector.checkStagnationWithLLM(provider, messages, 15);
-    expect(result).not.toBeNull();
-    expect(result).toContain("STAGNATION DETECTED");
-    expect(result).toContain("repeating search patterns");
-    expect(result).toContain("0.92");
-  });
+it("returns null when confidence below threshold", async () => {
+  const { detector } = makeDetector();
+  const provider = mockProvider(
+    '{"analysis":"Agent is exploring codebase","stagnation_confidence":0.3}',
+  );
+  const messages = makeMessages();
 
-  it("returns null when confidence below threshold", async () => {
-    const { detector } = makeDetector();
-    const provider = mockProvider(
-      '{"analysis":"Agent is exploring codebase","stagnation_confidence":0.3}',
-    );
-    const messages = makeMessages();
+  const result = await detector.checkStagnationWithLLM(provider, messages, 15);
+  expect(result).toBeNull();
+});
 
-    const result = await detector.checkStagnationWithLLM(provider, messages, 15);
-    expect(result).toBeNull();
-  });
+it("returns null on provider error", async () => {
+  const { detector } = makeDetector();
+  const provider = throwingProvider();
+  const messages = makeMessages();
 
-  it("returns null on provider error", async () => {
-    const { detector } = makeDetector();
-    const provider = throwingProvider();
-    const messages = makeMessages();
+  const result = await detector.checkStagnationWithLLM(provider, messages, 15);
+  expect(result).toBeNull();
+});
 
-    const result = await detector.checkStagnationWithLLM(provider, messages, 15);
-    expect(result).toBeNull();
-  });
+it("adapts interval based on confidence", async () => {
+  const { detector } = makeDetector();
+  const messages = makeMessages();
 
-  it("adapts interval based on confidence", async () => {
-    const { detector } = makeDetector();
-    const messages = makeMessages();
+  // High confidence (0.7+) → shorter interval (MIN_JUDGE_INTERVAL = 5)
+  const highProvider = mockProvider('{"analysis":"stagnating","stagnation_confidence":0.75}');
+  await detector.checkStagnationWithLLM(highProvider, messages, 15);
 
-    // High confidence (0.7+) → shorter interval (MIN_JUDGE_INTERVAL = 5)
-    const highProvider = mockProvider('{"analysis":"stagnating","stagnation_confidence":0.75}');
-    await detector.checkStagnationWithLLM(highProvider, messages, 15);
+  // Next call at iteration 20 (15 + 5 = 20) should fire
+  const midProvider = mockProvider('{"analysis":"ok","stagnation_confidence":0.2}');
+  await detector.checkStagnationWithLLM(midProvider, messages, 20);
+  expect(midProvider.chat).toHaveBeenCalledTimes(1); // called — interval was 5
 
-    // Next call at iteration 20 (15 + 5 = 20) should fire
-    const midProvider = mockProvider('{"analysis":"ok","stagnation_confidence":0.2}');
-    const atShortInterval = await detector.checkStagnationWithLLM(midProvider, messages, 20);
-    expect(midProvider.chat).toHaveBeenCalledTimes(1); // called — interval was 5
+  // Low confidence (0.2) → longer interval (MAX_JUDGE_INTERVAL = 12)
+  // Next call at iteration 25 (20 + 5) should NOT fire — interval is now 12
+  const skipProvider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
+  const tooSoon = await detector.checkStagnationWithLLM(skipProvider, messages, 25);
+  expect(tooSoon).toBeNull();
+  expect(skipProvider.chat).not.toHaveBeenCalled(); // skipped — 25-20=5 < 12
 
-    // Low confidence (0.2) → longer interval (MAX_JUDGE_INTERVAL = 12)
-    // Next call at iteration 25 (20 + 5) should NOT fire — interval is now 12
-    const skipProvider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
-    const tooSoon = await detector.checkStagnationWithLLM(skipProvider, messages, 25);
-    expect(tooSoon).toBeNull();
-    expect(skipProvider.chat).not.toHaveBeenCalled(); // skipped — 25-20=5 < 12
+  // But at iteration 32 (20 + 12) it should fire
+  const fireProvider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
+  await detector.checkStagnationWithLLM(fireProvider, messages, 32);
+  expect(fireProvider.chat).toHaveBeenCalledTimes(1);
+});
 
-    // But at iteration 32 (20 + 12) it should fire
-    const fireProvider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
-    await detector.checkStagnationWithLLM(fireProvider, messages, 32);
-    expect(fireProvider.chat).toHaveBeenCalledTimes(1);
-  });
+it("includes session state context in judge call", async () => {
+  const state = new SessionState();
+  state.setPlan([
+    { description: "Step 1", status: "completed" },
+    { description: "Step 2", status: "in_progress" },
+  ]);
+  state.recordModifiedFile("src/foo.ts");
+  state.addFinding("Bug found", "null pointer in foo()", 3);
 
-  it("includes session state context in judge call", async () => {
-    const state = new SessionState();
-    state.setPlan([
-      { description: "Step 1", status: "completed" },
-      { description: "Step 2", status: "in_progress" },
-    ]);
-    state.recordModifiedFile("src/foo.ts");
-    state.addFinding("Bug found", "null pointer in foo()", 3);
+  const { detector } = makeDetector(state);
+  const provider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
+  const messages = makeMessages();
 
-    const { detector } = makeDetector(state);
-    const provider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
-    const messages = makeMessages();
+  await detector.checkStagnationWithLLM(provider, messages, 15);
 
-    await detector.checkStagnationWithLLM(provider, messages, 15);
+  // Verify the messages passed to provider contain session state context
+  const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]!;
+  const judgeMessages = chatCall[0] as Message[];
+  const userMsg = judgeMessages.find((m) => m.role === MessageRole.USER);
+  expect(userMsg).toBeDefined();
+  expect(userMsg!.content).toContain("Plan progress: 1/2 steps completed");
+  expect(userMsg!.content).toContain("Modified files: 1");
+  expect(userMsg!.content).toContain("Findings: 1");
+});
 
-    // Verify the messages passed to provider contain session state context
-    const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    const judgeMessages = chatCall[0] as Message[];
-    const userMsg = judgeMessages.find((m) => m.role === MessageRole.USER);
-    expect(userMsg).toBeDefined();
-    expect(userMsg!.content).toContain("Plan progress: 1/2 steps completed");
-    expect(userMsg!.content).toContain("Modified files: 1");
-    expect(userMsg!.content).toContain("Findings: 1");
-  });
+it("resetRunState resets judge state", async () => {
+  const { detector } = makeDetector();
+  const provider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
+  const messages = makeMessages();
 
-  it("resetRunState resets judge state", async () => {
-    const { detector } = makeDetector();
-    const provider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
-    const messages = makeMessages();
+  // Fire at iteration 15
+  await detector.checkStagnationWithLLM(provider, messages, 15);
+  expect(provider.chat).toHaveBeenCalledTimes(1);
 
-    // Fire at iteration 15
-    await detector.checkStagnationWithLLM(provider, messages, 15);
-    expect(provider.chat).toHaveBeenCalledTimes(1);
+  // Reset
+  detector.resetRunState();
 
-    // Reset
-    detector.resetRunState();
+  // Should fire again at iteration 15 after reset (lastJudgeIteration was reset to 0)
+  const provider2 = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
+  await detector.checkStagnationWithLLM(provider2, messages, 15);
+  expect(provider2.chat).toHaveBeenCalledTimes(1);
+});
 
-    // Should fire again at iteration 15 after reset (lastJudgeIteration was reset to 0)
-    const provider2 = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
-    await detector.checkStagnationWithLLM(provider2, messages, 15);
-    expect(provider2.chat).toHaveBeenCalledTimes(1);
-  });
+it("includes tool call names and arguments in judge context", async () => {
+  const { detector } = makeDetector();
+  const provider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
+  const messages = makeMessagesWithToolCalls();
 
-  it("includes tool call names and arguments in judge context", async () => {
-    const { detector } = makeDetector();
-    const provider = mockProvider('{"analysis":"ok","stagnation_confidence":0.1}');
-    const messages = makeMessagesWithToolCalls();
+  await detector.checkStagnationWithLLM(provider, messages, 15);
 
-    await detector.checkStagnationWithLLM(provider, messages, 15);
+  const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]!;
+  const judgeMessages = chatCall[0] as Message[];
+  const userMsg = judgeMessages.find((m) => m.role === MessageRole.USER);
+  expect(userMsg).toBeDefined();
+  // Verify tool call names and args are present
+  expect(userMsg!.content).toContain("tool_call: search_files");
+  expect(userMsg!.content).toContain("pattern=login");
+  expect(userMsg!.content).toContain("path=/src");
+  expect(userMsg!.content).toContain("tool_call: read_file");
+  expect(userMsg!.content).toContain("path=/src/auth/login.ts");
+  // Verify tool results are present
+  expect(userMsg!.content).toContain("Found 3 matches");
+  expect(userMsg!.content).toContain("tool_result [tc1]");
+  expect(userMsg!.content).toContain("tool_result [tc2]");
+});
 
-    const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    const judgeMessages = chatCall[0] as Message[];
-    const userMsg = judgeMessages.find((m) => m.role === MessageRole.USER);
-    expect(userMsg).toBeDefined();
-    // Verify tool call names and args are present
-    expect(userMsg!.content).toContain("tool_call: search_files");
-    expect(userMsg!.content).toContain("pattern=login");
-    expect(userMsg!.content).toContain("path=/src");
-    expect(userMsg!.content).toContain("tool_call: read_file");
-    expect(userMsg!.content).toContain("path=/src/auth/login.ts");
-    // Verify tool results are present
-    expect(userMsg!.content).toContain("Found 3 matches");
-    expect(userMsg!.content).toContain("tool_result [tc1]");
-    expect(userMsg!.content).toContain("tool_result [tc2]");
-  });
+it("emits LLM_STAGNATION_DETECTED error event when stagnation detected", async () => {
+  const { detector, bus } = makeDetector();
+  const provider = mockProvider(
+    '{"analysis":"stuck in search loop","stagnation_confidence":0.95}',
+  );
+  const messages = makeMessages();
 
-  it("emits LLM_STAGNATION_DETECTED error event when stagnation detected", async () => {
-    const { detector, bus } = makeDetector();
-    const provider = mockProvider(
-      '{"analysis":"stuck in search loop","stagnation_confidence":0.95}',
-    );
-    const messages = makeMessages();
+  const errors: Array<{ code: string }> = [];
+  bus.on("error", (e) => errors.push(e as { code: string }));
 
-    const errors: Array<{ code: string }> = [];
-    bus.on("error", (e) => errors.push(e as { code: string }));
+  await detector.checkStagnationWithLLM(provider, messages, 15);
 
-    await detector.checkStagnationWithLLM(provider, messages, 15);
-
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.code).toBe("LLM_STAGNATION_DETECTED");
-  });
+  expect(errors).toHaveLength(1);
+  expect(errors[0]!.code).toBe("LLM_STAGNATION_DETECTED");
 });

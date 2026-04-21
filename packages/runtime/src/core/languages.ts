@@ -34,15 +34,3 @@ export const LANGUAGE_EXTENSIONS: {
   rust: [".rs"],
   shellscript: [".sh", ".bash", ".zsh"],
 };
-
-/**
- * Detect a language ID from a file extension.
- * Returns `null` when the extension is not recognised.
- */
-function detectLanguageFromExtension(ext: string): string | null {
-  const lower = ext.toLowerCase();
-  for (const [langId, exts] of Object.entries(LANGUAGE_EXTENSIONS)) {
-    if (exts?.includes(lower)) return langId;
-  }
-  return null;
-}

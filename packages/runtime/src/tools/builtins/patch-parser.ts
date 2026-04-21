@@ -83,6 +83,22 @@ const FILE_HEADER_NEW = /^\+\+\+ (?:b\/)?(.*)$/;
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/;
 const COMMIT_HEADER = /^From ([0-9a-f]{40}) /;
 
+interface DiffHeaderPaths {
+  readonly oldPath: string;
+  readonly newPath: string;
+}
+
+interface ChangeInfo {
+  readonly changeType: ChangeType;
+  readonly actualPath: string;
+  readonly oldPath: string | null;
+}
+
+interface HunkCursor {
+  newLineNum: number;
+  oldLineNum: number;
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function leadingWhitespace(s: string): string {
@@ -136,6 +152,115 @@ function computeSummary(files: FileEntry[]): PatchSummary {
     summary.totalDeletions += f.stats.deletions;
   }
   return summary;
+}
+
+function getChangeInfo(
+  paths: DiffHeaderPaths,
+  oldFile: string | null,
+  newFile: string | null,
+): ChangeInfo {
+  if (oldFile === "/dev/null") {
+    return { changeType: "added", actualPath: paths.newPath, oldPath: null };
+  }
+  if (newFile === "/dev/null") {
+    return { changeType: "deleted", actualPath: paths.oldPath, oldPath: null };
+  }
+  if (paths.oldPath !== paths.newPath) {
+    return { changeType: "renamed", actualPath: paths.newPath, oldPath: paths.oldPath };
+  }
+  return { changeType: "modified", actualPath: paths.newPath, oldPath: null };
+}
+
+function parseHunkHeader(line: string): {
+  readonly oldStart: number;
+  readonly oldCount: number;
+  readonly newStart: number;
+  readonly newCount: number;
+  readonly headerContext: string;
+} | null {
+  const match = HUNK_HEADER.exec(line);
+  if (!match) return null;
+  return {
+    oldStart: parseInt(match[1]!, 10),
+    oldCount: match[2] !== undefined ? parseInt(match[2], 10) : 1,
+    newStart: parseInt(match[3]!, 10),
+    newCount: match[4] !== undefined ? parseInt(match[4], 10) : 1,
+    headerContext: (match[5] ?? "").trim(),
+  };
+}
+
+function isHunkTerminator(line: string): boolean {
+  return line.startsWith("@@") ||
+    line.startsWith("diff --git") ||
+    (line.startsWith("---") && FILE_HEADER_OLD.test(line)) ||
+    (line.startsWith("+++") && FILE_HEADER_NEW.test(line));
+}
+
+function consumeHunkLine(
+  line: string,
+  cursor: HunkCursor,
+  target: {
+    readonly addedLines: AddedLine[];
+    readonly removedLines: RemovedLine[];
+    readonly contextLines: ContextLine[];
+    readonly includeContext: boolean;
+  },
+): boolean {
+  if (line.startsWith("+") && !line.startsWith("+++")) {
+    addHunkAddedLine(line, cursor, target.addedLines);
+    return true;
+  }
+  if (line.startsWith("-") && !line.startsWith("---")) {
+    addHunkRemovedLine(line, cursor, target.removedLines);
+    return true;
+  }
+  if (line.startsWith(" ") || line === "") {
+    addHunkContextLine(line, cursor, target.contextLines, target.includeContext);
+    return true;
+  }
+  return line.startsWith("\\");
+}
+
+function addHunkAddedLine(
+  line: string,
+  cursor: HunkCursor,
+  addedLines: AddedLine[],
+): void {
+  const content = line.slice(1);
+  addedLines.push({
+    lineNumber: cursor.newLineNum,
+    content,
+    indentation: leadingWhitespace(content),
+  });
+  cursor.newLineNum += 1;
+}
+
+function addHunkRemovedLine(
+  line: string,
+  cursor: HunkCursor,
+  removedLines: RemovedLine[],
+): void {
+  removedLines.push({
+    lineNumber: cursor.oldLineNum,
+    content: line.slice(1),
+  });
+  cursor.oldLineNum += 1;
+}
+
+function addHunkContextLine(
+  line: string,
+  cursor: HunkCursor,
+  contextLines: ContextLine[],
+  includeContext: boolean,
+): void {
+  if (includeContext) {
+    contextLines.push({
+      lineNumber: cursor.newLineNum,
+      content: line.length > 0 ? line.slice(1) : "",
+    });
+  }
+  cursor.newLineNum += 1;
+  cursor.oldLineNum += 1;
 }
 
 // ── PatchParser ─────────────────────────────────────────────────────────────
@@ -193,118 +318,20 @@ export class PatchParser {
   }
 
   // ── File parsing ────────────────────────────────────────────────────────
-
   private parseFile(filterPattern: string | null): FileEntry | null {
-    // Find next diff header
-    let oldPath: string | undefined;
-    let newPath: string | undefined;
-
-    while (this.currentLine < this.lines.length) {
-      const line = this.lines[this.currentLine]!;
-      const match = DIFF_HEADER.exec(line);
-      if (match) {
-        oldPath = match[1];
-        newPath = match[2];
-        this.currentLine += 1;
-        break;
-      }
-      this.currentLine += 1;
-    }
-
-    if (oldPath === undefined || newPath === undefined) {
-      return null;
-    }
-
-    // Find old file header
-    let oldFile: string | null = null;
-    while (this.currentLine < this.lines.length) {
-      const line = this.lines[this.currentLine]!;
-      const match = FILE_HEADER_OLD.exec(line);
-      if (match) {
-        oldFile = match[1]!;
-        this.currentLine += 1;
-        break;
-      }
-      // If we hit the next diff header before finding file headers, bail
-      if (DIFF_HEADER.test(line)) {
-        break;
-      }
-      this.currentLine += 1;
-    }
-
-    // Find new file header
-    let newFile: string | null = null;
-    while (this.currentLine < this.lines.length) {
-      const line = this.lines[this.currentLine]!;
-      const match = FILE_HEADER_NEW.exec(line);
-      if (match) {
-        newFile = match[1]!;
-        this.currentLine += 1;
-        break;
-      }
-      if (DIFF_HEADER.test(line)) {
-        break;
-      }
-      this.currentLine += 1;
-    }
-
-    // Determine change type
-    let changeType: ChangeType = "modified";
-    let actualPath: string;
-
-    if (oldFile === "/dev/null") {
-      changeType = "added";
-      actualPath = newPath;
-    } else if (newFile === "/dev/null") {
-      changeType = "deleted";
-      actualPath = oldPath;
-    } else if (oldPath !== newPath) {
-      changeType = "renamed";
-      actualPath = newPath;
-    } else {
-      actualPath = newPath;
-    }
-
-    // Apply filter
-    if (filterPattern !== null) {
-      const regex = new RegExp(filterPattern);
-      if (!regex.test(actualPath)) {
-        // Skip remaining hunk lines for this file
-        while (this.currentLine < this.lines.length) {
-          if (DIFF_HEADER.test(this.lines[this.currentLine]!)) {
-            break;
-          }
-          this.currentLine += 1;
-        }
-        return null;
-      }
-    }
-
-    // Parse hunks
-    const hunks: Hunk[] = [];
-    let additions = 0;
-    let deletions = 0;
-
-    while (this.currentLine < this.lines.length) {
-      const line = this.lines[this.currentLine]!;
-      if (DIFF_HEADER.test(line)) {
-        break;
-      }
-      const hunk = this.parseHunk();
-      if (hunk) {
-        hunks.push(hunk);
-        additions += hunk.addedLines.length;
-        deletions += hunk.removedLines.length;
-      } else {
-        this.currentLine += 1;
-      }
-    }
+    const diffHeader = this.findNextDiffHeader();
+    if (!diffHeader) return null;
+    const oldFile = this.findFileHeader(FILE_HEADER_OLD);
+    const newFile = this.findFileHeader(FILE_HEADER_NEW);
+    const change = getChangeInfo(diffHeader, oldFile, newFile);
+    if (!this.matchesFilter(change.actualPath, filterPattern)) return null;
+    const { hunks, additions, deletions } = this.parseFileHunks();
 
     return {
-      path: actualPath,
-      changeType,
-      oldPath: changeType === "renamed" ? oldPath : null,
-      language: detectLanguage(actualPath),
+      path: change.actualPath,
+      changeType: change.changeType,
+      oldPath: change.oldPath,
+      language: detectLanguage(change.actualPath),
       hunks,
       stats: {
         additions,
@@ -314,84 +341,95 @@ export class PatchParser {
     };
   }
 
-  // ── Hunk parsing ────────────────────────────────────────────────────────
+  private findNextDiffHeader(): DiffHeaderPaths | null {
+    while (this.currentLine < this.lines.length) {
+      const match = DIFF_HEADER.exec(this.lines[this.currentLine]!);
+      this.currentLine += 1;
+      if (match) return { oldPath: match[1]!, newPath: match[2]! };
+    }
+    return null;
+  }
 
+  private findFileHeader(pattern: RegExp): string | null {
+    while (this.currentLine < this.lines.length) {
+      const line = this.lines[this.currentLine]!;
+      const match = pattern.exec(line);
+      if (match) {
+        this.currentLine += 1;
+        return match[1]!;
+      }
+      if (DIFF_HEADER.test(line)) break;
+      this.currentLine += 1;
+    }
+    return null;
+  }
+
+  private matchesFilter(path: string, filterPattern: string | null): boolean {
+    if (filterPattern === null || new RegExp(filterPattern).test(path)) return true;
+    this.skipToNextFile();
+    return false;
+  }
+
+  private skipToNextFile(): void {
+    while (this.currentLine < this.lines.length && !DIFF_HEADER.test(this.lines[this.currentLine]!)) {
+      this.currentLine += 1;
+    }
+  }
+
+  private parseFileHunks(): { readonly hunks: Hunk[]; readonly additions: number; readonly deletions: number } {
+    const hunks: Hunk[] = [];
+    let additions = 0;
+    let deletions = 0;
+
+    while (this.currentLine < this.lines.length && !DIFF_HEADER.test(this.lines[this.currentLine]!)) {
+      const hunk = this.parseHunk();
+      if (!hunk) {
+        this.currentLine += 1;
+        continue;
+      }
+      hunks.push(hunk);
+      additions += hunk.addedLines.length;
+      deletions += hunk.removedLines.length;
+    }
+    return { hunks, additions, deletions };
+  }
+
+  // ── Hunk parsing ────────────────────────────────────────────────────────
   private parseHunk(): Hunk | null {
     if (this.currentLine >= this.lines.length) {
       return null;
     }
 
-    const line = this.lines[this.currentLine]!;
-    const match = HUNK_HEADER.exec(line);
-    if (!match) {
-      return null;
-    }
-
-    const oldStart = parseInt(match[1]!, 10);
-    const oldCount = match[2] !== undefined ? parseInt(match[2], 10) : 1;
-    const newStart = parseInt(match[3]!, 10);
-    const newCount = match[4] !== undefined ? parseInt(match[4], 10) : 1;
-    const headerContext = (match[5] ?? "").trim();
+    const parsedHeader = parseHunkHeader(this.lines[this.currentLine]!);
+    if (!parsedHeader) return null;
     this.currentLine += 1;
 
     const addedLines: AddedLine[] = [];
     const removedLines: RemovedLine[] = [];
     const contextLines: ContextLine[] = [];
-    let newLineNum = newStart;
-    let oldLineNum = oldStart;
+    const cursor: HunkCursor = {
+      newLineNum: parsedHeader.newStart,
+      oldLineNum: parsedHeader.oldStart,
+    };
 
     while (this.currentLine < this.lines.length) {
       const hunkLine = this.lines[this.currentLine]!;
-
-      // Check for termination conditions
-      if (hunkLine.startsWith("@@") || hunkLine.startsWith("diff --git")) {
-        break;
-      }
-      if (hunkLine.startsWith("---") && FILE_HEADER_OLD.test(hunkLine)) {
-        break;
-      }
-      if (hunkLine.startsWith("+++") && FILE_HEADER_NEW.test(hunkLine)) {
-        break;
-      }
-
-      if (hunkLine.startsWith("+") && !hunkLine.startsWith("+++")) {
-        const content = hunkLine.slice(1);
-        addedLines.push({
-          lineNumber: newLineNum,
-          content,
-          indentation: leadingWhitespace(content),
-        });
-        newLineNum += 1;
-      } else if (hunkLine.startsWith("-") && !hunkLine.startsWith("---")) {
-        removedLines.push({
-          lineNumber: oldLineNum,
-          content: hunkLine.slice(1),
-        });
-        oldLineNum += 1;
-      } else if (hunkLine.startsWith(" ") || hunkLine === "") {
-        if (this.includeContext) {
-          const content = hunkLine.length > 0 ? hunkLine.slice(1) : "";
-          contextLines.push({
-            lineNumber: newLineNum,
-            content,
-          });
-        }
-        newLineNum += 1;
-        oldLineNum += 1;
-      } else if (hunkLine.startsWith("\\")) {
-        // "\ No newline at end of file" -- skip
-      } else {
-        break;
-      }
+      if (isHunkTerminator(hunkLine)) break;
+      if (!consumeHunkLine(hunkLine, cursor, {
+        addedLines,
+        removedLines,
+        contextLines,
+        includeContext: this.includeContext,
+      })) break;
       this.currentLine += 1;
     }
 
     const result: Hunk = {
-      header: `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@ ${headerContext}`,
-      oldStart,
-      oldCount,
-      newStart,
-      newCount,
+      header: `@@ -${parsedHeader.oldStart},${parsedHeader.oldCount} +${parsedHeader.newStart},${parsedHeader.newCount} @@ ${parsedHeader.headerContext}`,
+      oldStart: parsedHeader.oldStart,
+      oldCount: parsedHeader.oldCount,
+      newStart: parsedHeader.newStart,
+      newCount: parsedHeader.newCount,
       addedLines,
       removedLines,
     };

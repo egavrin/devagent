@@ -53,32 +53,31 @@ function buildPreview(
     truncated: clippedByLines || clippedByChars,
   };
 }
-
 function buildCommandResultMetadata(
-  command: string,
-  cwd: string,
-  exitCode: number | null,
-  stdout: string,
-  stderr: string,
-  options?: {
+  input: {
+    readonly command: string;
+    readonly cwd: string;
+    readonly exitCode: number | null;
+    readonly stdout: string;
+    readonly stderr: string;
     readonly timedOut?: boolean;
     readonly warningOnly?: boolean;
     readonly stdoutWasCapped?: boolean;
     readonly stderrWasCapped?: boolean;
   },
 ): ToolCommandResultMetadata {
-  const stdoutPreview = buildPreview(stdout);
-  const stderrPreview = buildPreview(stderr);
+  const stdoutPreview = buildPreview(input.stdout);
+  const stderrPreview = buildPreview(input.stderr);
   return {
-    command,
-    cwd,
-    exitCode,
-    timedOut: options?.timedOut === true,
-    warningOnly: options?.warningOnly === true,
+    command: input.command,
+    cwd: input.cwd,
+    exitCode: input.exitCode,
+    timedOut: input.timedOut === true,
+    warningOnly: input.warningOnly === true,
     stdoutPreview: stdoutPreview.preview,
     stderrPreview: stderrPreview.preview,
-    stdoutTruncated: (options?.stdoutWasCapped ?? false) || stdoutPreview.truncated,
-    stderrTruncated: (options?.stderrWasCapped ?? false) || stderrPreview.truncated,
+    stdoutTruncated: (input.stdoutWasCapped ?? false) || stdoutPreview.truncated,
+    stderrTruncated: (input.stderrWasCapped ?? false) || stderrPreview.truncated,
   };
 }
 
@@ -129,57 +128,14 @@ export const runCommandTool: ToolSpec = {
     },
   },
   handler: async (params, context) => {
-    const command = params["command"] as string;
-    const cwdParam = (params["cwd"] as string | undefined) ?? ".";
-    const cwd = resolve(
-      context.repoRoot,
-      cwdParam,
-    );
-    const timeoutMs = Math.min(
-      (params["timeout_ms"] as number | undefined) ?? DEFAULT_TIMEOUT_MS,
-      MAX_COMMAND_TIMEOUT_MS,
-    );
-    let envOverrides: Record<string, string> = {};
-    const envParam = params["env"];
-    if (typeof envParam === "string" && envParam.length > 0) {
-      try {
-        const parsedEnv = JSON.parse(envParam) as unknown;
-        if (parsedEnv == null) {
-          envOverrides = {};
-        } else if (typeof parsedEnv === "object" && !Array.isArray(parsedEnv)) {
-          envOverrides = parsedEnv as Record<string, string>;
-        } else {
-          return {
-            success: false,
-            output: "",
-            error: `Invalid env JSON: ${envParam}`,
-            artifacts: [],
-            metadata: {
-              commandResult: buildCommandResultMetadata(command, cwdParam, null, "", "", {}),
-            },
-          };
-        }
-      } catch {
-        return {
-          success: false,
-          output: "",
-          error: `Invalid env JSON: ${envParam}`,
-          artifacts: [],
-          metadata: {
-            commandResult: buildCommandResultMetadata(command, cwdParam, null, "", "", {}),
-          },
-        };
-      }
-    } else if (typeof envParam === "object" && envParam !== null) {
-      // Also accept a direct object (e.g., from non-OpenAI providers)
-      envOverrides = envParam as Record<string, string>;
-    }
+    const request = parseRunCommandRequest(params, context.repoRoot);
+    if ("error" in request) return request.error;
 
-    const result = await spawnAndCapture("sh", ["-c", command], {
-      cwd,
-      timeout: timeoutMs,
+    const result = await spawnAndCapture("sh", ["-c", request.command], {
+      cwd: request.cwd,
+      timeout: request.timeoutMs,
       maxBytes: MAX_OUTPUT_BYTES,
-      env: Object.keys(envOverrides).length > 0 ? envOverrides : undefined,
+      env: Object.keys(request.envOverrides).length > 0 ? request.envOverrides : undefined,
     });
 
     const safeStdout = withTruncationMarker("stdout", result.stdout, MAX_OUTPUT_BYTES);
@@ -188,74 +144,234 @@ export const runCommandTool: ToolSpec = {
     const stderrWasCapped = result.stderr.length >= MAX_OUTPUT_BYTES;
 
     if (result.timedOut) {
-      // Detect large-repo search patterns and provide targeted guidance
-      const scopingHint = detectSearchScopingHint(command);
-      return {
-        success: false,
-        output: safeStdout,
-        error: `Command timed out after ${timeoutMs}ms\n${safeStderr}${scopingHint ? `\n[Hint] ${scopingHint}` : ""}`,
-        artifacts: [],
-        metadata: {
-          commandResult: buildCommandResultMetadata(command, cwdParam, null, safeStdout, safeStderr, {
-            timedOut: true,
-            stdoutWasCapped,
-            stderrWasCapped,
-          }),
-        },
-      };
+      return buildTimedOutResult(request, {
+        safeStdout,
+        safeStderr,
+        stdoutWasCapped,
+        stderrWasCapped,
+      });
     }
 
     if (result.exitCode !== 0) {
-      // Partial success heuristic: if stdout has substantial content and stderr
-      // contains only warnings (permission denied, broken pipes), treat as success
-      // with warnings. Common with `find` on restricted directories.
       const isPartialSuccess = safeStdout.length > 100 && isStderrWarningOnly(safeStderr);
-      if (isPartialSuccess) {
-        return {
-          success: true,
-          output: `${safeStdout}\n\n[Warning: exit code ${result.exitCode}. Some errors during execution:]\n${safeStderr}`,
-          error: null,
-          artifacts: [],
-          metadata: {
-            commandResult: buildCommandResultMetadata(command, cwdParam, result.exitCode, safeStdout, safeStderr, {
-              warningOnly: true,
-              stdoutWasCapped,
-              stderrWasCapped,
-            }),
-          },
-        };
-      }
-
-      return {
-        success: false,
-        output: `Exit code: ${result.exitCode}\nstdout: ${safeStdout}\nstderr: ${safeStderr}`,
-        error: `Command exited with code ${result.exitCode}`,
-        artifacts: [],
-        metadata: {
-          commandResult: buildCommandResultMetadata(command, cwdParam, result.exitCode, safeStdout, safeStderr, {
-            stdoutWasCapped,
-            stderrWasCapped,
-          }),
-        },
-      };
-    }
-
-    return {
-      success: true,
-      output: safeStdout || "(no output)",
-      error: null,
-      artifacts: [],
-      metadata: {
-        commandResult: buildCommandResultMetadata(command, cwdParam, result.exitCode, safeStdout || "(no output)", safeStderr, {
+      return isPartialSuccess
+        ? buildWarningOnlyResult(request, result.exitCode, {
+          safeStdout,
+          safeStderr,
           stdoutWasCapped,
           stderrWasCapped,
-        }),
-      },
-    };
+        })
+        : buildExitFailureResult(request, result.exitCode, {
+          safeStdout,
+          safeStderr,
+          stdoutWasCapped,
+          stderrWasCapped,
+        });
+    }
+
+    return buildSuccessResult(request, result.exitCode, {
+      safeStdout,
+      safeStderr,
+      stdoutWasCapped,
+      stderrWasCapped,
+    });
   },
 };
 
 // ─── Helpers ────────────────────────────────────────────────
+
+interface RunCommandRequest {
+  readonly command: string;
+  readonly cwdParam: string;
+  readonly cwd: string;
+  readonly timeoutMs: number;
+  readonly envOverrides: Record<string, string>;
+}
+
+interface CommandOutputState {
+  readonly safeStdout: string;
+  readonly safeStderr: string;
+  readonly stdoutWasCapped: boolean;
+  readonly stderrWasCapped: boolean;
+}
+
+function parseRunCommandRequest(
+  params: Record<string, unknown>,
+  repoRoot: string,
+): RunCommandRequest | { readonly error: ReturnType<typeof invalidEnvResult> } {
+  const command = params["command"] as string;
+  const cwdParam = (params["cwd"] as string | undefined) ?? ".";
+  const envResult = parseEnvOverrides(params["env"]);
+  if ("error" in envResult) {
+    return { error: invalidEnvResult(command, cwdParam, envResult.error) };
+  }
+  return {
+    command,
+    cwdParam,
+    cwd: resolve(repoRoot, cwdParam),
+    timeoutMs: Math.min(
+      (params["timeout_ms"] as number | undefined) ?? DEFAULT_TIMEOUT_MS,
+      MAX_COMMAND_TIMEOUT_MS,
+    ),
+    envOverrides: envResult.value,
+  };
+}
+
+function parseEnvOverrides(envParam: unknown): { readonly value: Record<string, string> } | { readonly error: string } {
+  if (typeof envParam === "string" && envParam.length > 0) return parseStringEnv(envParam);
+  if (typeof envParam === "object" && envParam !== null) {
+    return { value: envParam as Record<string, string> };
+  }
+  return { value: {} };
+}
+
+function parseStringEnv(envParam: string): { readonly value: Record<string, string> } | { readonly error: string } {
+  try {
+    const parsedEnv = JSON.parse(envParam) as unknown;
+    if (parsedEnv == null) return { value: {} };
+    if (typeof parsedEnv === "object" && !Array.isArray(parsedEnv)) {
+      return { value: parsedEnv as Record<string, string> };
+    }
+  } catch {
+    // Fall through to the shared error result below.
+  }
+  return { error: `Invalid env JSON: ${envParam}` };
+}
+
+function invalidEnvResult(command: string, cwd: string, error: string) {
+  return {
+    success: false,
+    output: "",
+    error,
+    artifacts: [],
+    metadata: {
+      commandResult: commandMetadata({
+        command,
+        cwd,
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+      }),
+    },
+  };
+}
+
+function commandMetadata(
+  input: {
+    readonly command: string;
+    readonly cwd: string;
+    readonly exitCode: number | null;
+    readonly stdout: string;
+    readonly stderr: string;
+    readonly timedOut?: boolean;
+    readonly warningOnly?: boolean;
+    readonly stdoutWasCapped?: boolean;
+    readonly stderrWasCapped?: boolean;
+  },
+): ToolCommandResultMetadata {
+  return buildCommandResultMetadata({
+    ...input,
+  });
+}
+
+function buildTimedOutResult(
+  request: RunCommandRequest,
+  output: CommandOutputState,
+) {
+  const scopingHint = detectSearchScopingHint(request.command);
+  return {
+    success: false,
+    output: output.safeStdout,
+    error: `Command timed out after ${request.timeoutMs}ms\n${output.safeStderr}${scopingHint ? `\n[Hint] ${scopingHint}` : ""}`,
+    artifacts: [],
+    metadata: {
+      commandResult: commandMetadata({
+        command: request.command,
+        cwd: request.cwdParam,
+        exitCode: null,
+        stdout: output.safeStdout,
+        stderr: output.safeStderr,
+        timedOut: true,
+        stdoutWasCapped: output.stdoutWasCapped,
+        stderrWasCapped: output.stderrWasCapped,
+      }),
+    },
+  };
+}
+
+function buildWarningOnlyResult(
+  request: RunCommandRequest,
+  exitCode: number,
+  output: CommandOutputState,
+) {
+  return {
+    success: true,
+    output: `${output.safeStdout}\n\n[Warning: exit code ${exitCode}. Some errors during execution:]\n${output.safeStderr}`,
+    error: null,
+    artifacts: [],
+    metadata: {
+      commandResult: commandMetadata({
+        command: request.command,
+        cwd: request.cwdParam,
+        exitCode,
+        stdout: output.safeStdout,
+        stderr: output.safeStderr,
+        warningOnly: true,
+        stdoutWasCapped: output.stdoutWasCapped,
+        stderrWasCapped: output.stderrWasCapped,
+      }),
+    },
+  };
+}
+
+function buildExitFailureResult(
+  request: RunCommandRequest,
+  exitCode: number,
+  output: CommandOutputState,
+) {
+  return {
+    success: false,
+    output: `Exit code: ${exitCode}\nstdout: ${output.safeStdout}\nstderr: ${output.safeStderr}`,
+    error: `Command exited with code ${exitCode}`,
+    artifacts: [],
+    metadata: {
+      commandResult: commandMetadata({
+        command: request.command,
+        cwd: request.cwdParam,
+        exitCode,
+        stdout: output.safeStdout,
+        stderr: output.safeStderr,
+        stdoutWasCapped: output.stdoutWasCapped,
+        stderrWasCapped: output.stderrWasCapped,
+      }),
+    },
+  };
+}
+
+function buildSuccessResult(
+  request: RunCommandRequest,
+  exitCode: number | null,
+  output: CommandOutputState,
+) {
+  const resultOutput = output.safeStdout || "(no output)";
+  return {
+    success: true,
+    output: resultOutput,
+    error: null,
+    artifacts: [],
+    metadata: {
+      commandResult: commandMetadata({
+        command: request.command,
+        cwd: request.cwdParam,
+        exitCode,
+        stdout: resultOutput,
+        stderr: output.safeStderr,
+        stdoutWasCapped: output.stdoutWasCapped,
+        stderrWasCapped: output.stderrWasCapped,
+      }),
+    },
+  };
+}
 
 /**
  * Detect if a timed-out command is a large-repo search and provide

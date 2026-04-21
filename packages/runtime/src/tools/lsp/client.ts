@@ -474,6 +474,7 @@ function severityToString(severity: number | undefined): string {
     case 2: return "warning";
     case 3: return "info";
     case 4: return "hint";
+    case undefined: return "unknown";
     default: return "unknown";
   }
 }

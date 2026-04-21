@@ -65,73 +65,80 @@ export const DEFAULT_DOUBLE_CHECK_OPTIONS: DoubleCheckOptions = {
 export function parseTestOutput(raw: string): TestSummary | null {
   if (!raw || raw.length < 5) return null;
 
-  // Jest / Vitest: "Tests:  1 failed, 2 passed, 3 total"
+  return parseJestSummary(raw)
+    ?? parseVitestSummary(raw)
+    ?? parsePytestFailureSummary(raw)
+    ?? parsePytestPassSummary(raw)
+    ?? parseCargoSummary(raw)
+    ?? parseGoSummary(raw);
+}
+
+function parseJestSummary(raw: string): TestSummary | null {
   const jestMatch = raw.match(/Tests:\s+(\d+)\s+failed,\s+(\d+)\s+passed(?:,\s+(\d+)\s+total)?/);
-  if (jestMatch) {
-    return {
-      framework: "jest",
-      failed: parseInt(jestMatch[1]!, 10),
-      passed: parseInt(jestMatch[2]!, 10),
-      failureMessages: extractJestFailures(raw),
-    };
-  }
+  if (!jestMatch) return null;
+  return {
+    framework: "jest",
+    failed: parseInt(jestMatch[1]!, 10),
+    passed: parseInt(jestMatch[2]!, 10),
+    failureMessages: extractJestFailures(raw),
+  };
+}
 
-  // Vitest alternative: "Tests  1 failed | 2 passed (3)"
+function parseVitestSummary(raw: string): TestSummary | null {
   const vitestMatch = raw.match(/Tests\s+(\d+)\s+failed\s+\|\s+(\d+)\s+passed/);
-  if (vitestMatch) {
-    return {
-      framework: "vitest",
-      failed: parseInt(vitestMatch[1]!, 10),
-      passed: parseInt(vitestMatch[2]!, 10),
-      failureMessages: extractJestFailures(raw),
-    };
-  }
+  if (!vitestMatch) return null;
+  return {
+    framework: "vitest",
+    failed: parseInt(vitestMatch[1]!, 10),
+    passed: parseInt(vitestMatch[2]!, 10),
+    failureMessages: extractJestFailures(raw),
+  };
+}
 
-  // pytest: "1 failed, 2 passed in 0.5s" or "2 passed in 0.5s"
+function parsePytestFailureSummary(raw: string): TestSummary | null {
   const pytestFailMatch = raw.match(/(\d+)\s+failed,\s+(\d+)\s+passed\s+in/);
-  if (pytestFailMatch) {
-    return {
-      framework: "pytest",
-      failed: parseInt(pytestFailMatch[1]!, 10),
-      passed: parseInt(pytestFailMatch[2]!, 10),
-      failureMessages: extractPytestFailures(raw),
-    };
-  }
+  if (!pytestFailMatch) return null;
+  return {
+    framework: "pytest",
+    failed: parseInt(pytestFailMatch[1]!, 10),
+    passed: parseInt(pytestFailMatch[2]!, 10),
+    failureMessages: extractPytestFailures(raw),
+  };
+}
+
+function parsePytestPassSummary(raw: string): TestSummary | null {
   const pytestPassMatch = raw.match(/(\d+)\s+passed\s+in\s+[\d.]+s/);
-  if (pytestPassMatch) {
-    return {
-      framework: "pytest",
-      failed: 0,
-      passed: parseInt(pytestPassMatch[1]!, 10),
-      failureMessages: [],
-    };
-  }
+  if (!pytestPassMatch) return null;
+  return {
+    framework: "pytest",
+    failed: 0,
+    passed: parseInt(pytestPassMatch[1]!, 10),
+    failureMessages: [],
+  };
+}
 
-  // cargo test: "test result: FAILED. 2 passed; 1 failed; 0 ignored"
+function parseCargoSummary(raw: string): TestSummary | null {
   const cargoMatch = raw.match(/test result:\s+\w+\.\s+(\d+)\s+passed;\s+(\d+)\s+failed/);
-  if (cargoMatch) {
-    return {
-      framework: "cargo",
-      passed: parseInt(cargoMatch[1]!, 10),
-      failed: parseInt(cargoMatch[2]!, 10),
-      failureMessages: extractCargoFailures(raw),
-    };
-  }
+  if (!cargoMatch) return null;
+  return {
+    framework: "cargo",
+    passed: parseInt(cargoMatch[1]!, 10),
+    failed: parseInt(cargoMatch[2]!, 10),
+    failureMessages: extractCargoFailures(raw),
+  };
+}
 
-  // Go test: "FAIL" at end of output + "--- FAIL: TestName"
+function parseGoSummary(raw: string): TestSummary | null {
   const goFailMatch = raw.match(/^FAIL\s/m);
-  if (goFailMatch) {
-    const goFailTests = raw.match(/--- FAIL: (\S+)/g) ?? [];
-    const goPassTests = raw.match(/--- PASS: (\S+)/g) ?? [];
-    return {
-      framework: "go",
-      failed: goFailTests.length,
-      passed: goPassTests.length,
-      failureMessages: goFailTests.map((m) => m.replace("--- FAIL: ", "")),
-    };
-  }
-
-  return null;
+  if (!goFailMatch) return null;
+  const goFailTests = raw.match(/--- FAIL: (\S+)/g) ?? [];
+  const goPassTests = raw.match(/--- PASS: (\S+)/g) ?? [];
+  return {
+    framework: "go",
+    failed: goFailTests.length,
+    passed: goPassTests.length,
+    failureMessages: goFailTests.map((m) => m.replace("--- FAIL: ", "")),
+  };
 }
 
 /** Extract failure messages from Jest/Vitest output. */
@@ -272,78 +279,89 @@ export class DoubleCheck {
       };
     }
 
-    const diagnosticErrors: string[] = [];
-    let baselineFiltered = 0;
-    let testOutput: string | null = null;
-    let testPassed: boolean | null = null;
-
-    // Check diagnostics for modified files
-    if (this.options.checkDiagnostics && this.diagnosticProvider) {
-      for (const file of modifiedFiles) {
-        try {
-          const diagnostics = await this.diagnosticProvider(file);
-          const errors = diagnostics.filter((d) => d.severity === "error");
-
-          // If baseline provided, only report errors beyond the pre-edit count
-          const preExistingCount = baseline?.[file] ?? 0;
-          if (baseline && errors.length <= preExistingCount) {
-            // All errors are pre-existing — skip them
-            baselineFiltered += errors.length;
-            continue;
-          }
-
-          // Report only the NEW errors (beyond pre-existing count)
-          const newErrors = baseline
-            ? errors.slice(preExistingCount)
-            : errors;
-          baselineFiltered += baseline ? preExistingCount : 0;
-
-          for (const err of newErrors) {
-            diagnosticErrors.push(`${file}: ${err.message}`);
-          }
-        } catch (err) {
-          const message = extractErrorMessage(err);
-          diagnosticErrors.push(`${file}: diagnostics provider failure: ${message}`);
-          this.bus.emit("error", {
-            message: `Double-check diagnostics failed for ${file}: ${message}`,
-            code: "DOUBLE_CHECK_DIAGNOSTIC_ERROR",
-            fatal: false,
-          });
-        }
-      }
-    }
-
-    // Run tests if configured
-    let testSummary: TestSummary | undefined;
-    if (this.options.runTests && this.options.testCommand && this.testRunner) {
-      try {
-        const result = await this.testRunner(this.options.testCommand);
-        testOutput = result.output;
-        testPassed = result.success;
-        // Parse structured summary from test output
-        const parsed = parseTestOutput(result.output);
-        if (parsed) {
-          testSummary = parsed;
-        }
-      } catch (err) {
-        const message = extractErrorMessage(err);
-        testOutput = `Test execution failed: ${message}`;
-        testPassed = false;
-      }
-    }
+    const diagnostics = await this.runDiagnosticChecks(modifiedFiles, baseline);
+    const test = await this.runConfiguredTests();
 
     const passed =
-      diagnosticErrors.length === 0 &&
-      (testPassed === null || testPassed);
+      diagnostics.errors.length === 0 &&
+      (test.passed === null || test.passed);
 
     return {
       passed,
-      diagnosticErrors,
-      testOutput,
-      testPassed,
-      testSummary,
-      baselineFiltered: baselineFiltered > 0 ? baselineFiltered : undefined,
+      diagnosticErrors: diagnostics.errors,
+      testOutput: test.output,
+      testPassed: test.passed,
+      testSummary: test.summary,
+      baselineFiltered: diagnostics.baselineFiltered > 0
+        ? diagnostics.baselineFiltered
+        : undefined,
     };
+  }
+
+  private async runDiagnosticChecks(
+    modifiedFiles: ReadonlyArray<string>,
+    baseline: DiagnosticBaseline | undefined,
+  ): Promise<{ readonly errors: string[]; readonly baselineFiltered: number }> {
+    if (!this.options.checkDiagnostics || !this.diagnosticProvider) {
+      return { errors: [], baselineFiltered: 0 };
+    }
+
+    const errors: string[] = [];
+    let baselineFiltered = 0;
+
+    for (const file of modifiedFiles) {
+      const result = await this.runDiagnosticCheckForFile(file, baseline);
+      errors.push(...result.errors);
+      baselineFiltered += result.baselineFiltered;
+    }
+
+    return { errors, baselineFiltered };
+  }
+
+  private async runDiagnosticCheckForFile(
+    file: string,
+    baseline: DiagnosticBaseline | undefined,
+  ): Promise<{ readonly errors: string[]; readonly baselineFiltered: number }> {
+    try {
+      const diagnostics = await this.diagnosticProvider!(file);
+      const errors = diagnostics.filter((d) => d.severity === "error");
+      return filterDiagnosticErrors(file, errors, baseline);
+    } catch (err) {
+      const message = extractErrorMessage(err);
+      this.bus.emit("error", {
+        message: `Double-check diagnostics failed for ${file}: ${message}`,
+        code: "DOUBLE_CHECK_DIAGNOSTIC_ERROR",
+        fatal: false,
+      });
+      return {
+        errors: [`${file}: diagnostics provider failure: ${message}`],
+        baselineFiltered: 0,
+      };
+    }
+  }
+
+  private async runConfiguredTests(): Promise<{
+    readonly output: string | null;
+    readonly passed: boolean | null;
+    readonly summary?: TestSummary;
+  }> {
+    if (!this.options.runTests || !this.options.testCommand || !this.testRunner) {
+      return { output: null, passed: null };
+    }
+
+    try {
+      const result = await this.testRunner(this.options.testCommand);
+      return {
+        output: result.output,
+        passed: result.success,
+        summary: parseTestOutput(result.output) ?? undefined,
+      };
+    } catch (err) {
+      return {
+        output: `Test execution failed: ${extractErrorMessage(err)}`,
+        passed: false,
+      };
+    }
   }
 
   /**
@@ -351,42 +369,64 @@ export class DoubleCheck {
    */
   formatResults(result: DoubleCheckResult): string {
     if (result.passed) {
-      if (result.baselineFiltered && result.baselineFiltered > 0) {
-        return `Double-check: All validations passed (${result.baselineFiltered} pre-existing error(s) filtered).`;
-      }
-      return "Double-check: All validations passed.";
+      return formatPassedResult(result.baselineFiltered);
     }
 
-    const parts: string[] = [];
-
-    if (result.diagnosticErrors.length > 0) {
-      let header = `Diagnostic errors (${result.diagnosticErrors.length})`;
-      if (result.baselineFiltered && result.baselineFiltered > 0) {
-        header += ` — ${result.baselineFiltered} pre-existing error(s) filtered`;
-      }
-      parts.push(
-        `${header}:\n` +
-          result.diagnosticErrors.map((e) => `  - ${e}`).join("\n"),
-      );
-    }
-
-    if (result.testPassed === false) {
-      if (result.testSummary) {
-        const s = result.testSummary;
-        const header = `Test failures (${s.framework}): ${s.failed} failed, ${s.passed} passed`;
-        if (s.failureMessages.length > 0) {
-          parts.push(
-            `${header}\n` +
-              s.failureMessages.map((m) => `  - ${m}`).join("\n"),
-          );
-        } else {
-          parts.push(header);
-        }
-      } else {
-        parts.push(`Test failures:\n${result.testOutput ?? "  (no output)"}`);
-      }
-    }
+    const parts = [
+      formatDiagnosticFailures(result),
+      formatTestFailures(result),
+    ].filter((part): part is string => part !== null);
 
     return `Double-check: Validation FAILED.\n${parts.join("\n\n")}`;
   }
+}
+
+function filterDiagnosticErrors(
+  file: string,
+  errors: ReadonlyArray<{ readonly message: string; readonly severity: string }>,
+  baseline: DiagnosticBaseline | undefined,
+): { readonly errors: string[]; readonly baselineFiltered: number } {
+  const preExistingCount = baseline?.[file] ?? 0;
+  if (baseline && errors.length <= preExistingCount) {
+    return { errors: [], baselineFiltered: errors.length };
+  }
+
+  const newErrors = baseline ? errors.slice(preExistingCount) : errors;
+  return {
+    errors: newErrors.map((err) => `${file}: ${err.message}`),
+    baselineFiltered: baseline ? preExistingCount : 0,
+  };
+}
+
+function formatPassedResult(baselineFiltered: number | undefined): string {
+  if (baselineFiltered && baselineFiltered > 0) {
+    return `Double-check: All validations passed (${baselineFiltered} pre-existing error(s) filtered).`;
+  }
+  return "Double-check: All validations passed.";
+}
+
+function formatDiagnosticFailures(result: DoubleCheckResult): string | null {
+  if (result.diagnosticErrors.length === 0) return null;
+  const header = formatDiagnosticFailureHeader(result);
+  return `${header}:\n${result.diagnosticErrors.map((e) => `  - ${e}`).join("\n")}`;
+}
+
+function formatDiagnosticFailureHeader(result: DoubleCheckResult): string {
+  const header = `Diagnostic errors (${result.diagnosticErrors.length})`;
+  return result.baselineFiltered && result.baselineFiltered > 0
+    ? `${header} — ${result.baselineFiltered} pre-existing error(s) filtered`
+    : header;
+}
+
+function formatTestFailures(result: DoubleCheckResult): string | null {
+  if (result.testPassed !== false) return null;
+  if (!result.testSummary) {
+    return `Test failures:\n${result.testOutput ?? "  (no output)"}`;
+  }
+
+  const summary = result.testSummary;
+  const header = `Test failures (${summary.framework}): ${summary.failed} failed, ${summary.passed} passed`;
+  return summary.failureMessages.length > 0
+    ? `${header}\n${summary.failureMessages.map((m) => `  - ${m}`).join("\n")}`
+    : header;
 }

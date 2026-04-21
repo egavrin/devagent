@@ -5,7 +5,6 @@ import {
   filterCoordinatorTools,
   createTaskManagementTools,
 } from "./coordinator.js";
-import type { WorkerTask } from "./coordinator.js";
 import type { ToolSpec, ToolCategory } from "../core/index.js";
 import { ToolRegistry } from "../tools/registry.js";
 
@@ -23,187 +22,185 @@ function makeTool(name: string, category: ToolCategory): ToolSpec {
 }
 
 // ─── CoordinatorTaskPool ────────────────────────────────────
+let pool: CoordinatorTaskPool;
 
-describe("CoordinatorTaskPool", () => {
-  let pool: CoordinatorTaskPool;
+beforeEach(() => {
+  pool = new CoordinatorTaskPool(2);
+});
 
-  beforeEach(() => {
-    pool = new CoordinatorTaskPool(2);
+describe("createTask", () => {
+  it("creates a task with pending status", () => {
+    const taskId = pool.createTask("Build feature X");
+    const task = pool.getTask(taskId);
+
+    expect(task).toBeDefined();
+    expect(task!.status).toBe("pending");
+    expect(task!.objective).toBe("Build feature X");
+    expect(task!.agentId).toBeNull();
+    expect(task!.result).toBeNull();
+    expect(task!.error).toBeNull();
   });
 
-  describe("createTask", () => {
-    it("creates a task with pending status", () => {
-      const taskId = pool.createTask("Build feature X");
-      const task = pool.getTask(taskId);
-
-      expect(task).toBeDefined();
-      expect(task!.status).toBe("pending");
-      expect(task!.objective).toBe("Build feature X");
-      expect(task!.agentId).toBeNull();
-      expect(task!.result).toBeNull();
-      expect(task!.error).toBeNull();
-    });
-
-    it("assigns unique task IDs", () => {
-      const id1 = pool.createTask("Task 1");
-      const id2 = pool.createTask("Task 2");
-      expect(id1).not.toBe(id2);
-    });
-  });
-
-  describe("startTask", () => {
-    it("transitions pending task to running", () => {
-      const taskId = pool.createTask("Do work");
-      const started = pool.startTask(taskId, "agent-1");
-
-      expect(started).toBe(true);
-      const task = pool.getTask(taskId);
-      expect(task!.status).toBe("running");
-      expect(task!.agentId).toBe("agent-1");
-    });
-
-    it("returns false for non-existent task", () => {
-      expect(pool.startTask("bogus", "agent-1")).toBe(false);
-    });
-
-    it("returns false for already running task", () => {
-      const taskId = pool.createTask("Work");
-      pool.startTask(taskId, "agent-1");
-      expect(pool.startTask(taskId, "agent-2")).toBe(false);
-    });
-
-    it("rejects start when maxWorkers reached", () => {
-      const t1 = pool.createTask("Task 1");
-      const t2 = pool.createTask("Task 2");
-      const t3 = pool.createTask("Task 3");
-
-      pool.startTask(t1, "a1");
-      pool.startTask(t2, "a2");
-
-      // maxWorkers is 2, so third should be rejected
-      expect(pool.startTask(t3, "a3")).toBe(false);
-      expect(pool.getTask(t3)!.status).toBe("pending");
-    });
-  });
-
-  describe("completeTask", () => {
-    it("transitions running task to completed", () => {
-      const taskId = pool.createTask("Work");
-      pool.startTask(taskId, "agent-1");
-
-      const completed = pool.completeTask(taskId, "All done");
-      expect(completed).toBe(true);
-
-      const task = pool.getTask(taskId);
-      expect(task!.status).toBe("completed");
-      expect(task!.result).toBe("All done");
-      expect(task!.completedAt).not.toBeNull();
-    });
-
-    it("returns false for pending task", () => {
-      const taskId = pool.createTask("Work");
-      expect(pool.completeTask(taskId, "done")).toBe(false);
-    });
-  });
-
-  describe("failTask", () => {
-    it("transitions running task to failed", () => {
-      const taskId = pool.createTask("Work");
-      pool.startTask(taskId, "agent-1");
-
-      const failed = pool.failTask(taskId, "Something broke");
-      expect(failed).toBe(true);
-
-      const task = pool.getTask(taskId);
-      expect(task!.status).toBe("failed");
-      expect(task!.error).toBe("Something broke");
-      expect(task!.completedAt).not.toBeNull();
-    });
-
-    it("returns false for pending task", () => {
-      const taskId = pool.createTask("Work");
-      expect(pool.failTask(taskId, "err")).toBe(false);
-    });
-  });
-
-  describe("killTask", () => {
-    it("kills a running task", () => {
-      const taskId = pool.createTask("Work");
-      pool.startTask(taskId, "agent-1");
-
-      expect(pool.killTask(taskId)).toBe(true);
-      expect(pool.getTask(taskId)!.status).toBe("killed");
-    });
-
-    it("kills a pending task", () => {
-      const taskId = pool.createTask("Work");
-      expect(pool.killTask(taskId)).toBe(true);
-      expect(pool.getTask(taskId)!.status).toBe("killed");
-    });
-
-    it("returns false for completed task", () => {
-      const taskId = pool.createTask("Work");
-      pool.startTask(taskId, "agent-1");
-      pool.completeTask(taskId, "done");
-
-      expect(pool.killTask(taskId)).toBe(false);
-    });
-
-    it("returns false for failed task", () => {
-      const taskId = pool.createTask("Work");
-      pool.startTask(taskId, "agent-1");
-      pool.failTask(taskId, "err");
-
-      expect(pool.killTask(taskId)).toBe(false);
-    });
-  });
-
-  describe("listTasks and getTask", () => {
-    it("lists all tasks", () => {
-      pool.createTask("Task A");
-      pool.createTask("Task B");
-
-      const tasks = pool.listTasks();
-      expect(tasks).toHaveLength(2);
-      expect(tasks.map((t) => t.objective)).toEqual(["Task A", "Task B"]);
-    });
-
-    it("getTask returns undefined for missing task", () => {
-      expect(pool.getTask("nope")).toBeUndefined();
-    });
-  });
-
-  describe("hasCapacity", () => {
-    it("returns true when under limit", () => {
-      expect(pool.hasCapacity()).toBe(true);
-
-      const t1 = pool.createTask("Task 1");
-      pool.startTask(t1, "a1");
-      expect(pool.hasCapacity()).toBe(true);
-    });
-
-    it("returns false when at limit", () => {
-      const t1 = pool.createTask("Task 1");
-      const t2 = pool.createTask("Task 2");
-      pool.startTask(t1, "a1");
-      pool.startTask(t2, "a2");
-
-      expect(pool.hasCapacity()).toBe(false);
-    });
-
-    it("regains capacity after task completes", () => {
-      const t1 = pool.createTask("Task 1");
-      const t2 = pool.createTask("Task 2");
-      pool.startTask(t1, "a1");
-      pool.startTask(t2, "a2");
-
-      expect(pool.hasCapacity()).toBe(false);
-
-      pool.completeTask(t1, "done");
-      expect(pool.hasCapacity()).toBe(true);
-    });
+  it("assigns unique task IDs", () => {
+    const id1 = pool.createTask("Task 1");
+    const id2 = pool.createTask("Task 2");
+    expect(id1).not.toBe(id2);
   });
 });
+
+describe("startTask", () => {
+  it("transitions pending task to running", () => {
+    const taskId = pool.createTask("Do work");
+    const started = pool.startTask(taskId, "agent-1");
+
+    expect(started).toBe(true);
+    const task = pool.getTask(taskId);
+    expect(task!.status).toBe("running");
+    expect(task!.agentId).toBe("agent-1");
+  });
+
+  it("returns false for non-existent task", () => {
+    expect(pool.startTask("bogus", "agent-1")).toBe(false);
+  });
+
+  it("returns false for already running task", () => {
+    const taskId = pool.createTask("Work");
+    pool.startTask(taskId, "agent-1");
+    expect(pool.startTask(taskId, "agent-2")).toBe(false);
+  });
+
+  it("rejects start when maxWorkers reached", () => {
+    const t1 = pool.createTask("Task 1");
+    const t2 = pool.createTask("Task 2");
+    const t3 = pool.createTask("Task 3");
+
+    pool.startTask(t1, "a1");
+    pool.startTask(t2, "a2");
+
+    // maxWorkers is 2, so third should be rejected
+    expect(pool.startTask(t3, "a3")).toBe(false);
+    expect(pool.getTask(t3)!.status).toBe("pending");
+  });
+});
+
+describe("completeTask", () => {
+  it("transitions running task to completed", () => {
+    const taskId = pool.createTask("Work");
+    pool.startTask(taskId, "agent-1");
+
+    const completed = pool.completeTask(taskId, "All done");
+    expect(completed).toBe(true);
+
+    const task = pool.getTask(taskId);
+    expect(task!.status).toBe("completed");
+    expect(task!.result).toBe("All done");
+    expect(task!.completedAt).not.toBeNull();
+  });
+
+  it("returns false for pending task", () => {
+    const taskId = pool.createTask("Work");
+    expect(pool.completeTask(taskId, "done")).toBe(false);
+  });
+});
+
+describe("failTask", () => {
+  it("transitions running task to failed", () => {
+    const taskId = pool.createTask("Work");
+    pool.startTask(taskId, "agent-1");
+
+    const failed = pool.failTask(taskId, "Something broke");
+    expect(failed).toBe(true);
+
+    const task = pool.getTask(taskId);
+    expect(task!.status).toBe("failed");
+    expect(task!.error).toBe("Something broke");
+    expect(task!.completedAt).not.toBeNull();
+  });
+
+  it("returns false for pending task", () => {
+    const taskId = pool.createTask("Work");
+    expect(pool.failTask(taskId, "err")).toBe(false);
+  });
+});
+
+describe("killTask", () => {
+  it("kills a running task", () => {
+    const taskId = pool.createTask("Work");
+    pool.startTask(taskId, "agent-1");
+
+    expect(pool.killTask(taskId)).toBe(true);
+    expect(pool.getTask(taskId)!.status).toBe("killed");
+  });
+
+  it("kills a pending task", () => {
+    const taskId = pool.createTask("Work");
+    expect(pool.killTask(taskId)).toBe(true);
+    expect(pool.getTask(taskId)!.status).toBe("killed");
+  });
+
+  it("returns false for completed task", () => {
+    const taskId = pool.createTask("Work");
+    pool.startTask(taskId, "agent-1");
+    pool.completeTask(taskId, "done");
+
+    expect(pool.killTask(taskId)).toBe(false);
+  });
+
+  it("returns false for failed task", () => {
+    const taskId = pool.createTask("Work");
+    pool.startTask(taskId, "agent-1");
+    pool.failTask(taskId, "err");
+
+    expect(pool.killTask(taskId)).toBe(false);
+  });
+});
+
+describe("listTasks and getTask", () => {
+  it("lists all tasks", () => {
+    pool.createTask("Task A");
+    pool.createTask("Task B");
+
+    const tasks = pool.listTasks();
+    expect(tasks).toHaveLength(2);
+    expect(tasks.map((t) => t.objective)).toEqual(["Task A", "Task B"]);
+  });
+
+  it("getTask returns undefined for missing task", () => {
+    expect(pool.getTask("nope")).toBeUndefined();
+  });
+});
+
+describe("hasCapacity", () => {
+  it("returns true when under limit", () => {
+    expect(pool.hasCapacity()).toBe(true);
+
+    const t1 = pool.createTask("Task 1");
+    pool.startTask(t1, "a1");
+    expect(pool.hasCapacity()).toBe(true);
+  });
+
+  it("returns false when at limit", () => {
+    const t1 = pool.createTask("Task 1");
+    const t2 = pool.createTask("Task 2");
+    pool.startTask(t1, "a1");
+    pool.startTask(t2, "a2");
+
+    expect(pool.hasCapacity()).toBe(false);
+  });
+
+  it("regains capacity after task completes", () => {
+    const t1 = pool.createTask("Task 1");
+    const t2 = pool.createTask("Task 2");
+    pool.startTask(t1, "a1");
+    pool.startTask(t2, "a2");
+
+    expect(pool.hasCapacity()).toBe(false);
+
+    pool.completeTask(t1, "done");
+    expect(pool.hasCapacity()).toBe(true);
+  });
+});
+
 
 // ─── filterCoordinatorTools ─────────────────────────────────
 

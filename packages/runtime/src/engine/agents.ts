@@ -191,42 +191,8 @@ export async function runAgent(
     definition.allowedToolCategories,
   );
 
-  // Create isolated TaskLoop with its own SessionState so stagnation
-  // detection, tool-output pruning, and post-compaction summaries work.
-  // Seed from parent's coverage data so the subagent doesn't re-read files
-  // that have already been examined.
-  const sessionState = new SessionState({ persist: false });
-  if (options.parentSessionState) {
-    seedSessionState(sessionState, options.parentSessionState);
-  }
-
-  const childTools = new ToolRegistry();
-  for (const tool of filteredTools.getAll()) {
-    if (tool.name === "delegate") continue;
-    childTools.register(tool);
-  }
-
-  if (
-    options.createDelegateTool &&
-    options.depth < 1 &&
-    allowsChildDelegation(agentType, options.config)
-  ) {
-    childTools.register(options.createDelegateTool({
-      provider: options.provider,
-      tools: childTools,
-      bus: options.bus,
-      approvalGate: options.approvalGate,
-      config: options.config,
-      repoRoot: options.repoRoot,
-      agentRegistry: registry,
-      parentAgentId: options.agentId,
-      getParentSessionState: () => sessionState,
-      depth: options.depth,
-      parentAgentType: agentType,
-      ambient: options.ambient,
-    }));
-  }
-
+  const sessionState = createSeededSessionState(options.parentSessionState);
+  const childTools = createAgentToolRegistry(filteredTools, options, registry, agentType, sessionState);
   const systemPrompt = assembleAgentSystemPrompt({
     agentType,
     repoRoot: options.repoRoot,
@@ -239,12 +205,8 @@ export async function runAgent(
     projectInstructions: options.ambient?.projectInstructions,
   });
 
-  const provider = options.ambient?.providerFactory
-    ? options.ambient.providerFactory(options.config, agentType)
-    : options.provider;
-
   const loop = new TaskLoop({
-    provider,
+    provider: resolveAgentProvider(options, agentType),
     tools: childTools,
     bus: options.bus,
     approvalGate: options.approvalGate,
@@ -267,23 +229,7 @@ export async function runAgent(
 
   const result = await runWithTimeout(loop, query, options.config.subagentTimeoutMs);
   const finalMessage = extractFinalAssistantMessage(result);
-  const parsedOutput = parseStructuredAgentOutput(agentType, finalMessage);
-
-  return {
-    agentId: options.agentId,
-    agentType,
-    agentMeta: {
-      agentId: options.agentId,
-      parentId: options.parentId,
-      depth: options.depth,
-      agentType,
-    },
-    result,
-    cost: result.cost,
-    finalMessage,
-    childSessionState: sessionState.toJSON(),
-    parsedOutput,
-  };
+  return buildAgentRunResult(agentType, options, result, finalMessage, sessionState);
 }
 
 // ─── Fork Agent ─────────────────────────────────────────────
@@ -308,7 +254,7 @@ interface ForkAgentOptions extends AgentRunOptions {
 export async function runForkedAgent(
   query: string,
   options: ForkAgentOptions,
-  registry: AgentRegistry,
+  _registry: AgentRegistry,
 ): Promise<AgentRunResult> {
   // Depth guard: prevent recursive forking
   const hasBoilerplate = options.parentMessages.some(
@@ -318,33 +264,12 @@ export async function runForkedAgent(
     throw new Error("Forked agents cannot fork again (recursive fork detected)");
   }
 
-  // Build initial messages: parent's history + fork directive
-  const initialMessages: Message[] = [...options.parentMessages];
-  initialMessages.push({
-    role: MessageRole.SYSTEM as const,
-    content: `${FORK_BOILERPLATE_TAG} You are a forked worker agent. Your directive:\n\n${query}\n\nFocus on this specific task. Do not attempt to fork additional agents.`,
-  });
-
-  // Clone parent's session state
-  const sessionState = new SessionState({ persist: false });
-  if (options.parentSessionState) {
-    seedSessionState(sessionState, options.parentSessionState);
-  }
-
-  // Fork uses the parent's full tool set (all categories)
-  const childTools = new ToolRegistry();
-  for (const tool of options.tools.getAll()) {
-    // Exclude delegate to prevent recursive delegation from forks
-    if (tool.name === "delegate") continue;
-    childTools.register(tool);
-  }
-
-  const provider = options.ambient?.providerFactory
-    ? options.ambient.providerFactory(options.config, AgentType.GENERAL)
-    : options.provider;
+  const initialMessages = createForkInitialMessages(options.parentMessages, query);
+  const sessionState = createSeededSessionState(options.parentSessionState);
+  const childTools = createToolRegistryWithoutDelegate(options.tools);
 
   const loop = new TaskLoop({
-    provider,
+    provider: resolveAgentProvider(options, AgentType.GENERAL),
     tools: childTools,
     bus: options.bus,
     approvalGate: options.approvalGate,
@@ -387,6 +312,97 @@ export async function runForkedAgent(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
+
+function createSeededSessionState(parent: SessionState | undefined): SessionState {
+  const sessionState = new SessionState({ persist: false });
+  if (parent) seedSessionState(sessionState, parent);
+  return sessionState;
+}
+
+function buildAgentRunResult(
+  agentType: AgentType,
+  options: AgentRunOptions,
+  result: TaskLoopResult,
+  finalMessage: string,
+  sessionState: SessionState,
+): AgentRunResult {
+  return {
+    agentId: options.agentId,
+    agentType,
+    agentMeta: {
+      agentId: options.agentId,
+      parentId: options.parentId,
+      depth: options.depth,
+      agentType,
+    },
+    result,
+    cost: result.cost,
+    finalMessage,
+    childSessionState: sessionState.toJSON(),
+    parsedOutput: parseStructuredAgentOutput(agentType, finalMessage),
+  };
+}
+
+function createAgentToolRegistry(
+  filteredTools: ToolRegistry,
+  options: AgentRunOptions,
+  registry: AgentRegistry,
+  agentType: AgentType,
+  sessionState: SessionState,
+): ToolRegistry {
+  const childTools = createToolRegistryWithoutDelegate(filteredTools);
+  if (!canRegisterDelegateTool(options, agentType)) return childTools;
+  childTools.register(options.createDelegateTool!({
+    provider: options.provider,
+    tools: childTools,
+    bus: options.bus,
+    approvalGate: options.approvalGate,
+    config: options.config,
+    repoRoot: options.repoRoot,
+    agentRegistry: registry,
+    parentAgentId: options.agentId,
+    getParentSessionState: () => sessionState,
+    depth: options.depth,
+    parentAgentType: agentType,
+    ambient: options.ambient,
+  }));
+  return childTools;
+}
+
+function createToolRegistryWithoutDelegate(source: ToolRegistry): ToolRegistry {
+  const childTools = new ToolRegistry();
+  for (const tool of source.getAll()) {
+    if (tool.name !== "delegate") childTools.register(tool);
+  }
+  return childTools;
+}
+
+function canRegisterDelegateTool(options: AgentRunOptions, agentType: AgentType): boolean {
+  return Boolean(
+    options.createDelegateTool &&
+    options.depth < 1 &&
+    allowsChildDelegation(agentType, options.config),
+  );
+}
+
+function resolveAgentProvider(options: AgentRunOptions, agentType: AgentType): LLMProvider {
+  return options.ambient?.providerFactory
+    ? options.ambient.providerFactory(options.config, agentType)
+    : options.provider;
+}
+
+function createForkInitialMessages(
+  parentMessages: ReadonlyArray<Message>,
+  query: string,
+): Message[] {
+  return [
+    ...parentMessages,
+    {
+      role: MessageRole.SYSTEM as const,
+      content: `${FORK_BOILERPLATE_TAG} You are a forked worker agent. Your directive:\n\n${query}\n\nFocus on this specific task. Do not attempt to fork additional agents.`,
+    },
+  ];
+}
 
 /**
  * Create a filtered ToolRegistry containing only tools in the allowed categories.

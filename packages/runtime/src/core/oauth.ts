@@ -95,52 +95,8 @@ export function startCallbackServer(
     rejectCallback = reject;
   });
 
-  const server = (globalThis as any).Bun?.serve({
-    port,
-    fetch(req: Request) {
-      const url = new URL(req.url);
-
-      if (url.pathname === "/auth/callback") {
-        const code = url.searchParams.get("code");
-        const state = url.searchParams.get("state");
-        const error = url.searchParams.get("error");
-        const errorDesc = url.searchParams.get("error_description");
-
-        if (error) {
-          const msg = errorDesc ?? error;
-          rejectCallback(new OAuthError(`Authorization failed: ${msg}`));
-          return new Response(HTML_ERROR(msg), {
-            headers: { "Content-Type": "text/html" },
-          });
-        }
-
-        if (!code || !state) {
-          const msg = "Missing authorization code or state";
-          rejectCallback(new OAuthError(msg));
-          return new Response(HTML_ERROR(msg), {
-            status: 400,
-            headers: { "Content-Type": "text/html" },
-          });
-        }
-
-        if (state !== expectedState) {
-          const msg = "Invalid state — possible CSRF attack";
-          rejectCallback(new OAuthError(msg));
-          return new Response(HTML_ERROR(msg), {
-            status: 403,
-            headers: { "Content-Type": "text/html" },
-          });
-        }
-
-        resolveCallback({ code, state });
-        return new Response(HTML_SUCCESS, {
-          headers: { "Content-Type": "text/html" },
-        });
-      }
-
-      return new Response("Not found", { status: 404 });
-    },
-  });
+  const fetch = createCallbackFetch(expectedState, resolveCallback, rejectCallback);
+  const server = (globalThis as any).Bun?.serve({ port, fetch });
 
   if (!server) {
     rejectCallback(new OAuthError("Bun.serve() not available — OAuth browser flow requires Bun runtime"));
@@ -161,6 +117,48 @@ export function startCallbackServer(
   promise.then(() => clearTimeout(timeout)).catch(() => clearTimeout(timeout));
 
   return { promise, shutdown };
+}
+
+function createCallbackFetch(
+  expectedState: string,
+  resolveCallback: (result: CallbackResult) => void,
+  rejectCallback: (error: Error) => void,
+) {
+  return (req: Request) => handleCallbackRequest(req, expectedState, resolveCallback, rejectCallback);
+}
+
+function handleCallbackRequest(
+  req: Request,
+  expectedState: string,
+  resolveCallback: (result: CallbackResult) => void,
+  rejectCallback: (error: Error) => void,
+) {
+  const url = new URL(req.url);
+  if (url.pathname !== "/auth/callback") return new Response("Not found", { status: 404 });
+
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const error = url.searchParams.get("error");
+  const errorDesc = url.searchParams.get("error_description");
+
+  if (error) return rejectCallbackWithHtml(rejectCallback, `Authorization failed: ${errorDesc ?? error}`);
+  if (!code || !state) return rejectCallbackWithHtml(rejectCallback, "Missing authorization code or state", 400);
+  if (state !== expectedState) return rejectCallbackWithHtml(rejectCallback, "Invalid state — possible CSRF attack", 403);
+
+  resolveCallback({ code, state });
+  return new Response(HTML_SUCCESS, { headers: { "Content-Type": "text/html" } });
+}
+
+function rejectCallbackWithHtml(
+  rejectCallback: (error: Error) => void,
+  message: string,
+  status?: number,
+) {
+  rejectCallback(new OAuthError(message));
+  return new Response(HTML_ERROR(message.replace(/^Authorization failed: /, "")), {
+    ...(status === undefined ? {} : { status }),
+    headers: { "Content-Type": "text/html" },
+  });
 }
 
 // ─── Token Exchange ─────────────────────────────────────────

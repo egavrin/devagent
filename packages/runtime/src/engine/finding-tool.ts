@@ -10,6 +10,25 @@
 import type { SessionState } from "./session-state.js";
 import type { ToolSpec } from "../core/index.js";
 
+const FINDING_PARAM_SCHEMA = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      description:
+        "Short title for the finding (e.g., 'SQL injection in login handler'). " +
+        "Used for deduplication — saving with the same title updates the existing finding.",
+    },
+    detail: {
+      type: "string",
+      description:
+        "Detailed description of the finding. Include: what was found, where (file + line), " +
+        "severity, and any recommendations. Max 500 chars.",
+    },
+  },
+  required: ["title", "detail"],
+};
+
 export function createFindingTool(
   getSessionState: () => SessionState | undefined,
   getIteration: () => number,
@@ -22,24 +41,7 @@ export function createFindingTool(
       "After compaction, saved findings appear in context so you don't need to re-read files. " +
       "Use for: bug reports, code review issues, architecture observations, security findings.",
     category: "state",
-    paramSchema: {
-      type: "object",
-      properties: {
-        title: {
-          type: "string",
-          description:
-            "Short title for the finding (e.g., 'SQL injection in login handler'). " +
-            "Used for deduplication — saving with the same title updates the existing finding.",
-        },
-        detail: {
-          type: "string",
-          description:
-            "Detailed description of the finding. Include: what was found, where (file + line), " +
-            "severity, and any recommendations. Max 500 chars.",
-        },
-      },
-      required: ["title", "detail"],
-    },
+    paramSchema: FINDING_PARAM_SCHEMA,
     resultSchema: {
       type: "object",
       properties: {
