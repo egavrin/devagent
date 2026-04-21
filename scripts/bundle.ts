@@ -56,12 +56,23 @@ if (result.exitCode !== 0) {
   process.exit(1);
 }
 
-// Ensure shebang is present
+// Ensure shebang is present and add polyfills for missing Node.js APIs (e.g. Bun < 1.4)
 const bundleContent = readFileSync(join(DIST, "devagent.js"), "utf-8");
-if (!bundleContent.startsWith("#!/")) {
+const polyfill = [
+  "// Polyfill markAsUncloneable for Bun (undici@8 requires it from node:worker_threads)",
+  "try { const wt = require('node:worker_threads'); if (!wt.markAsUncloneable) wt.markAsUncloneable = function() {}; } catch {}",
+  "",
+].join("\n");
+if (bundleContent.startsWith("#!/")) {
+  const firstNewline = bundleContent.indexOf("\n");
   writeFileSync(
     join(DIST, "devagent.js"),
-    "#!/usr/bin/env node\n" + bundleContent,
+    bundleContent.slice(0, firstNewline + 1) + polyfill + bundleContent.slice(firstNewline + 1),
+  );
+} else {
+  writeFileSync(
+    join(DIST, "devagent.js"),
+    "#!/usr/bin/env node\n" + polyfill + bundleContent,
   );
 }
 
