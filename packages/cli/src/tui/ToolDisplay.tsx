@@ -120,13 +120,8 @@ export function ToolGroupDisplay({ event }: { event: PresentedToolGroup }): Reac
     </Text>
   );
 }
-
 export function CommandResultDisplay({ data }: { data: PresentedCommandResult }): React.ReactElement {
-  const tone = data.status === "success"
-    ? "green"
-    : data.status === "warning"
-      ? "yellow"
-      : "red";
+  const tone = getCommandTone(data.status);
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -137,50 +132,55 @@ export function CommandResultDisplay({ data }: { data: PresentedCommandResult })
         <Text bold>{data.command}</Text>
       </Text>
       <Text dimColor>      {data.cwd === "." ? "cwd ." : `cwd ${data.cwd}`} · <Text color={tone}>{data.statusLine}</Text></Text>
-      {data.stdoutPreview && (
-        data.stdoutPreview.includes("\n")
-          ? (
-            <Box flexDirection="column">
-              <Text dimColor>      stdout</Text>
-              {data.stdoutPreview.split("\n").map((line, index) => (
-                <Text key={`stdout-${index}`}>
-                  <Text dimColor>        </Text>
-                  <Text>{line}</Text>
-                </Text>
-              ))}
-              {data.stdoutTruncated ? <Text dimColor>        …</Text> : null}
-            </Box>
-          )
-          : (
-            <Text>
-              <Text dimColor>      stdout </Text>
-              <Text>{data.stdoutPreview}</Text>
-              {data.stdoutTruncated ? <Text dimColor> …</Text> : null}
-            </Text>
-          )
-      )}
-      {data.stderrPreview && (
-        data.stderrPreview.includes("\n")
-          ? (
-            <Box flexDirection="column">
-              <Text dimColor>      stderr</Text>
-              {data.stderrPreview.split("\n").map((line, index) => (
-                <Text key={`stderr-${index}`}>
-                  <Text dimColor>        </Text>
-                  <Text color={data.status === "warning" ? "yellow" : "red"}>{line}</Text>
-                </Text>
-              ))}
-              {data.stderrTruncated ? <Text dimColor>        …</Text> : null}
-            </Box>
-          )
-          : (
-            <Text>
-              <Text dimColor>      stderr </Text>
-              <Text color={data.status === "warning" ? "yellow" : "red"}>{data.stderrPreview}</Text>
-              {data.stderrTruncated ? <Text dimColor> …</Text> : null}
-            </Text>
-          )
-      )}
+      <CommandPreview label="stdout" preview={data.stdoutPreview} truncated={data.stdoutTruncated} />
+      <CommandPreview label="stderr" preview={data.stderrPreview} truncated={data.stderrTruncated} color={getStderrTone(data.status)} />
+    </Box>
+  );
+}
+
+function getCommandTone(status: PresentedCommandResult["status"]): "green" | "yellow" | "red" {
+  if (status === "success") return "green";
+  if (status === "warning") return "yellow";
+  return "red";
+}
+
+function getStderrTone(status: PresentedCommandResult["status"]): "yellow" | "red" {
+  return status === "warning" ? "yellow" : "red";
+}
+
+function CommandPreview(
+  {
+    label,
+    preview,
+    truncated,
+    color,
+  }: {
+    readonly label: "stdout" | "stderr";
+    readonly preview: string;
+    readonly truncated: boolean;
+    readonly color?: "yellow" | "red";
+  },
+): React.ReactElement | null {
+  if (!preview) return null;
+  if (!preview.includes("\n")) {
+    return (
+      <Text>
+        <Text dimColor>      {label} </Text>
+        <Text color={color}>{preview}</Text>
+        {truncated ? <Text dimColor> …</Text> : null}
+      </Text>
+    );
+  }
+  return (
+    <Box flexDirection="column">
+      <Text dimColor>      {label}</Text>
+      {preview.split("\n").map((line, index) => (
+        <Text key={`${label}-${index}`}>
+          <Text dimColor>        </Text>
+          <Text color={color}>{line}</Text>
+        </Text>
+      ))}
+      {truncated ? <Text dimColor>        …</Text> : null}
     </Box>
   );
 }

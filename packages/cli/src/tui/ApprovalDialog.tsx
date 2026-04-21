@@ -20,31 +20,12 @@ interface ApprovalDialogProps {
 export function ApprovalDialog({ request, onResponse }: ApprovalDialogProps): React.ReactElement {
   const [mode, setMode] = useState<"choose" | "reject-reason">("choose");
   const [reason, setReason] = useState("");
-
   useInput((input, key) => {
     if (mode === "choose") {
-      const k = input.toLowerCase();
-      if (k === "y") {
-        onResponse(true);
-      } else if (k === "s") {
-        onResponse(true, true);
-      } else if (k === "n") {
-        setMode("reject-reason");
-      } else if (key.escape) {
-        onResponse(false);
-      }
-    } else if (mode === "reject-reason") {
-      if (key.return) {
-        onResponse(false, false, reason.trim() || undefined);
-      } else if (key.escape) {
-        setMode("choose");
-        setReason("");
-      } else if (key.backspace || key.delete) {
-        setReason((r) => r.slice(0, -1));
-      } else if (input && !key.ctrl && !key.meta) {
-        setReason((r) => r + input);
-      }
+      handleApprovalChoice(input, key, onResponse, setMode);
+      return;
     }
+    handleRejectReasonInput({ input, key, reason, setMode, setReason, onResponse });
   });
 
   const truncatedDetails = request.details.length > 70
@@ -79,4 +60,40 @@ export function ApprovalDialog({ request, onResponse }: ApprovalDialogProps): Re
       )}
     </Box>
   );
+}
+
+function handleApprovalChoice(
+  input: string,
+  key: { readonly escape?: boolean },
+  onResponse: ApprovalDialogProps["onResponse"],
+  setMode: React.Dispatch<React.SetStateAction<"choose" | "reject-reason">>,
+): void {
+  const choice = input.toLowerCase();
+  if (choice === "y") onResponse(true);
+  else if (choice === "s") onResponse(true, true);
+  else if (choice === "n") setMode("reject-reason");
+  else if (key.escape) onResponse(false);
+}
+
+interface RejectReasonInputOptions {
+  readonly input: string;
+  readonly key: { readonly return?: boolean; readonly escape?: boolean; readonly backspace?: boolean; readonly delete?: boolean; readonly ctrl?: boolean; readonly meta?: boolean };
+  readonly reason: string;
+  readonly setMode: React.Dispatch<React.SetStateAction<"choose" | "reject-reason">>;
+  readonly setReason: React.Dispatch<React.SetStateAction<string>>;
+  readonly onResponse: ApprovalDialogProps["onResponse"];
+}
+
+function handleRejectReasonInput(options: RejectReasonInputOptions): void {
+  const { input, key, reason, setMode, setReason, onResponse } = options;
+  if (key.return) {
+    onResponse(false, false, reason.trim() || undefined);
+  } else if (key.escape) {
+    setMode("choose");
+    setReason("");
+  } else if (key.backspace || key.delete) {
+    setReason((current) => current.slice(0, -1));
+  } else if (input && !key.ctrl && !key.meta) {
+    setReason((current) => current + input);
+  }
 }

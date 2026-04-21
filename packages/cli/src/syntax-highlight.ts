@@ -70,6 +70,13 @@ const CLI_THEME: Readonly<Record<string, ThemeFormatter>> = {
   default: identity,
 };
 
+const SHEBANG_LANGUAGE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/node/, "javascript"],
+  [/python/, "python"],
+  [/ruby/, "ruby"],
+  [/(?:bash|sh|zsh)/, "bash"],
+];
+
 export function detectSyntaxLanguage(
   filePath: string,
   firstLine?: string | null,
@@ -83,14 +90,13 @@ export function detectSyntaxLanguage(
   if (mapped) return mapped;
 
   const shebang = firstLine?.trimStart();
-  if (shebang?.startsWith("#!")) {
-    if (shebang.includes("node")) return "javascript";
-    if (shebang.includes("python")) return "python";
-    if (shebang.includes("ruby")) return "ruby";
-    if (shebang.includes("bash") || shebang.includes("sh") || shebang.includes("zsh")) return "bash";
-  }
+  if (shebang?.startsWith("#!")) return detectShebangLanguage(shebang);
 
   return undefined;
+}
+
+function detectShebangLanguage(shebang: string): string | undefined {
+  return SHEBANG_LANGUAGE_PATTERNS.find(([pattern]) => pattern.test(shebang))?.[1];
 }
 
 export function getFirstContentLine(text?: string): string | null {

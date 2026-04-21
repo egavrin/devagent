@@ -86,75 +86,30 @@ function formatSkillPromptGuidance(): string {
  * capability-aware/task-shape fragments.
  */
 export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
-  const sections: string[] = [];
   const capabilities = deriveRootPromptCapabilities(opts.availableTools);
-
-  // Core identity and behavior
-  sections.push(PROMPT_BASE);
-
-  // Generic tool usage strategy
-  sections.push(PROMPT_TOOLS);
-
-  // Mode-specific constraints
-  sections.push(PROMPT_MODE_ACT);
-
-  // Capability-aware task-shape and tool-specific guidance
-  sections.push(
+  const sections: string[] = [
+    PROMPT_BASE,
+    PROMPT_TOOLS,
+    PROMPT_MODE_ACT,
     ...buildRootPromptFragments({
       mode: opts.mode,
       capabilities,
       agentModelOverrides: opts.agentModelOverrides,
       agentReasoningOverrides: opts.agentReasoningOverrides,
     }),
-  );
-
-  // Review guidelines (loaded conditionally)
+  ];
   if (opts.includeReview) {
     sections.push(PROMPT_REVIEW);
   }
-
-  // Environment context
-  const envLines = [
-    `Working directory: ${opts.repoRoot}`,
-    `Task mode: ${opts.mode}`,
-  ];
-  if (opts.approvalMode) {
-    envLines.push(`Safety mode: ${opts.approvalMode}`);
-  }
-  if (opts.provider && opts.model) {
-    envLines.push(`Provider: ${opts.provider} / ${opts.model}`);
-  } else if (opts.provider) {
-    envLines.push(`Provider: ${opts.provider}`);
-  } else if (opts.model) {
-    envLines.push(`Model: ${opts.model}`);
-  }
-  envLines.push(`Date: ${new Date().toISOString().split("T")[0]}`);
-  sections.push(`## Environment\n\n${envLines.join("\n")}`);
-
-  // Project-level instructions (AGENTS.md, CLAUDE.md, etc.)
+  sections.push(formatEnvironmentSection(opts));
   const projectContext = loadProjectContext(opts.repoRoot);
   if (projectContext) {
     sections.push(projectContext);
   }
-
-  // Skills (Agent Skills standard)
-  const skillList = opts.skills.list();
-  if (skillList.length > 0) {
-    const skillLines = skillList
-      .map((s) => formatSkillMatchLine(s))
-      .join("\n");
-    sections.push(
-      `## Available Skills\n\n${skillLines}\n\n` +
-      `Use the \`invoke_skill\` tool to load a skill's full instructions when the ` +
-      `user's task matches an available skill. ${formatSkillPromptGuidance()}`,
-    );
-  }
-
+  appendSkillsSection(sections, opts);
   if (opts.deferredTools && opts.deferredTools.length > 0) {
     sections.push(formatDeferredToolsSection(opts.deferredTools));
   }
-
-  // Session context briefing (turn isolation — replaces raw history)
   if (opts.briefing) {
     sections.push(
       `## Session Context\n\nYou are continuing a conversation. Here is a summary of prior work:\n\n${formatBriefing(opts.briefing)}`,
@@ -162,4 +117,37 @@ export function assembleSystemPrompt(opts: AssemblePromptOptions): string {
   }
 
   return sections.join("\n\n");
+}
+
+function formatEnvironmentSection(opts: AssemblePromptOptions): string {
+  const envLines = [
+    `Working directory: ${opts.repoRoot}`,
+    `Task mode: ${opts.mode}`,
+    ...formatProviderModelLines(opts),
+    `Date: ${new Date().toISOString().split("T")[0]}`,
+  ];
+  if (opts.approvalMode) {
+    envLines.splice(2, 0, `Safety mode: ${opts.approvalMode}`);
+  }
+  return `## Environment\n\n${envLines.join("\n")}`;
+}
+
+function formatProviderModelLines(opts: AssemblePromptOptions): string[] {
+  if (opts.provider && opts.model) return [`Provider: ${opts.provider} / ${opts.model}`];
+  if (opts.provider) return [`Provider: ${opts.provider}`];
+  if (opts.model) return [`Model: ${opts.model}`];
+  return [];
+}
+
+function appendSkillsSection(sections: string[], opts: AssemblePromptOptions): void {
+  const skillList = opts.skills.list();
+  if (skillList.length === 0) {
+    return;
+  }
+  const skillLines = skillList.map((skill) => formatSkillMatchLine(skill)).join("\n");
+  sections.push(
+    `## Available Skills\n\n${skillLines}\n\n` +
+    `Use the \`invoke_skill\` tool to load a skill's full instructions when the ` +
+    `user's task matches an available skill. ${formatSkillPromptGuidance()}`,
+  );
 }

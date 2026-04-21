@@ -42,100 +42,121 @@ export function renderMarkdown(text: string, enabled: boolean = true): string {
   if (!enabled) return text;
 
   const lines = text.split("\n");
-  const output: string[] = [];
-  let inCodeBlock = false;
-  let codeLang = "";
-  let codeLines: string[] = [];
+  const state: MarkdownRenderState = {
+    output: [],
+    inCodeBlock: false,
+    codeLang: "",
+    codeLines: [],
+  };
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const line = lines[lineIndex]!;
-    // Code fence start/end
-    if (line.trimStart().startsWith("```")) {
-      if (!inCodeBlock) {
-        inCodeBlock = true;
-        codeLang = line.trimStart().slice(3).trim();
-        codeLines = [];
-        continue;
-      } else {
-        // End of code block — render with syntax highlighting
-        const label = codeLang ? `${DIM}─── ${codeLang} ───${RESET}` : `${DIM}───${RESET}`;
-        output.push(label);
-        output.push(highlightCode(codeLines.join("\n"), codeLang));
-        output.push(`${DIM}───${RESET}`);
-        inCodeBlock = false;
-        codeLang = "";
-        codeLines = [];
-        continue;
-      }
-    }
-
-    if (inCodeBlock) {
-      codeLines.push(line);
+    if (handleCodeBlockLine(state, line)) {
       continue;
     }
-
-    // Headers
-    const headerMatch = line.match(/^(#{1,6})\s+(.+)/);
-    if (headerMatch) {
-      const level = headerMatch[1]!.length;
-      const headerText = headerMatch[2]!;
-      if (level <= 2) {
-        output.push(`${BOLD}${headerText}${RESET}`);
-      } else {
-        output.push(`${BOLD}${DIM}${headerText}${RESET}`);
-      }
+    const tableBlock = collectTableBlock(lines, lineIndex);
+    if (tableBlock) {
+      state.output.push(...renderTableBlock(tableBlock.lines));
+      lineIndex = tableBlock.nextIndex;
       continue;
     }
-
-    // Horizontal rule
-    if (/^[-*_]{3,}\s*$/.test(line)) {
-      output.push(`${DIM}${"─".repeat(40)}${RESET}`);
-      continue;
-    }
-
-    // Table rows (pipe-delimited)
-    if (line.includes("|") && line.trim().startsWith("|")) {
-      const tableLines = [line];
-      while (lineIndex + 1 < lines.length && lines[lineIndex + 1]!.trim().startsWith("|")) {
-        lineIndex++;
-        tableLines.push(lines[lineIndex]!);
-      }
-      output.push(...renderTableBlock(tableLines));
-      continue;
-    }
-
-    // List items (unordered)
-    const ulMatch = line.match(/^(\s*)[-*+]\s+(.*)/);
-    if (ulMatch) {
-      const indent = ulMatch[1] ?? "";
-      const content = formatInline(ulMatch[2] ?? "");
-      output.push(`${indent}${DIM}•${RESET} ${content}`);
-      continue;
-    }
-
-    // List items (ordered)
-    const olMatch = line.match(/^(\s*)(\d+)[.)]\s+(.*)/);
-    if (olMatch) {
-      const indent = olMatch[1] ?? "";
-      const num = olMatch[2]!;
-      const content = formatInline(olMatch[3] ?? "");
-      output.push(`${indent}${DIM}${num}.${RESET} ${content}`);
-      continue;
-    }
-
-    // Regular text — apply inline formatting
-    output.push(formatInline(line));
+    state.output.push(renderMarkdownLine(line));
   }
 
-  // Close unclosed code block
-  if (inCodeBlock) {
-    const label = codeLang ? `${DIM}─── ${codeLang} ───${RESET}` : `${DIM}───${RESET}`;
-    output.push(label);
-    output.push(highlightCode(codeLines.join("\n"), codeLang));
-    output.push(`${DIM}───${RESET}`);
-  }
+  closeCodeBlock(state);
+  return state.output.join("\n");
+}
 
-  return output.join("\n");
+interface MarkdownRenderState {
+  readonly output: string[];
+  inCodeBlock: boolean;
+  codeLang: string;
+  codeLines: string[];
+}
+
+function handleCodeBlockLine(state: MarkdownRenderState, line: string): boolean {
+  if (line.trimStart().startsWith("```")) {
+    toggleCodeBlock(state, line);
+    return true;
+  }
+  if (!state.inCodeBlock) {
+    return false;
+  }
+  state.codeLines.push(line);
+  return true;
+}
+
+function toggleCodeBlock(state: MarkdownRenderState, line: string): void {
+  if (!state.inCodeBlock) {
+    state.inCodeBlock = true;
+    state.codeLang = line.trimStart().slice(3).trim();
+    state.codeLines = [];
+    return;
+  }
+  closeCodeBlock(state);
+}
+
+function closeCodeBlock(state: MarkdownRenderState): void {
+  if (!state.inCodeBlock) {
+    return;
+  }
+  const label = state.codeLang ? `${DIM}─── ${state.codeLang} ───${RESET}` : `${DIM}───${RESET}`;
+  state.output.push(label);
+  state.output.push(highlightCode(state.codeLines.join("\n"), state.codeLang));
+  state.output.push(`${DIM}───${RESET}`);
+  state.inCodeBlock = false;
+  state.codeLang = "";
+  state.codeLines = [];
+}
+
+function collectTableBlock(
+  lines: ReadonlyArray<string>,
+  lineIndex: number,
+): { readonly lines: string[]; readonly nextIndex: number } | null {
+  const line = lines[lineIndex]!;
+  if (!line.includes("|") || !line.trim().startsWith("|")) {
+    return null;
+  }
+  const tableLines = [line];
+  let nextIndex = lineIndex;
+  while (nextIndex + 1 < lines.length && lines[nextIndex + 1]!.trim().startsWith("|")) {
+    nextIndex++;
+    tableLines.push(lines[nextIndex]!);
+  }
+  return { lines: tableLines, nextIndex };
+}
+
+function renderMarkdownLine(line: string): string {
+  return renderHeaderLine(line)
+    ?? renderHorizontalRule(line)
+    ?? renderUnorderedListLine(line)
+    ?? renderOrderedListLine(line)
+    ?? formatInline(line);
+}
+
+function renderHeaderLine(line: string): string | null {
+  const match = line.match(/^(#{1,6})\s+(.+)/);
+  if (!match) return null;
+  const headerText = match[2]!;
+  return match[1]!.length <= 2
+    ? `${BOLD}${headerText}${RESET}`
+    : `${BOLD}${DIM}${headerText}${RESET}`;
+}
+
+function renderHorizontalRule(line: string): string | null {
+  return /^[-*_]{3,}\s*$/.test(line) ? `${DIM}${"─".repeat(40)}${RESET}` : null;
+}
+
+function renderUnorderedListLine(line: string): string | null {
+  const match = line.match(/^(\s*)[-*+]\s+(.*)/);
+  if (!match) return null;
+  return `${match[1] ?? ""}${DIM}•${RESET} ${formatInline(match[2] ?? "")}`;
+}
+
+function renderOrderedListLine(line: string): string | null {
+  const match = line.match(/^(\s*)(\d+)[.)]\s+(.*)/);
+  if (!match) return null;
+  return `${match[1] ?? ""}${DIM}${match[2]!}.${RESET} ${formatInline(match[3] ?? "")}`;
 }
 
 function renderTableBlock(lines: ReadonlyArray<string>): ReadonlyArray<string> {

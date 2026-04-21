@@ -46,6 +46,13 @@ interface PromptInputKey {
   readonly meta?: boolean;
   readonly super?: boolean;
   readonly hyper?: boolean;
+  readonly upArrow?: boolean;
+  readonly downArrow?: boolean;
+  readonly backspace?: boolean;
+  readonly delete?: boolean;
+  readonly leftArrow?: boolean;
+  readonly rightArrow?: boolean;
+  readonly ctrl?: boolean;
 }
 
 interface PromptRow {
@@ -68,6 +75,24 @@ interface PromptInputProps {
   readonly history?: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly approvalMode?: string;
+}
+
+interface PromptInputControls {
+  readonly value: string;
+  readonly cursorPos: number;
+  readonly historyIndex: number;
+  readonly completions: readonly string[];
+  readonly completionIndex: number;
+  readonly history: ReadonlyArray<string>;
+  readonly cwd: string | undefined;
+  readonly savedInputRef: React.MutableRefObject<string>;
+  readonly onSubmit: (value: string) => void;
+  readonly onCycleApprovalMode: (() => void) | undefined;
+  readonly setValue: React.Dispatch<React.SetStateAction<string>>;
+  readonly setCursorPos: React.Dispatch<React.SetStateAction<number>>;
+  readonly setHistoryIndex: React.Dispatch<React.SetStateAction<number>>;
+  readonly setCompletions: React.Dispatch<React.SetStateAction<string[]>>;
+  readonly setCompletionIndex: React.Dispatch<React.SetStateAction<number>>;
 }
 
 export function shouldInsertPromptNewline(key: PromptInputKey): boolean {
@@ -223,6 +248,137 @@ function renderPromptText(row: PromptRow): React.ReactElement {
   );
 }
 
+function submitPromptValue(input: string, key: PromptInputKey, controls: PromptInputControls): boolean {
+  if (!shouldSubmitPromptInput(input, key)) {
+    return false;
+  }
+
+  const submitValue = buildPromptSubmitValue(input, key, controls.value, controls.cursorPos) ?? controls.value;
+  const trimmed = submitValue.trim();
+  if (trimmed) {
+    controls.onSubmit(trimmed);
+    controls.setValue("");
+    controls.setCursorPos(0);
+    controls.setHistoryIndex(-1);
+    controls.savedInputRef.current = "";
+  }
+  return true;
+}
+
+function handleHistoryKey(key: PromptInputKey, controls: PromptInputControls): boolean {
+  if (key.upArrow && controls.history.length > 0) {
+    if (controls.historyIndex === -1) controls.savedInputRef.current = controls.value;
+    const newIndex = Math.min(controls.historyIndex + 1, controls.history.length - 1);
+    const historyValue = controls.history[controls.history.length - 1 - newIndex] ?? "";
+    controls.setHistoryIndex(newIndex);
+    controls.setValue(historyValue);
+    controls.setCursorPos(historyValue.length);
+    return true;
+  }
+
+  if (!key.downArrow) {
+    return false;
+  }
+
+  if (controls.historyIndex > 0) {
+    const newIndex = controls.historyIndex - 1;
+    const historyValue = controls.history[controls.history.length - 1 - newIndex] ?? "";
+    controls.setHistoryIndex(newIndex);
+    controls.setValue(historyValue);
+    controls.setCursorPos(historyValue.length);
+  } else if (controls.historyIndex === 0) {
+    controls.setHistoryIndex(-1);
+    controls.setValue(controls.savedInputRef.current);
+    controls.setCursorPos(controls.savedInputRef.current.length);
+  }
+  return true;
+}
+
+function applyCompletion(completion: string, controls: PromptInputControls): void {
+  controls.setValue(completion);
+  controls.setCursorPos(completion.length);
+}
+
+function handleCompletionKey(key: PromptInputKey, controls: PromptInputControls): boolean {
+  const tabAction = resolvePromptTabAction(key);
+  if (tabAction === "cycle-mode") {
+    controls.onCycleApprovalMode?.();
+    return true;
+  }
+
+  if (tabAction !== "complete") {
+    return false;
+  }
+
+  if (controls.completions.length > 0) {
+    const next = (controls.completionIndex + 1) % controls.completions.length;
+    controls.setCompletionIndex(next);
+    applyCompletion(controls.completions[next]!, controls);
+    return true;
+  }
+
+  const candidates = getCompletions(controls.value, controls.cwd);
+  if (candidates.length > 0) {
+    controls.setCompletions(candidates);
+    controls.setCompletionIndex(0);
+    applyCompletion(candidates[0]!, controls);
+  }
+  return true;
+}
+
+function clearCompletions(controls: PromptInputControls): void {
+  if (controls.completions.length === 0) {
+    return;
+  }
+  controls.setCompletions([]);
+  controls.setCompletionIndex(0);
+}
+
+function handleEditingKey(input: string, key: PromptInputKey, controls: PromptInputControls): boolean {
+  clearCompletions(controls);
+  if (key.backspace || key.delete) {
+    if (controls.cursorPos > 0) {
+      controls.setValue(controls.value.slice(0, controls.cursorPos - 1) + controls.value.slice(controls.cursorPos));
+      controls.setCursorPos(controls.cursorPos - 1);
+    }
+    return true;
+  }
+  if (key.leftArrow) {
+    controls.setCursorPos(Math.max(0, controls.cursorPos - 1));
+    return true;
+  }
+  if (key.rightArrow) {
+    controls.setCursorPos(Math.min(controls.value.length, controls.cursorPos + 1));
+    return true;
+  }
+  if (!input || key.ctrl || key.meta) {
+    return false;
+  }
+
+  controls.setValue(controls.value.slice(0, controls.cursorPos) + input + controls.value.slice(controls.cursorPos));
+  controls.setCursorPos(controls.cursorPos + input.length);
+  controls.setHistoryIndex(-1);
+  return true;
+}
+
+function insertPromptNewline(controls: PromptInputControls): void {
+  controls.setValue(
+    controls.value.slice(0, controls.cursorPos) + "\n" + controls.value.slice(controls.cursorPos),
+  );
+  controls.setCursorPos(controls.cursorPos + 1);
+}
+
+function handlePromptInput(input: string, key: PromptInputKey, controls: PromptInputControls): void {
+  if (shouldInsertPromptNewline(key)) {
+    insertPromptNewline(controls);
+    return;
+  }
+  if (submitPromptValue(input, key, controls)) return;
+  if (handleHistoryKey(key, controls)) return;
+  if (handleCompletionKey(key, controls)) return;
+  handleEditingKey(input, key, controls);
+}
+
 export function PromptInput({
   onSubmit,
   onCycleApprovalMode,
@@ -241,109 +397,24 @@ export function PromptInput({
   const accentColor = getApprovalModeColor(approvalMode);
   const contentWidth = Math.max(1, (stdout.columns ?? 80) - INPUT_FRAME_WIDTH);
   const promptRows = buildPromptRows(value, cursorPos, placeholder, contentWidth);
-
   useInput((input, key) => {
-    if (shouldInsertPromptNewline(key)) {
-      const before = value.slice(0, cursorPos);
-      const after = value.slice(cursorPos);
-      setValue(before + "\n" + after);
-      setCursorPos(cursorPos + 1);
-      return;
-    }
-
-    // Submit on plain Enter. Some ptys deliver Enter as a literal newline
-    // instead of Ink's normalized key.return, so handle both forms.
-    if (shouldSubmitPromptInput(input, key)) {
-      const submitValue = buildPromptSubmitValue(input, key, value, cursorPos) ?? value;
-      const trimmed = submitValue.trim();
-      if (trimmed) {
-        onSubmit(trimmed);
-        setValue("");
-        setCursorPos(0);
-        setHistoryIndex(-1);
-        savedInputRef.current = "";
-      }
-      return;
-    }
-
-    // History navigation
-    if (key.upArrow && history.length > 0) {
-      if (historyIndex === -1) savedInputRef.current = value;
-      const newIndex = Math.min(historyIndex + 1, history.length - 1);
-      setHistoryIndex(newIndex);
-      const v = history[history.length - 1 - newIndex] ?? "";
-      setValue(v);
-      setCursorPos(v.length);
-      return;
-    }
-    if (key.downArrow) {
-      if (historyIndex > 0) {
-        const newIndex = historyIndex - 1;
-        setHistoryIndex(newIndex);
-        const v = history[history.length - 1 - newIndex] ?? "";
-        setValue(v);
-        setCursorPos(v.length);
-      } else if (historyIndex === 0) {
-        setHistoryIndex(-1);
-        setValue(savedInputRef.current);
-        setCursorPos(savedInputRef.current.length);
-      }
-      return;
-    }
-
-    const tabAction = resolvePromptTabAction(key);
-    if (tabAction === "cycle-mode") {
-      onCycleApprovalMode?.();
-      return;
-    }
-
-    // Tab completion
-    if (tabAction === "complete") {
-      if (completions.length > 0) {
-        const next = (completionIndex + 1) % completions.length;
-        setCompletionIndex(next);
-        const c = completions[next]!;
-        setValue(c);
-        setCursorPos(c.length);
-      } else {
-        const candidates = getCompletions(value, cwd);
-        if (candidates.length > 0) {
-          setCompletions(candidates);
-          setCompletionIndex(0);
-          setValue(candidates[0]!);
-          setCursorPos(candidates[0]!.length);
-        }
-      }
-      return;
-    }
-
-    // Clear completions on other keys
-    if (completions.length > 0) {
-      setCompletions([]);
-      setCompletionIndex(0);
-    }
-
-    // Backspace
-    if (key.backspace || key.delete) {
-      if (cursorPos > 0) {
-        setValue(value.slice(0, cursorPos - 1) + value.slice(cursorPos));
-        setCursorPos(cursorPos - 1);
-      }
-      return;
-    }
-
-    // Arrow keys
-    if (key.leftArrow) { setCursorPos(Math.max(0, cursorPos - 1)); return; }
-    if (key.rightArrow) { setCursorPos(Math.min(value.length, cursorPos + 1)); return; }
-
-    // Regular input
-    if (input && !key.ctrl && !key.meta) {
-      const before = value.slice(0, cursorPos);
-      const after = value.slice(cursorPos);
-      setValue(before + input + after);
-      setCursorPos(cursorPos + input.length);
-      setHistoryIndex(-1);
-    }
+    handlePromptInput(input, key, {
+      value,
+      cursorPos,
+      historyIndex,
+      completions,
+      completionIndex,
+      history,
+      cwd,
+      savedInputRef,
+      onSubmit,
+      onCycleApprovalMode,
+      setValue,
+      setCursorPos,
+      setHistoryIndex,
+      setCompletions,
+      setCompletionIndex,
+    });
   });
 
   return (

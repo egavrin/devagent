@@ -6,8 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import type { DoctorReportInput } from "./commands.js";
-import { buildDoctorReport, renderDoctorReport } from "./commands.js";
+import type { DoctorReportInput } from "./commands/doctor-types.js";
+import { buildDoctorReport, renderDoctorReport } from "./commands/doctor.js";
 import type { DevAgentConfig } from "@devagent/runtime";
 
 const cliSrcDir = dirname(fileURLToPath(import.meta.url));
@@ -74,7 +74,6 @@ function makeInput(overrides: Partial<DoctorReportInput> = {}): DoctorReportInpu
     ...overrides,
   };
 }
-
 describe("doctor report", () => {
   it("shows actionable runtime remediation for Ubuntu users on old Node", () => {
     const report = buildDoctorReport(makeInput({
@@ -163,7 +162,9 @@ Checks:
 
 Blocking issues found.`);
   });
+});
 
+describe("doctor report provider and advisory states", () => {
   it("omits remediation block when doctor passes", () => {
     const report = buildDoctorReport(makeInput({
       config: makeConfig({ provider: "devagent-api", model: "cortex" }),

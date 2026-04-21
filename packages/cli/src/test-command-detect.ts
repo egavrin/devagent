@@ -79,44 +79,39 @@ function hasPythonTests(repoRoot: string): boolean {
 
   return directoryContainsPythonFile(repoRoot, 4, false);
 }
-
 function directoryContainsPythonFile(
   dir: string,
   depth: number,
   anyPythonFile: boolean,
 ): boolean {
   if (depth < 0) return false;
-
-  let entries: Array<{
-    name: string;
-    isDirectory(): boolean;
-    isFile(): boolean;
-  }>;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true, encoding: "utf8" }) as Array<{
-      name: string;
-      isDirectory(): boolean;
-      isFile(): boolean;
-    }>;
-  } catch {
-    return false;
-  }
-
-  for (const entry of entries) {
+  return readDirectoryEntries(dir).some((entry) => {
     if (entry.isDirectory()) {
-      if (IGNORED_DIRS.has(entry.name)) continue;
-      if (directoryContainsPythonFile(join(dir, entry.name), depth - 1, anyPythonFile)) {
-        return true;
-      }
-      continue;
+      return !IGNORED_DIRS.has(entry.name) &&
+        directoryContainsPythonFile(join(dir, entry.name), depth - 1, anyPythonFile);
     }
+    return isMatchingPythonTestFile(entry, anyPythonFile);
+  });
+}
 
-    if (!entry.isFile() || !entry.name.endsWith(".py")) continue;
-    if (anyPythonFile) return true;
-    if (PYTHON_TEST_FILENAME.test(entry.name)) return true;
+type DirectoryEntry = {
+  name: string;
+  isDirectory(): boolean;
+  isFile(): boolean;
+};
+
+function readDirectoryEntries(dir: string): DirectoryEntry[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true, encoding: "utf8" }) as DirectoryEntry[];
+  } catch {
+    return [];
   }
+}
 
-  return false;
+function isMatchingPythonTestFile(entry: DirectoryEntry, anyPythonFile: boolean): boolean {
+  return entry.isFile() &&
+    entry.name.endsWith(".py") &&
+    (anyPythonFile || PYTHON_TEST_FILENAME.test(entry.name));
 }
 
 function fileContains(path: string, snippet: string): boolean {

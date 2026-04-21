@@ -38,7 +38,6 @@ function mockSkills(
     })),
   } as unknown as SkillRegistry;
 }
-
 describe("assembleSystemPrompt", () => {
   it("includes mode and environment metadata", () => {
     const repoRoot = createTempRepo();
@@ -107,6 +106,9 @@ describe("assembleSystemPrompt", () => {
     expect(prompt).toContain("`surface-change-e2e` before `validate-user-surface`");
   });
 
+});
+
+describe("assembleSystemPrompt investigation guidance", () => {
   it("makes scenario-mandated delegation and investigation playbooks explicit in the parent prompt", () => {
     const repoRoot = createTempRepo();
     const prompt = assembleSystemPrompt({
@@ -173,7 +175,9 @@ describe("assembleSystemPrompt", () => {
     expect(prompt).toContain("runtime/tests behavior");
     expect(prompt).toContain("Avoid serial phase plans like `locate -> inspect -> compare -> summarize`");
   });
+});
 
+describe("assembleSystemPrompt unavailable capabilities", () => {
   it("omits delegation guidance when delegate is unavailable", () => {
     const repoRoot = createTempRepo();
     const prompt = assembleSystemPrompt({

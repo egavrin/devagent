@@ -227,7 +227,6 @@ describe("formatFileEditPreview", () => {
     expect(result).toContain("... +2 more files");
   });
 });
-
 describe("formatTranscriptPart", () => {
   it("renders approval parts with typed approval semantics", () => {
     const result = formatTranscriptPart(presentApprovalRequestEvent({
@@ -347,7 +346,9 @@ describe("formatTranscriptPart", () => {
     expect(formatTranscriptPart(parts[1]!)).toContain("Validation failed");
     expect(formatTranscriptPart(parts[2]!)).toContain("src/new.ts: Unexpected token");
   });
+});
 
+describe("formatTranscriptPart multiline previews", () => {
   it("preserves multiline validation previews instead of flattening them", () => {
     const parts = presentToolAfterEvent({
       name: "write_file",
@@ -618,7 +619,6 @@ describe("formatCompactionResult", () => {
 });
 
 // ─── Improvement 4: Session Summary ───────────────────────────
-
 describe("formatSessionSummary", () => {
   it("formats full session data", () => {
     const result = formatSessionSummary({
@@ -677,7 +677,9 @@ describe("formatSessionSummary", () => {
     expect(result).not.toContain("Plan:");
     expect(result).not.toContain("Cost:");
   });
+});
 
+describe("formatSessionSummary collections", () => {
   it("sorts tool usage by count descending", () => {
     const result = formatSessionSummary({
       sessionId: "sess_sort",
@@ -782,12 +784,25 @@ describe("subagent formatting", () => {
   });
 
   it("formats child tool counters distinctly", () => {
-    const result = formatToolStart("search_files", { pattern: "FixedArray" }, 2, 0, undefined, "root-sub-1");
+    const result = formatToolStart({
+      name: "search_files",
+      params: { pattern: "FixedArray" },
+      iteration: 2,
+      maxIter: 0,
+      counterLabel: "root-sub-1",
+    });
     expect(result).toContain("[root-sub-1:2]");
   });
 
   it("uses the same child counter formatting for grouped tool output", () => {
-    const result = formatToolGroupStart("read_file", 3, ["a.ts", "b.ts"], 4, 0, undefined, "root-sub-1");
+    const result = formatToolGroupStart({
+      name: "read_file",
+      count: 3,
+      paramSummaries: ["a.ts", "b.ts"],
+      iteration: 4,
+      maxIter: 0,
+      counterLabel: "root-sub-1",
+    });
     expect(result).toContain("[root-sub-1:4]");
   });
 });
@@ -838,14 +853,24 @@ describe("formatReasoning", () => {
 
 describe("formatToolStart with verbs", () => {
   it("uses present-tense verb instead of raw tool name", () => {
-    const result = formatToolStart("read_file", { path: "src/main.ts" }, 1, 30);
+    const result = formatToolStart({
+      name: "read_file",
+      params: { path: "src/main.ts" },
+      iteration: 1,
+      maxIter: 30,
+    });
     expect(result).toContain("Reading");
     expect(result).toContain("src/main.ts");
     expect(result).not.toContain("read_file");
   });
 
   it("uses present-tense verb for search_files", () => {
-    const result = formatToolStart("search_files", { pattern: "handleAuth" }, 2, 30);
+    const result = formatToolStart({
+      name: "search_files",
+      params: { pattern: "handleAuth" },
+      iteration: 2,
+      maxIter: 30,
+    });
     expect(result).toContain("Searching");
     expect(result).toContain("handleAuth");
   });
@@ -870,10 +895,13 @@ describe("formatToolEnd with verbs", () => {
 
 describe("formatToolGroupStart", () => {
   it("formats grouped read_file calls", () => {
-    const result = formatToolGroupStart(
-      "read_file", 3, ["src/main.ts", "src/format.ts", "src/output-state.ts"],
-      1, 30,
-    );
+    const result = formatToolGroupStart({
+      name: "read_file",
+      count: 3,
+      paramSummaries: ["src/main.ts", "src/format.ts", "src/output-state.ts"],
+      iteration: 1,
+      maxIter: 30,
+    });
     expect(result).toContain("Reading");
     expect(result).toContain("3 files");
     expect(result).toContain("src/main.ts");
@@ -882,11 +910,13 @@ describe("formatToolGroupStart", () => {
   });
 
   it("truncates params list beyond 3 items", () => {
-    const result = formatToolGroupStart(
-      "read_file", 5,
-      ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"],
-      2, 30,
-    );
+    const result = formatToolGroupStart({
+      name: "read_file",
+      count: 5,
+      paramSummaries: ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"],
+      iteration: 2,
+      maxIter: 30,
+    });
     expect(result).toContain("5 files");
     expect(result).toContain("a.ts");
     expect(result).toContain("b.ts");
@@ -896,10 +926,13 @@ describe("formatToolGroupStart", () => {
   });
 
   it("uses generic 'calls' for non-file tools", () => {
-    const result = formatToolGroupStart(
-      "run_command", 3, ["ls", "pwd", "whoami"],
-      1, 30,
-    );
+    const result = formatToolGroupStart({
+      name: "run_command",
+      count: 3,
+      paramSummaries: ["ls", "pwd", "whoami"],
+      iteration: 1,
+      maxIter: 30,
+    });
     expect(result).toContain("Running");
     expect(result).toContain("3 calls");
   });

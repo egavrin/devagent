@@ -14,27 +14,14 @@ export interface StatusBarProps {
   readonly running?: boolean;
   readonly hasApproval?: boolean;
 }
-
 export function StatusBar(props: StatusBarProps): React.ReactElement {
   const { model, cost, inputTokens, maxContextTokens, iteration, maxIterations, cwd, running, hasApproval } = props;
 
   const shortModel = model.length > 20 ? model.slice(0, 20) : model;
   const pct = maxContextTokens > 0 ? Math.round((inputTokens / maxContextTokens) * 100) : 0;
-  const pctColor = pct > 80 ? "red" : pct > 60 ? "yellow" : "gray";
-
-  const iterLabel = maxIterations > 0
-    ? `iter ${iteration}/${maxIterations}`
-    : "";
-
-  // Shortcuts section — context-aware
-  let shortcuts = "";
-  if (hasApproval) {
-    shortcuts = "[y]once [n]deny [s]ession";
-  } else if (running) {
-    shortcuts = "Ctrl+C cancel";
-  } else {
-    shortcuts = "Shift+Tab safety │ Ctrl+K cmds │ Ctrl+C exit";
-  }
+  const pctColor = getTokenColor(pct);
+  const iterLabel = getIterationLabel(iteration, maxIterations);
+  const shortcuts = getShortcutLabel(Boolean(running), Boolean(hasApproval));
 
   const dirName = cwd ? (cwd.split("/").pop() ?? cwd) : "";
 
@@ -48,4 +35,20 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
       {dirName && <><Text color="gray"> │ </Text><Text dimColor>{dirName}</Text></>}
     </Box>
   );
+}
+
+function getTokenColor(pct: number): "red" | "yellow" | "gray" {
+  if (pct > 80) return "red";
+  if (pct > 60) return "yellow";
+  return "gray";
+}
+
+function getIterationLabel(iteration: number, maxIterations: number): string {
+  return maxIterations > 0 ? `iter ${iteration}/${maxIterations}` : "";
+}
+
+function getShortcutLabel(running: boolean, hasApproval: boolean): string {
+  if (hasApproval) return "[y]once [n]deny [s]ession";
+  if (running) return "Ctrl+C cancel";
+  return "Shift+Tab safety │ Ctrl+K cmds │ Ctrl+C exit";
 }

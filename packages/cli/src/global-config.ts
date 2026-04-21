@@ -16,6 +16,12 @@ const LEGACY_CONFIG_FILENAME = "config.json";
 const LEGACY_GLOBAL_TOML_FILENAME = ".devagent.toml";
 const AGENT_TYPES = new Set(["general", "explore", "reviewer", "architect"]);
 const TOOL_CATEGORIES = new Set(["readonly", "mutating", "workflow", "external", "state"]);
+const SUBAGENT_AGENT_MAP_FIELDS = new Set([
+  "agent_model_overrides",
+  "agent_reasoning_overrides",
+  "agent_iteration_caps",
+  "allowed_child_agents",
+]);
 const ROOT_KEYS = new Set(["provider", "model", "api_key"]);
 const SECTION_FIELDS = new Map<string, ReadonlySet<string>>([
   ["safety", new Set(["mode"])],
@@ -204,7 +210,6 @@ export function setGlobalConfigValue(path: string, rawValue: string): void {
   setNestedValue(config, resolved.path, resolved.value);
   writeGlobalConfigObject(config);
 }
-
 function resolveConfigPath(
   path: string,
 ): { readonly path: string[]; readonly legacyApprovalAlias: boolean } {
@@ -221,57 +226,107 @@ function resolveConfigPath(
     return { path: [topLevel], legacyApprovalAlias: false };
   }
 
-  const second = rawParts[1] ? toSnakeCase(rawParts[1]) : undefined;
-  if (topLevel === "approval") {
-    if (rawParts.length !== 2 || second !== "mode") {
-      throw new Error(`Unsupported config key: "${path}"`);
-    }
-    return { path: ["safety", "mode"], legacyApprovalAlias: true };
-  }
+  const resolved = resolveNestedConfigPath(path, topLevel, rawParts);
+  if (!resolved) throw new Error(`Unsupported config key: "${path}"`);
+  return resolved;
+}
 
-  if (second && SECTION_FIELDS.has(topLevel)) {
-    if (rawParts.length !== 2 || !SECTION_FIELDS.get(topLevel)!.has(second)) {
-      throw new Error(`Unsupported config key: "${path}"`);
-    }
+function resolveNestedConfigPath(
+  originalPath: string,
+  topLevel: string,
+  rawParts: ReadonlyArray<string>,
+): { readonly path: string[]; readonly legacyApprovalAlias: boolean } | undefined {
+  const second = rawParts[1] ? toSnakeCase(rawParts[1]) : undefined;
+  return resolveApprovalPath(topLevel, rawParts, second)
+    ?? resolveSectionPath(topLevel, rawParts, second)
+    ?? resolveProviderPath(topLevel, rawParts)
+    ?? resolveSubagentPath(originalPath, topLevel, rawParts, second);
+}
+
+function resolveApprovalPath(
+  topLevel: string,
+  rawParts: ReadonlyArray<string>,
+  second: string | undefined,
+): { readonly path: string[]; readonly legacyApprovalAlias: boolean } | undefined {
+  if (topLevel !== "approval") return undefined;
+  return rawParts.length === 2 && second === "mode"
+    ? { path: ["safety", "mode"], legacyApprovalAlias: true }
+    : undefined;
+}
+
+function resolveSectionPath(
+  topLevel: string,
+  rawParts: ReadonlyArray<string>,
+  second: string | undefined,
+): { readonly path: string[]; readonly legacyApprovalAlias: boolean } | undefined {
+  if (!second || !SECTION_FIELDS.get(topLevel)?.has(second) || rawParts.length !== 2) {
+    return undefined;
+  }
+  return { path: [topLevel, second], legacyApprovalAlias: false };
+}
+
+function resolveProviderPath(
+  topLevel: string,
+  rawParts: ReadonlyArray<string>,
+): { readonly path: string[]; readonly legacyApprovalAlias: boolean } | undefined {
+  if (topLevel !== "providers") return undefined;
+  const providerId = rawParts[1];
+  const field = rawParts[2] ? toSnakeCase(rawParts[2]) : undefined;
+  if (!providerId || rawParts.length !== 3 || !field || !PROVIDER_FIELDS.has(field)) return undefined;
+  return { path: [topLevel, providerId, field], legacyApprovalAlias: false };
+}
+
+function resolveSubagentPath(
+  originalPath: string,
+  topLevel: string,
+  rawParts: ReadonlyArray<string>,
+  second: string | undefined,
+): { readonly path: string[]; readonly legacyApprovalAlias: boolean } | undefined {
+  if (topLevel !== "subagents" || !second) return undefined;
+  if (second === "subagent_timeout_ms" && rawParts.length === 2) {
     return { path: [topLevel, second], legacyApprovalAlias: false };
   }
+  return resolveSubagentAgentPath(originalPath, topLevel, rawParts, second);
+}
 
-  if (topLevel === "providers") {
-    const providerId = rawParts[1];
-    const field = rawParts[2] ? toSnakeCase(rawParts[2]) : undefined;
-    if (!providerId || rawParts.length !== 3 || !field || !PROVIDER_FIELDS.has(field)) {
-      throw new Error(`Unsupported config key: "${path}"`);
-    }
-    return { path: [topLevel, providerId, field], legacyApprovalAlias: false };
+function resolveSubagentAgentPath(
+  originalPath: string,
+  topLevel: string,
+  rawParts: ReadonlyArray<string>,
+  second: string,
+): { readonly path: string[]; readonly legacyApprovalAlias: boolean } | undefined {
+  if (SUBAGENT_AGENT_MAP_FIELDS.has(second)) {
+    return resolveSubagentAgentMapPath(originalPath, topLevel, rawParts, second);
   }
+  if (second !== "agent_permission_overrides") return undefined;
+  return resolveSubagentPermissionPath(originalPath, topLevel, rawParts, second);
+}
 
-  if (topLevel === "subagents") {
-    if (!second) {
-      throw new Error(`Unsupported config key: "${path}"`);
-    }
-    if (second === "subagent_timeout_ms" && rawParts.length === 2) {
-      return { path: [topLevel, second], legacyApprovalAlias: false };
-    }
-    if (
-      ["agent_model_overrides", "agent_reasoning_overrides", "agent_iteration_caps", "allowed_child_agents"].includes(second)
-    ) {
-      const agentType = rawParts[2] ? toSnakeCase(rawParts[2]) : undefined;
-      if (!agentType || rawParts.length !== 3 || !AGENT_TYPES.has(agentType)) {
-        throw new Error(`Unsupported config key: "${path}"`);
-      }
-      return { path: [topLevel, second, agentType], legacyApprovalAlias: false };
-    }
-    if (second === "agent_permission_overrides") {
-      const agentType = rawParts[2] ? toSnakeCase(rawParts[2]) : undefined;
-      const category = rawParts[3] ? toSnakeCase(rawParts[3]) : undefined;
-      if (!agentType || !category || rawParts.length !== 4 || !AGENT_TYPES.has(agentType) || !TOOL_CATEGORIES.has(category)) {
-        throw new Error(`Unsupported config key: "${path}"`);
-      }
-      return { path: [topLevel, second, agentType, category], legacyApprovalAlias: false };
-    }
+function resolveSubagentAgentMapPath(
+  originalPath: string,
+  topLevel: string,
+  rawParts: ReadonlyArray<string>,
+  second: string,
+): { readonly path: string[]; readonly legacyApprovalAlias: boolean } {
+  const agentType = rawParts[2] ? toSnakeCase(rawParts[2]) : undefined;
+  if (!agentType || rawParts.length !== 3 || !AGENT_TYPES.has(agentType)) {
+    throw new Error(`Unsupported config key: "${originalPath}"`);
   }
+  return { path: [topLevel, second, agentType], legacyApprovalAlias: false };
+}
 
-  throw new Error(`Unsupported config key: "${path}"`);
+function resolveSubagentPermissionPath(
+  originalPath: string,
+  topLevel: string,
+  rawParts: ReadonlyArray<string>,
+  second: string,
+): { readonly path: string[]; readonly legacyApprovalAlias: boolean } {
+  const agentType = rawParts[2] ? toSnakeCase(rawParts[2]) : undefined;
+  const category = rawParts[3] ? toSnakeCase(rawParts[3]) : undefined;
+  if (!agentType || !category || rawParts.length !== 4 || !AGENT_TYPES.has(agentType) || !TOOL_CATEGORIES.has(category)) {
+    throw new Error(`Unsupported config key: "${originalPath}"`);
+  }
+  return { path: [topLevel, second, agentType, category], legacyApprovalAlias: false };
 }
 
 function resolveConfigAssignment(
@@ -382,36 +437,13 @@ function flattenObject(
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
 function normalizeGlobalConfigObject(
   config: Record<string, unknown>,
 ): { readonly config: Record<string, unknown>; readonly changed: boolean } {
   const next = { ...config };
   let changed = false;
-
-  const safety = isPlainObject(next["safety"])
-    ? (next["safety"])
-    : undefined;
-  const approval = isPlainObject(next["approval"])
-    ? { ...(next["approval"]) }
-    : undefined;
-
-  let nextSafety = safety ? { ...safety } : undefined;
-  let safetyChanged = false;
-  if (approval) {
-    if (nextSafety?.["mode"] === undefined && approval["mode"] !== undefined) {
-      nextSafety = {
-        ...(nextSafety ?? {}),
-        mode: normalizeAssignedValue(["safety", "mode"], approval["mode"], {
-          originalPath: "approval.mode",
-          legacyApprovalAlias: true,
-        }),
-      };
-      safetyChanged = true;
-    }
-  }
-
-  if (safetyChanged && nextSafety) {
+  const nextSafety = normalizeSafetyFromApproval(next);
+  if (nextSafety) {
     next["safety"] = nextSafety;
     changed = true;
   }
@@ -422,4 +454,19 @@ function normalizeGlobalConfigObject(
   }
 
   return { config: next, changed };
+}
+
+function normalizeSafetyFromApproval(config: Record<string, unknown>): Record<string, unknown> | undefined {
+  const safety = isPlainObject(config["safety"]) ? config["safety"] : undefined;
+  const approval = isPlainObject(config["approval"]) ? config["approval"] : undefined;
+  if (!approval || safety?.["mode"] !== undefined || approval["mode"] === undefined) {
+    return undefined;
+  }
+  return {
+    ...(safety ?? {}),
+    mode: normalizeAssignedValue(["safety", "mode"], approval["mode"], {
+      originalPath: "approval.mode",
+      legacyApprovalAlias: true,
+    }),
+  };
 }

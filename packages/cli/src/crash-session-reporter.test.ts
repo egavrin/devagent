@@ -2,23 +2,28 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createCrashSessionReporter } from "./main.js";
 
+type CrashEvent = "SIGINT" | "uncaughtException" | "unhandledRejection";
+
+function createMockCrashProcess() {
+  const write = vi.fn(() => true);
+  const onceHandlers = new Map<string, (...args: any[]) => void>();
+  const exit = vi.fn(() => {
+    throw new Error("exit");
+  }) as unknown as (code?: number) => never;
+  const proc = {
+    stderr: { write },
+    once: (event: CrashEvent, listener: (...args: any[]) => void) => {
+      onceHandlers.set(event, listener);
+    },
+    off: vi.fn(),
+    exit,
+  };
+  return { exit, onceHandlers, proc, write };
+}
+
 describe("createCrashSessionReporter", () => {
   it("prints session id on SIGINT and exits 130", () => {
-    const write = vi.fn(() => true);
-    const onceHandlers = new Map<string, (...args: any[]) => void>();
-    const off = vi.fn();
-    const exit = vi.fn(() => {
-      throw new Error("exit");
-    }) as unknown as (code?: number) => never;
-
-    const proc = {
-      stderr: { write },
-      once: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => {
-        onceHandlers.set(event, listener);
-      },
-      off,
-      exit,
-    };
+    const { exit, onceHandlers, proc, write } = createMockCrashProcess();
 
     createCrashSessionReporter("s-123", "normal", proc);
 
@@ -28,20 +33,7 @@ describe("createCrashSessionReporter", () => {
   });
 
   it("prints crash error and session id on uncaughtException", () => {
-    const write = vi.fn(() => true);
-    const onceHandlers = new Map<string, (...args: any[]) => void>();
-    const exit = vi.fn(() => {
-      throw new Error("exit");
-    }) as unknown as (code?: number) => never;
-
-    const proc = {
-      stderr: { write },
-      once: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => {
-        onceHandlers.set(event, listener);
-      },
-      off: vi.fn(),
-      exit,
-    };
+    const { exit, onceHandlers, proc, write } = createMockCrashProcess();
 
     createCrashSessionReporter("s-456", "normal", proc);
 
@@ -52,20 +44,7 @@ describe("createCrashSessionReporter", () => {
   });
 
   it("prints crash error and session id on unhandledRejection", () => {
-    const write = vi.fn(() => true);
-    const onceHandlers = new Map<string, (...args: any[]) => void>();
-    const exit = vi.fn(() => {
-      throw new Error("exit");
-    }) as unknown as (code?: number) => never;
-
-    const proc = {
-      stderr: { write },
-      once: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => {
-        onceHandlers.set(event, listener);
-      },
-      off: vi.fn(),
-      exit,
-    };
+    const { exit, onceHandlers, proc, write } = createMockCrashProcess();
 
     createCrashSessionReporter("s-789", "normal", proc);
 
@@ -76,20 +55,7 @@ describe("createCrashSessionReporter", () => {
   });
 
   it("does not print in quiet mode", () => {
-    const write = vi.fn(() => true);
-    const onceHandlers = new Map<string, (...args: any[]) => void>();
-    const exit = vi.fn(() => {
-      throw new Error("exit");
-    }) as unknown as (code?: number) => never;
-
-    const proc = {
-      stderr: { write },
-      once: (event: "SIGINT" | "uncaughtException" | "unhandledRejection", listener: (...args: any[]) => void) => {
-        onceHandlers.set(event, listener);
-      },
-      off: vi.fn(),
-      exit,
-    };
+    const { onceHandlers, proc, write } = createMockCrashProcess();
 
     createCrashSessionReporter("s-q", "quiet", proc);
 

@@ -6,7 +6,6 @@ import type {
   ProviderConfig,
   ReasoningEffort,
 } from "@devagent/runtime";
-
 export function buildProviderConfig(
   config: DevAgentConfig,
   reasoningEffort?: ReasoningEffort,
@@ -16,25 +15,35 @@ export function buildProviderConfig(
     model: config.model,
   };
   const registryCaps = lookupModelCapabilities(config.model, config.provider);
-  const resolvedReasoningEffort = agentType
-    ? config.agentReasoningOverrides?.[agentType] ?? reasoningEffort
-    : reasoningEffort;
+  const resolvedReasoningEffort = resolveReasoningEffort(config, reasoningEffort, agentType);
   const shouldUseDevagentApiMainDefault =
     config.provider === "devagent-api" &&
     agentType === undefined &&
     resolvedReasoningEffort === undefined &&
     baseProviderConfig.reasoningEffort === undefined;
+  const reasoningConfig = resolvedReasoningEffort
+    ? { reasoningEffort: resolvedReasoningEffort }
+    : getDefaultReasoningConfig(shouldUseDevagentApiMainDefault);
+  const capabilityConfig = !baseProviderConfig.capabilities && registryCaps
+    ? { capabilities: registryCaps }
+    : {};
 
   return {
     ...baseProviderConfig,
     model: config.model,
-    ...(resolvedReasoningEffort
-      ? { reasoningEffort: resolvedReasoningEffort }
-      : shouldUseDevagentApiMainDefault
-        ? { reasoningEffort: "high" }
-        : {}),
-    ...(!baseProviderConfig.capabilities && registryCaps
-      ? { capabilities: registryCaps }
-      : {}),
+    ...reasoningConfig,
+    ...capabilityConfig,
   };
+}
+
+function getDefaultReasoningConfig(enabled: boolean): Partial<ProviderConfig> {
+  return enabled ? { reasoningEffort: "high" } : {};
+}
+
+function resolveReasoningEffort(
+  config: DevAgentConfig,
+  reasoningEffort: ReasoningEffort | undefined,
+  agentType: AgentType | undefined,
+): ReasoningEffort | undefined {
+  return agentType ? config.agentReasoningOverrides?.[agentType] ?? reasoningEffort : reasoningEffort;
 }

@@ -87,7 +87,6 @@ describe("parsePromptCommandQuery", () => {
     ]);
   });
 });
-
 describe("preparePromptCommandQuery", () => {
   it("rewrites review commands into a skill-driven local workflow", async () => {
     const prepared = await preparePromptCommandQuery("please /review these changes", {
@@ -186,7 +185,9 @@ describe("preparePromptCommandQuery", () => {
     expect(prepared?.rewrittenQuery).toContain("Launch three readonly `reviewer` delegates");
     expect(prepared?.rewrittenQuery).toContain("remove code aggressively in the main agent before refactoring what remains");
   });
+});
 
+describe("preparePromptCommandQuery explicit preferences", () => {
   it("honors no-delegates and skip-tests directives explicitly", async () => {
     const prepared = await preparePromptCommandQuery(
       "/simplify staged only packages/runtime no delegates skip tests",
@@ -235,22 +236,21 @@ describe("preparePromptCommandQuery", () => {
     expect(prepared?.rewrittenQuery).not.toContain("Launch three readonly `reviewer` delegates before concluding.");
   });
 });
+const reviewSegment = {
+  name: "review" as const,
+  body: "",
+  rawBody: "",
+  targetHint: { kind: "staged" } as const,
+  target: { kind: "staged" } as const,
+  pathFilters: [],
+  focusAreas: [],
+  delegatePreference: "auto" as const,
+  verificationPreference: "normal" as const,
+  start: 0,
+  end: 7,
+};
 
-describe("createPromptCommandFinalTextValidator", () => {
-  const reviewSegment = {
-    name: "review" as const,
-    body: "",
-    rawBody: "",
-    targetHint: { kind: "staged" } as const,
-    target: { kind: "staged" } as const,
-    pathFilters: [],
-    focusAreas: [],
-    delegatePreference: "auto" as const,
-    verificationPreference: "normal" as const,
-    start: 0,
-    end: 7,
-  };
-
+describe("createPromptCommandFinalTextValidator success cases", () => {
   it("accepts review output with blocking and non-blocking sections", () => {
     const validator = createPromptCommandFinalTextValidator([
       reviewSegment,
@@ -294,7 +294,9 @@ describe("createPromptCommandFinalTextValidator", () => {
       ].join("\n")),
     ).toEqual({ valid: true });
   });
+});
 
+describe("createPromptCommandFinalTextValidator", () => {
   it("rejects malformed review findings", () => {
     const validator = createPromptCommandFinalTextValidator([
       reviewSegment,

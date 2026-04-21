@@ -254,7 +254,6 @@ describe("loadQueryFromFile", () => {
       .toThrow("Input file is empty: empty.md");
   });
 });
-
 describe("renderHelpText", () => {
   it("includes the file flag", () => {
     expect(renderHelpText()).toContain("-f, --file <path>    Read query from file");
@@ -322,6 +321,9 @@ describe("renderHelpText", () => {
     expect(builtHelp.trim()).toBe(renderHelpText().trim());
   });
 
+});
+
+describe("renderHelpText built CLI parity", () => {
   it("matches the built CLI help alias output after build", () => {
     execFileSync("bun", ["run", "build"], {
       cwd: cliPackageDir,
@@ -387,7 +389,9 @@ describe("renderHelpText", () => {
       expect(execError.stderr).not.toContain('Environment variable "OPENAI_API_KEY" referenced in config but not set');
     }
   });
+});
 
+describe("CLI startup config validation", () => {
   it("reports the selected provider when an inactive config env ref is unset", () => {
     execFileSync("bun", ["run", "build"], {
       cwd: join(cliPackageDir, "..", "runtime"),
@@ -509,7 +513,9 @@ describe("renderHelpText", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+});
 
+describe("CLI resume preflight", () => {
   it("reports a missing recent session before provider auth on --continue", () => {
     const home = mkdtempSync(join(tmpdir(), "devagent-continue-home-"));
     try {
@@ -655,72 +661,69 @@ function createSessionTestConfig(): DevAgentConfig {
   } as unknown as DevAgentConfig;
 }
 
-describe("setupSessionPersistence", () => {
-  function createMemorySessionStore(): SessionStore {
-    const sessions = new Map<string, Session>();
-    const sessionState = new Map<string, Record<string, unknown>>();
-    let nextId = 1;
+function createMemorySessionStore(): SessionStore {
+  const sessions = new Map<string, Session>();
+  const sessionState = new Map<string, Record<string, unknown>>();
+  let nextId = 1;
 
-    return {
-      createSession(metadata?: Record<string, unknown>): Session {
-        const now = Date.now();
-        const session = {
-          id: `session-${nextId++}`,
-          createdAt: now,
-          updatedAt: now,
-          messages: [],
-          metadata: metadata ?? {},
-        } satisfies Session;
-        sessions.set(session.id, session);
-        return session;
-      },
-      getSession(id: string): Session | null {
-        return sessions.get(id) ?? null;
-      },
-      listSessions(limit: number = 50): ReadonlyArray<Session> {
-        return [...sessions.values()]
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-          .slice(0, limit);
-      },
-      updateSessionMetadata(id: string, patch: Record<string, unknown>): Session | null {
-        const session = sessions.get(id);
-        if (!session) {
-          return null;
-        }
-        const updated = {
-          ...session,
-          updatedAt: Date.now(),
-          metadata: {
-            ...session.metadata,
-            ...patch,
-          },
-        } satisfies Session;
-        sessions.set(id, updated);
-        return updated;
-      },
-      addMessage(sessionId: string, message: Session["messages"][number]): void {
-        const session = sessions.get(sessionId);
-        if (!session) {
-          throw new Error(`missing session ${sessionId}`);
-        }
-        const updated = {
-          ...session,
-          updatedAt: Date.now(),
-          messages: [...session.messages, message],
-        } satisfies Session;
-        sessions.set(sessionId, updated);
-      },
-      addCostRecord(): void {},
-      saveCompactionEvent(): void {},
-      saveSessionState(id: string, state: object): void {
-        sessionState.set(id, state as Record<string, unknown>);
-      },
-      loadSessionState(id: string): Record<string, unknown> | null {
-        return sessionState.get(id) ?? null;
-      },
-      close(): void {},
-    } as unknown as SessionStore;
-  }
+  return {
+    createSession(metadata?: Record<string, unknown>): Session {
+      const now = Date.now();
+      const session = {
+        id: `session-${nextId++}`,
+        createdAt: now,
+        updatedAt: now,
+        messages: [],
+        metadata: metadata ?? {},
+      } satisfies Session;
+      sessions.set(session.id, session);
+      return session;
+    },
+    getSession(id: string): Session | null {
+      return sessions.get(id) ?? null;
+    },
+    listSessions(limit: number = 50): ReadonlyArray<Session> {
+      return [...sessions.values()]
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, limit);
+    },
+    updateSessionMetadata(id: string, patch: Record<string, unknown>): Session | null {
+      const session = sessions.get(id);
+      if (!session) return null;
+      const updated = {
+        ...session,
+        updatedAt: Date.now(),
+        metadata: {
+          ...session.metadata,
+          ...patch,
+        },
+      } satisfies Session;
+      sessions.set(id, updated);
+      return updated;
+    },
+    addMessage(sessionId: string, message: Session["messages"][number]): void {
+      const session = sessions.get(sessionId);
+      if (!session) throw new Error(`missing session ${sessionId}`);
+      const updated = {
+        ...session,
+        updatedAt: Date.now(),
+        messages: [...session.messages, message],
+      } satisfies Session;
+      sessions.set(sessionId, updated);
+    },
+    addCostRecord(): void {},
+    saveCompactionEvent(): void {},
+    saveSessionState(id: string, state: object): void {
+      sessionState.set(id, state as Record<string, unknown>);
+    },
+    loadSessionState(id: string): Record<string, unknown> | null {
+      return sessionState.get(id) ?? null;
+    },
+    close(): void {},
+  } as unknown as SessionStore;
+}
+
+describe("setupSessionPersistence", () => {
 
   it("does not create a session before activation", async () => {
     const store = createMemorySessionStore();
@@ -831,7 +834,9 @@ describe("setupSessionPersistence", () => {
     expect(persistence.initialMessages).toEqual(restoredSession.messages);
     expect(persistence.resumeBriefing).toBeUndefined();
   });
+});
 
+describe("setupSessionPersistence session lifecycle", () => {
   it("creates a fresh session only after clear-style deactivation", async () => {
     const store = createMemorySessionStore();
     const persistence = await setupSessionPersistence(

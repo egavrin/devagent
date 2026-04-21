@@ -7,8 +7,7 @@ import {
   presentSummaryToolMessage,
   presentToolAfterEvent,
 } from "./transcript-presenter.js";
-
-describe("transcript-presenter", () => {
+describe("transcript-presenter tool events", () => {
   it("emits tool plus file-edit parts for tool:after file edits", () => {
     const parts = presentToolAfterEvent({
       name: "write_file",
@@ -100,7 +99,9 @@ describe("transcript-presenter", () => {
     expect(parts[1]?.kind).toBe("validation-result");
     expect(parts[2]?.kind).toBe("diagnostic-list");
   });
+});
 
+describe("transcript-presenter status events", () => {
   it("emits progress parts for context compaction", () => {
     const part = presentContextCompactingEvent({
       estimatedTokens: 96000,

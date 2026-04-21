@@ -48,8 +48,11 @@ import type {
   ApprovalPolicy,
   DevAgentConfig,
   FinalTextValidator,
+  LLMProvider,
   Message,
   SessionStateJSON,
+  SkillRegistry,
+  ToolRegistry,
 } from "@devagent/runtime";
 import type { ContinuationSession } from "@devagent-sdk/types";
 
@@ -91,6 +94,29 @@ interface ResolvedWorkflowContinuation {
   readonly query: string;
   readonly initialMessages: Message[] | undefined;
   readonly sessionState: SessionStateJSON | undefined;
+}
+
+interface WorkflowConfigResult {
+  readonly config: DevAgentConfig;
+  readonly approvalMode: ApprovalMode;
+}
+
+interface WorkflowToolSetup {
+  readonly skills: SkillRegistry;
+  readonly toolRegistry: ToolRegistry;
+}
+
+interface WorkflowLoopSetup {
+  readonly bus: EventBus;
+  readonly config: DevAgentConfig;
+  readonly contextManager: ContextManager;
+  readonly doubleCheck: DoubleCheck;
+  readonly gate: ApprovalGate;
+  readonly provider: LLMProvider;
+  readonly sessionState: SessionState;
+  readonly skills: SkillRegistry;
+  readonly systemPrompt: string;
+  readonly toolRegistry: ToolRegistry;
 }
 
 const PLAN_FREE_WORKFLOW_TASK_TYPES = new Set([
@@ -197,19 +223,13 @@ function loadContinuationPayload(session: ContinuationSession | undefined): Head
     sessionState: session.payload.sessionState as SessionStateJSON | undefined,
   };
 }
-
 export function resolveWorkflowContinuation(
   query: string,
   options: WorkflowQueryOptions["continuation"],
 ): ResolvedWorkflowContinuation {
   const previousSession = loadContinuationPayload(options?.session);
   const isResume = options?.mode === "resume";
-  const parts = [
-    isResume ? "Continue the prior session using the preserved context below." : "",
-    options?.reason ? `Continuation reason: ${options.reason}` : "",
-    options?.instructions ? `Continuation instructions:\n${options.instructions}` : "",
-    query,
-  ].filter(Boolean);
+  const parts = buildContinuationQueryParts(query, options, isResume);
 
   return {
     query: parts.length === 1 ? query : parts.join("\n\n"),
@@ -218,132 +238,135 @@ export function resolveWorkflowContinuation(
   };
 }
 
-export async function setupAndRunWorkflowQuery(
-  options: WorkflowQueryOptions,
-): Promise<WorkflowQueryResult> {
-  const projectRoot = options.repoPath;
+function buildContinuationQueryParts(
+  query: string,
+  options: WorkflowQueryOptions["continuation"],
+  isResume: boolean,
+): string[] {
+  return [
+    isResume ? "Continue the prior session using the preserved context below." : "",
+    options?.reason ? `Continuation reason: ${options.reason}` : "",
+    options?.instructions ? `Continuation instructions:\n${options.instructions}` : "",
+    query,
+  ].filter(Boolean);
+}
 
-  // 1. Load config with CLI overrides
-  const approvalMode = (
-    { "suggest": ApprovalMode.SUGGEST, "auto-edit": ApprovalMode.AUTO_EDIT, "full-auto": ApprovalMode.FULL_AUTO }
-  )[options.approvalMode] ?? ApprovalMode.FULL_AUTO;
-
+async function loadWorkflowConfig(options: WorkflowQueryOptions): Promise<WorkflowConfigResult> {
+  const approvalMode = resolveWorkflowApprovalMode(options.approvalMode);
   const configOverrides: Partial<DevAgentConfig> = {
     ...(options.provider ? { provider: options.provider } : {}),
     ...(options.model ? { model: options.model } : {}),
     approval: { mode: approvalMode } as ApprovalPolicy,
   };
-
-  let config = loadConfig(projectRoot, configOverrides);
-  config = await resolveProviderCredentials(config);
-
+  let config = await resolveProviderCredentials(loadConfig(options.repoPath, configOverrides));
   if (options.maxIterations) {
     config = { ...config, budget: { ...config.budget, maxIterations: options.maxIterations } };
   }
+  loadBundledModelRegistry(options.repoPath);
+  assertWorkflowProviderModel(config);
+  return { config: applyModelRegistryBudget(config), approvalMode };
+}
 
-  // Load model registry
+function resolveWorkflowApprovalMode(value: string): ApprovalMode {
+  return (
+    { "suggest": ApprovalMode.SUGGEST, "auto-edit": ApprovalMode.AUTO_EDIT, "full-auto": ApprovalMode.FULL_AUTO }
+  )[value] ?? ApprovalMode.FULL_AUTO;
+}
+
+function loadBundledModelRegistry(projectRoot: string): void {
   const cliDir = dirname(fileURLToPath(import.meta.url));
-  const devagentModelsDir = resolveBundledModelsDir(cliDir);
-  loadModelRegistry(projectRoot, [devagentModelsDir]);
+  loadModelRegistry(projectRoot, [resolveBundledModelsDir(cliDir)]);
+}
 
+function assertWorkflowProviderModel(config: DevAgentConfig): void {
   const providerModelIssue = getProviderModelCompatibilityIssue(config.provider, config.model);
-  if (providerModelIssue) {
-    const hint = formatProviderModelCompatibilityHint(providerModelIssue);
-    const message = hint
-      ? `${formatProviderModelCompatibilityError(providerModelIssue)} ${hint}`
-      : formatProviderModelCompatibilityError(providerModelIssue);
-    throw new Error(message);
+  if (!providerModelIssue) {
+    return;
   }
+  const hint = formatProviderModelCompatibilityHint(providerModelIssue);
+  const message = hint
+    ? `${formatProviderModelCompatibilityError(providerModelIssue)} ${hint}`
+    : formatProviderModelCompatibilityError(providerModelIssue);
+  throw new Error(message);
+}
 
-  // Auto-size context budget from model registry
+function applyModelRegistryBudget(config: DevAgentConfig): DevAgentConfig {
   const registryEntry = lookupModelEntry(config.model, config.provider);
-  if (registryEntry && config.budget.maxContextTokens === DEFAULT_BUDGET.maxContextTokens) {
-    config = {
-      ...config,
-      budget: {
-        ...config.budget,
-        maxContextTokens: registryEntry.contextWindow,
-        responseHeadroom: registryEntry.responseHeadroom,
-      },
-    };
+  if (!registryEntry || config.budget.maxContextTokens !== DEFAULT_BUDGET.maxContextTokens) {
+    return config;
   }
+  return {
+    ...config,
+    budget: {
+      ...config.budget,
+      maxContextTokens: registryEntry.contextWindow,
+      responseHeadroom: registryEntry.responseHeadroom,
+    },
+  };
+}
 
-  // 2. Create provider
-  const providerRegistry = createDefaultRegistry();
-  const provider = providerRegistry.get(
-    config.provider,
-    buildProviderConfig(config, options.reasoning as "low" | "medium" | "high" | "xhigh" | undefined),
-  );
-
-  // 3. Set up tools (lightweight shared runtime bootstrap)
-  const bus = new EventBus();
-  const gate = new ApprovalGate(config.approval, bus);
-
-  const continuation = resolveWorkflowContinuation(options.query, options.continuation);
-  const sessionState = continuation.sessionState
+function createWorkflowSessionState(
+  continuation: ResolvedWorkflowContinuation,
+  config: DevAgentConfig,
+): SessionState {
+  return continuation.sessionState
     ? SessionState.fromJSON(continuation.sessionState, config.sessionState)
     : new SessionState(config.sessionState);
+}
 
-  // Skills
+function setupWorkflowTools(
+  options: WorkflowQueryOptions,
+  setup: Pick<WorkflowLoopSetup, "bus" | "config" | "gate" | "provider" | "sessionState">,
+): WorkflowToolSetup {
   const { skills, skillResolver, skillAccess, toolRegistry } = createSkillInfrastructure(
-    projectRoot,
-    sessionState,
+    options.repoPath,
+    setup.sessionState,
     READONLY_WORKFLOW_TASK_TYPES.has(options.taskType ?? "")
       ? { additionalDeferredToolNames: EXTRA_DEFERRED_READONLY_WORKFLOW_TOOLS }
       : undefined,
   );
-
-  // Prompt-only workflow stages should return an artifact directly instead of
-  // getting trapped in iterative update_plan loops.
   if (shouldEnableWorkflowPlanTool(options.taskType)) {
-    toolRegistry.register(createPlanTool(
-      bus,
-      () => sessionState,
-      () => 0,
-      async () => null,
-    ));
+    toolRegistry.register(createPlanTool(setup.bus, () => setup.sessionState, () => 0, async () => null));
   }
-  toolRegistry.register(createFindingTool(() => sessionState, () => 0));
+  toolRegistry.register(createFindingTool(() => setup.sessionState, () => 0));
   toolRegistry.register(createSkillTool(skills, skillResolver, { skillAccess }));
+  registerWorkflowDelegateTool(options, { ...setup, skills, toolRegistry });
+  return { skills, toolRegistry };
+}
 
-  // Tool scripts + delegate
-  toolRegistry.register(createToolScriptTool({ registry: toolRegistry, bus }));
-  const agentRegistry = new AgentRegistry();
-  toolRegistry.register(createDelegateTool({
-    provider,
-    tools: toolRegistry,
-    bus,
-    approvalGate: gate,
-    config,
-    repoRoot: projectRoot,
-    agentRegistry,
+function registerWorkflowDelegateTool(
+  options: WorkflowQueryOptions,
+  setup: Pick<WorkflowLoopSetup, "bus" | "config" | "gate" | "provider" | "sessionState" | "skills" | "toolRegistry">,
+): void {
+  setup.toolRegistry.register(createToolScriptTool({ registry: setup.toolRegistry, bus: setup.bus }));
+  const providerRegistry = createDefaultRegistry();
+  setup.toolRegistry.register(createDelegateTool({
+    provider: setup.provider,
+    tools: setup.toolRegistry,
+    bus: setup.bus,
+    approvalGate: setup.gate,
+    config: setup.config,
+    repoRoot: options.repoPath,
+    agentRegistry: new AgentRegistry(),
     parentAgentId: "workflow",
-    getParentSessionState: () => sessionState,
+    getParentSessionState: () => setup.sessionState,
     depth: 0,
     parentAgentType: AgentType.GENERAL,
     ambient: {
-      skills,
+      skills: setup.skills,
       approvalMode: options.approvalMode,
-      providerLabel: `${config.provider} / ${config.model}`,
-      providerFactory: (agentConfig, agentType) => {
-        return providerRegistry.get(
-          agentConfig.provider,
-          buildProviderConfig(
-            agentConfig,
-            options.reasoning as "low" | "medium" | "high" | "xhigh" | undefined,
-            agentType,
-          ),
-        );
-      },
+      providerLabel: `${setup.config.provider} / ${setup.config.model}`,
+      providerFactory: (agentConfig, agentType) => providerRegistry.get(
+        agentConfig.provider,
+        buildProviderConfig(agentConfig, options.reasoning as "low" | "medium" | "high" | "xhigh" | undefined, agentType),
+      ),
     },
   }));
+}
 
-  // DoubleCheck (auto-enable in full-auto)
-  const isFullAuto = config.approval.mode === ApprovalMode.FULL_AUTO;
-  const dcEnabled = config.doubleCheck?.enabled ?? isFullAuto;
-  const autoTestCommand = dcEnabled && !config.doubleCheck?.testCommand
-    ? detectProjectTestCommand(projectRoot)
-    : null;
+function createWorkflowDoubleCheck(config: DevAgentConfig, bus: EventBus, projectRoot: string): DoubleCheck {
+  const dcEnabled = config.doubleCheck?.enabled ?? config.approval.mode === ApprovalMode.FULL_AUTO;
+  const autoTestCommand = resolveAutoTestCommand(config, dcEnabled, projectRoot);
   const doubleCheck = new DoubleCheck({
     ...DEFAULT_DOUBLE_CHECK_OPTIONS,
     ...config.doubleCheck,
@@ -354,11 +377,17 @@ export async function setupAndRunWorkflowQuery(
   if (autoTestCommand) {
     doubleCheck.setTestRunner(createShellTestRunner(projectRoot));
   }
+  return doubleCheck;
+}
 
-  // Context
-  const contextManager = new ContextManager(config.context);
+function resolveAutoTestCommand(config: DevAgentConfig, enabled: boolean, projectRoot: string): string | null {
+  if (!enabled || config.doubleCheck?.testCommand) {
+    return null;
+  }
+  return detectProjectTestCommand(projectRoot);
+}
 
-  // 4. Log events to JSONL file
+function appendWorkflowToolEvents(bus: EventBus, eventsPath: string): void {
   bus.on("tool:after", (event) => {
     const line = JSON.stringify({
       type: "tool_call",
@@ -368,55 +397,81 @@ export async function setupAndRunWorkflowQuery(
       ...(typeof event.batchSize === "number" ? { batchSize: event.batchSize } : {}),
       timestamp: new Date().toISOString(),
     }) + "\n";
-    try { appendFileSync(options.eventsPath, line); } catch { /* best-effort */ }
+    try { appendFileSync(eventsPath, line); } catch { /* best-effort */ }
   });
+}
 
-  // 5. Load repo context (WORKFLOW.md, AGENTS.md, instructions)
-  const repoContext = loadRepoContext(projectRoot);
-  const repoContextPrompt = buildContextPrompt(repoContext);
-
-  // 6. Assemble system prompt
+function buildWorkflowSystemPrompt(options: WorkflowQueryOptions, setup: WorkflowLoopSetup): string {
   const baseSystemPrompt = assembleSystemPrompt({
     mode: "act",
-    skills,
-    repoRoot: projectRoot,
-    availableTools: toolRegistry.getLoaded(),
-    deferredTools: toolRegistry.getDeferred(),
+    skills: setup.skills,
+    repoRoot: options.repoPath,
+    availableTools: setup.toolRegistry.getLoaded(),
+    deferredTools: setup.toolRegistry.getDeferred(),
     approvalMode: options.approvalMode,
     provider: options.provider,
     model: options.model,
-    agentModelOverrides: config.agentModelOverrides,
-    agentReasoningOverrides: config.agentReasoningOverrides,
+    agentModelOverrides: setup.config.agentModelOverrides,
+    agentReasoningOverrides: setup.config.agentReasoningOverrides,
   });
-
+  const repoContextPrompt = buildContextPrompt(loadRepoContext(options.repoPath));
   const requestedSkillsPrompt = options.requestedSkills?.length
     ? `## Requested Skills\n\nThese skills were explicitly requested for this task: ${options.requestedSkills.join(", ")}.`
     : "";
+  return [baseSystemPrompt, repoContextPrompt, requestedSkillsPrompt].filter(Boolean).join("\n\n");
+}
 
-  // Append repo context after the base system prompt
-  const contextSections = [
-    baseSystemPrompt,
-    repoContextPrompt,
-    requestedSkillsPrompt,
-  ].filter(Boolean);
-  const systemPrompt = contextSections.join("\n\n");
-
-  // 6. Run TaskLoop
-  const taskLoop = new TaskLoop({
-    provider,
-    tools: toolRegistry,
-    bus,
-    approvalGate: gate,
-    config,
-    systemPrompt,
-    repoRoot: projectRoot,
+function createWorkflowTaskLoop(
+  options: WorkflowQueryOptions,
+  continuation: ResolvedWorkflowContinuation,
+  setup: WorkflowLoopSetup,
+): TaskLoop {
+  return new TaskLoop({
+    provider: setup.provider,
+    tools: setup.toolRegistry,
+    bus: setup.bus,
+    approvalGate: setup.gate,
+    config: setup.config,
+    systemPrompt: setup.systemPrompt,
+    repoRoot: options.repoPath,
     mode: "act",
-    contextManager,
-    doubleCheck,
-    sessionState,
+    contextManager: setup.contextManager,
+    doubleCheck: setup.doubleCheck,
+    sessionState: setup.sessionState,
     initialMessages: continuation.initialMessages,
     finalTextValidator: createWorkflowFinalTextValidator(options.taskType),
   });
+}
+
+function classifyWorkflowRunStatus(status: string): Pick<WorkflowQueryResult, "outcome" | "outcomeReason" | "success"> {
+  if (status === "budget_exceeded") {
+    return { outcome: "no_progress", outcomeReason: "iteration_limit", success: false };
+  }
+  if (status === "empty_response" || status === "aborted") {
+    return { outcome: "no_progress", outcomeReason: "no_code", success: false };
+  }
+  return { outcome: "completed", success: true };
+}
+export async function setupAndRunWorkflowQuery(
+  options: WorkflowQueryOptions,
+): Promise<WorkflowQueryResult> {
+  const { config } = await loadWorkflowConfig(options);
+  const providerRegistry = createDefaultRegistry();
+  const provider = providerRegistry.get(config.provider, buildProviderConfig(config, options.reasoning as "low" | "medium" | "high" | "xhigh" | undefined));
+  const bus = new EventBus();
+  const gate = new ApprovalGate(config.approval, bus);
+  const continuation = resolveWorkflowContinuation(options.query, options.continuation);
+  const sessionState = createWorkflowSessionState(continuation, config);
+  const contextManager = new ContextManager(config.context);
+  const doubleCheck = createWorkflowDoubleCheck(config, bus, options.repoPath);
+  const tools = setupWorkflowTools(options, { bus, config, gate, provider, sessionState });
+  appendWorkflowToolEvents(bus, options.eventsPath);
+  const setup = {
+    bus, config, contextManager, doubleCheck, gate, provider, sessionState,
+    skills: tools.skills, systemPrompt: "", toolRegistry: tools.toolRegistry,
+  } satisfies WorkflowLoopSetup;
+  const loopSetup = { ...setup, systemPrompt: buildWorkflowSystemPrompt(options, setup) };
+  const taskLoop = createWorkflowTaskLoop(options, continuation, loopSetup);
 
   let responseText = "";
   let iterations = 0;
@@ -441,19 +496,7 @@ export async function setupAndRunWorkflowQuery(
         sessionState: sessionState.toJSON(),
       },
     };
-    if (result.status === "budget_exceeded") {
-      outcome = "no_progress";
-      outcomeReason = "iteration_limit";
-      success = false;
-    } else if (result.status === "empty_response") {
-      outcome = "no_progress";
-      outcomeReason = "no_code";
-      success = false;
-    } else if (result.status === "aborted") {
-      outcome = "no_progress";
-      outcomeReason = "no_code";
-      success = false;
-    }
+    ({ outcome, outcomeReason, success } = classifyWorkflowRunStatus(result.status));
   } catch (err) {
     responseText = extractErrorMessage(err);
     success = false;

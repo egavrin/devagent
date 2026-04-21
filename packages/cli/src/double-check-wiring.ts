@@ -309,6 +309,21 @@ export function createRoutingDiagnosticProvider(
 // ─── Compiler Fallback Provider ──────────────────────────────
 
 const COMPILER_MAX_OUTPUT = 50_000;
+const PER_FILE_COMPILERS = new Set(["gcc", "g++", "pyright", "shellcheck"]);
+
+interface ParsedDiagnostic {
+  readonly message: string;
+  readonly severity: string;
+}
+
+interface CompilerRunOptions {
+  readonly repoRoot: string;
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly diagnosticPattern: RegExp;
+  readonly filePath: string;
+  readonly timeout: number;
+}
 
 /**
  * Create a DiagnosticProvider that runs language-specific compiler/checker
@@ -321,72 +336,6 @@ const COMPILER_MAX_OUTPUT = 50_000;
 export function createCompilerFallbackProvider(
   repoRoot: string,
 ): DiagnosticProvider {
-  // Per-file compilers need the file path appended to args
-  const perFileCompilers = new Set(["gcc", "g++", "pyright", "shellcheck"]);
-
-  /** Parse compiler output into diagnostics for a specific file. */
-  function parseDiagnostics(
-    output: string,
-    diagnosticPattern: RegExp,
-    command: string,
-    filePath: string,
-  ): Array<{ message: string; severity: string }> {
-    const diagnostics: Array<{ message: string; severity: string }> = [];
-    const seen = new Set<string>();
-
-    for (const line of output.split("\n")) {
-      const match = diagnosticPattern.exec(line.trim());
-      if (!match?.groups) continue;
-
-      const { file, line: lineNum, col, message, sev } = match.groups;
-      if (!file || !lineNum) continue;
-
-      // For project-wide compilers (tsc, cargo), filter to the modified file
-      if (!perFileCompilers.has(command)) {
-        const normFile = file.replace(/\\/g, "/");
-        const normTarget = filePath.replace(/\\/g, "/");
-        if (!normTarget.endsWith(normFile) && !normFile.endsWith(normTarget.split("/").pop()!)) {
-          continue;
-        }
-      }
-
-      const severity = sev?.toLowerCase() === "warning" ? "warning" : "error";
-      const diagMsg = `${file}:${lineNum}${col ? `:${col}` : ""}: ${message ?? line}`;
-
-      if (!seen.has(diagMsg)) {
-        seen.add(diagMsg);
-        diagnostics.push({ message: diagMsg, severity });
-      }
-    }
-    return diagnostics;
-  }
-
-  /** Run compiler and parse diagnostics. Returns null if compiler unavailable. */
-  async function tryCompiler(
-    cmd: string,
-    cmdArgs: ReadonlyArray<string>,
-    diagnosticPattern: RegExp,
-    filePath: string,
-    timeout: number,
-  ): Promise<Array<{ message: string; severity: string }> | null> {
-    const finalArgs = perFileCompilers.has(cmd)
-      ? [...cmdArgs, filePath]
-      : [...cmdArgs];
-
-    try {
-      const result = await spawnAndCapture(cmd, finalArgs, {
-        cwd: repoRoot,
-        timeout,
-        maxBytes: COMPILER_MAX_OUTPUT,
-      });
-      if (result.exitCode === 0) return []; // No errors
-      const output = result.stderr || result.stdout;
-      return parseDiagnostics(output, diagnosticPattern, cmd, filePath);
-    } catch {
-      return null; // Compiler not available
-    }
-  }
-
   return async (filePath: string) => {
     const lang = detectLanguage(filePath);
     if (!lang) return [];
@@ -397,23 +346,91 @@ export function createCompilerFallbackProvider(
     const { command, args, diagnosticPattern, timeout, retryCommand, retryArgs } = entry.fallbackCheck;
 
     // Try primary command
-    const result = await tryCompiler(command, args, diagnosticPattern, filePath, timeout);
+    const result = await tryCompiler({ repoRoot, command, args, diagnosticPattern, filePath, timeout });
     if (result !== null) return result;
 
     // Primary failed (compiler not available) — try retry command if configured
     if (retryCommand) {
       const retryResult = await tryCompiler(
-        retryCommand,
-        retryArgs ?? args,
-        diagnosticPattern,
-        filePath,
-        timeout,
+        { repoRoot, command: retryCommand, args: retryArgs ?? args, diagnosticPattern, filePath, timeout },
       );
       if (retryResult !== null) return retryResult;
     }
 
     return []; // No compiler available
   };
+}
+
+function parseDiagnostics(
+  output: string,
+  diagnosticPattern: RegExp,
+  command: string,
+  filePath: string,
+): ParsedDiagnostic[] {
+  const diagnostics: ParsedDiagnostic[] = [];
+  const seen = new Set<string>();
+
+  for (const line of output.split("\n")) {
+    const diagnostic = parseDiagnosticLine(line, diagnosticPattern, command, filePath);
+    if (!diagnostic || seen.has(diagnostic.message)) continue;
+    seen.add(diagnostic.message);
+    diagnostics.push(diagnostic);
+  }
+  return diagnostics;
+}
+
+function parseDiagnosticLine(
+  line: string,
+  diagnosticPattern: RegExp,
+  command: string,
+  filePath: string,
+): ParsedDiagnostic | null {
+  const match = diagnosticPattern.exec(line.trim());
+  if (!match?.groups) return null;
+
+  const { file, line: lineNum, col, message, sev } = match.groups;
+  if (!file || !lineNum || !isRelevantCompilerFile(command, file, filePath)) {
+    return null;
+  }
+
+  return {
+    message: `${file}:${lineNum}${col ? `:${col}` : ""}: ${message ?? line}`,
+    severity: sev?.toLowerCase() === "warning" ? "warning" : "error",
+  };
+}
+
+function isRelevantCompilerFile(command: string, file: string, filePath: string): boolean {
+  if (PER_FILE_COMPILERS.has(command)) {
+    return true;
+  }
+  const normFile = file.replace(/\\/g, "/");
+  const normTarget = filePath.replace(/\\/g, "/");
+  return normTarget.endsWith(normFile) || normFile.endsWith(normTarget.split("/").pop()!);
+}
+
+async function tryCompiler(
+  options: CompilerRunOptions,
+): Promise<ParsedDiagnostic[] | null> {
+  const finalArgs = PER_FILE_COMPILERS.has(options.command)
+    ? [...options.args, options.filePath]
+    : [...options.args];
+
+  try {
+    const result = await spawnAndCapture(options.command, finalArgs, {
+      cwd: options.repoRoot,
+      timeout: options.timeout,
+      maxBytes: COMPILER_MAX_OUTPUT,
+    });
+    if (result.exitCode === 0) return [];
+    return parseDiagnostics(
+      result.stderr || result.stdout,
+      options.diagnosticPattern,
+      options.command,
+      options.filePath,
+    );
+  } catch {
+    return null;
+  }
 }
 
 // ─── Shell Test Runner ─────────────────────────────────────
@@ -584,34 +601,46 @@ export async function lazyUpgradeLSP(
     let startedCount = 0;
 
     for (const server of available) {
-      try {
-        const config: LSPServerConfig = {
-          command: server.command,
-          args: [...server.args],
-          languages: [...server.languages],
-          extensions: [...server.extensions],
-          timeout: 10_000,
-        };
-        await lspRouter.addServer(config);
+      if (await startDetectedLspServer(lspRouter, server)) {
         startedCount++;
         onServerStarted?.(server);
-      } catch {
-        // Server failed to start — skip it, keep compiler fallback for those languages
       }
     }
 
-    if (startedCount > 0) {
-      // Swap diagnostic provider from compiler fallback to LSP routing
-      const diagnosticProvider: DiagnosticProvider = createRoutingDiagnosticProvider(
-        lspRouter,
-        onLSPDiagnostics,
-      );
-
-      doubleCheck.setDiagnosticProvider(diagnosticProvider);
-    }
+    upgradeDiagnosticProvider(startedCount, doubleCheck, lspRouter, onLSPDiagnostics);
 
     onUpgradeComplete?.(startedCount);
   } catch (err) {
     onError?.(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+function upgradeDiagnosticProvider(
+  startedCount: number,
+  doubleCheck: DoubleCheck,
+  lspRouter: LSPRouter,
+  onLSPDiagnostics: (() => void) | undefined,
+): void {
+  if (startedCount === 0) {
+    return;
+  }
+  doubleCheck.setDiagnosticProvider(createRoutingDiagnosticProvider(lspRouter, onLSPDiagnostics));
+}
+
+async function startDetectedLspServer(
+  lspRouter: LSPRouter,
+  server: DetectedLSPServer,
+): Promise<boolean> {
+  try {
+    await lspRouter.addServer({
+      command: server.command,
+      args: [...server.args],
+      languages: [...server.languages],
+      extensions: [...server.extensions],
+      timeout: 10_000,
+    });
+    return true;
+  } catch {
+    return false;
   }
 }

@@ -39,6 +39,14 @@ interface ProviderEntry {
   readonly authMethods: readonly ("api-key" | "browser-oauth" | "device-code")[];
 }
 
+type AuthMethod = "api-key" | "browser-oauth" | "device-code";
+type AuthQuestion = (prompt: string) => Promise<string>;
+
+interface PromptSession {
+  readonly question: AuthQuestion;
+  readonly close: () => void;
+}
+
 const PROVIDER_NAMES: Readonly<Record<string, string>> = {
   anthropic: "Anthropic (API key)",
   openai: "OpenAI (API key)",
@@ -106,124 +114,125 @@ export async function runAuthCommand(subcommand: string, args: ReadonlyArray<str
 }
 
 // ─── Login ──────────────────────────────────────────────────
-
 async function authLogin(): Promise<void> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
-
-  const question = (prompt: string): Promise<string> =>
-    new Promise((resolve) => rl.question(prompt, resolve));
+  const prompt = createPromptSession();
 
   try {
     process.stderr.write(bold("Add credential") + "\n\n");
-
-    // Show provider choices
-    process.stderr.write("Select provider:\n");
-    for (let i = 0; i < KNOWN_PROVIDERS.length; i++) {
-      process.stderr.write(`  ${cyan(String(i + 1))}. ${KNOWN_PROVIDERS[i]!.name}\n`);
-    }
+    const providerEntry = await promptProviderSelection(prompt.question);
+    if (!providerEntry) return;
     process.stderr.write("\n");
 
-    const choice = await question(cyan("> "));
-    const choiceNum = parseInt(choice.trim(), 10);
-
-    let providerId: string;
-    let providerEntry: ProviderEntry | undefined;
-
-    if (choiceNum >= 1 && choiceNum <= KNOWN_PROVIDERS.length) {
-      providerEntry = KNOWN_PROVIDERS[choiceNum - 1]!;
-      providerId = providerEntry.id;
-    } else {
-      // Try treating input as provider name directly
-      const directMatch = KNOWN_PROVIDERS.find(
-        (p) => p.id === choice.trim().toLowerCase(),
-      );
-      if (directMatch) {
-        providerEntry = directMatch;
-        providerId = directMatch.id;
-      } else {
-        process.stderr.write(red("Invalid selection.") + "\n");
-        return;
-      }
-    }
-
-    process.stderr.write("\n");
-
-    // Check if this provider supports OAuth
-    const oauthConfig = getOAuthProvider(providerId);
+    const oauthConfig = getOAuthProvider(providerEntry.id);
     const authMethods = providerEntry?.authMethods ?? ["api-key"];
-
     if (oauthConfig && authMethods.some((m) => m !== "api-key")) {
-      // OAuth provider — choose auth method
-      let authMethod: "browser-oauth" | "device-code" | "api-key";
-
-      if (authMethods.length === 1) {
-        authMethod = authMethods[0]!;
-      } else {
-        process.stderr.write("Authentication method:\n");
-        const options: { label: string; method: "browser-oauth" | "device-code" | "api-key" }[] = [];
-        if (authMethods.includes("browser-oauth")) {
-          options.push({ label: "Browser login (opens browser)", method: "browser-oauth" });
-        }
-        if (authMethods.includes("device-code")) {
-          options.push({ label: "Device code (paste code in browser)", method: "device-code" });
-        }
-        if (authMethods.includes("api-key")) {
-          options.push({ label: "API key", method: "api-key" });
-        }
-
-        for (let i = 0; i < options.length; i++) {
-          process.stderr.write(`  ${cyan(String(i + 1))}. ${options[i]!.label}\n`);
-        }
-        process.stderr.write("\n");
-
-        const methodChoice = await question(cyan("> "));
-        const methodNum = parseInt(methodChoice.trim(), 10);
-        if (methodNum >= 1 && methodNum <= options.length) {
-          authMethod = options[methodNum - 1]!.method;
-        } else {
-          authMethod = options[0]!.method; // Default to first
-        }
-      }
-
+      const authMethod = await promptAuthMethod(authMethods, prompt.question);
       process.stderr.write("\n");
-
-      // Close the readline before OAuth flows (they manage their own I/O)
-      rl.close();
-
-      if (authMethod === "browser-oauth") {
-        await authLoginBrowserOAuth(providerId, oauthConfig);
-      } else if (authMethod === "device-code") {
-        if (providerId === "chatgpt") {
-          await authLoginChatGPTDeviceCode(providerId, oauthConfig);
-        } else {
-          await authLoginDeviceCode(providerId, oauthConfig);
-        }
-      } else {
-        // Fall through to API key — reopen rl
-        const rl2 = createInterface({ input: process.stdin, output: process.stderr });
-        const q2 = (prompt: string): Promise<string> =>
-          new Promise((resolve) => rl2.question(prompt, resolve));
-        try {
-          await authLoginApiKey(providerId, q2);
-        } finally {
-          rl2.close();
-        }
-      }
+      prompt.close();
+      await runOAuthLoginMethod(providerEntry.id, oauthConfig, authMethod);
       return;
     }
 
-    // API key flow
-    if (providerEntry?.hint) {
+    if (providerEntry.hint) {
       process.stderr.write(dim(providerEntry.hint) + "\n");
     }
-    await authLoginApiKey(providerId, question);
+    await authLoginApiKey(providerEntry.id, prompt.question);
   } finally {
-    // rl might already be closed for OAuth flows — safe to call close() multiple times
-    rl.close();
+    prompt.close();
   }
+}
+
+function createPromptSession(): PromptSession {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return {
+    question: (prompt: string) => new Promise((resolve) => rl.question(prompt, resolve)),
+    close: () => rl.close(),
+  };
+}
+
+async function promptProviderSelection(question: AuthQuestion): Promise<ProviderEntry | undefined> {
+  process.stderr.write("Select provider:\n");
+  for (let i = 0; i < KNOWN_PROVIDERS.length; i++) {
+    process.stderr.write(`  ${cyan(String(i + 1))}. ${KNOWN_PROVIDERS[i]!.name}\n`);
+  }
+  process.stderr.write("\n");
+
+  const choice = await question(cyan("> "));
+  const provider = resolveProviderSelection(choice);
+  if (!provider) {
+    process.stderr.write(red("Invalid selection.") + "\n");
+  }
+  return provider;
+}
+
+function resolveProviderSelection(choice: string): ProviderEntry | undefined {
+  const choiceNum = parseInt(choice.trim(), 10);
+  if (choiceNum >= 1 && choiceNum <= KNOWN_PROVIDERS.length) {
+    return KNOWN_PROVIDERS[choiceNum - 1]!;
+  }
+  return KNOWN_PROVIDERS.find((provider) => provider.id === choice.trim().toLowerCase());
+}
+
+async function promptAuthMethod(
+  authMethods: readonly AuthMethod[],
+  question: AuthQuestion,
+): Promise<AuthMethod> {
+  if (authMethods.length === 1) {
+    return authMethods[0]!;
+  }
+  process.stderr.write("Authentication method:\n");
+  const options = buildAuthMethodOptions(authMethods);
+  for (let i = 0; i < options.length; i++) {
+    process.stderr.write(`  ${cyan(String(i + 1))}. ${options[i]!.label}\n`);
+  }
+  process.stderr.write("\n");
+
+  const methodChoice = await question(cyan("> "));
+  const methodNum = parseInt(methodChoice.trim(), 10);
+  return methodNum >= 1 && methodNum <= options.length
+    ? options[methodNum - 1]!.method
+    : options[0]!.method;
+}
+
+function buildAuthMethodOptions(authMethods: readonly AuthMethod[]): Array<{ label: string; method: AuthMethod }> {
+  return [
+    authMethods.includes("browser-oauth")
+      ? { label: "Browser login (opens browser)", method: "browser-oauth" as const }
+      : null,
+    authMethods.includes("device-code")
+      ? { label: "Device code (paste code in browser)", method: "device-code" as const }
+      : null,
+    authMethods.includes("api-key") ? { label: "API key", method: "api-key" as const } : null,
+  ].filter((option): option is { label: string; method: AuthMethod } => option !== null);
+}
+
+async function runOAuthLoginMethod(
+  providerId: string,
+  oauthConfig: OAuthProviderConfig,
+  authMethod: AuthMethod,
+): Promise<void> {
+  if (authMethod === "browser-oauth") {
+    await authLoginBrowserOAuth(providerId, oauthConfig);
+    return;
+  }
+  if (authMethod === "device-code") {
+    await authLoginDeviceFlow(providerId, oauthConfig);
+    return;
+  }
+  const prompt = createPromptSession();
+  try {
+    await authLoginApiKey(providerId, prompt.question);
+  } finally {
+    prompt.close();
+  }
+}
+
+async function authLoginDeviceFlow(providerId: string, oauthConfig: OAuthProviderConfig): Promise<void> {
+  if (providerId === "chatgpt") {
+    await authLoginChatGPTDeviceCode(providerId, oauthConfig);
+    return;
+  }
+  await authLoginDeviceCode(providerId, oauthConfig);
 }
 
 // ─── API Key Login ──────────────────────────────────────────
@@ -516,7 +525,6 @@ export function collectCredentialStatusEntries(
 }
 
 // ─── Logout ─────────────────────────────────────────────────
-
 async function authLogout(args: ReadonlyArray<string> = []): Promise<void> {
   const store = new CredentialStore();
   const stored = store.all();
@@ -527,76 +535,105 @@ async function authLogout(args: ReadonlyArray<string> = []): Promise<void> {
     return;
   }
 
+  if (handleDirectLogout(args, store, stored, ids)) return;
+
+  const prompt = createPromptSession();
+  try {
+    await promptLogoutSelection(prompt.question, store, stored, ids);
+  } finally {
+    prompt.close();
+  }
+}
+
+function handleDirectLogout(
+  args: ReadonlyArray<string>,
+  store: CredentialStore,
+  stored: Readonly<Record<string, CredentialInfo>>,
+  ids: ReadonlyArray<string>,
+): boolean {
   const target = args[0];
   if (args.length > 1) {
-    process.stderr.write(red("Usage: devagent auth logout [provider] | --all") + "\n");
-    process.exit(2);
+    writeLogoutUsageAndExit(2);
   }
   if (target === "--all") {
-    for (const id of ids) {
-      store.remove(id);
-    }
-    process.stderr.write(green("\u2713 Removed all stored credentials") + "\n");
-    return;
+    removeAllCredentials(store, ids);
+    return true;
   }
-
   if (target) {
-    if (!stored[target]) {
-      process.stderr.write(red(`No stored credential found for ${target}.`) + "\n");
-      process.exit(1);
-    }
-    store.remove(target);
-    process.stderr.write(green("\u2713 Removed credential for " + target) + "\n");
+    removeTargetCredential(store, stored, target);
+    return true;
+  }
+  if (!process.stdin.isTTY) {
+    writeLogoutUsageAndExit(2);
+  }
+  return false;
+}
+
+function writeLogoutUsageAndExit(code: number): never {
+  process.stderr.write(red("Usage: devagent auth logout [provider] | --all") + "\n");
+  process.exit(code);
+}
+
+function removeAllCredentials(store: CredentialStore, ids: ReadonlyArray<string>): void {
+  for (const id of ids) {
+    store.remove(id);
+  }
+  process.stderr.write(green("\u2713 Removed all stored credentials") + "\n");
+}
+
+function removeTargetCredential(
+  store: CredentialStore,
+  stored: Readonly<Record<string, CredentialInfo>>,
+  target: string,
+): void {
+  if (!stored[target]) {
+    process.stderr.write(red(`No stored credential found for ${target}.`) + "\n");
+    process.exit(1);
+  }
+  store.remove(target);
+  process.stderr.write(green("\u2713 Removed credential for " + target) + "\n");
+}
+
+async function promptLogoutSelection(
+  question: AuthQuestion,
+  store: CredentialStore,
+  stored: Readonly<Record<string, CredentialInfo>>,
+  ids: ReadonlyArray<string>,
+): Promise<void> {
+  process.stderr.write(bold("Remove stored credential") + "\n\n");
+  writeLogoutOptions(stored, ids);
+
+  const choice = await question(cyan("> "));
+  const choiceNum = parseInt(choice.trim(), 10);
+  if (choiceNum >= 1 && choiceNum <= ids.length) {
+    removeSelectedCredential(store, ids[choiceNum - 1]!);
     return;
   }
-
-  if (!process.stdin.isTTY) {
-    process.stderr.write(red("Usage: devagent auth logout [provider] | --all") + "\n");
-    process.exit(2);
+  if (ids.length > 1 && choiceNum === ids.length + 1) {
+    removeAllCredentials(store, ids);
+    return;
   }
+  process.stderr.write(red("Invalid selection.") + "\n");
+}
 
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
-
-  const question = (prompt: string): Promise<string> =>
-    new Promise((resolve) => rl.question(prompt, resolve));
-
-  try {
-    process.stderr.write(bold("Remove stored credential") + "\n\n");
-
-    for (let i = 0; i < ids.length; i++) {
-      const id = ids[i]!;
-      const cred = stored[id]!;
-      const masked = credentialMask(cred);
-      process.stderr.write(
-        `  ${cyan(String(i + 1))}. ${id} ${dim(masked)}\n`,
-      );
-    }
-    if (ids.length > 1) {
-      process.stderr.write(`  ${cyan(String(ids.length + 1))}. ${yellow("All")}\n`);
-    }
-    process.stderr.write("\n");
-
-    const choice = await question(cyan("> "));
-    const choiceNum = parseInt(choice.trim(), 10);
-
-    if (choiceNum >= 1 && choiceNum <= ids.length) {
-      const id = ids[choiceNum - 1]!;
-      store.remove(id);
-      process.stderr.write(green("\u2713 Removed credential for " + id) + "\n");
-    } else if (ids.length > 1 && choiceNum === ids.length + 1) {
-      for (const id of ids) {
-        store.remove(id);
-      }
-      process.stderr.write(green("\u2713 Removed all stored credentials") + "\n");
-    } else {
-      process.stderr.write(red("Invalid selection.") + "\n");
-    }
-  } finally {
-    rl.close();
+function writeLogoutOptions(
+  stored: Readonly<Record<string, CredentialInfo>>,
+  ids: ReadonlyArray<string>,
+): void {
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i]!;
+    const masked = credentialMask(stored[id]!);
+    process.stderr.write(`  ${cyan(String(i + 1))}. ${id} ${dim(masked)}\n`);
   }
+  if (ids.length > 1) {
+    process.stderr.write(`  ${cyan(String(ids.length + 1))}. ${yellow("All")}\n`);
+  }
+  process.stderr.write("\n");
+}
+
+function removeSelectedCredential(store: CredentialStore, id: string): void {
+  store.remove(id);
+  process.stderr.write(green("\u2713 Removed credential for " + id) + "\n");
 }
 
 // ─── Auth Result Display ────────────────────────────────────

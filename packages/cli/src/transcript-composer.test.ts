@@ -6,8 +6,7 @@ import {
   makeInfoPart,
   makeTurnSummaryPart,
 } from "./transcript-presenter.js";
-
-describe("TranscriptComposer", () => {
+describe("TranscriptComposer standalone and completed turns", () => {
   it("keeps standalone info rows outside turns", () => {
     const composer = new TranscriptComposer();
 
@@ -78,7 +77,9 @@ describe("TranscriptComposer", () => {
     expect(nodes[0].turn.metrics.validationFailed).toBe(false);
     expect(nodes[0].turn.summary?.iterations).toBe(2);
   });
+});
 
+describe("TranscriptComposer active and consecutive turns", () => {
   it("attaches progress, approval, and validation rows to the active turn", () => {
     const composer = new TranscriptComposer();
 

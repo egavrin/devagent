@@ -40,51 +40,60 @@ interface ActiveTurn {
   readonly startedAt: number;
   readonly entries: ReadonlyArray<TurnEntry>;
 }
-
 function createMetrics(
   entries: ReadonlyArray<TurnEntry>,
   summary: PresentedTurnSummary | undefined,
   startedAt: number,
   finishedAt: number,
 ): TurnMetrics {
-  let toolCalls = 0;
-  let filesChanged = 0;
-  let validationFailed = false;
-
-  for (const entry of entries) {
-    switch (entry.part.kind) {
-      case "tool":
-        if (entry.part.event.status === "success" || entry.part.event.status === "error") {
-          toolCalls++;
-        }
-        break;
-      case "tool-group":
-        if (entry.part.event.status === "success" || entry.part.event.status === "error") {
-          toolCalls += entry.part.event.count;
-        }
-        break;
-      case "file-edit":
-        filesChanged++;
-        break;
-      case "file-edit-overflow":
-        filesChanged += entry.part.data.hiddenCount;
-        break;
-      case "validation-result":
-        if (!entry.part.data.passed) validationFailed = true;
-        break;
-      default:
-        break;
-    }
-  }
+  const entryMetrics = entries.map((entry) => getEntryMetrics(entry.part));
 
   return {
-    toolCalls,
-    filesChanged,
-    validationFailed,
+    toolCalls: sumMetric(entryMetrics, "toolCalls"),
+    filesChanged: sumMetric(entryMetrics, "filesChanged"),
+    validationFailed: entryMetrics.some((metrics) => metrics.validationFailed),
     iterations: summary?.iterations ?? 0,
     cost: summary?.cost ?? 0,
     elapsedMs: summary?.elapsedMs ?? Math.max(0, finishedAt - startedAt),
   };
+}
+
+interface EntryMetrics {
+  readonly toolCalls: number;
+  readonly filesChanged: number;
+  readonly validationFailed: boolean;
+}
+
+function getEntryMetrics(part: TranscriptPart): EntryMetrics {
+  return {
+    toolCalls: getPartToolCallCount(part),
+    filesChanged: getPartFileChangeCount(part),
+    validationFailed: part.kind === "validation-result" && !part.data.passed,
+  };
+}
+
+function getPartToolCallCount(part: TranscriptPart): number {
+  if (part.kind === "tool") {
+    return isFinishedToolStatus(part.event.status) ? 1 : 0;
+  }
+  if (part.kind === "tool-group") {
+    return isFinishedToolStatus(part.event.status) ? part.event.count : 0;
+  }
+  return 0;
+}
+
+function isFinishedToolStatus(status: string): boolean {
+  return status === "success" || status === "error";
+}
+
+function getPartFileChangeCount(part: TranscriptPart): number {
+  if (part.kind === "file-edit") return 1;
+  if (part.kind === "file-edit-overflow") return part.data.hiddenCount;
+  return 0;
+}
+
+function sumMetric(metrics: ReadonlyArray<EntryMetrics>, field: "toolCalls" | "filesChanged"): number {
+  return metrics.reduce((total, entry) => total + entry[field], 0);
 }
 
 function inferCompletedStatus(
@@ -95,32 +104,27 @@ function inferCompletedStatus(
   }
   return "completed";
 }
-
 function partBelongsToTurn(part: TranscriptPart): boolean {
-  switch (part.kind) {
-    case "tool":
-    case "tool-group":
-    case "file-edit":
-    case "file-edit-overflow":
-    case "command-result":
-    case "validation-result":
-    case "diagnostic-list":
-    case "status":
-    case "progress":
-    case "approval":
-    case "reasoning":
-    case "plan":
-    case "error":
-    case "final-output":
-    case "info":
-      return true;
-    case "turn-summary":
-    case "user":
-      return false;
-    default:
-      return false;
-  }
+  return TURN_PART_KINDS.has(part.kind);
 }
+
+const TURN_PART_KINDS = new Set<TranscriptPart["kind"]>([
+  "tool",
+  "tool-group",
+  "file-edit",
+  "file-edit-overflow",
+  "command-result",
+  "validation-result",
+  "diagnostic-list",
+  "status",
+  "progress",
+  "approval",
+  "reasoning",
+  "plan",
+  "error",
+  "final-output",
+  "info",
+]);
 
 export class TranscriptComposer {
   private readonly nodes: TranscriptNode[] = [];

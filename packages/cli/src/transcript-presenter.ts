@@ -186,7 +186,6 @@ export function presentToolBeforeEvent(
     },
   };
 }
-
 export function presentToolAfterEvent(
   event: ToolAfterEvent,
   iteration: number,
@@ -194,7 +193,33 @@ export function presentToolAfterEvent(
 ): ReadonlyArray<TranscriptPart> {
   const commandResult = extractCommandResultMetadata(event.result.metadata);
   const validationResult = extractValidationResultMetadata(event.result.metadata);
-  const parts: TranscriptPart[] = [{
+  const parts: TranscriptPart[] = [
+    buildToolAfterPart(event, iteration, maxIterations, commandResult, validationResult),
+  ];
+
+  if (event.result.success) {
+    appendFileEditParts(parts, event);
+  }
+
+  if (commandResult) {
+    parts.push({ kind: "command-result", data: presentCommandResult(event.callId, commandResult) });
+  }
+
+  if (validationResult) {
+    appendValidationParts(parts, event.callId, validationResult);
+  }
+
+  return parts;
+}
+
+function buildToolAfterPart(
+  event: ToolAfterEvent,
+  iteration: number,
+  maxIterations: number,
+  commandResult: ToolCommandResultMetadata | undefined,
+  validationResult: ToolValidationResultMetadata | undefined,
+): TranscriptPart {
+  return {
     kind: "tool",
     event: {
       id: event.callId,
@@ -209,54 +234,46 @@ export function presentToolAfterEvent(
         ? extractToolPreviewForTranscript(event.name, event.result.output)
         : undefined,
     },
-  }];
+  };
+}
 
-  if (event.result.success) {
-    for (const fileEdit of event.fileEdits ?? []) {
-      parts.push({
-        kind: "file-edit",
-        data: {
-          toolId: event.callId,
-          fileEdit,
-          summary: formatFileEditSummary(fileEdit),
-        },
-      });
-    }
-    if ((event.fileEditHiddenCount ?? 0) > 0) {
-      parts.push({
-        kind: "file-edit-overflow",
-        data: { hiddenCount: event.fileEditHiddenCount ?? 0 },
-      });
-    }
-  }
-
-  if (commandResult) {
+function appendFileEditParts(parts: TranscriptPart[], event: ToolAfterEvent): void {
+  for (const fileEdit of event.fileEdits ?? []) {
     parts.push({
-      kind: "command-result",
-      data: presentCommandResult(event.callId, commandResult),
+      kind: "file-edit",
+      data: {
+        toolId: event.callId,
+        fileEdit,
+        summary: formatFileEditSummary(fileEdit),
+      },
     });
   }
-
-  if (validationResult) {
+  if ((event.fileEditHiddenCount ?? 0) > 0) {
     parts.push({
-      kind: "validation-result",
-      data: presentValidationResult(event.callId, validationResult),
+      kind: "file-edit-overflow",
+      data: { hiddenCount: event.fileEditHiddenCount ?? 0 },
     });
-
-    if (validationResult.diagnosticErrors.length > 0) {
-      parts.push({
-        kind: "diagnostic-list",
-        data: {
-          toolId: event.callId,
-          title: `diagnostics (${validationResult.diagnosticErrors.length})`,
-          diagnostics: validationResult.diagnosticErrors.slice(0, MAX_PRESENTED_DIAGNOSTICS),
-          hiddenCount: Math.max(0, validationResult.diagnosticErrors.length - MAX_PRESENTED_DIAGNOSTICS),
-        },
-      });
-    }
   }
+}
 
-  return parts;
+function appendValidationParts(
+  parts: TranscriptPart[],
+  toolId: string,
+  validationResult: ToolValidationResultMetadata,
+): void {
+  parts.push({ kind: "validation-result", data: presentValidationResult(toolId, validationResult) });
+
+  if (validationResult.diagnosticErrors.length > 0) {
+    parts.push({
+      kind: "diagnostic-list",
+      data: {
+        toolId,
+        title: `diagnostics (${validationResult.diagnosticErrors.length})`,
+        diagnostics: validationResult.diagnosticErrors.slice(0, MAX_PRESENTED_DIAGNOSTICS),
+        hiddenCount: Math.max(0, validationResult.diagnosticErrors.length - MAX_PRESENTED_DIAGNOSTICS),
+      },
+    });
+  }
 }
 
 export function presentToolGroupEvent(event: PresentedToolGroup): TranscriptPart {
@@ -348,28 +365,14 @@ export function makeTurnSummaryPart(
 export function makeInfoPart(title: string, lines: ReadonlyArray<string>): TranscriptPart {
   return { kind: "info", data: { title, lines } };
 }
-
 function extractCommandResultMetadata(
   metadata: Record<string, unknown> | undefined,
 ): ToolCommandResultMetadata | undefined {
   const value = metadata?.["commandResult"];
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
-  if (
-    typeof record["command"] !== "string" ||
-    typeof record["cwd"] !== "string" ||
-    typeof record["stdoutPreview"] !== "string" ||
-    typeof record["stderrPreview"] !== "string" ||
-    typeof record["stdoutTruncated"] !== "boolean" ||
-    typeof record["stderrTruncated"] !== "boolean" ||
-    typeof record["timedOut"] !== "boolean" ||
-    typeof record["warningOnly"] !== "boolean"
-  ) {
-    return undefined;
-  }
-
   const exitCode = record["exitCode"];
-  if (!(typeof exitCode === "number" || exitCode === null)) {
+  if (!isCommandResultRecord(record) || !(typeof exitCode === "number" || exitCode === null)) {
     return undefined;
   }
 
@@ -386,41 +389,62 @@ function extractCommandResultMetadata(
   };
 }
 
+function isCommandResultRecord(record: Record<string, unknown>): record is Record<string, unknown> & {
+  command: string;
+  cwd: string;
+  stdoutPreview: string;
+  stderrPreview: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  timedOut: boolean;
+  warningOnly: boolean;
+} {
+  return [
+    typeof record["command"] === "string",
+    typeof record["cwd"] === "string",
+    typeof record["stdoutPreview"] === "string",
+    typeof record["stderrPreview"] === "string",
+    typeof record["stdoutTruncated"] === "boolean",
+    typeof record["stderrTruncated"] === "boolean",
+    typeof record["timedOut"] === "boolean",
+    typeof record["warningOnly"] === "boolean",
+  ].every(Boolean);
+}
+
 function extractValidationResultMetadata(
   metadata: Record<string, unknown> | undefined,
 ): ToolValidationResultMetadata | undefined {
   const value = metadata?.["validationResult"];
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
-  if (
-    typeof record["passed"] !== "boolean" ||
-    !Array.isArray(record["diagnosticErrors"]) ||
-    !record["diagnosticErrors"].every((item) => typeof item === "string") ||
-    !(typeof record["testPassed"] === "boolean" || record["testPassed"] === null)
-  ) {
+  if (!isValidationResultRecord(record)) {
     return undefined;
   }
 
-  const testSummaryValue = record["testSummary"];
-  const testSummary = testSummaryValue && typeof testSummaryValue === "object"
-    && typeof (testSummaryValue as Record<string, unknown>)["framework"] === "string"
-    && typeof (testSummaryValue as Record<string, unknown>)["passed"] === "number"
-    && typeof (testSummaryValue as Record<string, unknown>)["failed"] === "number"
-    && Array.isArray((testSummaryValue as Record<string, unknown>)["failureMessages"])
-    && ((testSummaryValue as Record<string, unknown>)["failureMessages"] as ReadonlyArray<unknown>)
-      .every((item) => typeof item === "string")
-    ? {
-      framework: (testSummaryValue as Record<string, unknown>)["framework"] as string,
-      passed: (testSummaryValue as Record<string, unknown>)["passed"] as number,
-      failed: (testSummaryValue as Record<string, unknown>)["failed"] as number,
-      failureMessages: (testSummaryValue as Record<string, unknown>)["failureMessages"] as ReadonlyArray<string>,
-    }
-    : undefined;
-
   return {
     passed: record["passed"],
-    diagnosticErrors: record["diagnosticErrors"] as ReadonlyArray<string>,
+    diagnosticErrors: record["diagnosticErrors"],
     testPassed: record["testPassed"],
+    ...buildOptionalValidationMetadata(record),
+  };
+}
+
+function isValidationResultRecord(record: Record<string, unknown>): record is Record<string, unknown> & {
+  passed: boolean;
+  diagnosticErrors: ReadonlyArray<string>;
+  testPassed: boolean | null;
+} {
+  return typeof record["passed"] === "boolean" &&
+    Array.isArray(record["diagnosticErrors"]) &&
+    record["diagnosticErrors"].every((item) => typeof item === "string") &&
+    (typeof record["testPassed"] === "boolean" || record["testPassed"] === null);
+}
+
+function buildOptionalValidationMetadata(
+  record: Record<string, unknown>,
+): Partial<ToolValidationResultMetadata> {
+  const testSummary = extractTestSummary(record["testSummary"]);
+  return {
     ...(testSummary ? { testSummary } : {}),
     ...(typeof record["testOutputPreview"] === "string" || record["testOutputPreview"] === null
       ? { testOutputPreview: record["testOutputPreview"] }
@@ -429,6 +453,31 @@ function extractValidationResultMetadata(
       ? { baselineFiltered: record["baselineFiltered"] }
       : {}),
   };
+}
+
+function extractTestSummary(value: unknown): ToolValidationResultMetadata["testSummary"] | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (!isTestSummaryRecord(record)) return undefined;
+  return {
+    framework: record["framework"],
+    passed: record["passed"],
+    failed: record["failed"],
+    failureMessages: record["failureMessages"],
+  };
+}
+
+function isTestSummaryRecord(record: Record<string, unknown>): record is {
+  framework: string;
+  passed: number;
+  failed: number;
+  failureMessages: ReadonlyArray<string>;
+} {
+  return typeof record["framework"] === "string" &&
+    typeof record["passed"] === "number" &&
+    typeof record["failed"] === "number" &&
+    Array.isArray(record["failureMessages"]) &&
+    record["failureMessages"].every((item) => typeof item === "string");
 }
 
 function presentCommandResult(toolId: string, metadata: ToolCommandResultMetadata): PresentedCommandResult {

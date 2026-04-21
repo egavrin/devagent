@@ -21,94 +21,98 @@ import {
 } from "./ToolDisplay.js";
 import type { PresentedStatus } from "../transcript-presenter.js";
 import { cleanTime } from "./shared.js";
-
 export const LogEntryView = React.memo(function LogEntryView({ entry }: { entry: LogEntry }): React.ReactElement | null {
-  switch (entry.part.kind) {
-    case "tool":
-      return <ToolDisplay event={entry.part.event} />;
-    case "tool-group":
-      return <ToolGroupDisplay event={entry.part.event} />;
-    case "file-edit":
-      return <FileEditDisplay data={entry.part.data} />;
-    case "file-edit-overflow":
-      return <Text dimColor>      ... +{entry.part.data.hiddenCount} more files</Text>;
-    case "command-result":
-      return <CommandResultDisplay data={entry.part.data} />;
-    case "validation-result":
-      return <ValidationResultDisplay data={entry.part.data} />;
-    case "diagnostic-list":
-      return <DiagnosticListDisplay data={entry.part.data} />;
-    case "reasoning":
-      return (
-        <Box borderLeft borderColor="gray" paddingLeft={1}>
-          <Text dimColor>ℹ {entry.part.data.text}</Text>
-        </Box>
-      );
-    case "plan":
-      return <PlanView steps={entry.part.data as PlanStep[]} />;
-    case "error": {
-      const err = entry.part.data;
-      return <ErrorView message={err.message} code={err.code} />;
-    }
-    case "status": {
-      return (
-        <TranscriptCard
-          title={entry.part.data.title}
-          color={toneToColor(entry.part.data.tone)}
-          lines={entry.part.data.lines}
-        />
-      );
-    }
-    case "progress": {
-      return (
-        <TranscriptCard
-          title={entry.part.data.title}
-          color="cyan"
-          lines={[entry.part.data.detail ?? "Working…"]}
-        />
-      );
-    }
-    case "approval":
-      return (
-        <TranscriptCard
-          title="approval"
-          color="yellow"
-          lines={[`Awaiting approval for ${entry.part.data.toolName}`, entry.part.data.details]}
-        />
-      );
-    case "final-output":
-      return <FinalOutput text={entry.part.data.text} />;
-    case "turn-summary":
-      return null;
-    case "user":
-      return <TranscriptCard title="you" color="cyan" lines={[`> ${entry.part.data.text}`]} boldBody marginTop={1} />;
-    case "info": {
-      const lines = entry.part.data.lines;
-      const joined = lines.join("\n");
-      if (joined.includes("completed")) {
-        const scoreMatch = joined.match(/(?:score )?(\d+\.\d+),?\s*(?:partial|complete)/);
-        if (scoreMatch) {
-          const score = parseFloat(scoreMatch[1]!);
-          const scoreColor = score >= 0.8 ? "green" : score >= 0.5 ? "yellow" : "red";
-          const matchStart = joined.indexOf(scoreMatch[0]);
-          const beforeScore = joined.slice(0, matchStart);
-          const afterScore = joined.slice(matchStart + scoreMatch[0].length);
-          return (
-            <Text>
-              <Text dimColor>{cleanTime(beforeScore)}</Text>
-              <Text color={scoreColor} bold>{score.toFixed(2)}</Text>
-              <Text dimColor>{afterScore}</Text>
-            </Text>
-          );
-        }
-        return <Text dimColor>{cleanTime(joined)}</Text>;
-      }
-      return <TranscriptCard title={entry.part.data.title} color="gray" lines={lines} />;
-    }
-    default:
-      return null;
-  }
+  const direct = renderDirectEntry(entry);
+  if (direct !== undefined) return direct;
+  return renderCardEntry(entry);
 });
+
+function renderDirectEntry(entry: LogEntry): React.ReactElement | null | undefined {
+  return renderToolEntry(entry) ?? renderMessageEntry(entry);
+}
+
+function renderToolEntry(entry: LogEntry): React.ReactElement | undefined {
+  if (entry.part.kind === "tool") return <ToolDisplay event={entry.part.event} />;
+  if (entry.part.kind === "tool-group") return <ToolGroupDisplay event={entry.part.event} />;
+  if (entry.part.kind === "file-edit") return <FileEditDisplay data={entry.part.data} />;
+  if (entry.part.kind === "file-edit-overflow") {
+    return <Text dimColor>      ... +{entry.part.data.hiddenCount} more files</Text>;
+  }
+  if (entry.part.kind === "command-result") return <CommandResultDisplay data={entry.part.data} />;
+  if (entry.part.kind === "validation-result") return <ValidationResultDisplay data={entry.part.data} />;
+  if (entry.part.kind === "diagnostic-list") return <DiagnosticListDisplay data={entry.part.data} />;
+  return undefined;
+}
+
+function renderMessageEntry(entry: LogEntry): React.ReactElement | null | undefined {
+  if (entry.part.kind === "reasoning") {
+    return (
+      <Box borderLeft borderColor="gray" paddingLeft={1}>
+        <Text dimColor>ℹ {entry.part.data.text}</Text>
+      </Box>
+    );
+  }
+  if (entry.part.kind === "plan") return <PlanView steps={entry.part.data as PlanStep[]} />;
+  if (entry.part.kind === "error") return <ErrorView message={entry.part.data.message} code={entry.part.data.code} />;
+  if (entry.part.kind === "final-output") return <FinalOutput text={entry.part.data.text} />;
+  if (entry.part.kind === "turn-summary") return null;
+  if (entry.part.kind === "info") return <InfoEntry title={entry.part.data.title} lines={entry.part.data.lines} />;
+  return undefined;
+}
+
+function renderCardEntry(entry: LogEntry): React.ReactElement | null {
+  if (entry.part.kind === "status") {
+    return <TranscriptCard title={entry.part.data.title} color={toneToColor(entry.part.data.tone)} lines={entry.part.data.lines} />;
+  }
+  if (entry.part.kind === "progress") {
+    return <TranscriptCard title={entry.part.data.title} color="cyan" lines={[entry.part.data.detail ?? "Working…"]} />;
+  }
+  if (entry.part.kind === "approval") {
+    return <TranscriptCard title="approval" color="yellow" lines={[`Awaiting approval for ${entry.part.data.toolName}`, entry.part.data.details]} />;
+  }
+  if (entry.part.kind === "user") {
+    return <TranscriptCard title="you" color="cyan" lines={[`> ${entry.part.data.text}`]} boldBody marginTop={1} />;
+  }
+  return null;
+}
+
+function InfoEntry(
+  { title, lines }: { readonly title: string; readonly lines: ReadonlyArray<string> },
+): React.ReactElement {
+  const joined = lines.join("\n");
+  if (!joined.includes("completed")) {
+    return <TranscriptCard title={title} color="gray" lines={lines} />;
+  }
+  const score = extractScoreDisplay(joined);
+  if (!score) {
+    return <Text dimColor>{cleanTime(joined)}</Text>;
+  }
+  return (
+    <Text>
+      <Text dimColor>{cleanTime(score.before)}</Text>
+      <Text color={score.color} bold>{score.value.toFixed(2)}</Text>
+      <Text dimColor>{score.after}</Text>
+    </Text>
+  );
+}
+
+function extractScoreDisplay(joined: string): {
+  readonly before: string;
+  readonly after: string;
+  readonly value: number;
+  readonly color: "green" | "yellow" | "red";
+} | null {
+  const scoreMatch = joined.match(/(?:score )?(\d+\.\d+),?\s*(?:partial|complete)/);
+  if (!scoreMatch) return null;
+  const value = parseFloat(scoreMatch[1]!);
+  const matchStart = joined.indexOf(scoreMatch[0]);
+  return {
+    before: joined.slice(0, matchStart),
+    after: joined.slice(matchStart + scoreMatch[0].length),
+    value,
+    color: value >= 0.8 ? "green" : value >= 0.5 ? "yellow" : "red",
+  };
+}
 
 function toneToColor(tone: PresentedStatus["tone"]): "cyan" | "green" | "yellow" | "red" | "gray" {
   switch (tone) {
@@ -120,6 +124,8 @@ function toneToColor(tone: PresentedStatus["tone"]): "cyan" | "green" | "yellow"
       return "red";
     case "info":
       return "cyan";
+    case undefined:
+      return "gray";
     default:
       return "gray";
   }
