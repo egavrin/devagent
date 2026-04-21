@@ -89,7 +89,7 @@ describe("createDefaultRegistry", () => {
     expect(body.messages?.map((message) => message.role)).not.toContain("developer");
   });
 
-  it("keeps devagent-api request rewriting when proxy env vars are configured", async () => {
+  it("keeps devagent-api request rewriting when proxy env vars are configured for loopback", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
     setProxyEnv(originalProxyEnv, {
@@ -100,6 +100,7 @@ describe("createDefaultRegistry", () => {
     const provider = registry.get("devagent-api", {
       model: "cortex",
       apiKey: "test-key",
+      baseUrl: "http://localhost:8080/v1",
       capabilities: {
         useResponsesApi: false,
         reasoning: true,
@@ -120,7 +121,7 @@ describe("createDefaultRegistry", () => {
       messages?: Array<{ role?: string }>;
     };
     expect(headers.get("x-request-id")).toBeTruthy();
-    expect(init.dispatcher).toBeTruthy();
+    expect(init.dispatcher).toBeUndefined();
     expect(body.messages?.map((message) => message.role)).toContain("system");
     expect(body.messages?.map((message) => message.role)).not.toContain("developer");
   });
@@ -185,7 +186,7 @@ describe("createDefaultRegistry", () => {
     expect(body.messages?.map((message) => message.role)).not.toContain("developer");
   });
 
-  it("keeps DeepSeek request rewriting when proxy env vars are configured", async () => {
+  it("keeps DeepSeek request rewriting when proxy env vars are configured for loopback", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
     setProxyEnv(originalProxyEnv, {
@@ -196,6 +197,7 @@ describe("createDefaultRegistry", () => {
     const provider = registry.get("deepseek", {
       model: "deepseek-chat",
       apiKey: "test-key",
+      baseUrl: "http://localhost:8080/v1",
       capabilities: {
         useResponsesApi: false,
         reasoning: true,
@@ -214,7 +216,7 @@ describe("createDefaultRegistry", () => {
     const body = JSON.parse(String(init.body ?? "{}")) as {
       messages?: Array<{ role?: string }>;
     };
-    expect(init.dispatcher).toBeTruthy();
+    expect(init.dispatcher).toBeUndefined();
     expect(body.messages?.map((message) => message.role)).toContain("system");
     expect(body.messages?.map((message) => message.role)).not.toContain("developer");
   });

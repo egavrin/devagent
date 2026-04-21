@@ -54,6 +54,20 @@ export {
 
 export type { ToolCategory } from "./types.js";
 
+// Proxy-aware fetch
+export {
+  BUN_PROXY_UNSUPPORTED_MESSAGE,
+  createProxyAwareFetch,
+  hasProxyEnv,
+  shouldBypassProxy,
+} from "./proxy-fetch.js";
+export type {
+  FetchFn,
+  ProxyAwareFetchOptions,
+  ProxyRuntime,
+  UndiciProxyModule,
+} from "./proxy-fetch.js";
+
 // Event bus
 export { EventBus } from "./events.js";
 export type {

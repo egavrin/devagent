@@ -38,12 +38,14 @@ describe("network proxy helpers", () => {
   it("does not attach a dispatcher when no proxy env vars are set", async () => {
     await withClearedProxyEnvAsync(async () => {
       const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
-      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch);
+      const loadUndici = vi.fn();
+      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch, { loadUndici });
 
       await proxyFetch("https://example.com/v1/models");
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0]?.[1]).toBeUndefined();
+      expect(loadUndici).not.toHaveBeenCalled();
     });
   });
 
@@ -51,7 +53,17 @@ describe("network proxy helpers", () => {
     await withClearedProxyEnvAsync(async () => {
       process.env["HTTPS_PROXY"] = "https://proxy.example.com:8443";
       const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
-      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch);
+      const dispatcher = { dispatch: vi.fn() };
+      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch, {
+        runtime: "node",
+        loadUndici: async () => ({
+          EnvHttpProxyAgent: class {
+            constructor() {
+              return dispatcher;
+            }
+          },
+        }),
+      });
 
       await proxyFetch("https://example.com/v1/models", {
         headers: { "x-test": "1" },
@@ -60,7 +72,20 @@ describe("network proxy helpers", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const init = fetchMock.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown };
       expect(init.headers).toEqual({ "x-test": "1" });
-      expect(init.dispatcher).toBeTruthy();
+      expect(init.dispatcher).toBe(dispatcher);
+    });
+  });
+
+  it("fails clearly under Bun when proxy env vars are set", async () => {
+    await withClearedProxyEnvAsync(async () => {
+      process.env["HTTPS_PROXY"] = "https://proxy.example.com:8443";
+      const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
+      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch, { runtime: "bun" });
+
+      await expect(proxyFetch("https://example.com/v1/models")).rejects.toThrow(
+        "proxy dispatchers require Node.js",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 
@@ -68,11 +93,13 @@ describe("network proxy helpers", () => {
     await withClearedProxyEnvAsync(async () => {
       process.env["HTTPS_PROXY"] = "https://proxy.example.com:8443";
       const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
-      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch);
+      const loadUndici = vi.fn();
+      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch, { runtime: "node", loadUndici });
 
       await proxyFetch("http://localhost:11434/v1/models");
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect((fetchMock.mock.calls[0]?.[1] as { dispatcher?: unknown } | undefined)?.dispatcher).toBeUndefined();
+      expect(loadUndici).not.toHaveBeenCalled();
       expect(shouldBypassProxy("http://127.0.0.1:11434/v1/models")).toBe(true);
       expect(shouldBypassProxy("http://[::1]:11434/v1/models")).toBe(true);
     });

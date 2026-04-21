@@ -3,14 +3,15 @@ import { readFile, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchUrlTool } from "./fetch-url.js";
+import { createProxyAwareFetch, fetchUrlTool } from "./fetch-url.js";
 import type { ToolContext } from "../../core/types.js";
 import type { AddressInfo } from "node:net";
 
 const TEST_SESSION_ID = "fetch-url-test";
 const DOWNLOAD_DIR = join(tmpdir(), "devagent-fetch-url", TEST_SESSION_ID);
+const PROXY_ENV_VARS = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"] as const;
 
 function makeCtx(): ToolContext {
   return {
@@ -113,6 +114,24 @@ async function expectUnknownMimeSaved(
 
 const repeatedPrefix = "a".repeat(2047);
 
+async function withClearedProxyEnv(fn: () => Promise<void>): Promise<void> {
+  const original = new Map<string, string | undefined>();
+  for (const key of PROXY_ENV_VARS) {
+    original.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  try {
+    await fn();
+  } finally {
+    for (const key of PROXY_ENV_VARS) {
+      const value = original.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 describe("fetch_url", () => {
   const closers: Array<() => Promise<void>> = [];
 
@@ -123,7 +142,59 @@ describe("fetch_url", () => {
         await close();
       }
     }
+    vi.restoreAllMocks();
     await rm(DOWNLOAD_DIR, { recursive: true, force: true });
+  });
+
+  it("does not load undici when no proxy env vars are set", async () => {
+    await withClearedProxyEnv(async () => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
+      const loadUndici = vi.fn();
+      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch, { loadUndici });
+
+      await proxyFetch("https://example.com/docs");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[1]).toBeUndefined();
+      expect(loadUndici).not.toHaveBeenCalled();
+    });
+  });
+
+  it("attaches a proxy dispatcher on Node when proxy env vars are set", async () => {
+    await withClearedProxyEnv(async () => {
+      process.env["HTTPS_PROXY"] = "https://proxy.example.com:8443";
+      const dispatcher = { dispatch: vi.fn() };
+      const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
+      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch, {
+        runtime: "node",
+        loadUndici: async () => ({
+          EnvHttpProxyAgent: class {
+            constructor() {
+              return dispatcher;
+            }
+          },
+        }),
+      });
+
+      await proxyFetch("https://example.com/docs", { headers: { accept: "text/plain" } });
+
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown };
+      expect(init.headers).toEqual({ accept: "text/plain" });
+      expect(init.dispatcher).toBe(dispatcher);
+    });
+  });
+
+  it("fails clearly under Bun when proxy env vars are set", async () => {
+    await withClearedProxyEnv(async () => {
+      process.env["HTTPS_PROXY"] = "https://proxy.example.com:8443";
+      const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
+      const proxyFetch = createProxyAwareFetch(fetchMock as typeof globalThis.fetch, { runtime: "bun" });
+
+      await expect(proxyFetch("https://example.com/docs")).rejects.toThrow(
+        "proxy dispatchers require Node.js",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   it("fetches plain text content", async () => {

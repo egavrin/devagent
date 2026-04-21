@@ -23,15 +23,35 @@ async function main(): Promise<void> {
   verifyBundleMarkers();
 
   const nodeBin = resolveNodeBinary();
+  const bunBin = resolveBunBinary();
   const npmBin = resolveNpmBinary();
   const stagedDist = stagePublishRuntime();
   installPublishDependencies(stagedDist, npmBin, nodeBin);
+  const expectedVersion = JSON.parse(readFileSync(join(stagedDist, "package.json"), "utf-8")).version as string;
 
   const isolatedHome = mkdtempSync(join(tmpdir(), "devagent-bundle-smoke-"));
   try {
     runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "--help"], {
       expectedExitCode: 0,
       description: "help smoke",
+      homeDir: isolatedHome,
+    });
+    runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "--version"], {
+      expectedExitCode: 0,
+      expectedOutput: expectedVersion,
+      description: "Node version smoke",
+      homeDir: isolatedHome,
+    });
+    runSmokeCommand(stagedDist, bunBin, ["bootstrap.js", "--version"], {
+      expectedExitCode: 0,
+      expectedOutput: expectedVersion,
+      description: "Bun version smoke",
+      homeDir: isolatedHome,
+    });
+    runSmokeCommand(stagedDist, bunBin, ["bootstrap.js", "--help"], {
+      expectedExitCode: 0,
+      expectedOutput: "devagent",
+      description: "Bun help smoke",
       homeDir: isolatedHome,
     });
     runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "sessions"], {
@@ -94,6 +114,9 @@ function ensureBundleExists(): void {
 
 function verifyBundleMarkers(): void {
   const bundle = readFileSync(BUNDLE_PATH, "utf-8");
+  if (bundle.includes("markAsUncloneable")) {
+    throw new Error("Publish bundle contains undici internals that reference markAsUncloneable; keep undici external.");
+  }
   assertNoAsyncLazyInitNearAnchor(bundle, {
     anchor: "Failed to open session database:",
     label: "SessionStore startup",
@@ -158,6 +181,27 @@ function resolveNpmBinary(): string {
   throw new Error(
     "Could not find npm for publish-bundle smoke tests. Set DEVAGENT_NPM_BIN to an npm executable.",
   );
+}
+
+function resolveBunBinary(): string {
+  const explicit = process.env["DEVAGENT_BUN_BIN"];
+  if (explicit) {
+    validateBunBinary(explicit);
+    return explicit;
+  }
+  validateBunBinary(process.execPath);
+  return process.execPath;
+}
+
+function validateBunBinary(candidate: string): void {
+  const result = spawnSync(
+    candidate,
+    ["-e", "if (!process.versions?.bun) process.exit(1); console.log(process.versions.bun);"],
+    { encoding: "utf-8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(`Expected a real Bun binary for bundle smoke tests, got: ${candidate}`);
+  }
 }
 
 function validateRealNodeBinary(candidate: string, throwOnFailure: boolean = true): boolean {
@@ -295,7 +339,7 @@ function runSmokeCommand(
     );
   }
 
-  for (const crashMarker of ["is not iterable", "is not a constructor"]) {
+  for (const crashMarker of ["is not iterable", "is not a constructor", "markAsUncloneable"]) {
     if (output.includes(crashMarker)) {
       throw new Error(`${options.description} surfaced a startup crash marker: ${crashMarker}\n${output.trim()}`);
     }

@@ -11,9 +11,10 @@
  * Output: dist/  (ready for `npm publish`)
  */
 
+import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
-import { execSync } from "node:child_process";
+
 import { MINIMUM_NODE_MAJOR, renderRuntimeBootstrap } from "../packages/cli/src/runtime-version.ts";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -49,6 +50,7 @@ const result = Bun.spawnSync([
   // External: native addons and optional deps that can't be inlined
   "--external", "cli-highlight",
   "--external", "better-sqlite3",
+  "--external", "undici",
 ], { cwd: ROOT, stdio: ["inherit", "inherit", "inherit"] });
 
 if (result.exitCode !== 0) {
@@ -56,23 +58,12 @@ if (result.exitCode !== 0) {
   process.exit(1);
 }
 
-// Ensure shebang is present and add polyfills for missing Node.js APIs (e.g. Bun < 1.4)
+// Ensure shebang is present
 const bundleContent = readFileSync(join(DIST, "devagent.js"), "utf-8");
-const polyfill = [
-  "// Polyfill markAsUncloneable for Bun (undici@8 requires it from node:worker_threads)",
-  "try { const wt = require('node:worker_threads'); if (!wt.markAsUncloneable) wt.markAsUncloneable = function() {}; } catch {}",
-  "",
-].join("\n");
-if (bundleContent.startsWith("#!/")) {
-  const firstNewline = bundleContent.indexOf("\n");
+if (!bundleContent.startsWith("#!/")) {
   writeFileSync(
     join(DIST, "devagent.js"),
-    bundleContent.slice(0, firstNewline + 1) + polyfill + bundleContent.slice(firstNewline + 1),
-  );
-} else {
-  writeFileSync(
-    join(DIST, "devagent.js"),
-    "#!/usr/bin/env node\n" + polyfill + bundleContent,
+    "#!/usr/bin/env node\n" + bundleContent,
   );
 }
 
@@ -108,6 +99,7 @@ const distPkg = {
     "typescript": "^5.7.0",
     "pyright": "^1.1.0",
     "bash-language-server": "^5.4.0",
+    "undici": "^8.1.0",
   },
 };
 

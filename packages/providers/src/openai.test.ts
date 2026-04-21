@@ -94,28 +94,6 @@ describe("createOpenAIProvider", () => {
     expect(headers.get("x-request-id")).toBe("preset-request-id");
   });
 
-  it("uses proxy-aware transport for remote requests when proxy env vars are set", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(makeStreamingResponse());
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-    setProxyEnv(originalProxyEnv, {
-      HTTPS_PROXY: "https://proxy.example.com:8443",
-    });
-
-    const provider = createOpenAIProvider({
-      model: "gpt-4o",
-      apiKey: "test-key",
-      requestIdHeaderName: "x-request-id",
-    });
-
-    await collectText(provider);
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown };
-    const headers = new Headers(init.headers);
-    expect(headers.get("x-request-id")).toBeTruthy();
-    expect(init.dispatcher).toBeTruthy();
-  });
-
   it("bypasses proxy-aware transport for loopback baseUrls", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeStreamingResponse());
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
