@@ -10,6 +10,7 @@ Use this file when planning coverage or writing the final report.
 - Pass `bun run test:surface-smoke`.
 - Pass `bun run check:oss`.
 - Pass `bun run build:publish`.
+- Pass `bun run check:publint`.
 - Pass `bun run test:bundle-smoke`.
 - Pass `bun run validate:live:provider-smoke` when local provider credentials or services are available.
 - Pass `bun run validate:live:tui` when interactive terminal behavior is in scope.
@@ -26,6 +27,7 @@ Use this file when planning coverage or writing the final report.
 ## Packaging And Install Matrix
 
 - Run `bun run build:publish`.
+- Run `bun run check:publint`.
 - Run `bun run test:bundle-smoke`.
 - Run `cd dist && npm pack`.
 - Install the tarball into a temp prefix and verify `devagent help`, `devagent version`, and `devagent doctor`.

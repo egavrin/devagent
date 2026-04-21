@@ -323,9 +323,9 @@ bun run validate:live:tui
 bun run verify:publish
 ```
 
-Use `typecheck`, `test`, `test:surface-smoke`, and `check:oss` as the fast PR gate for public-surface confidence.
+Use `check:quality`, `test`, `test:surface-smoke`, and `check:oss` as the fast PR gate for public-surface confidence.
 
-Use `validate:live:provider-smoke`, `validate:live:tui`, and `verify:publish` as the broader local release-validation tier for provider credentials, TUI behavior, and publish readiness.
+Use `validate:live:provider-smoke`, `validate:live:tui`, `check:publint:packages`, and `verify:publish` as the broader local release-validation tier for provider credentials, TUI behavior, package shape, and publish readiness.
 
 ## License
 

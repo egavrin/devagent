@@ -6,12 +6,12 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
     "./builtins/patch-parser": {
-      "import": "./dist/tools/builtins/patch-parser.js",
-      "types": "./dist/tools/builtins/patch-parser.d.ts"
+      "types": "./dist/tools/builtins/patch-parser.d.ts",
+      "import": "./dist/tools/builtins/patch-parser.js"
     }
   },
   "scripts": {
@@ -29,8 +29,8 @@
     "vscode-languageserver-protocol": "^3.17.5"
   },
   "devDependencies": {
-    "vitest": "^3.0.0",
     "eslint": "^9.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0"
   }
 }

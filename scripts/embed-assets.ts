@@ -11,9 +11,13 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync } from "node:fs";
-import { join, basename, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
+
+function writeLine(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
 
 function escapeTemplate(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
@@ -41,7 +45,7 @@ for (const file of cliPromptFiles) {
   cliLines.push("");
 }
 writeFileSync(join(cliPromptsDir, "embedded.ts"), cliLines.join("\n"));
-console.log(`✓ CLI prompts: ${cliPromptFiles.length} files → packages/cli/src/prompts/embedded.ts`);
+writeLine(`✓ CLI prompts: ${cliPromptFiles.length} files → packages/cli/src/prompts/embedded.ts`);
 
 // ── Runtime agent prompts ───────────────────────────────────
 
@@ -61,7 +65,7 @@ for (const file of runtimePromptFiles) {
   rtLines.push("");
 }
 writeFileSync(join(runtimePromptsDir, "embedded.ts"), rtLines.join("\n"));
-console.log(`✓ Agent prompts: ${runtimePromptFiles.length} files → packages/runtime/src/engine/prompts/embedded.ts`);
+writeLine(`✓ Agent prompts: ${runtimePromptFiles.length} files → packages/runtime/src/engine/prompts/embedded.ts`);
 
 // ── Model TOML files ────────────────────────────────────────
 
@@ -75,7 +79,7 @@ const modelLines = [
 ];
 for (const file of tomlFiles) {
   const content = readFileSync(join(modelsDir, file), "utf-8");
-  modelLines.push(`  ${JSON.stringify(file)}: \`${escapeTemplate(content)}\`,`);
+  modelLines.push(`  ${JSON.stringify(file)}: ${JSON.stringify(content)},`);
 }
 modelLines.push("};");
 modelLines.push("");
@@ -83,4 +87,4 @@ writeFileSync(
   join(ROOT, "packages/runtime/src/core/embedded-models.ts"),
   modelLines.join("\n"),
 );
-console.log(`✓ Models: ${tomlFiles.length} files → packages/runtime/src/core/embedded-models.ts`);
+writeLine(`✓ Models: ${tomlFiles.length} files → packages/runtime/src/core/embedded-models.ts`);

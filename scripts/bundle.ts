@@ -12,7 +12,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { resolve, join } from "node:path";
 
 import { MINIMUM_NODE_MAJOR, renderRuntimeBootstrap } from "../packages/cli/src/runtime-version.ts";
@@ -20,18 +20,23 @@ import { MINIMUM_NODE_MAJOR, renderRuntimeBootstrap } from "../packages/cli/src/
 const ROOT = resolve(import.meta.dirname, "..");
 const DIST = join(ROOT, "dist");
 
+function writeLine(message: string = ""): void {
+  process.stdout.write(`${message}\n`);
+}
+
 // ── Step 0: Clean dist ──────────────────────────────────────
 
+rmSync(DIST, { recursive: true, force: true });
 mkdirSync(DIST, { recursive: true });
 
 // ── Step 1: Generate embedded constants ─────────────────────
 
-console.log("→ Embedding assets...");
+writeLine("→ Embedding assets...");
 execSync("bun run scripts/embed-assets.ts", { cwd: ROOT, stdio: "inherit" });
 
 // ── Step 2: Bundle with Bun ─────────────────────────────────
 
-console.log("→ Bundling CLI...");
+writeLine("→ Bundling CLI...");
 
 // Create a stub for react-devtools-core (Ink's optional dev dependency)
 const shimDir = join(ROOT, "node_modules", "react-devtools-core");
@@ -75,7 +80,7 @@ execSync(`chmod +x ${join(DIST, "bootstrap.js")}`);
 
 // ── Step 3: Generate package.json ───────────────────────────
 
-console.log("→ Generating package.json...");
+writeLine("→ Generating package.json...");
 const rootPkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
 const version = rootPkg.version ?? "0.1.0";
 
@@ -107,7 +112,7 @@ writeFileSync(join(DIST, "package.json"), JSON.stringify(distPkg, null, 2) + "\n
 
 // ── Step 4: Copy supporting files ───────────────────────────
 
-console.log("→ Copying supporting files...");
+writeLine("→ Copying supporting files...");
 if (existsSync(join(ROOT, "README.md"))) {
   copyFileSync(join(ROOT, "README.md"), join(DIST, "README.md"));
 }
@@ -119,7 +124,8 @@ if (existsSync(join(ROOT, "LICENSE"))) {
 
 const stats = Bun.file(join(DIST, "devagent.js"));
 const sizeKB = Math.round((await stats.size) / 1024);
-console.log(`\n✓ Bundle ready: dist/devagent.js (${sizeKB} KB)`);
-console.log(`  Package: ${distPkg.name}@${version}`);
-console.log(`  Test: bun run test:bundle-smoke`);
-console.log(`  Publish: cd dist && npm publish --access public`);
+writeLine();
+writeLine(`✓ Bundle ready: dist/devagent.js (${sizeKB} KB)`);
+writeLine(`  Package: ${distPkg.name}@${version}`);
+writeLine("  Test: bun run test:bundle-smoke");
+writeLine("  Publish: cd dist && npm publish --access public");

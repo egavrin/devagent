@@ -88,10 +88,11 @@ describe("documentation parity", () => {
 
   it("documents the fast gate and broader release validation tier", () => {
     const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
-    expect(readme).toContain("Use `typecheck`, `test`, `test:surface-smoke`, and `check:oss` as the fast PR gate");
+    expect(readme).toContain("Use `check:quality`, `test`, `test:surface-smoke`, and `check:oss` as the fast PR gate");
     expect(readme).toContain("bun run validate:live:provider-smoke");
     expect(readme).toContain("bun run validate:live:tui");
-    expect(readme).toContain("provider credentials, TUI behavior, and publish readiness");
+    expect(readme).toContain("`check:publint:packages`");
+    expect(readme).toContain("provider credentials, TUI behavior, package shape, and publish readiness");
   });
 
   it("describes project instructions as optional manual files", () => {

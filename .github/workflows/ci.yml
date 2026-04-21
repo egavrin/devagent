@@ -40,6 +40,10 @@ jobs:
         working-directory: devagent
         run: bun install
 
+      - name: Workspace hygiene
+        working-directory: devagent
+        run: bun run check:workspace
+
       - name: Lint
         working-directory: devagent
         run: bun run lint
@@ -71,6 +75,10 @@ jobs:
       - name: Bundle
         working-directory: devagent
         run: bun run bundle
+
+      - name: Publish package shape
+        working-directory: devagent
+        run: bun run check:publint
 
   bundle-smoke:
     runs-on: ubuntu-latest

@@ -6,8 +6,8 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "scripts": {
@@ -19,14 +19,14 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@devagent/runtime": "workspace:*",
-    "ai": "^5.0.52",
     "@ai-sdk/anthropic": "^2.0.74",
-    "@ai-sdk/openai": "^2.0.102"
+    "@ai-sdk/openai": "^2.0.102",
+    "@devagent/runtime": "workspace:*",
+    "ai": "^5.0.52"
   },
   "devDependencies": {
-    "vitest": "^3.0.0",
     "eslint": "^9.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0"
   }
 }
