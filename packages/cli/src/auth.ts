@@ -81,7 +81,7 @@ Manage stored provider credentials for DevAgent.`;
 // ─── Entry Point ────────────────────────────────────────────
 
 export async function runAuthCommand(subcommand: string, args: ReadonlyArray<string> = []): Promise<void> {
-  if (subcommand === "--help" || subcommand === "-h") {
+  if (subcommand === "--help" || subcommand === "-h" || args.includes("--help") || args.includes("-h")) {
     process.stdout.write(renderAuthHelpText() + "\n");
     return;
   }

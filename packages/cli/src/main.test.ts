@@ -946,6 +946,40 @@ describe("review command validation", () => {
   });
 });
 
+describe("help command validation", () => {
+  it("prints execute help with exit code 0", () => {
+    execFileSync("bun", ["run", "build"], {
+      cwd: cliPackageDir,
+      stdio: "pipe",
+    });
+
+    const output = execFileSync("bun", ["dist/index.js", "execute", "--help"], {
+      cwd: cliPackageDir,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(output).toContain("Usage: devagent execute --request <file> --artifact-dir <dir>");
+  });
+
+  it("prints auth login help without entering the provider picker", () => {
+    execFileSync("bun", ["run", "build"], {
+      cwd: cliPackageDir,
+      stdio: "pipe",
+    });
+
+    const output = execFileSync("bun", ["dist/index.js", "auth", "login", "--help"], {
+      cwd: cliPackageDir,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(output).toContain("Usage:");
+    expect(output).toContain("devagent auth login");
+    expect(output).not.toContain("Select provider:");
+  });
+});
+
 describe("checkForUpdates", () => {
   afterEach(() => {
     delete process.env["DEVAGENT_DISABLE_UPDATE_CHECK"];

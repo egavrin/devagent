@@ -339,11 +339,11 @@ function verifyTarballReinstall(
     }
     const tarballPath = join(packDir, tarball);
     installTarballIntoPrefix(npmBin, prefixDir, tarballPath, nodeBin);
-    runInstalledBinarySmokeCommand(prefixDir, ["help"], homeDir, 0, "installed help smoke");
-    runInstalledBinarySmokeCommand(prefixDir, ["version"], homeDir, 0, "installed version smoke");
+    runInstalledBinarySmokeCommand(prefixDir, ["help"], homeDir, nodeBin, 0, "installed help smoke");
+    runInstalledBinarySmokeCommand(prefixDir, ["version"], homeDir, nodeBin, 0, "installed version smoke");
     uninstallTarballFromPrefix(npmBin, prefixDir, nodeBin);
     installTarballIntoPrefix(npmBin, prefixDir, tarballPath, nodeBin);
-    runInstalledBinarySmokeCommand(prefixDir, ["help"], homeDir, 0, "reinstalled help smoke");
+    runInstalledBinarySmokeCommand(prefixDir, ["help"], homeDir, nodeBin, 0, "reinstalled help smoke");
   } finally {
     rmSync(packDir, { recursive: true, force: true });
     rmSync(prefixDir, { recursive: true, force: true });
@@ -384,12 +384,13 @@ function runInstalledBinarySmokeCommand(
   prefixDir: string,
   args: string[],
   homeDir: string,
+  nodeBin: string,
   expectedExitCode: number,
   description: string,
 ): void {
   const executable = join(prefixDir, "bin", process.platform === "win32" ? "devagent.cmd" : "devagent");
   const env = {
-    ...process.env,
+    ...buildNodePreferredEnv(nodeBin),
     HOME: homeDir,
     XDG_CONFIG_HOME: join(homeDir, ".config"),
     XDG_CACHE_HOME: join(homeDir, ".cache"),

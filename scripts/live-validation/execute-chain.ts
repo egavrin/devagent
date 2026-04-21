@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { BreakdownDoc, IssueSpecDoc, TaskExecutionRequest } from "@devagent-sdk/types";
+import type { BreakdownDoc, IssueSpecDoc, TaskExecutionRequest, TaskExecutionResult } from "@devagent-sdk/types";
 import {
   captureGitOutputs,
   createIsolationWorkspaceWithTimeout,
@@ -224,6 +224,57 @@ async function collectArtifactEntries(
   return entries;
 }
 
+function extractFinalAssistantSummary(result: TaskExecutionResult): string | undefined {
+  const messages = result.session?.payload?.messages;
+  if (!Array.isArray(messages)) {
+    return undefined;
+  }
+
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index] as { role?: string; content?: unknown };
+    if (message.role === "assistant" && typeof message.content === "string" && message.content.trim().length > 0) {
+      return message.content.trim();
+    }
+  }
+  return undefined;
+}
+
+export async function buildStageFailureMessage(
+  commandResult: CommandResult,
+  artifactDir: string,
+): Promise<string | undefined> {
+  const resultPath = join(artifactDir, "result.json");
+  const details: string[] = [];
+
+  if (existsSync(resultPath)) {
+    try {
+      const result = JSON.parse(await readFile(resultPath, "utf-8")) as TaskExecutionResult;
+      details.push(`Result: ${result.status}`);
+      if (result.error) {
+        details.push(`Error: ${result.error.code}: ${result.error.message}`);
+      }
+      if (result.outcomeReason) {
+        details.push(`Outcome reason: ${result.outcomeReason}`);
+      }
+      const finalSummary = extractFinalAssistantSummary(result);
+      if (finalSummary) {
+        details.push(`Final assistant summary: ${finalSummary}`);
+      }
+    } catch (error) {
+      details.push(`Failed to parse ${resultPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const commandOutput = commandResult.stderr.trim() || commandResult.stdout.trim();
+  if (commandOutput) {
+    details.push(commandOutput);
+  }
+  if (commandResult.exitCode !== 0 && details.length === 0) {
+    details.push(`Stage exited with ${commandResult.exitCode}.`);
+  }
+  return details.length > 0 ? details.join("\n") : undefined;
+}
+
 async function updatePriorArtifacts(
   stage: ExecuteChainStage,
   artifactDir: string,
@@ -398,7 +449,7 @@ async function main(): Promise<void> {
         && artifactFiles.every((artifact) => artifact.exists)
         && workspacePassed;
       const failureMessage = commandResult.exitCode !== 0
-        ? commandResult.stderr.trim() || commandResult.stdout.trim() || `Stage exited with ${commandResult.exitCode}.`
+        ? await buildStageFailureMessage(commandResult, artifactDir)
         : !artifactFiles.every((artifact) => artifact.exists)
           ? "Missing expected stage artifacts."
           : !workspacePassed
@@ -474,7 +525,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}

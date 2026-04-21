@@ -292,6 +292,23 @@ function countOccurrences(text: string, needle: string): number {
   return count;
 }
 
+function transcriptMatchesPattern(text: string, pattern: string): boolean {
+  try {
+    return new RegExp(pattern).test(normalizeTranscript(text));
+  } catch {
+    return normalizeTranscript(text).includes(pattern);
+  }
+}
+
+function escapeExpectDoubleQuoted(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, "\\$");
+}
+
 export function extractSettledFrame(text: string): string {
   const normalized = normalizeTranscript(text).trim();
   if (normalized.length === 0) {
@@ -313,7 +330,7 @@ export function assertTuiFrame(
   frame: string,
   options: {
     readonly expectedVersion: string;
-    readonly requiredText: string;
+    readonly requiredText: string | RegExp;
   },
 ): void {
   if (!frame.includes("devagent")) {
@@ -322,8 +339,11 @@ export function assertTuiFrame(
   if (!frame.includes(`v${options.expectedVersion}`)) {
     throw new Error(`TUI frame did not include expected version v${options.expectedVersion}.`);
   }
-  if (!frame.includes(options.requiredText)) {
-    throw new Error(`TUI frame did not include expected text: ${options.requiredText}`);
+  const hasRequiredText = typeof options.requiredText === "string"
+    ? frame.includes(options.requiredText)
+    : options.requiredText.test(frame);
+  if (!hasRequiredText) {
+    throw new Error(`TUI frame did not include expected text: ${String(options.requiredText)}`);
   }
   if (!(frame.includes("Type /help for commands") || frame.includes("Type /help for all commands"))) {
     throw new Error("TUI frame did not include help guidance.");
@@ -350,6 +370,7 @@ async function runTuiTranscript(
   env: NodeJS.ProcessEnv,
   transcriptPath: string,
   typedCommand?: string,
+  expectedOutputPattern?: string,
 ): Promise<void> {
   const expectScriptPath = join(outputRoot, "tui.expect");
   const expectLines = [
@@ -359,21 +380,19 @@ async function runTuiTranscript(
     "set transcript [lindex $argv 0]",
     "set executable [lindex $argv 1]",
     "set args [lrange $argv 2 end]",
-    "log_user 0",
-    'if {$tcl_platform(platform) eq "unix" && $tcl_platform(os) eq "Darwin"} {',
-    '  spawn -noecho script -q $transcript $executable {*}$args',
-    "} else {",
-    '  set command [join [linsert $args 0 $executable] " "]',
-    '  spawn -noecho script -qefc $command $transcript',
-    "}",
+    "log_user 1",
+    "spawn -noecho $executable {*}$args",
     'expect { -re "Type /help|Shift\\+Tab toggles default and autopilot|Shift\\+Tab safety" {} timeout { exit 124 } }',
   ];
   if (typedCommand) {
     expectLines.push("after 300");
-    expectLines.push(`send -- "${typedCommand.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}\\r"`);
+    expectLines.push(`send -- "${escapeExpectDoubleQuoted(`${typedCommand}\n`)}"`);
+  }
+  if (expectedOutputPattern) {
+    expectLines.push(`expect { -re "${escapeExpectDoubleQuoted(expectedOutputPattern)}" { puts "\\nVALIDATOR_MATCH: $expect_out(0,string)" } timeout { exit 125 } }`);
   }
   expectLines.push(
-    "after 500",
+    "after 300",
     'send -- "\\003"',
     "expect eof",
     "set wait_status [wait]",
@@ -393,7 +412,16 @@ async function runTuiTranscript(
       timeout: 20_000,
     },
   );
-  if (result.status !== 0 && result.status !== 130) {
+  if (result.stdout.trim().length > 0) {
+    await writeFile(transcriptPath, result.stdout);
+  }
+  const observedExpectedOutput = expectedOutputPattern
+    ? result.stdout.includes("VALIDATOR_MATCH:") || transcriptMatchesPattern(result.stdout, expectedOutputPattern)
+    : true;
+  if (expectedOutputPattern && !observedExpectedOutput) {
+    throw new Error(`TUI validator did not observe expected output: ${expectedOutputPattern}`);
+  }
+  if (result.status !== 0 && result.status !== 130 && result.status !== 143 && !(result.status === 125 && observedExpectedOutput)) {
     throw new Error(`TUI validator exited with ${result.status}.${result.stderr ? `\n${result.stderr.trim()}` : ""}`);
   }
 }
@@ -457,6 +485,7 @@ async function main(): Promise<void> {
       env,
       transcriptPath,
       "/help",
+      "Commands: /clear",
     );
     await runTuiTranscript(
       outputRoot,
@@ -466,6 +495,7 @@ async function main(): Promise<void> {
       env,
       sessionsTranscriptPath,
       "/sessions",
+      "No sessions found\\.|Recent sessions:",
     );
     await runTuiTranscript(
       outputRoot,
@@ -475,6 +505,7 @@ async function main(): Promise<void> {
       env,
       clearTranscriptPath,
       "/clear",
+      "Context cleared\\.",
     );
 
     const helpFrame = extractSettledFrame(readFileSync(transcriptPath, "utf-8"));
@@ -498,9 +529,9 @@ async function main(): Promise<void> {
       ].join("\n"),
     );
 
-    assertTuiFrame(helpFrame, { expectedVersion, requiredText: "/help" });
-    assertTuiFrame(sessionsFrame, { expectedVersion, requiredText: "/sessions" });
-    assertTuiFrame(clearFrame, { expectedVersion, requiredText: "/clear" });
+    assertTuiFrame(helpFrame, { expectedVersion, requiredText: "Commands: /clear" });
+    assertTuiFrame(sessionsFrame, { expectedVersion, requiredText: /No sessions found\.|Recent sessions:/ });
+    assertTuiFrame(clearFrame, { expectedVersion, requiredText: "Context cleared." });
 
     process.stdout.write(
       `Validated tarball TUI with provider ${selection.provider}. Transcript: ${normalizedTranscriptPath}\n`,

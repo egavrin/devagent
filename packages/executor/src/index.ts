@@ -787,7 +787,9 @@ export function buildTaskQuery(
       );
       break;
     case "review":
-      sections.push("Review the current workspace changes and produce a report with either `No defects found.` or one section per defect using the format `Severity: <low|medium|high|critical>` plus a concrete fix recommendation.");
+      sections.push("Workspace is review-only for this stage. No file changes are allowed.");
+      sections.push("Do not use update_plan for this stage. Inspect the current workspace changes as needed, then return the final review artifact directly.");
+      sections.push("Produce a direct review report with either exactly `No defects found.` or one section per defect using the format `Severity: <low|medium|high|critical>` plus a concrete fix recommendation.");
       break;
     case "repair":
       sections.push("Apply repairs for the current issue, address the review findings, and summarize fixes applied plus remaining concerns.");

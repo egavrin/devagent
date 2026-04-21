@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 
 import { TUI_HELP_MESSAGE } from "./App.js";
 import {
+  buildPromptSubmitValue,
   buildPromptRows,
   getCompletions,
   shouldInsertPromptNewline,
+  shouldSubmitPromptInput,
   SLASH_COMMANDS,
 } from "./PromptInput.js";
 import { cycleApprovalMode, resolvePromptTabAction } from "./shared.js";
@@ -57,6 +59,21 @@ describe("PromptInput layout helpers", () => {
     expect(shouldInsertPromptNewline({ return: true, hyper: true })).toBe(true);
     expect(shouldInsertPromptNewline({ return: true })).toBe(false);
     expect(shouldInsertPromptNewline({ shift: true })).toBe(false);
+  });
+
+  it("treats plain terminal newline bytes as submit input", () => {
+    expect(shouldSubmitPromptInput("", { return: true })).toBe(true);
+    expect(shouldSubmitPromptInput("\r", {})).toBe(true);
+    expect(shouldSubmitPromptInput("\n", {})).toBe(true);
+    expect(shouldSubmitPromptInput("/help\n", {})).toBe(true);
+    expect(shouldSubmitPromptInput("x", {})).toBe(false);
+  });
+
+  it("builds submit values from paste chunks that include Enter", () => {
+    expect(buildPromptSubmitValue("", { return: true }, "/help", 5)).toBe("/help");
+    expect(buildPromptSubmitValue("/help\n", {}, "", 0)).toBe("/help");
+    expect(buildPromptSubmitValue("x\rignored", {}, "ab", 1)).toBe("axb");
+    expect(buildPromptSubmitValue("x", {}, "ab", 1)).toBeNull();
   });
 
   it("wraps long prompt text into explicit continuation rows", () => {

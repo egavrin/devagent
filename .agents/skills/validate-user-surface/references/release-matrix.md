@@ -23,6 +23,7 @@ Use this file when planning coverage or writing the final report.
 - Validate on real Node 20+ because the publish bootstrap targets Node, not Bun's Node shim.
 - Validate Bun-backed developer flows when the README or local contributor workflow depends on Bun.
 - Use isolated `HOME`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME` for every install and auth pass.
+- Do not infer provider credentials only from environment variables. The live validation harness can copy non-expired credentials from the local DevAgent `CredentialStore` into isolated homes; run provider smoke before marking credential-backed providers blocked.
 - Keep one clean temp repo for install and help checks and separate temp repos for query and mutation scenarios.
 
 ## Packaging And Install Matrix
@@ -32,7 +33,8 @@ Use this file when planning coverage or writing the final report.
 - Run `cd dist && npm pack`.
 - Install the tarball into a temp prefix and verify `devagent help`, `devagent version`, and `devagent doctor`.
 - Remove that install and repeat to catch stale-file issues.
-- Validate `node dist/bootstrap.js --help` and `node dist/bootstrap.js sessions`.
+- Validate `node dist/bootstrap.js --help` directly from raw `dist/`.
+- Validate `sessions` from the staged or installed publish runtime, because raw `dist/` intentionally lacks installed native dependencies such as `better-sqlite3`.
 - Validate `npx` and `bunx` invocation paths against a prerelease tag when one exists.
 - If no prerelease tag exists, validate the closest local equivalent and mark registry-backed `npx` or `bunx` as still pending.
 - Compare `dist/package.json` and copied `dist/README.md` against the root contract.
@@ -133,6 +135,7 @@ For each provider:
 - Use `bun run scripts/live-validation.ts --list-scenarios` to inventory current scenarios.
 - Run the full suite before adding bespoke manual checks.
 - Inspect `summary.json` and `summary.md` from the generated output directory.
+- Run `bun run validate:live:provider-smoke` before declaring provider coverage blocked; it verifies stored local credentials and Ollama service availability from isolated homes.
 - Use `bun run validate:live:execute-deep` when you need one ordered `execute` packet with prereqs, canonical staged flow, continuity checks, remainder coverage, and per-scenario review notes.
 - Use `bun run validate:live:execute-deep --only canonical|continuity|remainder --skip-prereqs` for focused local reruns after a broader packet establishes the baseline.
 - Use `bun run validate:live:execute-chain` when you need one disposable-worktree run that carries real stage artifacts forward into `implement`, `review`, and `repair`.

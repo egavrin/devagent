@@ -18,6 +18,7 @@ Treat the repository like a release candidate. Prefer live execution against bui
 
 - Run live checks for user-facing behavior. Do not count unit tests or code reading as release validation.
 - Use isolated temp homes and temp repos. Do not reuse the operator's real `~/.config/devagent`.
+- Environment variables are not the only credential source. The live harness can seed non-expired credentials from the local DevAgent `CredentialStore` into isolated homes; run `bun run validate:live:provider-smoke` before marking providers blocked just because API-key env vars are unset.
 - Prefer the publish bundle for install and packaging checks. Validate the developer CLI separately only when comparing dev-versus-publish behavior.
 - Treat missing provider credentials or missing external dependencies as validation gaps, not silent skips.
 - Do not publish to npm unless the user explicitly asks.
@@ -39,7 +40,7 @@ bun run test:live-validation
 bun run validate:live:full
 ```
 
-2. Create isolated homes and disposable workspaces for each install, auth, TUI, and query-flow pass.
+2. Create isolated homes and disposable workspaces for each install, auth, TUI, and query-flow pass. When provider credentials exist in the local DevAgent credential store, copy only the required non-expired credentials into those isolated homes rather than running against the operator's real HOME.
 3. Use `cd dist && npm pack` to create a publishable tarball, then validate install and launch paths from that artifact.
 4. Exercise documented install and launch paths live: tarball install, `npx`, `bunx`, bundled bootstrap, and linked local CLI when helpful.
 5. Cover the provider matrix from `references/release-matrix.md`. Prefer every documented provider. If full coverage is impossible, call out each unvalidated provider explicitly.
@@ -49,12 +50,17 @@ bun run validate:live:full
 
 ## Mandatory Surfaces
 
-- Packaging and install: `bun run build:publish`, `bun run test:bundle-smoke`, `npm pack` from `dist/`, tarball install, uninstall and reinstall, Node 20 bootstrap, and upgrade behavior.
+- Packaging and install: `bun run build:publish`, `bun run test:bundle-smoke`, `npm pack` from `dist/`, tarball install, uninstall and reinstall, Node 20 bootstrap help, installed-runtime session startup, and upgrade behavior.
 - Docs and metadata: README install snippets, quick start, provider list, command list, environment variables, `WORKFLOW.md` claims, copied `dist/README.md`, and generated `dist/package.json`.
 - CLI basics: `devagent help`, `version`, `doctor`, `configure`, `config get/set/path`, `completions`, `sessions`, `--resume`, `--continue`, `--provider`, `--model`, and `-f`.
 - Auth: `devagent auth login/status/logout` for API-key providers and device-code providers in isolated homes.
 - Query execution: interactive TUI, single-shot query execution, quiet and non-TTY behavior, `devagent review`, and `devagent execute`.
 - Provider coverage: Anthropic, OpenAI, Devagent API, DeepSeek, OpenRouter, Ollama, ChatGPT, and GitHub Copilot when credentials or local services are available.
+
+## Credential And Bootstrap Notes
+
+- Use `bun run validate:live:provider-smoke` to discover locally stored credentials and local services; it seeds isolated homes from `CredentialStore` and reports per-provider pass/block status.
+- For raw bundle checks, `node dist/bootstrap.js --help` is valid. Validate `sessions` from a staged or installed publish runtime, because raw `dist/` does not include installed native dependencies such as `better-sqlite3`.
 
 ## Reporting
 

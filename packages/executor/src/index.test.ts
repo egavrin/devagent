@@ -518,6 +518,10 @@ describe("skills", () => {
     ];
 
     const reviewQuery = buildTaskQuery(reviewRequest);
+    expect(reviewQuery).toContain("Workspace is review-only for this stage. No file changes are allowed.");
+    expect(reviewQuery).toContain("Do not use update_plan for this stage.");
+    expect(reviewQuery).toContain("return the final review artifact directly");
+    expect(reviewQuery).toContain("No defects found.");
     expect(reviewQuery.indexOf("Approved issue spec artifact:")).toBeLessThan(reviewQuery.indexOf("Implementation summary artifact:"));
     expect(reviewQuery.indexOf("Implementation summary artifact:")).toBeLessThan(reviewQuery.indexOf("Issue unit details:"));
     expect(reviewQuery.indexOf("Issue unit details:")).toBeLessThan(reviewQuery.indexOf("Focus files:"));

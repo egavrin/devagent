@@ -36,12 +36,37 @@ describe("assertTuiFrame", () => {
       "╚══════════════════╝",
       "cortex • v0.2.0",
       "Type /help for commands • Ctrl+K palette • Shift+Tab safety",
+      "No sessions found.",
       "╭────────────────────╮",
-      "│ ❯ /sessions       │",
+      "│ ❯ /               │",
+      "│ … s               │",
+      "│ … e               │",
+      "│ … s               │",
+      "│ … s               │",
+      "│ … i               │",
+      "│ … o               │",
+      "│ … n               │",
+      "│ … s               │",
       "╰────────────────────╯",
     ].join("\n");
 
-    expect(() => assertTuiFrame(frame, { expectedVersion: "0.2.0", requiredText: "/sessions" })).not.toThrow();
+    expect(() => assertTuiFrame(frame, { expectedVersion: "0.2.0", requiredText: "No sessions found." })).not.toThrow();
+  });
+
+  it("accepts command output matched by regex", () => {
+    const frame = [
+      "╔══════════════════╗",
+      "║    devagent      ║",
+      "╚══════════════════╝",
+      "cortex • v0.2.0",
+      "Type /help for commands • Ctrl+K palette • Shift+Tab safety",
+      "Recent sessions:",
+      "╭────────────────────╮",
+      "│ ❯                 │",
+      "╰────────────────────╯",
+    ].join("\n");
+
+    expect(() => assertTuiFrame(frame, { expectedVersion: "0.2.0", requiredText: /No sessions found\.|Recent sessions:/ })).not.toThrow();
   });
 
   it("rejects duplicate welcome blocks and banner collisions", () => {

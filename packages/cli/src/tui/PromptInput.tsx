@@ -74,6 +74,29 @@ export function shouldInsertPromptNewline(key: PromptInputKey): boolean {
   return Boolean(key.return && (key.shift || key.meta || key.super || key.hyper));
 }
 
+export function shouldSubmitPromptInput(input: string, key: PromptInputKey): boolean {
+  return Boolean(key.return || /[\r\n]/.test(input));
+}
+
+export function buildPromptSubmitValue(
+  input: string,
+  key: PromptInputKey,
+  value: string,
+  cursorPos: number,
+): string | null {
+  if (key.return) {
+    return value;
+  }
+
+  const submitIndex = input.search(/[\r\n]/);
+  if (submitIndex === -1) {
+    return null;
+  }
+
+  const submittedInput = input.slice(0, submitIndex);
+  return value.slice(0, cursorPos) + submittedInput + value.slice(cursorPos);
+}
+
 function splitGraphemes(line: string): Array<{ readonly text: string; readonly start: number; readonly end: number }> {
   return Array.from(
     GRAPHEME_SEGMENTER.segment(line),
@@ -228,9 +251,11 @@ export function PromptInput({
       return;
     }
 
-    // Submit on plain Enter
-    if (key.return) {
-      const trimmed = value.trim();
+    // Submit on plain Enter. Some ptys deliver Enter as a literal newline
+    // instead of Ink's normalized key.return, so handle both forms.
+    if (shouldSubmitPromptInput(input, key)) {
+      const submitValue = buildPromptSubmitValue(input, key, value, cursorPos) ?? value;
+      const trimmed = submitValue.trim();
       if (trimmed) {
         onSubmit(trimmed);
         setValue("");

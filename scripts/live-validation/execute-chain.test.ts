@@ -1,10 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import type { IssueSpecDoc } from "@devagent-sdk/types";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   EXECUTE_CHAIN_STAGES,
   buildExecuteChainRequest,
   extractIssueUnitFromIssueSpec,
 } from "./execute-chain-lib";
+import { buildStageFailureMessage as buildStageFailureMessageFromRun } from "./execute-chain";
 
 describe("execute chain helpers", () => {
   it("defines the full staged chain in the expected order", () => {
@@ -118,5 +122,50 @@ describe("execute chain helpers", () => {
       acceptanceCriteria: ["Done"],
       linkedArtifactVersionIds: ["B3"],
     });
+  });
+
+  it("summarizes result.json errors and final session summary for failed stages", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "devagent-chain-failure-"));
+    const artifactDir = join(dir, "artifacts");
+    await mkdir(artifactDir, { recursive: true });
+    await writeFile(join(artifactDir, "result.json"), JSON.stringify({
+      protocolVersion: "0.1",
+      taskId: "chain-review",
+      status: "failed",
+      artifacts: [],
+      error: {
+        code: "EXECUTION_FAILED",
+        message: "Task loop exhausted the iteration limit",
+      },
+      outcome: "no_progress",
+      outcomeReason: "iteration_limit",
+      metrics: {
+        startedAt: "2026-04-21T00:00:00.000Z",
+        finishedAt: "2026-04-21T00:00:01.000Z",
+        durationMs: 1000,
+      },
+      session: {
+        kind: "devagent-headless-v1",
+        payload: {
+          version: 1,
+          messages: [
+            { role: "assistant", content: "No defects found." },
+          ],
+        },
+      },
+    }));
+
+    const message = await buildStageFailureMessageFromRun({
+      exitCode: 1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      durationMs: 1000,
+    }, artifactDir);
+
+    expect(message).toContain("Result: failed");
+    expect(message).toContain("Error: EXECUTION_FAILED: Task loop exhausted the iteration limit");
+    expect(message).toContain("Outcome reason: iteration_limit");
+    expect(message).toContain("Final assistant summary: No defects found.");
   });
 });

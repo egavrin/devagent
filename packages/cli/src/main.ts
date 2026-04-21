@@ -1550,6 +1550,10 @@ export async function main(): Promise<void> {
       loadTaskExecutionRequest,
       parseExecuteArgs,
     } = await import("@devagent/executor");
+    if (process.argv.includes("--help") || process.argv.includes("-h")) {
+      process.stdout.write("Usage: devagent execute --request <file> --artifact-dir <dir>\n");
+      return;
+    }
     const executeArgs = parseExecuteArgs(process.argv);
     if (!executeArgs) {
       process.exit(1);
