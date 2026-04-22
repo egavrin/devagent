@@ -33,6 +33,8 @@ import type { EventBus, SafetyMode } from "@devagent/runtime";
 
 export const TUI_HELP_MESSAGE = "Commands: /clear (reset), /continue (resume work), /sessions (history), /exit (quit) │ Embedded shortcuts can appear anywhere: /review, /simplify │ Shift+Enter or Option+Enter for newline │ Shift+Tab toggles safety mode";
 export const ITERATION_LIMIT_NOTICE = "Iteration limit exhausted. Type /continue to proceed.";
+const EMPTY_RESPONSE_NOTICE = "Model returned no final response. Type /continue to retry, or switch provider/model if it repeats.";
+const ABORTED_NOTICE = "Run stopped before completion. Type /continue to retry from the current session.";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -183,6 +185,11 @@ async function completeSuccessfulQueryTurn(query: string, context: QueryRunConte
   context.flushThinking();
   context.flushGroup();
   appendQueryResult(result, context);
+  const turnStatus = result.status === "success"
+    ? "completed"
+    : result.status === "budget_exceeded"
+      ? "budget_exceeded"
+      : "error";
   context.completeTurn(
     context.nextId("summary"),
     makeTurnSummaryPart({
@@ -191,7 +198,7 @@ async function completeSuccessfulQueryTurn(query: string, context: QueryRunConte
       cost: context.refs.costAccum.current,
       elapsedMs: Date.now() - context.refs.turnStart.current,
     }),
-    { status: result.status === "budget_exceeded" ? "budget_exceeded" : "completed", finishedAt: Date.now() },
+    { status: turnStatus, finishedAt: Date.now() },
   );
 }
 
@@ -199,10 +206,18 @@ function appendQueryResult(result: InteractiveQueryResult, context: QueryRunCont
   if (result.lastText) {
     context.appendTurnPart(context.nextId("final"), makeFinalOutputPart(result.lastText));
   }
-  if (result.status === "budget_exceeded") {
-    context.appendTurnPart(context.nextId("budget"), makeInfoPart("status", [ITERATION_LIMIT_NOTICE]));
-    context.addToast(ITERATION_LIMIT_NOTICE, "warning");
+  const notice = noticeForQueryStatus(result.status);
+  if (notice) {
+    context.appendTurnPart(context.nextId("status"), makeInfoPart("status", [notice]));
+    context.addToast(notice, "warning");
   }
+}
+
+function noticeForQueryStatus(status: InteractiveQueryResult["status"]): string | null {
+  if (status === "budget_exceeded") return ITERATION_LIMIT_NOTICE;
+  if (status === "empty_response") return EMPTY_RESPONSE_NOTICE;
+  if (status === "aborted") return ABORTED_NOTICE;
+  return null;
 }
 
 function completeFailedQueryTurn(err: unknown, context: QueryRunContext): void {

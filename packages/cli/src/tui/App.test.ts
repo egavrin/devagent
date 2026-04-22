@@ -1016,7 +1016,52 @@ describe("interactive prompt scrollback and status", () => {
     expect(promptPlaceholders).toBeLessThanOrEqual(2);
     expect(output).toContain("Bottom line: done");
   });
+});
 
+describe("interactive incomplete query status", () => {
+  it.each([
+    {
+      name: "empty model response",
+      query: "reproduce stop",
+      status: "empty_response",
+      notice: "Model returned no final response. Type /continue to retry",
+    },
+    {
+      name: "aborted run",
+      query: "cancelled work",
+      status: "aborted",
+      notice: "Run stopped before completion. Type /continue to retry",
+    },
+  ] as const)("surfaces an $name as an incomplete turn", async ({ query, status, notice }) => {
+    const view = renderForTest(
+      React.createElement(App, {
+        bus: new EventBus(),
+        model: "test-model",
+        approvalMode: "autopilot",
+        cwd: "/tmp/devagent",
+        onClear: () => {},
+        onCycleApprovalMode: () => {},
+        onQuery: async () => ({
+          iterations: 2,
+          toolCalls: 1,
+          lastText: null,
+          status,
+        }),
+      }),
+    );
+
+    await settle();
+    await typeAndSubmit(view.stdin, query);
+    await waitForRenders();
+
+    const output = stripAnsi(view.stdout.readAll());
+    expect(output).toContain(`╭─ error ${query}`);
+    expect(output).toContain(notice);
+    expect(output).not.toContain(`╭─ completed ${query}`);
+  });
+});
+
+describe("interactive prompt commands", () => {
   it("keeps prompt scrollback stable after idle slash-command output", async () => {
     const view = renderForTest(
       React.createElement(App, {
