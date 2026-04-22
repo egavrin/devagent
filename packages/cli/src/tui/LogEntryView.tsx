@@ -4,7 +4,7 @@
  * Used by both App.tsx and SingleShotApp.tsx.
  */
 
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import React from "react";
 
 import { FinalOutput } from "./FinalOutput.js";
@@ -20,7 +20,7 @@ import {
   ValidationResultDisplay,
 } from "./ToolDisplay.js";
 import type { PresentedStatus } from "../transcript-presenter.js";
-import { cleanTime } from "./shared.js";
+import { cleanTime, framedBodyWidth, wrapAnsiTextByWidth } from "./shared.js";
 export const LogEntryView = React.memo(function LogEntryView({ entry }: { entry: LogEntry }): React.ReactElement | null {
   const direct = renderDirectEntry(entry);
   if (direct !== undefined) return direct;
@@ -146,18 +146,23 @@ function TranscriptCard(
     readonly marginTop?: number;
   },
 ): React.ReactElement {
+  const { stdout } = useStdout();
+  const bodyWidth = framedBodyWidth(stdout.columns);
+
   return (
     <Box flexDirection="column" marginTop={marginTop}>
       <Text>
         <Text dimColor>  ╭─ </Text>
         <Text color={color}>{title}</Text>
       </Text>
-      {lines.map((line, index) => (
-        <Text key={`${title}-${index}`}>
-          <Text dimColor>  │ </Text>
-          <Text bold={boldBody}>{line}</Text>
-        </Text>
-      ))}
+      {lines
+        .flatMap((line) => wrapAnsiTextByWidth(line, bodyWidth))
+        .map((line, index) => (
+          <Text key={`${title}-${index}`}>
+            <Text dimColor>  │ </Text>
+            <Text bold={boldBody}>{line}</Text>
+          </Text>
+        ))}
       <Text dimColor>  ╰─</Text>
     </Box>
   );

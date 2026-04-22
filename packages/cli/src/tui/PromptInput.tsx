@@ -21,7 +21,7 @@ import { join, dirname, basename } from "node:path";
 import React, { useRef, useState } from "react";
 import stringWidth from "string-width";
 
-import { getApprovalModeColor, resolvePromptTabAction } from "./shared.js";
+import { getApprovalModeColor, resolvePromptTabAction, resolveTerminalColumns } from "./shared.js";
 
 export const SLASH_COMMANDS = [
   "/help",
@@ -395,7 +395,7 @@ export function PromptInput({
   const savedInputRef = useRef("");
   const { stdout } = useStdout();
   const accentColor = getApprovalModeColor(approvalMode);
-  const contentWidth = Math.max(1, (stdout.columns ?? 80) - INPUT_FRAME_WIDTH);
+  const contentWidth = Math.max(1, resolveTerminalColumns(stdout.columns) - INPUT_FRAME_WIDTH);
   const promptRows = buildPromptRows(value, cursorPos, placeholder, contentWidth);
   useInput((input, key) => {
     handlePromptInput(input, key, {

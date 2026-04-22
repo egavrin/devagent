@@ -3,6 +3,7 @@
  */
 
 import { SafetyMode } from "@devagent/runtime";
+import stringWidth from "string-width";
 
 import type { TranscriptNode } from "../transcript-composer.js";
 import type { TranscriptPart } from "../transcript-presenter.js";
@@ -38,6 +39,11 @@ const APPROVAL_MODE_ORDER = [
 ] as const;
 
 type PromptTabAction = "cycle-mode" | "complete" | "none";
+const FRAMED_BODY_PREFIX = "  │ ";
+const DEFAULT_TERMINAL_COLUMNS = 80;
+const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const ANSI_CSI_PATTERN = /^\x1B\[[0-?]*[ -/]*[@-~]/;
+const ANSI_OSC_PATTERN = /^\x1B\][\s\S]*?(?:\x07|\x1B\\)/;
 
 export function cycleApprovalMode(mode: string): SafetyMode {
   const currentIndex = APPROVAL_MODE_ORDER.indexOf(mode as SafetyMode);
@@ -65,6 +71,61 @@ export function resolvePromptTabAction(key: { readonly tab?: boolean; readonly s
 
 export function cleanTime(text: string): string {
   return text.replace(/(\d+)\.\d+s/g, "$1s");
+}
+
+export function resolveTerminalColumns(columns: number | undefined): number {
+  if (columns !== undefined && columns > 0) {
+    return columns;
+  }
+  const envColumns = Number.parseInt(process.env["COLUMNS"] ?? "", 10);
+  return Number.isFinite(envColumns) && envColumns > 0 ? envColumns : DEFAULT_TERMINAL_COLUMNS;
+}
+
+export function framedBodyWidth(columns: number | undefined): number {
+  return Math.max(1, resolveTerminalColumns(columns) - FRAMED_BODY_PREFIX.length);
+}
+
+export function wrapAnsiTextByWidth(text: string, width: number): string[] {
+  const maxWidth = Math.max(1, width);
+  if (text.length === 0) return [""];
+
+  const rows: string[] = [];
+  let current = "";
+  let currentWidth = 0;
+  let index = 0;
+
+  while (index < text.length) {
+    const remaining = text.slice(index);
+    const controlSequence = readAnsiSequence(remaining);
+    if (controlSequence) {
+      current += controlSequence;
+      index += controlSequence.length;
+      continue;
+    }
+
+    const grapheme = nextGrapheme(remaining);
+    const graphemeWidth = stringWidth(grapheme);
+    if (currentWidth > 0 && currentWidth + graphemeWidth > maxWidth) {
+      rows.push(current);
+      current = "";
+      currentWidth = 0;
+    }
+
+    current += grapheme;
+    currentWidth += graphemeWidth;
+    index += grapheme.length;
+  }
+
+  rows.push(current);
+  return rows;
+}
+
+function readAnsiSequence(text: string): string | null {
+  return text.match(ANSI_CSI_PATTERN)?.[0] ?? text.match(ANSI_OSC_PATTERN)?.[0] ?? null;
+}
+
+function nextGrapheme(text: string): string {
+  return GRAPHEME_SEGMENTER.segment(text)[Symbol.iterator]().next().value?.segment ?? text[0] ?? "";
 }
 
 export function tokenProgressBar(used: number, max: number): string {

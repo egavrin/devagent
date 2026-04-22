@@ -16,6 +16,7 @@ import { StatusBar } from "./StatusBar.js";
 import { useAgentLog } from "./useAgentLog.js";
 import type { PresentedTurnStatus } from "../transcript-composer.js";
 import {
+  makeErrorPart,
   makeFinalOutputPart,
   makeInfoPart,
   makeTurnSummaryPart,
@@ -79,6 +80,21 @@ function stripAnsi(text: string): string {
 
 function countPromptPlaceholders(text: string): number {
   return (stripAnsi(text).match(/Ask anything…/g) ?? []).length;
+}
+
+function outputLines(text: string): string[] {
+  return stripAnsi(text).replace(/\r/g, "\n").split("\n");
+}
+
+function expectWrappedCardFragmentsInsideGutter(text: string, fragments: ReadonlyArray<string>): void {
+  const lines = outputLines(text);
+  for (const fragment of fragments) {
+    const matchingLines = lines.filter((line) => line.includes(fragment));
+    expect(matchingLines, `expected output to include fragment ${fragment}`).not.toEqual([]);
+    for (const line of matchingLines) {
+      expect(line, `fragment ${fragment} should stay inside the card gutter`).toMatch(/^  │ /);
+    }
+  }
 }
 
 async function typeAndSubmit(stdin: TestInput, text: string): Promise<void> {
@@ -735,6 +751,72 @@ describe("interactive completion notices", () => {
     expect(output).not.toContain("--- /dev/null");
     expect(output).not.toContain("+++ b/src/new-file.ts");
     expect(output).toContain("... +2 more files");
+  });
+});
+
+describe("framed TUI wrapping", () => {
+  const cases: Array<{
+    readonly name: string;
+    readonly columns: number;
+    readonly node: TranscriptNode;
+    readonly fragments: ReadonlyArray<string>;
+  }> = [
+    {
+      name: "error card",
+      columns: 72,
+      node: makeTurnNode(
+        "Verify image",
+        [{
+          id: "provider-error-1",
+          part: makeErrorPart({
+            message: "Provider error (attempt 1, ProviderError): OpenAI API error: terminated. Retrying in 611ms...",
+            code: "PROVIDER_RETRY",
+          }),
+        }],
+        { status: "error", elapsedMs: 300 },
+      ),
+      fragments: ["Provider error", "Retrying in", "611ms"],
+    },
+    {
+      name: "info card",
+      columns: 66,
+      node: {
+        id: "info-1",
+        kind: "part",
+        part: makeInfoPart("status", [
+          "A very long status update is rendered as a transcript card and should wrap through the shared framed-line gutter instead of escaping to column zero.",
+        ]),
+      },
+      fragments: ["A very long", "shared framed-line", "column zero"],
+    },
+    {
+      name: "final output card",
+      columns: 68,
+      node: makeTurnNode(
+        "Explain retry",
+        [{
+          id: "final-wrap-1",
+          part: makeFinalOutputPart("**Provider retry** details stay visible while markdown formatted assistant output wraps inside the framed response gutter."),
+        }],
+        { status: "completed", elapsedMs: 300 },
+      ),
+      fragments: ["Provider retry", "markdown formatted", "response gutter"],
+    },
+  ];
+
+  it.each(cases)("keeps wrapped $name text inside the left gutter", async ({ columns, fragments, node }) => {
+    const view = renderForTest(
+      React.createElement(TranscriptView, {
+        showWelcome: false,
+        model: "test-model",
+        transcriptNodes: [node],
+      }),
+      { columns },
+    );
+
+    await settle();
+
+    expectWrappedCardFragmentsInsideGutter(view.stdout.readAll(), fragments);
   });
 });
 

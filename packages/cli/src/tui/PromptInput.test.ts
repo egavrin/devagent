@@ -13,7 +13,7 @@ import {
   shouldSubmitPromptInput,
   SLASH_COMMANDS,
 } from "./PromptInput.js";
-import { cycleApprovalMode, resolvePromptTabAction } from "./shared.js";
+import { cycleApprovalMode, framedBodyWidth, resolvePromptTabAction, resolveTerminalColumns } from "./shared.js";
 
 describe("PromptInput slash completions", () => {
   it("includes review and simplify prompt shortcuts", () => {
@@ -113,6 +113,21 @@ describe("PromptInput layout helpers", () => {
       { prefix: "… ", text: "a", cursorOffset: 0, dim: false },
     ]);
     expect(rows.map((row) => stringWidth(row.text))).toEqual([4, 1]);
+  });
+
+  it("falls back when a PTY reports zero terminal columns", () => {
+    const previousColumns = process.env["COLUMNS"];
+    process.env["COLUMNS"] = "120";
+    try {
+      expect(resolveTerminalColumns(0)).toBe(120);
+      expect(framedBodyWidth(0)).toBe(116);
+    } finally {
+      if (previousColumns === undefined) {
+        delete process.env["COLUMNS"];
+      } else {
+        process.env["COLUMNS"] = previousColumns;
+      }
+    }
   });
 });
 
