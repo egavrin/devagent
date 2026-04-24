@@ -52,7 +52,7 @@ function registerRoutingLSPTools(lspRouter: LSPRouter, toolRegistry: ToolRegistr
 }
 
 function shouldLogSingleShotLsp(cliArgs: CliArgs): boolean {
-  return cliArgs.verbosity !== "quiet" && Boolean(cliArgs.query);
+  return cliArgs.verbosity !== "quiet" && Boolean(cliArgs.query) && !process.stderr.isTTY;
 }
 
 function scheduleLazyLSPUpgrade(options: LSPSetupOptions, lazyRouter: LSPRouter): void {

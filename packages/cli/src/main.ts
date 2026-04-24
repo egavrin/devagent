@@ -404,8 +404,13 @@ async function runSingleShotTuiMode(ctx: AgentSessionContext, query: string): Pr
     query,
     model: ctx.config.model,
     onQuery: async (q): Promise<InteractiveQueryResult> => {
+      outputState.resetTurn();
       ctx.persistence.activateSession(q);
-      return toInteractiveQueryResult(await runSingleQuery({ ...buildRunOptions(ctx), query: q }));
+      try {
+        return toInteractiveQueryResult(await runTuiQuery({ ...buildRunOptions(ctx), query: q }));
+      } finally {
+        resetTuiLoop();
+      }
     },
     onFinalOutput: (text) => { process.stdout.write(renderStdoutForSingleShot(text) + "\n"); },
   });
