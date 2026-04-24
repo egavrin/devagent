@@ -31,6 +31,16 @@ interface DeepSeekUsage {
   readonly completion_tokens?: number | null;
 }
 
+interface PreparedDeepSeekHistory {
+  readonly messages: Array<Record<string, unknown>>;
+  readonly validToolCallIds: ReadonlySet<string>;
+}
+
+interface NormalizedDeepSeekTurn {
+  readonly messages: Array<Record<string, unknown>>;
+  readonly validToolCallIds: ReadonlySet<string>;
+}
+
 /**
  * DeepSeek's thinking-mode Chat Completions protocol has one non-OpenAI quirk:
  * assistant tool-call messages must be replayed with reasoning_content.
@@ -93,7 +103,7 @@ function buildRequestBody(
   const caps = resolveCapabilities(config.capabilities);
   const body: Record<string, unknown> = {
     model: config.model,
-    messages: messages.map(convertDeepSeekMessage),
+    messages: prepareDeepSeekHistory(messages),
     stream: true,
     stream_options: { include_usage: true },
     max_tokens: config.maxTokens ?? caps.defaultMaxTokens,
@@ -116,13 +126,96 @@ function buildRequestBody(
   return body;
 }
 
-function convertDeepSeekMessage(message: Message): Record<string, unknown> {
-  if (message.role === MessageRole.SYSTEM) {
-    return { role: "system", content: message.content ?? "" };
+function prepareDeepSeekHistory(messages: ReadonlyArray<Message>): Array<Record<string, unknown>> {
+  const prepared = normalizeDeepSeekHistory(messages);
+  validateDeepSeekHistory(prepared);
+  return prepared.messages;
+}
+
+function normalizeDeepSeekHistory(messages: ReadonlyArray<Message>): PreparedDeepSeekHistory {
+  const validToolCallIds = new Set<string>();
+  const converted: Array<Record<string, unknown>> = [];
+  let turn: Message[] = [];
+
+  for (const message of messages) {
+    if (message.role === MessageRole.SYSTEM) {
+      flushDeepSeekTurn(turn, converted, validToolCallIds);
+      turn = [];
+      converted.push({ role: "system", content: message.content ?? "" });
+      continue;
+    }
+    if (message.role === MessageRole.USER) {
+      flushDeepSeekTurn(turn, converted, validToolCallIds);
+      turn = [];
+      converted.push({ role: "user", content: message.content ?? "" });
+      continue;
+    }
+    turn.push(message);
   }
-  if (message.role === MessageRole.USER) {
-    return { role: "user", content: message.content ?? "" };
+  flushDeepSeekTurn(turn, converted, validToolCallIds);
+
+  return { messages: converted, validToolCallIds };
+}
+
+function flushDeepSeekTurn(
+  turn: ReadonlyArray<Message>,
+  converted: Array<Record<string, unknown>>,
+  validToolCallIds: Set<string>,
+): void {
+  if (turn.length === 0) return;
+  const normalized = normalizeDeepSeekTurn(turn);
+  for (const id of normalized.validToolCallIds) validToolCallIds.add(id);
+  converted.push(...normalized.messages);
+}
+
+function normalizeDeepSeekTurn(turn: ReadonlyArray<Message>): NormalizedDeepSeekTurn {
+  const droppedToolCallIds = collectUnreplayableDeepSeekToolCallIds(turn);
+  const validToolCallIds = collectReplayableDeepSeekToolCallIds(turn);
+  const hasToolUse = validToolCallIds.size > 0;
+  const messages: Array<Record<string, unknown>> = [];
+
+  for (const message of turn) {
+    if (shouldDropDeepSeekToolResult(message, droppedToolCallIds, validToolCallIds)) continue;
+    const normalized = convertDeepSeekTurnMessage(message, droppedToolCallIds, hasToolUse);
+    if (normalized) messages.push(normalized);
   }
+
+  return { messages, validToolCallIds };
+}
+
+function collectUnreplayableDeepSeekToolCallIds(messages: ReadonlyArray<Message>): Set<string> {
+  const dropped = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== MessageRole.ASSISTANT || message.thinking || !message.toolCalls?.length) continue;
+    for (const toolCall of message.toolCalls) dropped.add(toolCall.callId);
+  }
+  return dropped;
+}
+
+function collectReplayableDeepSeekToolCallIds(messages: ReadonlyArray<Message>): Set<string> {
+  const valid = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== MessageRole.ASSISTANT || !message.thinking || !message.toolCalls?.length) continue;
+    for (const toolCall of message.toolCalls) valid.add(toolCall.callId);
+  }
+  return valid;
+}
+
+function shouldDropDeepSeekToolResult(
+  message: Message,
+  droppedToolCallIds: ReadonlySet<string>,
+  validToolCallIds: ReadonlySet<string>,
+): boolean {
+  if (message.role !== MessageRole.TOOL) return false;
+  if (!message.toolCallId) return true;
+  return droppedToolCallIds.has(message.toolCallId) || !validToolCallIds.has(message.toolCallId);
+}
+
+function convertDeepSeekTurnMessage(
+  message: Message,
+  droppedToolCallIds: ReadonlySet<string>,
+  hasToolUse: boolean,
+): Record<string, unknown> | null {
   if (message.role === MessageRole.TOOL) {
     return {
       role: "tool",
@@ -135,20 +228,88 @@ function convertDeepSeekMessage(message: Message): Record<string, unknown> {
     role: "assistant",
     content: message.content ?? "",
   };
-  if (message.thinking && message.toolCalls?.length) {
-    converted["reasoning_content"] = message.thinking;
+  if (!message.toolCalls?.length) {
+    if (message.thinking && hasToolUse) converted["reasoning_content"] = message.thinking;
+    return hasToolUse && !message.thinking ? null : converted;
   }
-  if (message.toolCalls?.length) {
-    converted["tool_calls"] = message.toolCalls.map((toolCall) => ({
-      id: toolCall.callId,
-      type: "function",
-      function: {
-        name: toolCall.name,
-        arguments: JSON.stringify(toolCall.arguments),
-      },
-    }));
+  if (!message.thinking) {
+    return hasToolUse ? null : message.content?.trim() ? converted : null;
   }
+
+  const toolCalls = message.toolCalls.filter((toolCall) => !droppedToolCallIds.has(toolCall.callId));
+  if (toolCalls.length === 0) return message.content?.trim() ? converted : null;
+
+  converted["reasoning_content"] = message.thinking;
+  converted["tool_calls"] = toolCalls.map(convertDeepSeekToolCall);
   return converted;
+}
+
+function convertDeepSeekToolCall(toolCall: NonNullable<Message["toolCalls"]>[number]): Record<string, unknown> {
+  return {
+    id: toolCall.callId,
+    type: "function",
+    function: {
+      name: toolCall.name,
+      arguments: JSON.stringify(toolCall.arguments),
+    },
+  };
+}
+
+function validateDeepSeekHistory(prepared: PreparedDeepSeekHistory): void {
+  for (const turn of splitDeepSeekHistoryTurns(prepared.messages)) {
+    const hasToolUse = turn.some((message) => readDeepSeekToolCalls(message).length > 0);
+    for (const message of turn) {
+      validateDeepSeekAssistantMessage(message, hasToolUse);
+      validateDeepSeekToolMessage(message, prepared.validToolCallIds);
+    }
+  }
+}
+
+function splitDeepSeekHistoryTurns(messages: ReadonlyArray<Record<string, unknown>>): Array<Array<Record<string, unknown>>> {
+  const turns: Array<Array<Record<string, unknown>>> = [];
+  let current: Array<Record<string, unknown>> = [];
+  for (const message of messages) {
+    if (message["role"] === "user" || message["role"] === "system") {
+      if (current.length > 0) turns.push(current);
+      current = [message];
+    } else {
+      current.push(message);
+    }
+  }
+  if (current.length > 0) turns.push(current);
+  return turns;
+}
+
+function validateDeepSeekAssistantMessage(message: Record<string, unknown>, hasToolUse: boolean): void {
+  if (message["role"] !== "assistant") return;
+  const toolCalls = readDeepSeekToolCalls(message);
+  for (const toolCall of toolCalls) {
+    if (typeof toolCall.id !== "string" || toolCall.id.length === 0) {
+      throw new ProviderError("DeepSeek history error: assistant tool calls require non-empty ids");
+    }
+  }
+  if (toolCalls.length > 0 && typeof message["reasoning_content"] !== "string") {
+    throw new ProviderError("DeepSeek history error: assistant tool calls require reasoning_content");
+  }
+  if (toolCalls.length === 0 && "reasoning_content" in message && !hasToolUse) {
+    throw new ProviderError("DeepSeek history error: final assistant messages must not include reasoning_content");
+  }
+}
+
+function validateDeepSeekToolMessage(
+  message: Record<string, unknown>,
+  validToolCallIds: ReadonlySet<string>,
+): void {
+  if (message["role"] !== "tool") return;
+  const toolCallId = message["tool_call_id"];
+  if (typeof toolCallId !== "string" || !validToolCallIds.has(toolCallId)) {
+    throw new ProviderError("DeepSeek history error: tool result does not match an assistant tool call");
+  }
+}
+
+function readDeepSeekToolCalls(message: Record<string, unknown>): Array<{ id?: unknown }> {
+  const toolCalls = message["tool_calls"];
+  return Array.isArray(toolCalls) ? toolCalls as Array<{ id?: unknown }> : [];
 }
 
 function convertDeepSeekTool(tool: ToolSpec): Record<string, unknown> {

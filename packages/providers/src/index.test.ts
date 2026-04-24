@@ -265,7 +265,7 @@ describe("DeepSeek registry provider", () => {
     expect(body["tools"]).toBeDefined();
   });
 
-  it("only replays DeepSeek reasoning_content for assistant tool calls", async () => {
+  it("replays DeepSeek reasoning_content for complete tool-use turns", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
 
@@ -316,7 +316,148 @@ describe("DeepSeek registry provider", () => {
     expect(body.messages?.[3]).toEqual({
       role: "assistant",
       content: "Final answer.",
+      reasoning_content: "This should stay local after the turn.",
     });
+  });
+
+  it("omits DeepSeek reasoning_content for non-tool final answers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("deepseek", {
+      model: "deepseek-v4-pro",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    await collectChunks(provider.chat([
+      { role: MessageRole.USER, content: "answer directly" },
+      {
+        role: MessageRole.ASSISTANT,
+        content: "Final answer.",
+        thinking: "No tool use happened.",
+      },
+      { role: MessageRole.USER, content: "what next?" },
+    ]));
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    expect(body.messages?.[1]).toEqual({
+      role: "assistant",
+      content: "Final answer.",
+    });
+  });
+
+  it("prunes unreplayable legacy DeepSeek tool-call history", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("deepseek", {
+      model: "deepseek-v4-pro",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    await collectChunks(provider.chat([
+      { role: MessageRole.USER, content: "first task" },
+      {
+        role: MessageRole.ASSISTANT,
+        content: "",
+        thinking: "Valid tool reasoning.",
+        toolCalls: [{ name: "run_command", arguments: { cmd: "pwd" }, callId: "call_valid" }],
+      },
+      { role: MessageRole.TOOL, toolCallId: "call_valid", content: "/tmp/project" },
+      {
+        role: MessageRole.ASSISTANT,
+        content: "Legacy visible text.",
+        toolCalls: [
+          { name: "read_file", arguments: { path: "a.ts" }, callId: "call_legacy_a" },
+          { name: "read_file", arguments: { path: "b.ts" }, callId: "call_legacy_b" },
+        ],
+      },
+      { role: MessageRole.TOOL, toolCallId: "call_legacy_a", content: "a" },
+      { role: MessageRole.TOOL, toolCallId: "call_legacy_b", content: "b" },
+      { role: MessageRole.TOOL, toolCallId: "call_orphan", content: "orphan" },
+      { role: MessageRole.USER, content: "next task" },
+      {
+        role: MessageRole.ASSISTANT,
+        content: "Legacy visible text without valid tool use.",
+        toolCalls: [
+          { name: "read_file", arguments: { path: "c.ts" }, callId: "call_legacy_c" },
+        ],
+      },
+      { role: MessageRole.TOOL, toolCallId: "call_legacy_c", content: "c" },
+      { role: MessageRole.USER, content: "final task" },
+    ]));
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    expect(body.messages).toEqual([
+      { role: "user", content: "first task" },
+      {
+        role: "assistant",
+        content: "",
+        reasoning_content: "Valid tool reasoning.",
+        tool_calls: [{
+          id: "call_valid",
+          type: "function",
+          function: {
+            name: "run_command",
+            arguments: "{\"cmd\":\"pwd\"}",
+          },
+        }],
+      },
+      { role: "tool", tool_call_id: "call_valid", content: "/tmp/project" },
+      { role: "user", content: "next task" },
+      { role: "assistant", content: "Legacy visible text without valid tool use." },
+      { role: "user", content: "final task" },
+    ]);
+  });
+
+  it("rejects malformed normalized DeepSeek tool-call history locally", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("deepseek", {
+      model: "deepseek-v4-pro",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    let message = "";
+    try {
+      await collectChunks(provider.chat([
+        { role: MessageRole.USER, content: "first task" },
+        {
+          role: MessageRole.ASSISTANT,
+          content: "",
+          thinking: "Reasoning exists but the tool id is broken.",
+          toolCalls: [{ name: "run_command", arguments: { cmd: "pwd" }, callId: "" }],
+        },
+      ]));
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(message).toContain("assistant tool calls require non-empty ids");
   });
 
   it("classifies DeepSeek JSON errors without leaking credentials", async () => {
