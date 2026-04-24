@@ -2,13 +2,45 @@
 provider = "deepseek"
 base_url = "https://api.deepseek.com/v1"
 
+# Current V4 models. Pricing from https://api-docs.deepseek.com/quick_start/pricing.
+[deepseek-v4-flash]
+context_window = 1000000
+response_headroom = 384000
+default_max_tokens = 384000
+tokenizer = "deepseek"
+supports_tools = true
+supports_parallel_tools = false
+supports_temperature = false
+input_price_per_million = 0.14
+cache_hit_input_price_per_million = 0.028
+output_price_per_million = 0.28
+
+[deepseek-v4-pro]
+context_window = 1000000
+response_headroom = 384000
+default_max_tokens = 384000
+tokenizer = "deepseek"
+supports_tools = true
+supports_parallel_tools = false
+supports_temperature = false
+input_price_per_million = 1.74
+cache_hit_input_price_per_million = 0.145
+output_price_per_million = 3.48
+
+# Compatibility aliases. DeepSeek says these names will be deprecated in the future:
+# deepseek-chat maps to deepseek-v4-flash non-thinking mode, and deepseek-reasoner
+# maps to deepseek-v4-flash thinking mode.
 [deepseek-chat]
-context_window = 128000
-response_headroom = 4000
+context_window = 1000000
+response_headroom = 384000
+default_max_tokens = 384000
 tokenizer = "deepseek"
 supports_tools = true
 supports_parallel_tools = false
 supports_temperature = true
+input_price_per_million = 0.14
+cache_hit_input_price_per_million = 0.028
+output_price_per_million = 0.28
 
 [deepseek-coder]
 context_window = 128000
@@ -19,9 +51,13 @@ supports_parallel_tools = false
 supports_temperature = true
 
 [deepseek-reasoner]
-context_window = 64000
-response_headroom = 8000
+context_window = 1000000
+response_headroom = 384000
+default_max_tokens = 384000
 tokenizer = "deepseek"
 supports_tools = true
 supports_parallel_tools = false
 supports_temperature = false
+input_price_per_million = 0.14
+cache_hit_input_price_per_million = 0.028
+output_price_per_million = 0.28

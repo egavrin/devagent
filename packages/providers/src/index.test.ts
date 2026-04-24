@@ -224,7 +224,160 @@ describe("DeepSeek registry provider", () => {
     expect(body.messages?.map((message) => message.role)).toContain("system");
     expect(body.messages?.map((message) => message.role)).not.toContain("developer");
   });
+
+  it("streams DeepSeek reasoning content and split tool calls", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeDeepSeekToolStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("deepseek", {
+      model: "deepseek-v4-pro",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+      reasoningEffort: "high",
+    });
+
+    const chunks = await collectChunks(provider.chat([
+      { role: MessageRole.USER, content: "where am i?" },
+    ], [makeLocationTool()]));
+
+    expect(chunks).toContainEqual({ type: "thinking", content: "I should inspect the cwd." });
+    expect(chunks).toContainEqual({ type: "text", content: "Let me check." });
+    expect(chunks).toContainEqual({
+      type: "tool_call",
+      content: "{\"cmd\":\"pwd\"}",
+      toolCallId: "call_1",
+      toolName: "run_command",
+    });
+    expect(chunks.at(-1)).toMatchObject({
+      type: "done",
+      usage: { promptTokens: 12, completionTokens: 34 },
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as Record<string, unknown>;
+    expect(body["thinking"]).toEqual({ type: "enabled" });
+    expect(body["reasoning_effort"]).toBe("high");
+    expect(body).not.toHaveProperty("temperature");
+    expect(body["tools"]).toBeDefined();
+  });
+
+  it("only replays DeepSeek reasoning_content for assistant tool calls", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("deepseek", {
+      model: "deepseek-v4-pro",
+      apiKey: "test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    await collectChunks(provider.chat([
+      { role: MessageRole.USER, content: "where am i?" },
+      {
+        role: MessageRole.ASSISTANT,
+        content: "Let me check.",
+        thinking: "I should inspect the cwd.",
+        toolCalls: [{ name: "run_command", arguments: { cmd: "pwd" }, callId: "call_1" }],
+      },
+      { role: MessageRole.TOOL, toolCallId: "call_1", content: "/tmp/project" },
+      {
+        role: MessageRole.ASSISTANT,
+        content: "Final answer.",
+        thinking: "This should stay local after the turn.",
+      },
+      { role: MessageRole.USER, content: "what next?" },
+    ]));
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    expect(body.messages?.[1]).toMatchObject({
+      role: "assistant",
+      content: "Let me check.",
+      reasoning_content: "I should inspect the cwd.",
+      tool_calls: [{
+        id: "call_1",
+        type: "function",
+        function: {
+          name: "run_command",
+          arguments: "{\"cmd\":\"pwd\"}",
+        },
+      }],
+    });
+    expect(body.messages?.[3]).toEqual({
+      role: "assistant",
+      content: "Final answer.",
+    });
+  });
+
+  it("classifies DeepSeek JSON errors without leaking credentials", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: { message: "The `reasoning_content` in the thinking mode must be passed back to the API." } }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    ));
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const registry = createDefaultRegistry();
+    const provider = registry.get("deepseek", {
+      model: "deepseek-v4-pro",
+      apiKey: "secret-test-key",
+      capabilities: {
+        useResponsesApi: false,
+        reasoning: true,
+        supportsTemperature: false,
+      },
+    });
+
+    let message = "";
+    try {
+      await collectChunks(provider.chat([
+        { role: MessageRole.USER, content: "ping" },
+      ]));
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toContain("reasoning_content");
+    expect(message).not.toContain("secret-test-key");
+  });
 });
+
+async function collectChunks(stream: AsyncIterable<unknown>): Promise<unknown[]> {
+  const chunks: unknown[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return chunks;
+}
+
+function makeLocationTool() {
+  return {
+    name: "run_command",
+    description: "Run a command",
+    category: "readonly" as const,
+    paramSchema: {
+      type: "object" as const,
+      properties: { cmd: { type: "string" } },
+      required: ["cmd"],
+    },
+    resultSchema: { type: "object" as const },
+    handler: async () => ({
+      success: true,
+      output: "",
+      error: null,
+      artifacts: [],
+    }),
+  };
+}
 
 function makeChatStreamingResponse(): Response {
   const stream = new ReadableStream({
@@ -235,6 +388,35 @@ function makeChatStreamingResponse(): Response {
       ));
       controller.enqueue(encoder.encode(
         'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"cortex","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n',
+      ));
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream",
+    },
+  });
+}
+
+function makeDeepSeekToolStreamingResponse(): Response {
+  const stream = new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      controller.enqueue(encoder.encode(
+        'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"I should inspect the cwd."},"finish_reason":null}]}\n\n',
+      ));
+      controller.enqueue(encoder.encode(
+        'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"Let me check."},"finish_reason":null}]}\n\n',
+      ));
+      controller.enqueue(encoder.encode(
+        'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"run_command","arguments":"{\\"cmd\\""}}]},"finish_reason":null}]}\n\n',
+      ));
+      controller.enqueue(encoder.encode(
+        'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\\"pwd\\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":34}}\n\n',
       ));
       controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       controller.close();

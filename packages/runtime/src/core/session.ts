@@ -16,7 +16,7 @@ import type { Session, Message, CostRecord , MessageRole } from "./types.js";
 
 // ─── Schema ──────────────────────────────────────────────────
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 // DDL constants — referenced in both CREATE_TABLES_STATEMENTS and migrate()
 const SESSION_STATE_DDL = `CREATE TABLE IF NOT EXISTS session_state (
@@ -52,6 +52,7 @@ const CREATE_TABLES_STATEMENTS = [
     session_id TEXT NOT NULL,
     role TEXT NOT NULL,
     content TEXT,
+    thinking TEXT,
     tool_call_id TEXT,
     tool_calls TEXT,
     created_at INTEGER NOT NULL,
@@ -140,6 +141,10 @@ export class SessionStore {
     if (fromVersion < 3) {
       this.db.exec(COMPACTION_LOG_DDL);
       this.db.exec(COMPACTION_LOG_INDEX_DDL);
+    }
+    // v3 -> v4: preserve reasoning content needed by providers such as DeepSeek.
+    if (fromVersion < 4) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN thinking TEXT");
     }
     // Update stored version
     this.db
@@ -231,13 +236,14 @@ export class SessionStore {
 
     this.db
       .prepare(
-        `INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (session_id, role, content, thinking, tool_call_id, tool_calls, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         sessionId,
         message.role,
         message.content,
+        message.thinking ?? null,
         message.toolCallId ?? null,
         toolCallsJson,
         now,
@@ -448,6 +454,7 @@ interface MessageRow {
   session_id: string;
   role: string;
   content: string | null;
+  thinking: string | null;
   tool_call_id: string | null;
   tool_calls: string | null;
   created_at: number;
@@ -480,6 +487,7 @@ function rowToMessage(row: MessageRow): Message {
   const message: Message = {
     role: row.role as MessageRole,
     content: row.content,
+    ...(row.thinking ? { thinking: row.thinking } : {}),
   };
 
   if (row.tool_call_id) {

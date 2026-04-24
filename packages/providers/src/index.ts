@@ -6,6 +6,7 @@
 export { validateOllamaModel } from "./ollama-preflight.js";
 
 import { createAnthropicProvider } from "./anthropic.js";
+import { createDeepSeekProvider } from "./deepseek.js";
 import { createOpenAIProvider } from "./openai.js";
 import { ProviderRegistry } from "./registry.js";
 import type { LLMProvider, ProviderConfig } from "@devagent/runtime";
@@ -94,21 +95,6 @@ function createGitHubCopilotProvider(config: ProviderConfig): LLMProvider {
       "store", "metadata", "prediction",
       "stream_options", "logprobs", "top_logprobs",
     ],
-  });
-}
-
-/**
- * DeepSeek provider — wraps the OpenAI provider for DeepSeek's API.
- * DeepSeek exposes an OpenAI-compatible API at api.deepseek.com/v1.
- */
-function createDeepSeekProvider(config: ProviderConfig): LLMProvider {
-  return createOpenAIProvider({
-    ...config,
-    baseUrl: config.baseUrl ?? "https://api.deepseek.com/v1",
-    messageRoleOverrides: {
-      ...(config.messageRoleOverrides ?? {}),
-      developer: "system",
-    },
   });
 }
 

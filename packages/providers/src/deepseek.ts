@@ -1,0 +1,338 @@
+import {
+  MessageRole,
+  ProviderError,
+  createProxyAwareFetch,
+} from "@devagent/runtime";
+
+import {
+  classifyProviderError,
+  resolveCapabilities,
+} from "./shared.js";
+import type { LLMProvider, Message, ProviderConfig, StreamChunk, ToolSpec } from "@devagent/runtime";
+
+interface DeepSeekToolCallDelta {
+  readonly index: number;
+  readonly id?: string | null;
+  readonly type?: string | null;
+  readonly function?: {
+    readonly name?: string | null;
+    readonly arguments?: string | null;
+  } | null;
+}
+
+interface PendingDeepSeekToolCall {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+interface DeepSeekUsage {
+  readonly prompt_tokens?: number | null;
+  readonly completion_tokens?: number | null;
+}
+
+/**
+ * DeepSeek's thinking-mode Chat Completions protocol has one non-OpenAI quirk:
+ * assistant tool-call messages must be replayed with reasoning_content.
+ */
+export function createDeepSeekProvider(config: ProviderConfig): LLMProvider {
+  const baseUrl = config.baseUrl ?? "https://api.deepseek.com/v1";
+  const transportFetch = createProxyAwareFetch(globalThis.fetch);
+  let abortController: AbortController | null = null;
+
+  return {
+    id: "deepseek",
+    async *chat(
+      messages: ReadonlyArray<Message>,
+      tools?: ReadonlyArray<ToolSpec>,
+    ): AsyncIterable<StreamChunk> {
+      abortController = new AbortController();
+      try {
+        const response = await transportFetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: buildHeaders(config),
+          body: JSON.stringify(buildRequestBody(config, messages, tools)),
+          signal: abortController.signal,
+        });
+
+        if (!response.ok) {
+          throw await buildDeepSeekError(response);
+        }
+
+        yield* streamDeepSeekResponse(response, abortController);
+      } catch (err) {
+        if (abortController.signal.aborted) {
+          yield { type: "done", content: "" };
+          return;
+        }
+        if (err instanceof ProviderError) throw err;
+        throw classifyProviderError(err, "DeepSeek");
+      } finally {
+        abortController = null;
+      }
+    },
+    abort(): void {
+      abortController?.abort();
+    },
+  };
+}
+
+function buildHeaders(config: ProviderConfig): Record<string, string> {
+  return {
+    "content-type": "application/json",
+    ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
+    ...(config.customHeaders ?? {}),
+  };
+}
+
+function buildRequestBody(
+  config: ProviderConfig,
+  messages: ReadonlyArray<Message>,
+  tools: ReadonlyArray<ToolSpec> | undefined,
+): Record<string, unknown> {
+  const caps = resolveCapabilities(config.capabilities);
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages: messages.map(convertDeepSeekMessage),
+    stream: true,
+    stream_options: { include_usage: true },
+    max_tokens: config.maxTokens ?? caps.defaultMaxTokens,
+  };
+
+  if (config.reasoningEffort) {
+    body["reasoning_effort"] = config.reasoningEffort === "xhigh" ? "max" : config.reasoningEffort;
+  }
+  if (caps.reasoning) {
+    body["thinking"] = { type: "enabled" };
+  }
+  if (caps.supportsTemperature) {
+    body["temperature"] = config.temperature ?? 0;
+  }
+  if (tools && tools.length > 0) {
+    body["tools"] = tools.map(convertDeepSeekTool);
+    body["tool_choice"] = "auto";
+  }
+
+  return body;
+}
+
+function convertDeepSeekMessage(message: Message): Record<string, unknown> {
+  if (message.role === MessageRole.SYSTEM) {
+    return { role: "system", content: message.content ?? "" };
+  }
+  if (message.role === MessageRole.USER) {
+    return { role: "user", content: message.content ?? "" };
+  }
+  if (message.role === MessageRole.TOOL) {
+    return {
+      role: "tool",
+      tool_call_id: message.toolCallId ?? "",
+      content: message.content ?? "",
+    };
+  }
+
+  const converted: Record<string, unknown> = {
+    role: "assistant",
+    content: message.content ?? "",
+  };
+  if (message.thinking && message.toolCalls?.length) {
+    converted["reasoning_content"] = message.thinking;
+  }
+  if (message.toolCalls?.length) {
+    converted["tool_calls"] = message.toolCalls.map((toolCall) => ({
+      id: toolCall.callId,
+      type: "function",
+      function: {
+        name: toolCall.name,
+        arguments: JSON.stringify(toolCall.arguments),
+      },
+    }));
+  }
+  return converted;
+}
+
+function convertDeepSeekTool(tool: ToolSpec): Record<string, unknown> {
+  return {
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.paramSchema,
+    },
+  };
+}
+
+async function buildDeepSeekError(response: Response): Promise<ProviderError> {
+  const responseBody = await response.text();
+  const message = extractDeepSeekErrorMessage(responseBody) ?? responseBody;
+  const error = new Error(message) as Error & {
+    status: number;
+    statusCode: number;
+    responseHeaders: Record<string, string>;
+  };
+  error.status = response.status;
+  error.statusCode = response.status;
+  error.responseHeaders = Object.fromEntries(response.headers.entries());
+  return classifyProviderError(error, "DeepSeek");
+}
+
+function extractDeepSeekErrorMessage(responseBody: string): string | null {
+  try {
+    const parsed = JSON.parse(responseBody) as { error?: { message?: unknown } };
+    return typeof parsed.error?.message === "string" ? parsed.error.message : null;
+  } catch {
+    return null;
+  }
+}
+
+async function* streamDeepSeekResponse(
+  response: Response,
+  abortController: AbortController,
+): AsyncGenerator<StreamChunk> {
+  if (!response.body) {
+    throw new ProviderError("DeepSeek stream error: missing response body");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const toolCalls = new Map<number, PendingDeepSeekToolCall>();
+  let buffer = "";
+  let doneSent = false;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const events = splitCompleteSseEvents(buffer);
+      buffer = events.remainder;
+      for (const event of events.complete) {
+        const chunk = parseSseData(event);
+        if (!chunk) continue;
+        if (chunk === "[DONE]") {
+          yield* flushDeepSeekToolCalls(toolCalls);
+          if (!doneSent) {
+            doneSent = true;
+            yield { type: "done", content: "" };
+          }
+          return;
+        }
+        const emitted = mapDeepSeekChunk(chunk, toolCalls);
+        for (const item of emitted) yield item;
+        if (emitted.some((item) => item.type === "done")) doneSent = true;
+      }
+    }
+
+    const tail = parseSseData(buffer);
+    if (tail && tail !== "[DONE]") {
+      for (const item of mapDeepSeekChunk(tail, toolCalls)) yield item;
+    }
+    yield* flushDeepSeekToolCalls(toolCalls);
+    if (!doneSent) yield { type: "done", content: "" };
+  } catch (err) {
+    if (abortController.signal.aborted) {
+      yield { type: "done", content: "" };
+      return;
+    }
+    throw err;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function splitCompleteSseEvents(buffer: string): { readonly complete: string[]; readonly remainder: string } {
+  const normalized = buffer.replaceAll("\r\n", "\n");
+  const parts = normalized.split("\n\n");
+  return {
+    complete: parts.slice(0, -1),
+    remainder: parts.at(-1) ?? "",
+  };
+}
+
+function parseSseData(event: string): string | null {
+  const data = event
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trimStart())
+    .join("\n")
+    .trim();
+  return data.length > 0 ? data : null;
+}
+
+function mapDeepSeekChunk(
+  raw: string,
+  toolCalls: Map<number, PendingDeepSeekToolCall>,
+): StreamChunk[] {
+  const parsed = JSON.parse(raw) as {
+    choices?: Array<{
+      delta?: {
+        content?: string | null;
+        reasoning_content?: string | null;
+        tool_calls?: DeepSeekToolCallDelta[] | null;
+      } | null;
+      finish_reason?: string | null;
+    }>;
+    usage?: DeepSeekUsage | null;
+  };
+
+  const chunks: StreamChunk[] = [];
+  for (const choice of parsed.choices ?? []) {
+    const delta = choice.delta;
+    if (delta?.reasoning_content) {
+      chunks.push({ type: "thinking", content: delta.reasoning_content });
+    }
+    if (delta?.content) {
+      chunks.push({ type: "text", content: delta.content });
+    }
+    for (const toolCall of delta?.tool_calls ?? []) {
+      mergeToolCallDelta(toolCalls, toolCall);
+    }
+    if (choice.finish_reason === "tool_calls") {
+      chunks.push(...flushDeepSeekToolCalls(toolCalls));
+    }
+  }
+
+  if (parsed.usage) {
+    chunks.push({
+      type: "done",
+      content: "",
+      usage: {
+        promptTokens: parsed.usage.prompt_tokens ?? 0,
+        completionTokens: parsed.usage.completion_tokens ?? 0,
+      },
+    });
+  }
+
+  return chunks;
+}
+
+function mergeToolCallDelta(
+  toolCalls: Map<number, PendingDeepSeekToolCall>,
+  delta: DeepSeekToolCallDelta,
+): void {
+  const existing = toolCalls.get(delta.index) ?? {
+    id: delta.id ?? `call_${delta.index}`,
+    name: "",
+    arguments: "",
+  };
+  if (delta.id) existing.id = delta.id;
+  if (delta.function?.name) existing.name += delta.function.name;
+  if (delta.function?.arguments) existing.arguments += delta.function.arguments;
+  toolCalls.set(delta.index, existing);
+}
+
+function flushDeepSeekToolCalls(
+  toolCalls: Map<number, PendingDeepSeekToolCall>,
+): StreamChunk[] {
+  const chunks = Array.from(toolCalls.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([, toolCall]) => ({
+      type: "tool_call" as const,
+      content: toolCall.arguments || "{}",
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+    }));
+  toolCalls.clear();
+  return chunks;
+}

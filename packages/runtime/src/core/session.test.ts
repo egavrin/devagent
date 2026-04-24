@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import { BUN_SQLITE_AVAILABLE } from "./bun-sqlite.js";
+import { Database } from "./bun-sqlite.js";
 import { SessionStore } from "./session.js";
 import { MessageRole } from "./types.js";
 import type { Message, CostRecord } from "./types.js";
@@ -170,6 +171,28 @@ describe.skipIf(!BUN_SQLITE_AVAILABLE)("addMessage", () => {
     expect(messages[0]!.toolCalls![0]!.name).toBe("read_file");
   });
 
+  it("stores assistant thinking content", () => {
+    const session = store.createSession();
+    const msg: Message = {
+      role: MessageRole.ASSISTANT,
+      content: "I'll check.",
+      thinking: "Need a shell command.",
+      toolCalls: [
+        {
+          name: "run_command",
+          arguments: { cmd: "pwd" },
+          callId: "call_1",
+        },
+      ],
+    };
+    store.addMessage(session.id, msg);
+
+    const messages = store.getMessages(session.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.thinking).toBe("Need a shell command.");
+    expect(messages[0]!.toolCalls).toHaveLength(1);
+  });
+
   it("stores tool result messages", () => {
     const session = store.createSession();
     const msg: Message = {
@@ -194,6 +217,73 @@ describe.skipIf(!BUN_SQLITE_AVAILABLE)("addMessage", () => {
 
     const loaded = store.getSession(session.id);
     expect(loaded!.updatedAt).toBeGreaterThanOrEqual(originalUpdated);
+  });
+});
+
+describe.skipIf(!BUN_SQLITE_AVAILABLE)("schema migration", () => {
+  it("adds thinking column to existing v3 session databases", () => {
+    store.close();
+    const dbPath = join(tmpDir, "legacy-v3.db");
+    const db = new Database(dbPath);
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        metadata TEXT NOT NULL DEFAULT '{}'
+      );
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+      CREATE TABLE cost_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+        total_cost REAL NOT NULL DEFAULT 0.0,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+      CREATE TABLE session_state (
+        session_id TEXT PRIMARY KEY,
+        state_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+      CREATE TABLE compaction_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        tokens_before INTEGER NOT NULL,
+        tokens_after INTEGER NOT NULL,
+        removed_count INTEGER NOT NULL,
+        tier TEXT NOT NULL DEFAULT 'unknown',
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+      CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_version (version) VALUES (3);
+    `);
+    db.close();
+
+    const migrated = new SessionStore({ dbPath });
+    store = migrated;
+    const session = migrated.createSession();
+    migrated.addMessage(session.id, {
+      role: MessageRole.ASSISTANT,
+      content: "done",
+      thinking: "private reasoning",
+    });
+
+    expect(migrated.getMessages(session.id)[0]!.thinking).toBe("private reasoning");
   });
 });
 

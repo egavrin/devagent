@@ -72,6 +72,7 @@ response_headroom = 2000
 supports_temperature = true
 input_price_per_million = 2.50
 output_price_per_million = 10
+cache_hit_input_price_per_million = 1.25
 
 ["${modelNoPricing}"]
 context_window = 1000
@@ -87,12 +88,40 @@ supports_temperature = true
       expect(pricing).toBeDefined();
       expect(pricing!.inputPricePerMillion).toBe(2.50);
       expect(pricing!.outputPricePerMillion).toBe(10);
+      expect(pricing!.cacheHitInputPricePerMillion).toBe(1.25);
 
       const noPricing = lookupModelPricing(modelNoPricing);
       expect(noPricing).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("loads current DeepSeek V4 model capabilities and pricing", () => {
+    const modelsDir = join(import.meta.dirname ?? new URL(".", import.meta.url).pathname, "../../../../models");
+    loadModelRegistry(undefined, [modelsDir]);
+
+    const flash = lookupModelEntry("deepseek-v4-flash", "deepseek");
+    expect(flash?.contextWindow).toBe(1_000_000);
+    expect(flash?.responseHeadroom).toBe(384_000);
+    expect(flash?.capabilities.reasoning).toBe(true);
+    expect(flash?.capabilities.supportsTemperature).toBe(false);
+    expect(flash?.pricing).toEqual({
+      inputPricePerMillion: 0.14,
+      cacheHitInputPricePerMillion: 0.028,
+      outputPricePerMillion: 0.28,
+    });
+
+    const pro = lookupModelEntry("deepseek-v4-pro", "deepseek");
+    expect(pro?.contextWindow).toBe(1_000_000);
+    expect(pro?.responseHeadroom).toBe(384_000);
+    expect(pro?.capabilities.reasoning).toBe(true);
+    expect(pro?.capabilities.supportsTemperature).toBe(false);
+    expect(pro?.pricing).toEqual({
+      inputPricePerMillion: 1.74,
+      cacheHitInputPricePerMillion: 0.145,
+      outputPricePerMillion: 3.48,
+    });
   });
 
   it("tracks the same model name across multiple providers", () => {

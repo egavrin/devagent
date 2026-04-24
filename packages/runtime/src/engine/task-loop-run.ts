@@ -140,7 +140,7 @@ export async function runTaskLoop(
         continue;
       }
 
-      if (handleTextOrEmptyResponse(loop, state, response.textContent) === "continue") {
+      if (handleTextOrEmptyResponse(loop, state, response) === "continue") {
         continue;
       }
       break;
@@ -320,6 +320,7 @@ function appendAssistantToolCallMessage(loop: TaskLoopRunHost, response: LLMRoun
     content: response.textContent,
     partial: false,
     toolCalls,
+    ...(response.thinkingContent ? { thinking: response.thinkingContent } : {}),
     ...loop.getAgentEventFields(),
   });
 }
@@ -406,30 +407,30 @@ function appendToolUseSummary(loop: TaskLoopRunHost): void {
 function handleTextOrEmptyResponse(
   loop: TaskLoopRunHost,
   state: RunState,
-  textContent: string,
+  response: LLMRoundResult,
 ): "continue" | "break" {
-  if (textContent) return handleTextResponse(loop, state, textContent);
+  if (response.textContent) return handleTextResponse(loop, state, response);
   return handleEmptyResponse(loop, state);
 }
 
 function handleTextResponse(
   loop: TaskLoopRunHost,
   state: RunState,
-  textContent: string,
+  response: LLMRoundResult,
 ): "continue" | "break" {
-  if (appendDoubleCheckNudge(loop, state, textContent)) return "continue";
-  if (appendPlanNudge(loop, state, textContent)) return "continue";
-  if (appendFinalTextValidationNudge(loop, state, textContent)) return "continue";
+  if (appendDoubleCheckNudge(loop, state, response)) return "continue";
+  if (appendPlanNudge(loop, state, response)) return "continue";
+  if (appendFinalTextValidationNudge(loop, state, response)) return "continue";
 
-  state.lastNonEmptyText = textContent;
-  appendAssistantText(loop, textContent);
+  state.lastNonEmptyText = response.textContent;
+  appendAssistantText(loop, response);
   state.status = "success";
   return "break";
 }
 
-function appendDoubleCheckNudge(loop: TaskLoopRunHost, state: RunState, text: string): boolean {
+function appendDoubleCheckNudge(loop: TaskLoopRunHost, state: RunState, response: LLMRoundResult): boolean {
   if (!loop.unresolvedDoubleCheckFailure || !state.hadToolCalls) return false;
-  appendAssistantText(loop, text);
+  appendAssistantText(loop, response);
   loop.pushMessage({
     role: MessageRole.SYSTEM,
     content: "Double-check still failing from prior edits. You must fix validation errors before finalizing.",
@@ -438,11 +439,11 @@ function appendDoubleCheckNudge(loop: TaskLoopRunHost, state: RunState, text: st
   return true;
 }
 
-function appendPlanNudge(loop: TaskLoopRunHost, state: RunState, text: string): boolean {
+function appendPlanNudge(loop: TaskLoopRunHost, state: RunState, response: LLMRoundResult): boolean {
   const hasIncompleteSteps = loop.sessionState?.hasPendingPlanSteps() ?? false;
   if (!hasIncompleteSteps || !state.hadToolCalls || state.planNudgeUsed) return false;
   state.planNudgeUsed = true;
-  appendAssistantText(loop, text);
+  appendAssistantText(loop, response);
   loop.pushMessage({
     role: MessageRole.SYSTEM,
     content: "Your plan has incomplete steps. Continue working — use tools to make progress on the next pending step.",
@@ -450,10 +451,10 @@ function appendPlanNudge(loop: TaskLoopRunHost, state: RunState, text: string): 
   return true;
 }
 
-function appendFinalTextValidationNudge(loop: TaskLoopRunHost, state: RunState, text: string): boolean {
-  const validation = state.finalTextValidator?.(text) ?? { valid: true };
+function appendFinalTextValidationNudge(loop: TaskLoopRunHost, state: RunState, response: LLMRoundResult): boolean {
+  const validation = state.finalTextValidator?.(response.textContent) ?? { valid: true };
   if (validation.valid) return false;
-  appendAssistantText(loop, text);
+  appendAssistantText(loop, response);
   loop.pushMessage({
     role: MessageRole.SYSTEM,
     content: validation.retryMessage
@@ -462,11 +463,16 @@ function appendFinalTextValidationNudge(loop: TaskLoopRunHost, state: RunState, 
   return true;
 }
 
-function appendAssistantText(loop: TaskLoopRunHost, content: string): void {
-  loop.pushMessage({ role: MessageRole.ASSISTANT, content });
+function appendAssistantText(loop: TaskLoopRunHost, response: LLMRoundResult): void {
+  loop.pushMessage({
+    role: MessageRole.ASSISTANT,
+    content: response.textContent,
+    ...(response.thinkingContent ? { thinking: response.thinkingContent } : {}),
+  });
   loop.bus.emit("message:assistant", {
-    content,
+    content: response.textContent,
     partial: false,
+    ...(response.thinkingContent ? { thinking: response.thinkingContent } : {}),
     ...loop.getAgentEventFields(),
   });
 }

@@ -32,6 +32,9 @@ export function estimateMessageTokens(messages: ReadonlyArray<Message>): number 
     if (msg.content) {
       total += estimateTokens(msg.content);
     }
+    if (msg.thinking) {
+      total += estimateTokens(msg.thinking);
+    }
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
         total += estimateTokens(JSON.stringify(tc.arguments));

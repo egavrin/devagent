@@ -25,6 +25,7 @@ import type { ModelCapabilities } from "./types.js";
 export interface ModelPricing {
   readonly inputPricePerMillion: number;
   readonly outputPricePerMillion: number;
+  readonly cacheHitInputPricePerMillion?: number;
 }
 
 export interface ModelRegistryEntry {
@@ -254,8 +255,9 @@ function parseModelCapabilities(modelDef: Record<string, unknown>): ModelCapabil
 function parseModelPricing(modelDef: Record<string, unknown>): ModelPricing | undefined {
   const inputPrice = modelDef["input_price_per_million"] as number | undefined;
   const outputPrice = modelDef["output_price_per_million"] as number | undefined;
+  const cacheHitInputPrice = modelDef["cache_hit_input_price_per_million"] as number | undefined;
   return inputPrice != null && outputPrice != null
-    ? { inputPricePerMillion: inputPrice, outputPricePerMillion: outputPrice }
+    ? { inputPricePerMillion: inputPrice, outputPricePerMillion: outputPrice, cacheHitInputPricePerMillion: cacheHitInputPrice }
     : undefined;
 }
 

@@ -66,6 +66,18 @@ describe("estimateMessageTokens", () => {
     expect(tokens).toBeGreaterThan(0);
     expect(tokens).toBe(8); // ceil(21/4) + ceil(5/4) = 6 + 2 = 8
   });
+
+  it("includes persisted thinking content", () => {
+    const tokens = estimateMessageTokens([
+      {
+        role: MessageRole.ASSISTANT,
+        content: "ok",
+        thinking: "abcd",
+      },
+    ]);
+
+    expect(tokens).toBe(2);
+  });
 });
   it("does not truncate when under threshold", () => {
     const mgr = new ContextManager(makeConfig({ triggerRatio: 0.8 }));

@@ -192,7 +192,7 @@ function registerSessionPersistenceEvents(bus: EventBus, sessionStore: SessionSt
   });
   bus.on("message:assistant", (event) => {
     const session = event.agentId || event.partial ? null : getActiveSession();
-    if (session) sessionStore.addMessage(session.id, { role: MessageRole.ASSISTANT, content: event.content, toolCalls: event.toolCalls });
+    if (session) sessionStore.addMessage(session.id, { role: MessageRole.ASSISTANT, content: event.content, thinking: event.thinking, toolCalls: event.toolCalls });
   });
   bus.on("message:tool", (event) => {
     const session = event.agentId ? null : getActiveSession();

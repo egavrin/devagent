@@ -162,6 +162,7 @@ export interface SubagentErrorEvent {
 export interface AssistantMessageEvent {
   readonly content: string;
   readonly partial: boolean;
+  readonly thinking?: string;
   readonly chunk?: StreamChunk;
   readonly toolCalls?: ReadonlyArray<ToolCallRequest>;
   readonly agentId?: string;

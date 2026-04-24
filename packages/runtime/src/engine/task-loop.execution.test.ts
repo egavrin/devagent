@@ -609,6 +609,44 @@ beforeEach(() => {
     expect(assistantMsgs.length).toBe(2); // Previous + new
     expect(assistantMsgs[1]!.content).toBe("Continuing from where we left off.");
   });
+
+  it("preserves thinking on final assistant text messages", async () => {
+    const provider = createMockProvider([
+      [
+        { type: "thinking", content: "I should answer directly." },
+        { type: "text", content: "Final answer." },
+        { type: "done", content: "" },
+      ],
+    ]);
+
+    const assistantEvents: Array<{ content: string; thinking?: string }> = [];
+    bus.on("message:assistant", (event) => {
+      if (!event.partial) assistantEvents.push(event);
+    });
+
+    const registry = new ToolRegistry();
+    const gate = new ApprovalGate(config.approval, bus);
+    const loop = new TaskLoop({
+      provider,
+      tools: registry,
+      bus,
+      approvalGate: gate,
+      config,
+      systemPrompt: "Test",
+      repoRoot: "/tmp",
+    });
+
+    const result = await loop.run("Answer");
+    const finalAssistant = result.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content === "Final answer.",
+    );
+
+    expect(finalAssistant?.thinking).toBe("I should answer directly.");
+    expect(assistantEvents[0]).toMatchObject({
+      content: "Final answer.",
+      thinking: "I should answer directly.",
+    });
+  });
   it("defaults to system prompt when no initialMessages", async () => {
     const provider = createMockProvider([
       [
