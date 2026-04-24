@@ -224,7 +224,9 @@ describe("DeepSeek registry provider", () => {
     expect(body.messages?.map((message) => message.role)).toContain("system");
     expect(body.messages?.map((message) => message.role)).not.toContain("developer");
   });
+});
 
+describe("DeepSeek streaming provider", () => {
   it("streams DeepSeek reasoning content and split tool calls", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeDeepSeekToolStreamingResponse());
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
@@ -264,7 +266,9 @@ describe("DeepSeek registry provider", () => {
     expect(body).not.toHaveProperty("temperature");
     expect(body["tools"]).toBeDefined();
   });
+});
 
+describe("DeepSeek history replay", () => {
   it("replays DeepSeek reasoning_content for complete tool-use turns", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
@@ -353,7 +357,9 @@ describe("DeepSeek registry provider", () => {
       content: "Final answer.",
     });
   });
+});
 
+describe("DeepSeek legacy history pruning", () => {
   it("prunes unreplayable legacy DeepSeek tool-call history", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeChatStreamingResponse());
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
@@ -459,7 +465,9 @@ describe("DeepSeek registry provider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(message).toContain("assistant tool calls require non-empty ids");
   });
+});
 
+describe("DeepSeek provider errors", () => {
   it("classifies DeepSeek JSON errors without leaking credentials", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ error: { message: "The `reasoning_content` in the thinking mode must be passed back to the API." } }),

@@ -59,41 +59,8 @@ async function main(): Promise<void> {
       description: "session database smoke",
       homeDir: isolatedHome,
     });
-    runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "--provider", "devagent-api", "--model", "cortex", "hello"], {
-      expectedExitCode: 1,
-      expectedOutput: 'No API key configured for provider "devagent-api".',
-      description: "provider startup smoke",
-      homeDir: isolatedHome,
-      clearedEnvKeys: [
-        "DEVAGENT_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "OPENROUTER_API_KEY",
-        "DEEPSEEK_API_KEY",
-      ],
-    });
-
-    const stubGateway = await startStubGateway(nodeBin);
-    try {
-      writeGatewayConfig(isolatedHome, stubGateway.baseUrl);
-      runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "--provider", "devagent-api", "--model", "cortex", "hello"], {
-        expectedExitCode: 1,
-        description: "gateway transport smoke",
-        homeDir: isolatedHome,
-        envOverrides: {
-          DEVAGENT_API_KEY: "ilg_smoke_test_key",
-        },
-        clearedEnvKeys: [
-          "OPENAI_API_KEY",
-          "ANTHROPIC_API_KEY",
-          "OPENROUTER_API_KEY",
-          "DEEPSEEK_API_KEY",
-        ],
-      });
-      stubGateway.assertTransportContract();
-    } finally {
-      await stubGateway.stop();
-    }
+    runProviderStartupSmoke(stagedDist, nodeBin, isolatedHome);
+    await runGatewayTransportSmoke(stagedDist, nodeBin, isolatedHome);
 
     verifyTarballReinstall(stagedDist, npmBin, nodeBin, isolatedHome);
   } finally {
@@ -109,6 +76,46 @@ function ensureBundleExists(): void {
         `Missing publish artifact: ${requiredPath}. Run "bun run build:publish" before bundle smoke tests.`,
       );
     }
+  }
+}
+
+function runProviderStartupSmoke(stagedDist: string, nodeBin: string, isolatedHome: string): void {
+  runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "--provider", "devagent-api", "--model", "cortex", "hello"], {
+    expectedExitCode: 1,
+    expectedOutput: 'No API key configured for provider "devagent-api".',
+    description: "provider startup smoke",
+    homeDir: isolatedHome,
+    clearedEnvKeys: [
+      "DEVAGENT_API_KEY",
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "OPENROUTER_API_KEY",
+      "DEEPSEEK_API_KEY",
+    ],
+  });
+}
+
+async function runGatewayTransportSmoke(stagedDist: string, nodeBin: string, isolatedHome: string): Promise<void> {
+  const stubGateway = await startStubGateway(nodeBin);
+  try {
+    writeGatewayConfig(isolatedHome, stubGateway.baseUrl);
+    runSmokeCommand(stagedDist, nodeBin, ["bootstrap.js", "--provider", "devagent-api", "--model", "cortex", "hello"], {
+      expectedExitCode: 1,
+      description: "gateway transport smoke",
+      homeDir: isolatedHome,
+      envOverrides: {
+        DEVAGENT_API_KEY: "ilg_smoke_test_key",
+      },
+      clearedEnvKeys: [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
+        "DEEPSEEK_API_KEY",
+      ],
+    });
+    stubGateway.assertTransportContract();
+  } finally {
+    await stubGateway.stop();
   }
 }
 
@@ -384,11 +391,11 @@ function verifyTarballReinstall(
     }
     const tarballPath = join(packDir, tarball);
     installTarballIntoPrefix(npmBin, prefixDir, tarballPath, nodeBin);
-    runInstalledBinarySmokeCommand(prefixDir, ["help"], homeDir, nodeBin, 0, "installed help smoke");
-    runInstalledBinarySmokeCommand(prefixDir, ["version"], homeDir, nodeBin, 0, "installed version smoke");
+    runInstalledBinarySmokeCommand({ prefixDir, args: ["help"], homeDir, nodeBin, expectedExitCode: 0, description: "installed help smoke" });
+    runInstalledBinarySmokeCommand({ prefixDir, args: ["version"], homeDir, nodeBin, expectedExitCode: 0, description: "installed version smoke" });
     uninstallTarballFromPrefix(npmBin, prefixDir, nodeBin);
     installTarballIntoPrefix(npmBin, prefixDir, tarballPath, nodeBin);
-    runInstalledBinarySmokeCommand(prefixDir, ["help"], homeDir, nodeBin, 0, "reinstalled help smoke");
+    runInstalledBinarySmokeCommand({ prefixDir, args: ["help"], homeDir, nodeBin, expectedExitCode: 0, description: "reinstalled help smoke" });
   } finally {
     rmSync(packDir, { recursive: true, force: true });
     rmSync(prefixDir, { recursive: true, force: true });
@@ -425,33 +432,26 @@ function uninstallTarballFromPrefix(npmBin: string, prefixDir: string, nodeBin: 
   }
 }
 
-function runInstalledBinarySmokeCommand(
-  prefixDir: string,
-  args: string[],
-  homeDir: string,
-  nodeBin: string,
-  expectedExitCode: number,
-  description: string,
-): void {
-  const executable = join(prefixDir, "bin", process.platform === "win32" ? "devagent.cmd" : "devagent");
+function runInstalledBinarySmokeCommand(options: InstalledBinarySmokeOptions): void {
+  const executable = join(options.prefixDir, "bin", process.platform === "win32" ? "devagent.cmd" : "devagent");
   const env = {
-    ...buildNodePreferredEnv(nodeBin),
-    HOME: homeDir,
-    XDG_CONFIG_HOME: join(homeDir, ".config"),
-    XDG_CACHE_HOME: join(homeDir, ".cache"),
+    ...buildNodePreferredEnv(options.nodeBin),
+    HOME: options.homeDir,
+    XDG_CONFIG_HOME: join(options.homeDir, ".config"),
+    XDG_CACHE_HOME: join(options.homeDir, ".cache"),
     NO_COLOR: "1",
     FORCE_COLOR: "0",
     DEVAGENT_DISABLE_UPDATE_CHECK: "1",
   };
-  const result = spawnSync(executable, args, {
+  const result = spawnSync(executable, options.args, {
     env,
     encoding: "utf-8",
     stdio: "pipe",
   });
   const output = `${result.stdout}${result.stderr}`;
-  if (result.status !== expectedExitCode) {
+  if (result.status !== options.expectedExitCode) {
     throw new Error(
-      `${description} exited with ${result.status}, expected ${expectedExitCode}.\n${output.trim()}`,
+      `${options.description} exited with ${result.status}, expected ${options.expectedExitCode}.\n${output.trim()}`,
     );
   }
 }
@@ -478,52 +478,22 @@ interface StubGatewayHandle {
   readonly stop: () => Promise<void>;
 }
 
+interface InstalledBinarySmokeOptions {
+  readonly prefixDir: string;
+  readonly args: string[];
+  readonly homeDir: string;
+  readonly nodeBin: string;
+  readonly expectedExitCode: number;
+  readonly description: string;
+}
+
 async function startStubGateway(nodeBin: string): Promise<StubGatewayHandle> {
   const stubDir = mkdtempSync(join(tmpdir(), "devagent-gateway-stub-"));
   const portPath = join(stubDir, "port.txt");
   const requestLogPath = join(stubDir, "requests.log");
   const serverScriptPath = join(stubDir, "server.mjs");
 
-  writeFileSync(
-    serverScriptPath,
-    [
-      'import { createServer } from "node:http";',
-      'import { appendFileSync, writeFileSync } from "node:fs";',
-      "",
-      "const [portPath, requestLogPath] = process.argv.slice(2);",
-      "const server = createServer(async (req, res) => {",
-      '  appendFileSync(requestLogPath, `${req.method} ${req.url}\\n`);',
-      "  for await (const _chunk of req) {",
-      "    void _chunk;",
-      "  }",
-      '  if (req.url === "/v1/chat/completions") {',
-      "    res.statusCode = 401;",
-      '    res.setHeader("content-type", "application/json");',
-      '    res.end(JSON.stringify({ error: { code: "invalid_auth", message: "Missing runtime bearer token." } }));',
-      "    return;",
-      "  }",
-      '  if (req.url === "/v1/responses") {',
-      "    res.statusCode = 404;",
-      '    res.setHeader("content-type", "text/plain; charset=UTF-8");',
-      '    res.end("404 Not Found");',
-      "    return;",
-      "  }",
-      "  res.statusCode = 404;",
-      '  res.end("not found");',
-      "});",
-      'server.listen(0, "127.0.0.1", () => {',
-      "  const address = server.address();",
-      '  if (!address || typeof address === "string") {',
-      '    throw new Error("Failed to resolve stub gateway address");',
-      "  }",
-      "  writeFileSync(portPath, String(address.port));",
-      "});",
-      'process.on("SIGTERM", () => server.close(() => process.exit(0)));',
-      'process.on("SIGINT", () => server.close(() => process.exit(0)));',
-      "",
-    ].join("\n"),
-  );
-
+  writeStubGatewayScript(serverScriptPath);
   const child = spawn(nodeBin, [serverScriptPath, portPath, requestLogPath], {
     cwd: stubDir,
     stdio: ["ignore", "pipe", "pipe"],
@@ -532,32 +502,74 @@ async function startStubGateway(nodeBin: string): Promise<StubGatewayHandle> {
 
   try {
     const port = await waitForPortFile(portPath, child, output);
-    return {
-      baseUrl: `http://127.0.0.1:${port}/v1`,
-      assertTransportContract: () => {
-        const requests = existsSync(requestLogPath)
-          ? readFileSync(requestLogPath, "utf-8").split("\n").filter(Boolean)
-          : [];
-        if (!requests.includes("POST /v1/chat/completions")) {
-          throw new Error(
-            `gateway transport smoke did not hit /v1/chat/completions.\nRequests:\n${requests.join("\n")}`,
-          );
-        }
-        if (requests.includes("POST /v1/responses")) {
-          throw new Error(
-            `gateway transport smoke unexpectedly hit /v1/responses.\nRequests:\n${requests.join("\n")}`,
-          );
-        }
-      },
-      stop: async () => {
-        await stopStubGateway(child);
-        rmSync(stubDir, { recursive: true, force: true });
-      },
-    };
+    return createStubGatewayHandle(port, requestLogPath, child, stubDir);
   } catch (error) {
     await stopStubGateway(child);
     rmSync(stubDir, { recursive: true, force: true });
     throw error;
+  }
+}
+
+function writeStubGatewayScript(serverScriptPath: string): void {
+  writeFileSync(serverScriptPath, [
+    'import { createServer } from "node:http";',
+    'import { appendFileSync, writeFileSync } from "node:fs";',
+    "",
+    "const [portPath, requestLogPath] = process.argv.slice(2);",
+    "const server = createServer(async (req, res) => {",
+    '  appendFileSync(requestLogPath, `${req.method} ${req.url}\\n`);',
+    "  for await (const _chunk of req) void _chunk;",
+    '  if (req.url === "/v1/chat/completions") {',
+    "    res.statusCode = 401;",
+    '    res.setHeader("content-type", "application/json");',
+    '    res.end(JSON.stringify({ error: { code: "invalid_auth", message: "Missing runtime bearer token." } }));',
+    "    return;",
+    "  }",
+    '  if (req.url === "/v1/responses") {',
+    "    res.statusCode = 404;",
+    '    res.setHeader("content-type", "text/plain; charset=UTF-8");',
+    '    res.end("404 Not Found");',
+    "    return;",
+    "  }",
+    "  res.statusCode = 404;",
+    '  res.end("not found");',
+    "});",
+    'server.listen(0, "127.0.0.1", () => {',
+    "  const address = server.address();",
+    '  if (!address || typeof address === "string") throw new Error("Failed to resolve stub gateway address");',
+    "  writeFileSync(portPath, String(address.port));",
+    "});",
+    'process.on("SIGTERM", () => server.close(() => process.exit(0)));',
+    'process.on("SIGINT", () => server.close(() => process.exit(0)));',
+    "",
+  ].join("\n"));
+}
+
+function createStubGatewayHandle(
+  port: number,
+  requestLogPath: string,
+  child: ChildProcessWithoutNullStreams,
+  stubDir: string,
+): StubGatewayHandle {
+  return {
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    assertTransportContract: () => assertGatewayTransportContract(requestLogPath),
+    stop: async () => {
+      await stopStubGateway(child);
+      rmSync(stubDir, { recursive: true, force: true });
+    },
+  };
+}
+
+function assertGatewayTransportContract(requestLogPath: string): void {
+  const requests = existsSync(requestLogPath)
+    ? readFileSync(requestLogPath, "utf-8").split("\n").filter(Boolean)
+    : [];
+  if (!requests.includes("POST /v1/chat/completions")) {
+    throw new Error(`gateway transport smoke did not hit /v1/chat/completions.\nRequests:\n${requests.join("\n")}`);
+  }
+  if (requests.includes("POST /v1/responses")) {
+    throw new Error(`gateway transport smoke unexpectedly hit /v1/responses.\nRequests:\n${requests.join("\n")}`);
   }
 }
 

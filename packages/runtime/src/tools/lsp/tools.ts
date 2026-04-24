@@ -1,12 +1,14 @@
 /**
- * LSP-powered code analysis tools.
- * These tools use a running LSP client for real compiler intelligence.
- * All are read-only (category: "readonly").
+ * LSP-powered code intelligence tool.
+ *
+ * DevAgent exposes one generic readonly `lsp` tool instead of separate
+ * operation-specific tools. This keeps the prompt surface compact while still
+ * exposing precise language-server operations.
  */
 
 import type { LSPClient } from "./client.js";
 import { extractErrorMessage } from "../../core/errors.js";
-import type { ToolSpec, ToolErrorGuidance } from "../../core/types.js";
+import type { ToolErrorGuidance, ToolResult, ToolSpec } from "../../core/types.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -16,584 +18,413 @@ export type LSPClientResolver = (filePath: string) => {
   languageId: string;
 } | null;
 
-/** Common LSP error patterns shared by all single-client tools. */
-const LSP_COMMON_PATTERNS: ReadonlyArray<{ readonly match: string; readonly hint: string }> = [
-  {
-    match: "not running",
-    hint: "LSP client is not running. The language server may not be installed or may have crashed — check its process.",
-  },
-  {
-    match: "timed out",
-    hint: "LSP request timed out. The language server may be overloaded — try a smaller file or restart the server.",
-  },
+export type LSPClientProvider = () => ReadonlyArray<LSPClient>;
+
+type LSPClientMatch = NonNullable<ReturnType<LSPClientResolver>>;
+
+type WorkspaceSymbolResult = Awaited<ReturnType<LSPClient["getWorkspaceSymbols"]>>[number];
+
+interface WorkspaceSymbolAttempt {
+  readonly symbols: ReadonlyArray<WorkspaceSymbolResult>;
+  readonly successCount: number;
+  readonly failures: ReadonlyArray<string>;
+}
+
+type LSPOperation =
+  | "diagnostics"
+  | "definitions"
+  | "references"
+  | "symbols"
+  | "hover"
+  | "implementations"
+  | "workspace_symbols"
+  | "incoming_calls"
+  | "outgoing_calls";
+
+const LSP_OPERATIONS: ReadonlyArray<LSPOperation> = [
+  "diagnostics",
+  "definitions",
+  "references",
+  "symbols",
+  "hover",
+  "implementations",
+  "workspace_symbols",
+  "incoming_calls",
+  "outgoing_calls",
 ];
 
-const PATH_ONLY_PARAM_SCHEMA = {
+const MAX_LSP_RESULTS = 100;
+const LSP_OPERATION_TIMEOUT_MS = 30_000;
+const WORKSPACE_SYMBOL_RETRY_DELAYS_MS = [100, 250] as const;
+
+const LSP_PARAM_SCHEMA = {
   type: "object",
   properties: {
-    path: { type: "string", description: "File path relative to repo root" },
+    operation: {
+      type: "string",
+      enum: LSP_OPERATIONS,
+      description: "LSP operation to run",
+    },
+    path: {
+      type: "string",
+      description: "File path relative to repo root. Required for file and position operations.",
+    },
+    line: {
+      type: "number",
+      description: "Line number (1-based). Required for position operations.",
+    },
+    character: {
+      type: "number",
+      description: "Column number (1-based). Required for position operations.",
+    },
+    query: {
+      type: "string",
+      description: "Workspace symbol search query. Optional for workspace_symbols.",
+    },
   },
-  required: ["path"],
+  required: ["operation"],
+  additionalProperties: false,
 };
 
-const POSITION_PARAM_SCHEMA = {
+const LSP_RESULT_SCHEMA = {
   type: "object",
   properties: {
-    path: { type: "string", description: "File path relative to repo root" },
-    line: { type: "number", description: "Line number (1-based)" },
-    character: { type: "number", description: "Column number (1-based)" },
-  },
-  required: ["path", "line", "character"],
-};
-
-const DIAGNOSTICS_RESULT_SCHEMA = {
-  type: "object",
-  properties: {
-    diagnostics: { type: "string" },
+    result: { type: "string" },
     count: { type: "number" },
   },
 };
 
-const LOCATIONS_RESULT_SCHEMA = {
-  type: "object",
-  properties: {
-    locations: { type: "string" },
-  },
-};
-
-const REFERENCES_RESULT_SCHEMA = {
-  type: "object",
-  properties: {
-    references: { type: "string" },
-    count: { type: "number" },
-  },
-};
-
-const SYMBOLS_RESULT_SCHEMA = {
-  type: "object",
-  properties: {
-    symbols: { type: "string" },
-    count: { type: "number" },
-  },
+const LSP_GUIDANCE: ToolErrorGuidance = {
+  common:
+    "LSP operation failed. Verify the file path, position, and that a language server is configured for this file type.",
+  patterns: [
+    {
+      match: "No LSP server",
+      hint: "No LSP server is available for this file type. Check LSP configuration or install the relevant server.",
+    },
+    {
+      match: "not running",
+      hint: "The LSP client is not running. The language server may need to be restarted.",
+    },
+    {
+      match: "timed out",
+      hint: "The LSP request timed out. Try a narrower operation or restart the language server.",
+    },
+    {
+      match: "requires",
+      hint: "The operation is missing required input. Use path for file operations, path/line/character for position operations, and query for workspace_symbols when useful.",
+    },
+  ],
 };
 
 // ─── Tool Factory ───────────────────────────────────────────
 
 /**
- * Create LSP-backed analysis tools bound to a running LSP client.
- * Returns an array of ToolSpec that can be registered in the ToolRegistry.
+ * Create a single-client LSP tool. Kept for programmatic callers that bind one
+ * language server directly.
  */
 export function createLSPTools(client: LSPClient): ReadonlyArray<ToolSpec> {
   return [
-    createDiagnosticsTool(client),
-    createDefinitionTool(client),
-    createReferencesTool(client),
-    createSymbolsTool(client),
+    createLSPTool({
+      resolver: () => ({ client, languageId: "" }),
+      getClients: () => [client],
+    }),
   ];
 }
 
 /**
- * Create LSP-backed analysis tools that route to the correct LSP client
- * based on file path. Use this for multi-server setups where different
- * language servers handle different file types.
+ * Create a routed LSP tool that selects clients by file path.
  */
 export function createRoutingLSPTools(
   resolver: LSPClientResolver,
+  getClients: LSPClientProvider = () => [],
 ): ReadonlyArray<ToolSpec> {
-  return [
-    createRoutingDiagnosticsTool(resolver),
-    createRoutingDefinitionTool(resolver),
-    createRoutingReferencesTool(resolver),
-    createRoutingSymbolsTool(resolver),
-    createRoutingDefinitionByNameTool(resolver),
-    createRoutingReferencesByNameTool(resolver),
-  ];
+  return [createLSPTool({ resolver, getClients })];
 }
 
-function resolveOrFail(
+function createLSPTool(options: {
+  readonly resolver: LSPClientResolver;
+  readonly getClients: LSPClientProvider;
+}): ToolSpec {
+  return {
+    name: "lsp",
+    description:
+      "Run Language Server Protocol code intelligence. Operations: diagnostics, symbols, definitions, references, hover, implementations, workspace_symbols, incoming_calls, outgoing_calls.",
+    category: "readonly",
+    paramSchema: LSP_PARAM_SCHEMA,
+    resultSchema: LSP_RESULT_SCHEMA,
+    errorGuidance: LSP_GUIDANCE,
+    handler: async (params) => runLSPOperation(options, params),
+  };
+}
+
+async function runLSPOperation(
+  options: { readonly resolver: LSPClientResolver; readonly getClients: LSPClientProvider },
+  params: Record<string, unknown>,
+): Promise<ToolResult> {
+  try {
+    const operation = parseOperation(params["operation"]);
+    const outputPromise = operation === "workspace_symbols"
+      ? runWorkspaceSymbols(options.getClients, params)
+      : runFileOperation(options.resolver, operation, params);
+    const output = await withOperationTimeout(outputPromise);
+    return { success: true, output, error: null, artifacts: [] };
+  } catch (error) {
+    return {
+      success: false,
+      output: "",
+      error: extractErrorMessage(error),
+      artifacts: [],
+    };
+  }
+}
+
+async function withOperationTimeout(output: Promise<string>): Promise<string> {
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([
+      output,
+      new Promise<string>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`LSP operation timed out after ${LSP_OPERATION_TIMEOUT_MS}ms`)),
+          LSP_OPERATION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
+function parseOperation(value: unknown): LSPOperation {
+  if (typeof value !== "string" || !LSP_OPERATIONS.includes(value as LSPOperation)) {
+    throw new Error(`Invalid lsp operation: ${String(value)}`);
+  }
+  return value as LSPOperation;
+}
+
+async function runWorkspaceSymbols(
+  getClients: LSPClientProvider,
+  params: Record<string, unknown>,
+): Promise<string> {
+  const query = typeof params["query"] === "string" ? params["query"] : "";
+  const clients = getClients().filter((client) => client.isRunning());
+  if (clients.length === 0) return "No LSP clients are running.";
+
+  const symbols = await getWorkspaceSymbolsWithColdIndexRetry(clients, query);
+  if (symbols.length === 0) return query
+    ? `No workspace symbols found for query "${query}".`
+    : "No workspace symbols found.";
+  return `${symbols.length} workspace symbol(s):\n${formatWorkspaceSymbols(symbols)}`;
+}
+
+async function getWorkspaceSymbolsWithColdIndexRetry(
+  clients: ReadonlyArray<LSPClient>,
+  query: string,
+): Promise<Awaited<ReturnType<LSPClient["getWorkspaceSymbols"]>>> {
+  let lastAllFailedMessages: ReadonlyArray<string> = [];
+  let lastSuccessfulSymbols: ReadonlyArray<WorkspaceSymbolResult> | null = null;
+  const delays = [0, ...WORKSPACE_SYMBOL_RETRY_DELAYS_MS] as const;
+
+  for (const [attemptIndex, delayMs] of delays.entries()) {
+    if (delayMs > 0) await sleep(delayMs);
+
+    const attempt = await requestWorkspaceSymbols(clients, query);
+    if (attempt.successCount > 0) {
+      lastSuccessfulSymbols = attempt.symbols;
+      if (attempt.symbols.length > 0 || attemptIndex === delays.length - 1) {
+        return attempt.symbols.slice(0, MAX_LSP_RESULTS);
+      }
+      continue;
+    }
+
+    lastAllFailedMessages = attempt.failures;
+  }
+
+  if (lastSuccessfulSymbols) {
+    return lastSuccessfulSymbols.slice(0, MAX_LSP_RESULTS);
+  }
+
+  throw new Error(
+    lastAllFailedMessages.length > 0
+      ? `workspace_symbols failed for all LSP clients: ${lastAllFailedMessages.join("; ")}`
+      : "workspace_symbols failed for all LSP clients",
+  );
+}
+
+async function requestWorkspaceSymbols(
+  clients: ReadonlyArray<LSPClient>,
+  query: string,
+): Promise<WorkspaceSymbolAttempt> {
+  const settled = await Promise.allSettled(
+    clients.map((client) => client.getWorkspaceSymbols(query)),
+  );
+  const symbols: WorkspaceSymbolResult[] = [];
+  const failures: string[] = [];
+  let successCount = 0;
+
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
+      successCount++;
+      symbols.push(...result.value);
+    } else {
+      failures.push(extractErrorMessage(result.reason));
+    }
+  }
+
+  return { symbols, successCount, failures };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runFileOperation(
   resolver: LSPClientResolver,
-  filePath: string,
-): { client: LSPClient; languageId: string } {
-  const match = resolver(filePath);
-  if (!match) {
-    throw new Error(`No LSP server available for ${filePath}`);
+  operation: Exclude<LSPOperation, "workspace_symbols">,
+  params: Record<string, unknown>,
+): Promise<string> {
+  const path = requireString(params["path"], `${operation} requires path`);
+  const match = resolver(path);
+  if (!match) throw new Error(`No LSP server available for ${path}`);
+  if (!match.client.isRunning()) throw new Error(`LSP client not running for ${path}`);
+
+  if (operation === "diagnostics") {
+    return formatDiagnostics(path, await match.client.getDiagnostics(path, match.languageId));
   }
-  if (!match.client.isRunning()) {
-    throw new Error(`LSP client not running for ${filePath}`);
+  if (operation === "symbols") {
+    return formatDocumentSymbols(path, await match.client.getSymbols(path, match.languageId));
   }
-  return match;
+  return runPositionOperation(match, operation, path, params);
 }
 
-// ─── diagnostics ────────────────────────────────────────────
-function createDiagnosticsTool(client: LSPClient): ToolSpec {
+async function runPositionOperation(
+  match: LSPClientMatch,
+  operation: Exclude<LSPOperation, "workspace_symbols" | "diagnostics" | "symbols">,
+  path: string,
+  params: Record<string, unknown>,
+): Promise<string> {
+  const position = requirePosition(params, operation);
+  return runResolvedPositionOperation(match, operation, path, position);
+}
+
+async function runResolvedPositionOperation(
+  match: LSPClientMatch,
+  operation: Exclude<LSPOperation, "workspace_symbols" | "diagnostics" | "symbols">,
+  path: string,
+  position: { readonly line: number; readonly character: number },
+): Promise<string> {
+  switch (operation) {
+    case "definitions":
+      return formatLocations("Definition(s)", await match.client.getDefinition(path, position.line, position.character, match.languageId));
+    case "references":
+      return formatReferences(await match.client.getReferences(path, position.line, position.character, match.languageId));
+    case "hover":
+      return await match.client.getHover(path, position.line, position.character, match.languageId)
+        ?? "No hover information found at this position.";
+    case "implementations":
+      return formatLocations("Implementation(s)", await match.client.getImplementation(path, position.line, position.character, match.languageId));
+    case "incoming_calls":
+      return formatCallHierarchy("Incoming call(s)", await match.client.getIncomingCalls(path, position.line, position.character, match.languageId));
+    case "outgoing_calls":
+      return formatCallHierarchy("Outgoing call(s)", await match.client.getOutgoingCalls(path, position.line, position.character, match.languageId));
+  }
+}
+
+function formatReferences(references: Awaited<ReturnType<LSPClient["getReferences"]>>): string {
+  return references.length === 0
+    ? "No references found at this position."
+    : `${references.length} reference(s):\n${formatLocationLines(references)}`;
+}
+
+function requireString(value: unknown, message: string): string {
+  if (typeof value !== "string" || value.length === 0) throw new Error(message);
+  return value;
+}
+
+function requirePosition(
+  params: Record<string, unknown>,
+  operation: LSPOperation,
+): { readonly line: number; readonly character: number } {
+  if (typeof params["line"] !== "number" || typeof params["character"] !== "number") {
+    throw new Error(`${operation} requires path, line, and character`);
+  }
   return {
-    name: "diagnostics",
-    description:
-      "Get compiler diagnostics (errors, warnings) for a file. Uses the language server for real compiler analysis.",
-    category: "readonly",
-    paramSchema: PATH_ONLY_PARAM_SCHEMA,
-    resultSchema: DIAGNOSTICS_RESULT_SCHEMA,
-    errorGuidance: {
-      common: "Diagnostics failed. Ensure the LSP server is running and the file path is correct.",
-      patterns: LSP_COMMON_PATTERNS,
-    },
-    handler: async (params) => {
-      if (!client.isRunning()) return lspFailure("LSP client not running. Language server may not be available.");
-
-      const filePath = params["path"] as string;
-
-      try {
-        const result = await client.getDiagnostics(filePath);
-
-        if (result.diagnostics.length === 0) {
-          return {
-            success: true,
-            output: `No diagnostics for ${filePath}. File is clean.`,
-            error: null,
-            artifacts: [],
-          };
-        }
-
-        const output = result.diagnostics
-          .map((d) => `${filePath}:${d.line}:${d.character}: [${d.severity}] ${d.message}`)
-          .join("\n");
-
-        return {
-          success: true,
-          output: `${result.diagnostics.length} diagnostic(s) in ${filePath}:\n${output}`,
-          error: null,
-          artifacts: [],
-        };
-      } catch (err) {
-        return lspFailure(`Diagnostics failed: ${extractErrorMessage(err)}`);
-      }
-    },
+    line: params["line"],
+    character: params["character"],
   };
 }
 
-// ─── definitions ────────────────────────────────────────────
-function createDefinitionTool(client: LSPClient): ToolSpec {
-  return {
-    name: "definitions",
-    description:
-      "Go to definition of a symbol at a specific position. Returns the file and location where the symbol is defined.",
-    category: "readonly",
-    paramSchema: POSITION_PARAM_SCHEMA,
-    resultSchema: LOCATIONS_RESULT_SCHEMA,
-    errorGuidance: {
-      common: "Definition lookup failed. Verify the file path and position — use read_file to confirm the symbol location.",
-      patterns: LSP_COMMON_PATTERNS,
-    },
-    handler: async (params) => {
-      if (!client.isRunning()) return lspFailure("LSP client not running.");
-
-      const filePath = params["path"] as string;
-      const line = params["line"] as number;
-      const character = params["character"] as number;
-
-      try {
-        const locations = await client.getDefinition(filePath, line, character);
-
-        if (locations.length === 0) {
-          return {
-            success: true,
-            output: "No definition found at this position.",
-            error: null,
-            artifacts: [],
-          };
-        }
-
-        return {
-          success: true,
-          output: `Definition(s):\n${formatLocations(locations)}`,
-          error: null,
-          artifacts: [],
-        };
-      } catch (err) {
-        return lspFailure(`Definition lookup failed: ${extractErrorMessage(err)}`);
-      }
-    },
-  };
+function formatDiagnostics(
+  path: string,
+  result: Awaited<ReturnType<LSPClient["getDiagnostics"]>>,
+): string {
+  if (result.diagnostics.length === 0) return `No diagnostics for ${path}. File is clean.`;
+  const lines = result.diagnostics
+    .map((d) => `${path}:${d.line}:${d.character}: [${d.severity}] ${d.message}`)
+    .join("\n");
+  return `${result.diagnostics.length} diagnostic(s) in ${path}:\n${lines}`;
 }
 
-// ─── references ─────────────────────────────────────────────
-function createReferencesTool(client: LSPClient): ToolSpec {
-  return {
-    name: "references",
-    description:
-      "Find all references to a symbol at a specific position. Returns all locations where the symbol is used.",
-    category: "readonly",
-    paramSchema: POSITION_PARAM_SCHEMA,
-    resultSchema: REFERENCES_RESULT_SCHEMA,
-    errorGuidance: {
-      common: "References lookup failed. Verify the file path and position — use read_file to confirm the symbol location.",
-      patterns: LSP_COMMON_PATTERNS,
-    },
-    handler: async (params) => {
-      if (!client.isRunning()) return lspFailure("LSP client not running.");
-
-      const filePath = params["path"] as string;
-      const line = params["line"] as number;
-      const character = params["character"] as number;
-
-      try {
-        const refs = await client.getReferences(filePath, line, character);
-
-        if (refs.length === 0) {
-          return {
-            success: true,
-            output: "No references found at this position.",
-            error: null,
-            artifacts: [],
-          };
-        }
-
-        return {
-          success: true,
-          output: `${refs.length} reference(s):\n${formatLocations(refs)}`,
-          error: null,
-          artifacts: [],
-        };
-      } catch (err) {
-        return lspFailure(`References lookup failed: ${extractErrorMessage(err)}`);
-      }
-    },
-  };
+function formatDocumentSymbols(
+  path: string,
+  symbols: Awaited<ReturnType<LSPClient["getSymbols"]>>,
+): string {
+  if (symbols.length === 0) return `No symbols found in ${path}.`;
+  return `${symbols.length} symbol(s) in ${path}:\n${symbols.slice(0, MAX_LSP_RESULTS).map((symbol) => {
+    const container = symbol.containerName ? ` (in ${symbol.containerName})` : "";
+    return `${symbol.kind} ${symbol.name}${container} - ${path}:${symbol.line}:${symbol.character}`;
+  }).join("\n")}`;
 }
 
-// ─── symbols (single-client) ─────────────────────────────────
-function createSymbolsTool(client: LSPClient): ToolSpec {
-  return {
-    name: "symbols",
-    description:
-      "List all symbols (functions, classes, variables, etc.) in a file. Provides a structural overview of the file.",
-    category: "readonly",
-    paramSchema: PATH_ONLY_PARAM_SCHEMA,
-    resultSchema: SYMBOLS_RESULT_SCHEMA,
-    errorGuidance: {
-      common: "Symbol listing failed. Verify the file path is correct — use find_files to discover available files.",
-      patterns: LSP_COMMON_PATTERNS,
-    },
-    handler: async (params) => {
-      if (!client.isRunning()) return lspFailure("LSP client not running.");
-
-      const filePath = params["path"] as string;
-
-      try {
-        const symbols = await client.getSymbols(filePath);
-
-        if (symbols.length === 0) {
-          return {
-            success: true,
-            output: `No symbols found in ${filePath}.`,
-            error: null,
-            artifacts: [],
-          };
-        }
-
-        return {
-          success: true,
-          output: `${symbols.length} symbol(s) in ${filePath}:\n${formatSymbols(symbols, filePath)}`,
-          error: null,
-          artifacts: [],
-        };
-      } catch (err) {
-        return lspFailure(`Symbol listing failed: ${extractErrorMessage(err)}`);
-      }
-    },
-  };
+function formatLocations(
+  label: string,
+  locations: ReadonlyArray<{ readonly file: string; readonly line: number; readonly character: number }>,
+): string {
+  if (locations.length === 0) return `No ${label.toLowerCase()} found at this position.`;
+  return `${label}:\n${formatLocationLines(locations)}`;
 }
 
-function lspFailure(error: string): {
-  readonly success: false;
-  readonly output: "";
-  readonly error: string;
-  readonly artifacts: [];
-} {
-  return { success: false, output: "", error, artifacts: [] };
+function formatLocationLines(
+  locations: ReadonlyArray<{ readonly file: string; readonly line: number; readonly character: number }>,
+): string {
+  return locations
+    .slice(0, MAX_LSP_RESULTS)
+    .map((location) => `${location.file}:${location.line}:${location.character}`)
+    .join("\n");
 }
 
-function formatLocations(locations: ReadonlyArray<{ readonly file: string; readonly line: number; readonly character: number }>): string {
-  return locations.map((loc) => `${loc.file}:${loc.line}:${loc.character}`).join("\n");
-}
-
-function formatSymbols(
-  symbols: ReadonlyArray<{ readonly kind: string; readonly name: string; readonly containerName?: string; readonly line: number }>,
-  filePath: string,
+function formatWorkspaceSymbols(
+  symbols: ReadonlyArray<{
+    readonly kind: string;
+    readonly name: string;
+    readonly file: string;
+    readonly line: number;
+    readonly character: number;
+    readonly containerName?: string;
+  }>,
 ): string {
   return symbols.map((symbol) => {
     const container = symbol.containerName ? ` (in ${symbol.containerName})` : "";
-    return `${symbol.kind} ${symbol.name}${container} — ${filePath}:${symbol.line}`;
+    return `${symbol.kind} ${symbol.name}${container} - ${symbol.file}:${symbol.line}:${symbol.character}`;
   }).join("\n");
 }
 
-// ─── Routing tools (multi-server) ────────────────────────────
-
-function routingHandler(
-  resolver: LSPClientResolver,
-  filePath: string,
-  fn: (client: LSPClient, filePath: string, languageId: string) => Promise<string>,
-): Promise<{ success: boolean; output: string; error: string | null; artifacts: string[] }> {
-  try {
-    const { client, languageId } = resolveOrFail(resolver, filePath);
-    return fn(client, filePath, languageId).then(
-      (output) => ({ success: true, output, error: null, artifacts: [] }),
-      (err) => ({
-        success: false,
-        output: "",
-        error: extractErrorMessage(err),
-        artifacts: [],
-      }),
-    );
-  } catch (err) {
-    const message = extractErrorMessage(err);
-    return Promise.resolve({ success: false, output: "", error: message, artifacts: [] });
-  }
-}
-
-/** Error guidance for position-based routing LSP tools. */
-const LSP_ROUTING_GUIDANCE: ToolErrorGuidance = {
-  common:
-    "LSP operation failed. Verify the file path is correct and a language server is configured for this file type.",
-  patterns: [
-    {
-      match: "No LSP server",
-      hint: "No LSP server available for this file type. Check that a language server is configured for this extension.",
-    },
-    {
-      match: "not running",
-      hint: "LSP client is not running. The language server may need to be restarted.",
-    },
-    {
-      match: "timed out",
-      hint: "LSP request timed out. The language server may be overloaded — try a smaller file or restart the server.",
-    },
-  ],
-};
-
-/** Error guidance for name-based LSP tools (extends routing guidance with symbol lookup). */
-const LSP_NAME_LOOKUP_GUIDANCE: ToolErrorGuidance = {
-  common:
-    "LSP name-based lookup failed. Verify the file path and symbol name are correct.",
-  patterns: [
-    {
-      match: "No LSP server",
-      hint: "No LSP server available for this file type. Check that a language server is configured for this extension.",
-    },
-    {
-      match: "not running",
-      hint: "LSP client is not running. The language server may need to be restarted.",
-    },
-    {
-      match: "not found in",
-      hint: "Symbol not found in this file. Use the symbols tool to list available symbols, then retry with the correct name.",
-    },
-    {
-      match: "timed out",
-      hint: "LSP request timed out. The language server may be overloaded — try a smaller file or restart the server.",
-    },
-  ],
-};
-
-function createRoutingDiagnosticsTool(resolver: LSPClientResolver): ToolSpec {
-  return {
-    name: "diagnostics",
-    description:
-      "Get real compiler diagnostics (errors, warnings) for a source file. Preferred over reading a file or running grep when you need to check whether code compiles or has type errors — returns the same errors the compiler would report, not text matches.",
-    category: "readonly",
-    paramSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "File path relative to repo root" },
-      },
-      required: ["path"],
-    },
-    resultSchema: {
-      type: "object",
-      properties: { diagnostics: { type: "string" }, count: { type: "number" } },
-    },
-    errorGuidance: LSP_ROUTING_GUIDANCE,
-    handler: async (params) => {
-      const filePath = params["path"] as string;
-      return routingHandler(resolver, filePath, async (client, fp, langId) => {
-        const result = await client.getDiagnostics(fp, langId);
-        if (result.diagnostics.length === 0) return `No diagnostics for ${fp}. File is clean.`;
-        const lines = result.diagnostics
-          .map((d) => `${fp}:${d.line}:${d.character}: [${d.severity}] ${d.message}`)
-          .join("\n");
-        return `${result.diagnostics.length} diagnostic(s) in ${fp}:\n${lines}`;
-      });
-    },
-  };
-}
-
-function createRoutingDefinitionTool(resolver: LSPClientResolver): ToolSpec {
-  return {
-    name: "definitions",
-    description:
-      "Jump to the definition of a symbol at a given position. Preferred over grep/search_files when you know a symbol name and need its source — resolves through imports, re-exports, and type aliases accurately.",
-    category: "readonly",
-    paramSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "File path relative to repo root" },
-        line: { type: "number", description: "Line number (1-based)" },
-        character: { type: "number", description: "Column number (1-based)" },
-      },
-      required: ["path", "line", "character"],
-    },
-    resultSchema: {
-      type: "object",
-      properties: { locations: { type: "string" } },
-    },
-    errorGuidance: LSP_ROUTING_GUIDANCE,
-    handler: async (params) => {
-      const filePath = params["path"] as string;
-      return routingHandler(resolver, filePath, async (client, fp, langId) => {
-        const locations = await client.getDefinition(fp, params["line"] as number, params["character"] as number, langId);
-        if (locations.length === 0) return "No definition found at this position.";
-        return `Definition(s):\n${locations.map((l) => `${l.file}:${l.line}:${l.character}`).join("\n")}`;
-      });
-    },
-  };
-}
-
-function createRoutingReferencesTool(resolver: LSPClientResolver): ToolSpec {
-  return {
-    name: "references",
-    description:
-      "Find every reference to a symbol across the codebase. Preferred over grep/search_files for finding usages of a function, class, or variable — type-aware, so it won't return false-positive text matches and will catch indirect usages through aliases.",
-    category: "readonly",
-    paramSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "File path relative to repo root" },
-        line: { type: "number", description: "Line number (1-based)" },
-        character: { type: "number", description: "Column number (1-based)" },
-      },
-      required: ["path", "line", "character"],
-    },
-    resultSchema: {
-      type: "object",
-      properties: { references: { type: "string" }, count: { type: "number" } },
-    },
-    errorGuidance: LSP_ROUTING_GUIDANCE,
-    handler: async (params) => {
-      const filePath = params["path"] as string;
-      return routingHandler(resolver, filePath, async (client, fp, langId) => {
-        const refs = await client.getReferences(fp, params["line"] as number, params["character"] as number, langId);
-        if (refs.length === 0) return "No references found at this position.";
-        return `${refs.length} reference(s):\n${refs.map((l) => `${l.file}:${l.line}:${l.character}`).join("\n")}`;
-      });
-    },
-  };
-}
-
-function createRoutingSymbolsTool(resolver: LSPClientResolver): ToolSpec {
-  return {
-    name: "symbols",
-    description:
-      "List all symbols (functions, classes, interfaces, variables) in a file with their types and locations. Preferred over reading the whole file when you need a structural overview — faster and gives precise line numbers for each declaration.",
-    category: "readonly",
-    paramSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "File path relative to repo root" },
-      },
-      required: ["path"],
-    },
-    resultSchema: {
-      type: "object",
-      properties: { symbols: { type: "string" }, count: { type: "number" } },
-    },
-    errorGuidance: LSP_ROUTING_GUIDANCE,
-    handler: async (params) => {
-      const filePath = params["path"] as string;
-      return routingHandler(resolver, filePath, async (client, fp, langId) => {
-        const symbols = await client.getSymbols(fp, langId);
-        if (symbols.length === 0) return `No symbols found in ${fp}.`;
-        const lines = symbols
-          .map((s) => {
-            const container = s.containerName ? ` (in ${s.containerName})` : "";
-            return `${s.kind} ${s.name}${container} — ${fp}:${s.line}`;
-          })
-          .join("\n");
-        return `${symbols.length} symbol(s) in ${fp}:\n${lines}`;
-      });
-    },
-  };
-}
-
-// ─── Name-based wrappers (composite tools) ──────────────────
-
-function createRoutingDefinitionByNameTool(resolver: LSPClientResolver): ToolSpec {
-  return {
-    name: "definition_by_name",
-    description:
-      "Jump to where a symbol is defined, by name. Accepts a symbol name and a file where it appears — resolves through imports and re-exports. Preferred over grep when you need the exact source location of a class, function, or variable.",
-    category: "readonly",
-    paramSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "File path relative to repo root where the symbol appears" },
-        symbol_name: { type: "string", description: "Name of the symbol to look up (e.g. class, function, variable name)" },
-      },
-      required: ["path", "symbol_name"],
-    },
-    resultSchema: {
-      type: "object",
-      properties: { locations: { type: "string" } },
-    },
-    errorGuidance: LSP_NAME_LOOKUP_GUIDANCE,
-    handler: async (params) => {
-      const filePath = params["path"] as string;
-      const symbolName = params["symbol_name"] as string;
-      return routingHandler(resolver, filePath, async (client, fp, langId) => {
-        const symbols = await client.getSymbols(fp, langId);
-        const match = symbols.find((s) => s.name === symbolName);
-        if (!match) {
-          throw new Error(`Symbol "${symbolName}" not found in ${fp}`);
-        }
-        const locations = await client.getDefinition(fp, match.line, match.character, langId);
-        if (locations.length === 0) return `No definition found for "${symbolName}".`;
-        return `Definition(s):\n${locations.map((l) => `${l.file}:${l.line}:${l.character}`).join("\n")}`;
-      });
-    },
-  };
-}
-
-function createRoutingReferencesByNameTool(resolver: LSPClientResolver): ToolSpec {
-  return {
-    name: "references_by_name",
-    description:
-      "Find every reference to a symbol across the codebase, by name. Accepts a symbol name and a file where it is declared — type-aware, catches indirect usages through aliases. Preferred over grep/search_files for finding all callers of a function or all uses of a class.",
-    category: "readonly",
-    paramSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "File path relative to repo root where the symbol is declared" },
-        symbol_name: { type: "string", description: "Name of the symbol to find references for" },
-      },
-      required: ["path", "symbol_name"],
-    },
-    resultSchema: {
-      type: "object",
-      properties: { references: { type: "string" }, count: { type: "number" } },
-    },
-    errorGuidance: LSP_NAME_LOOKUP_GUIDANCE,
-    handler: async (params) => {
-      const filePath = params["path"] as string;
-      const symbolName = params["symbol_name"] as string;
-      return routingHandler(resolver, filePath, async (client, fp, langId) => {
-        const symbols = await client.getSymbols(fp, langId);
-        const match = symbols.find((s) => s.name === symbolName);
-        if (!match) {
-          throw new Error(`Symbol "${symbolName}" not found in ${fp}`);
-        }
-        const refs = await client.getReferences(fp, match.line, match.character, langId);
-        if (refs.length === 0) return `No references found for "${symbolName}".`;
-        return `${refs.length} reference(s):\n${refs.map((l) => `${l.file}:${l.line}:${l.character}`).join("\n")}`;
-      });
-    },
-  };
+function formatCallHierarchy(
+  label: string,
+  calls: ReadonlyArray<{
+    readonly kind: string;
+    readonly name: string;
+    readonly file: string;
+    readonly line: number;
+    readonly character: number;
+    readonly detail?: string;
+  }>,
+): string {
+  if (calls.length === 0) return `No ${label.toLowerCase()} found at this position.`;
+  const lines = calls.slice(0, MAX_LSP_RESULTS).map((call) => {
+    const detail = call.detail ? ` ${call.detail}` : "";
+    return `${call.kind} ${call.name}${detail} - ${call.file}:${call.line}:${call.character}`;
+  });
+  return `${label}:\n${lines.join("\n")}`;
 }

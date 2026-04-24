@@ -46,6 +46,8 @@ it("finds, reads, and summarizes real repo files without returning raw intermedi
   expect(result.success).toBe(true);
   expect(JSON.parse(result.output.trim())).toEqual({ count: 4, hasEngine: true });
   expect(result.output).not.toContain("programmatic readonly tool scripts");
+  expect(result.metadata.toolScript.toolCallCount).toBe(2);
+  expect(result.metadata.toolScript.innerOutputChars).toBeGreaterThan(result.metadata.toolScript.finalOutputChars);
 });
 
 it("supports real search, git status, and parallel execution", async () => {

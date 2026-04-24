@@ -11,6 +11,7 @@ import {
 } from "../core/skills/prompt-format.js";
 import type { DeferredToolStub } from "../tools/index.js";
 import { PROMPT_AGENT_COMMON } from "./prompts/embedded.js";
+import { formatReadonlyBatchingGuidance } from "./readonly-batching-guidance.js";
 
 const TOTAL_MAX_CHARS = 32 * 1024;
 
@@ -103,12 +104,7 @@ function deriveAgentPromptCapabilities(
     hasMutatingTools: availableTools.some((tool) => tool.category === "mutating"),
     hasRunCommand: availableTools.some((tool) => tool.name === "run_command"),
     hasExecuteToolScript: availableTools.some((tool) => tool.name === "execute_tool_script"),
-    hasLspTools: availableTools.some((tool) =>
-      tool.name === "diagnostics" ||
-      tool.name === "symbols" ||
-      tool.name === "definitions" ||
-      tool.name === "references"
-    ),
+    hasLspTools: availableTools.some((tool) => tool.name === "lsp"),
     hasDelegate: availableTools.some((tool) => tool.name === "delegate"),
   };
 }
@@ -125,6 +121,7 @@ function buildSearchFragment(): string {
     "Rules:",
     "- Prefer targeted `file_pattern` values over global scans.",
     "- Avoid speculative full-file reads when a focused read will answer the question.",
+    "- If the task is a narrowed 3+ file audit and `execute_tool_script` is available, follow the readonly batching guidance instead of serial `find_files -> search_files -> read_file`.",
     "- Use exact canonical tool names.",
   ].join("\n");
 }
@@ -153,28 +150,17 @@ function buildShellFragment(): string {
 
 function buildLspFragment(): string {
   return [
-    "## LSP Tools",
+    "## LSP Tool",
     "",
-    "- `diagnostics` for compiler and language-server feedback after edits.",
-    "- `symbols` for structural overview.",
-    "- `definitions` and `references` to trace symbol ownership and usage.",
+    "- Use `lsp` for compiler/language-server diagnostics, document symbols, definitions, references, hover, implementations, workspace symbols, and call hierarchy.",
+    "- Prefer `lsp` over text search when you need type-aware symbol ownership or usage.",
+    "- If `workspace_symbols` is unexpectedly empty for a symbol you know should exist, open or sync likely files with `read_file` or `lsp` `symbols`, then try one broader query.",
+    "- Do not repeat an identical successful `lsp` call; use the result you already have.",
   ].join("\n");
 }
 
 function buildBatchingFragment(): string {
-  return [
-    "## Batched Readonly Calls",
-    "",
-    "- Default to `execute_tool_script` as the first inspection tool when a narrowed task likely needs 3+ readonly calls.",
-    "- Prime fit: known-path multi-file audits where grouped `read_file` calls can be filtered or summarized in code.",
-    "- Prime fit: verification prompts such as \"verify/disprove whether X leaks\", \"compare implementation, schema, and tests\", or \"check prompt consistency\" across a small known file set.",
-    "- Good fit: implementation/schema/test/prompt-consistency/security-leakage checks where the files are named or easy to enumerate.",
-    "- Do not spend separate turns on serial `read_file` calls when the file set is already known; batch them and print one compact conclusion.",
-    "- Write one TypeScript script that calls readonly tools through `tools.*` and filters or aggregates results in code.",
-    "- Tool calls return `ToolResult` objects; inspect `result.output` for text content.",
-    "- Print only synthesized findings, counts, paths, or summaries. Avoid dumping raw intermediate tool output.",
-    "- If a script fails, break the failed steps into direct tool calls instead of retrying the same script.",
-  ].join("\n");
+  return formatReadonlyBatchingGuidance();
 }
 
 function buildDelegationFragment(): string {

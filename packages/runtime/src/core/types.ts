@@ -53,6 +53,15 @@ export type ToolHandler = (
   context: ToolContext,
 ) => Promise<ToolResult>;
 
+export interface LSPDocumentSync {
+  syncFile(
+    filePath: string,
+    options?: {
+      readonly didSave?: boolean;
+    },
+  ): Promise<void>;
+}
+
 export interface ToolContext {
   readonly repoRoot: string;
   readonly config: DevAgentConfig;
@@ -64,6 +73,7 @@ export interface ToolContext {
   readonly parentAgentId?: string | null;
   readonly depth?: number;
   readonly agentType?: AgentType;
+  readonly lspSync?: LSPDocumentSync;
 }
 
 export interface ToolFileChangeLine {

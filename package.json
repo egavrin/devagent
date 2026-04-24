@@ -24,7 +24,9 @@
     "test": "turbo run test",
     "test:bundle-smoke": "bun run scripts/smoke-publish-bundle.ts",
     "test:surface-smoke": "bun test scripts/surface-smoke/*.test.ts",
-    "lint": "turbo run lint",
+    "lint": "bun run lint:packages && bun run lint:scripts",
+    "lint:packages": "turbo run lint",
+    "lint:scripts": "eslint scripts --max-warnings=0",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean",
     "dev": "turbo run dev",
@@ -44,6 +46,7 @@
     "check:publint:bundle": "publint run dist --pack false",
     "check:quality": "bun run check:workspace && bun run lint && bun run typecheck && bun run check:dead && bun run check:deps",
     "validate:live:provider-smoke": "bun run scripts/live-validation/provider-smoke.ts",
+    "validate:live:tool-script": "bun run scripts/live-validation/tool-script-adoption.ts",
     "validate:live:tui": "bun run scripts/live-validation/tui-validator.ts"
   },
   "devDependencies": {

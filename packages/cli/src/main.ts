@@ -284,6 +284,7 @@ function buildRunOptions(ctx: AgentSessionContext, seed?: InteractiveResumeSeed)
     verbosityConfig: ctx.tools.verbosityConfig,
     sessionState: ctx.tools.sessionState,
     briefing: seed?.briefing ?? ctx.persistence.resumeBriefing,
+    lspSync: ctx.lsp.lspSync,
   };
 }
 

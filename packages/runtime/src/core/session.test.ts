@@ -3,8 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { BUN_SQLITE_AVAILABLE } from "./bun-sqlite.js";
-import { Database } from "./bun-sqlite.js";
+import { BUN_SQLITE_AVAILABLE , Database } from "./bun-sqlite.js";
 import { SessionStore } from "./session.js";
 import { MessageRole } from "./types.js";
 import type { Message, CostRecord } from "./types.js";

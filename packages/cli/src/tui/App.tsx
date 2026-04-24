@@ -296,7 +296,7 @@ function useTuiKeyboardShortcuts(options: {
     if ((key.ctrl && input === "c") || input === "\x03") {
       handleCancelShortcut(options);
     }
-    if (key.ctrl && input === "k" && !options.running) {
+    if (((key.ctrl && input === "k") || input === "\x0b") && !options.running) {
       options.setShowCommandPalette((value) => !value);
     }
   });
@@ -536,9 +536,7 @@ export function App({ bus, onQuery, onCancelQuery, onClear, onCycleApprovalMode,
   });
 
   const handleCycleApprovalMode = useCallback(() => {
-    if (running || pendingApproval || showCommandPalette) {
-      return;
-    }
+    if (running || pendingApproval || showCommandPalette) return;
     const nextMode = cycleApprovalMode(currentApprovalMode);
     setCurrentApprovalMode(nextMode);
     onCycleApprovalMode(nextMode);
@@ -559,13 +557,9 @@ export function App({ bus, onQuery, onCancelQuery, onClear, onCycleApprovalMode,
     running, setCancelPending, setRunning, setShowCommandPalette, setSpinnerMessage, showCommandPalette,
   });
 
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
+  const dismissToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
 
-  const runCommand = useCallback((command: string) => {
-    void handleSubmit(command);
-  }, [handleSubmit]);
+  const runCommand = useCallback((command: string) => void handleSubmit(command), [handleSubmit]);
 
   const showPrompt = !running && !pendingApproval && !showCommandPalette;
 

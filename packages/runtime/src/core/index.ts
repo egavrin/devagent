@@ -16,6 +16,7 @@ export type {
   ToolValidationTestSummary,
   ToolResult,
   ToolHandler,
+  LSPDocumentSync,
   ToolCallRecord,
   ToolCallRequest,
   Message,

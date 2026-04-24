@@ -231,10 +231,27 @@ function buildToolAfterPart(
       durationMs: event.durationMs,
       error: event.result.error ?? undefined,
       preview: event.result.success && !commandResult && !validationResult
-        ? extractToolPreviewForTranscript(event.name, event.result.output)
+        ? extractToolScriptPreview(event.result.metadata) ?? extractToolPreviewForTranscript(event.name, event.result.output)
         : undefined,
     },
   };
+}
+
+function extractToolScriptPreview(metadata: Record<string, unknown> | undefined): string | undefined {
+  const value = metadata?.["toolScript"];
+  if (!value || typeof value !== "object") return undefined;
+  const telemetry = value as Record<string, unknown>;
+  const toolCallCount = telemetry["toolCallCount"];
+  const innerOutputChars = telemetry["innerOutputChars"];
+  const finalOutputChars = telemetry["finalOutputChars"];
+  if (
+    typeof toolCallCount !== "number" ||
+    typeof innerOutputChars !== "number" ||
+    typeof finalOutputChars !== "number"
+  ) {
+    return undefined;
+  }
+  return `${toolCallCount} inner call(s), ${innerOutputChars} hidden chars -> ${finalOutputChars} stdout chars`;
 }
 
 function appendFileEditParts(parts: TranscriptPart[], event: ToolAfterEvent): void {

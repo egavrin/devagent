@@ -346,34 +346,44 @@ export function assertTuiFrame(
   if (!hasRequiredText) {
     throw new Error(`TUI frame did not include expected text: ${String(options.requiredText)}`);
   }
-  if (!(frame.includes("Type /help for commands") || frame.includes("Type /help for all commands"))) {
-    throw new Error("TUI frame did not include help guidance.");
-  }
-  if (!frame.includes("Shift+Tab")) {
-    throw new Error("TUI frame did not include Shift+Tab safety guidance.");
-  }
-  if (countOccurrences(frame, "║    devagent") !== 1) {
-    throw new Error("TUI frame contained duplicate welcome/header blocks.");
-  }
-  if (/workspace-[^\n]*╔/.test(frame)) {
-    throw new Error("TUI frame contained a status-bar/banner collision.");
-  }
-  if (!/╭[─]+╮[\s\S]*❯[\s\S]*╰[─]+╯/.test(frame)) {
-    throw new Error("TUI frame did not contain an intact prompt box.");
+  assertCommonTuiFrameShape(frame);
+}
+
+function assertCommonTuiFrameShape(frame: string): void {
+  const checks: Array<readonly [boolean, string]> = [
+    [frame.includes("Type /help for commands") || frame.includes("Type /help for all commands"), "TUI frame did not include help guidance."],
+    [frame.includes("Shift+Tab"), "TUI frame did not include Shift+Tab safety guidance."],
+    [countOccurrences(frame, "║    devagent") === 1, "TUI frame contained duplicate welcome/header blocks."],
+    [!/workspace-[^\n]*╔/.test(frame), "TUI frame contained a status-bar/banner collision."],
+    [/╭[─]+╮[\s\S]*❯[\s\S]*╰[─]+╯/.test(frame), "TUI frame did not contain an intact prompt box."],
+  ];
+  for (const [passed, message] of checks) {
+    if (!passed) throw new Error(message);
   }
 }
 
-async function runTuiTranscript(
-  outputRoot: string,
-  executable: string,
-  args: string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-  transcriptPath: string,
-  typedCommand?: string,
-  expectedOutputPattern?: string,
-): Promise<void> {
-  const expectScriptPath = join(outputRoot, "tui.expect");
+interface TuiTranscriptRun {
+  readonly outputRoot: string;
+  readonly executable: string;
+  readonly args: string[];
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly transcriptPath: string;
+  readonly typedCommand?: string;
+  readonly expectedOutputPattern?: string;
+}
+
+interface ValidatorTranscriptInput {
+  readonly outputRoot: string;
+  readonly executable: string;
+  readonly installedBootstrap: string;
+  readonly selection: { readonly provider: string; readonly model: string };
+  readonly workspaceDir: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+async function runTuiTranscript(options: TuiTranscriptRun): Promise<void> {
+  const expectScriptPath = join(options.outputRoot, "tui.expect");
   const expectLines = [
     "#!/usr/bin/expect -f",
     "set timeout 10",
@@ -385,12 +395,12 @@ async function runTuiTranscript(
     "spawn -noecho $executable {*}$args",
     'expect { -re "Type /help|Shift\\+Tab toggles default and autopilot|Shift\\+Tab safety" {} timeout { exit 124 } }',
   ];
-  if (typedCommand) {
+  if (options.typedCommand) {
     expectLines.push("after 300");
-    expectLines.push(`send -- "${escapeExpectDoubleQuoted(`${typedCommand}\n`)}"`);
+    expectLines.push(`send -- "${escapeExpectDoubleQuoted(`${options.typedCommand}\n`)}"`);
   }
-  if (expectedOutputPattern) {
-    expectLines.push(`expect { -re "${escapeExpectDoubleQuoted(expectedOutputPattern)}" { puts "\\nVALIDATOR_MATCH: $expect_out(0,string)" } timeout { exit 125 } }`);
+  if (options.expectedOutputPattern) {
+    expectLines.push(`expect { -re "${escapeExpectDoubleQuoted(options.expectedOutputPattern)}" { puts "\\nVALIDATOR_MATCH: $expect_out(0,string)" } timeout { exit 125 } }`);
   }
   expectLines.push(
     "after 300",
@@ -404,27 +414,42 @@ async function runTuiTranscript(
 
   const result = spawnSync(
     "expect",
-    [expectScriptPath, transcriptPath, executable, ...args],
+    [expectScriptPath, options.transcriptPath, options.executable, ...options.args],
     {
-      cwd,
-      env,
+      cwd: options.cwd,
+      env: options.env,
       encoding: "utf-8",
       stdio: "pipe",
       timeout: 20_000,
     },
   );
   if (result.stdout.trim().length > 0) {
-    await writeFile(transcriptPath, result.stdout);
+    await writeFile(options.transcriptPath, result.stdout);
   }
-  const observedExpectedOutput = expectedOutputPattern
-    ? result.stdout.includes("VALIDATOR_MATCH:") || transcriptMatchesPattern(result.stdout, expectedOutputPattern)
-    : true;
+  const observedExpectedOutput = observedExpectedPattern(result.stdout, options.expectedOutputPattern);
+  assertTuiTranscriptResult(result.status, result.stderr, observedExpectedOutput, options.expectedOutputPattern);
+}
+
+function observedExpectedPattern(stdout: string, expectedOutputPattern: string | undefined): boolean {
+  if (!expectedOutputPattern) return true;
+  return stdout.includes("VALIDATOR_MATCH:") || transcriptMatchesPattern(stdout, expectedOutputPattern);
+}
+
+function assertTuiTranscriptResult(
+  status: number | null,
+  stderr: string,
+  observedExpectedOutput: boolean,
+  expectedOutputPattern: string | undefined,
+): void {
   if (expectedOutputPattern && !observedExpectedOutput) {
     throw new Error(`TUI validator did not observe expected output: ${expectedOutputPattern}`);
   }
-  if (result.status !== 0 && result.status !== 130 && result.status !== 143 && !(result.status === 125 && observedExpectedOutput)) {
-    throw new Error(`TUI validator exited with ${result.status}.${result.stderr ? `\n${result.stderr.trim()}` : ""}`);
-  }
+  if (isAcceptedExpectStatus(status, observedExpectedOutput)) return;
+  throw new Error(`TUI validator exited with ${status}.${stderr ? `\n${stderr.trim()}` : ""}`);
+}
+
+function isAcceptedExpectStatus(status: number | null, observedExpectedOutput: boolean): boolean {
+  return status === 0 || status === 130 || status === 143 || (status === 125 && observedExpectedOutput);
 }
 
 async function main(): Promise<void> {
@@ -454,94 +479,113 @@ async function main(): Promise<void> {
   try {
     installTarballIntoPrefix(npmBin, prefixDir, tarballPath, nodeBin);
     await seedCredential(homeDir, selection.provider, selection.credential);
-    const expectedVersion = JSON.parse(readFileSync(join(DIST, "package.json"), "utf-8")).version as string;
-
-    const executable = nodeBin;
-    const installedBootstrap = join(
-      prefixDir,
-      "lib",
-      "node_modules",
-      "@egavrin",
-      "devagent",
-      "bootstrap.js",
-    );
-    const env: NodeJS.ProcessEnv = {
-      ...buildNodePreferredEnv(nodeBin),
-      HOME: homeDir,
-      XDG_CONFIG_HOME: join(homeDir, ".config"),
-      XDG_CACHE_HOME: join(homeDir, ".cache"),
-      NO_COLOR: "1",
-      FORCE_COLOR: "0",
-      TERM: process.env["TERM"] ?? "xterm-256color",
-      COLUMNS: "120",
-      LINES: "40",
-      DEVAGENT_DISABLE_UPDATE_CHECK: "1",
-    };
-
-    await runTuiTranscript(
-      outputRoot,
-      executable,
-      [installedBootstrap, "--provider", selection.provider, "--model", selection.model, "--mode", "default"],
-      workspaceDir,
-      env,
-      transcriptPath,
-      "/help",
-      "Commands: /clear",
-    );
-    await runTuiTranscript(
-      outputRoot,
-      executable,
-      [installedBootstrap, "--provider", selection.provider, "--model", selection.model, "--mode", "default"],
-      workspaceDir,
-      env,
-      sessionsTranscriptPath,
-      "/sessions",
-      "No sessions found\\.|Recent sessions:",
-    );
-    await runTuiTranscript(
-      outputRoot,
-      executable,
-      [installedBootstrap, "--provider", selection.provider, "--model", selection.model, "--mode", "default"],
-      workspaceDir,
-      env,
+    await runTuiValidationSuite({
+      clearFramePath,
       clearTranscriptPath,
-      "/clear",
-      "Context cleared\\.",
-    );
-
-    const helpFrame = extractSettledFrame(readFileSync(transcriptPath, "utf-8"));
-    const sessionsFrame = extractSettledFrame(readFileSync(sessionsTranscriptPath, "utf-8"));
-    const clearFrame = extractSettledFrame(readFileSync(clearTranscriptPath, "utf-8"));
-
-    await writeFile(helpFramePath, helpFrame);
-    await writeFile(sessionsFramePath, sessionsFrame);
-    await writeFile(clearFramePath, clearFrame);
-    await writeFile(
+      helpFramePath,
+      homeDir,
+      nodeBin,
       normalizedTranscriptPath,
-      [
-        "=== /help ===",
-        helpFrame,
-        "",
-        "=== /sessions ===",
-        sessionsFrame,
-        "",
-        "=== /clear ===",
-        clearFrame,
-      ].join("\n"),
-    );
-
-    assertTuiFrame(helpFrame, { expectedVersion, requiredText: "Commands: /clear" });
-    assertTuiFrame(sessionsFrame, { expectedVersion, requiredText: /No sessions found\.|Recent sessions:/ });
-    assertTuiFrame(clearFrame, { expectedVersion, requiredText: "Context cleared." });
-
-    process.stdout.write(
-      `Validated tarball TUI with provider ${selection.provider}. Transcript: ${normalizedTranscriptPath}\n`,
-    );
+      outputRoot,
+      prefixDir,
+      selection,
+      sessionsFramePath,
+      sessionsTranscriptPath,
+      transcriptPath,
+      workspaceDir,
+    });
   } finally {
     rmSync(prefixDir, { recursive: true, force: true });
     rmSync(homeDir, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
   }
+}
+
+async function runTuiValidationSuite(input: {
+  readonly clearFramePath: string;
+  readonly clearTranscriptPath: string;
+  readonly helpFramePath: string;
+  readonly homeDir: string;
+  readonly nodeBin: string;
+  readonly normalizedTranscriptPath: string;
+  readonly outputRoot: string;
+  readonly prefixDir: string;
+  readonly selection: ReturnType<typeof resolveProviderSelection>;
+  readonly sessionsFramePath: string;
+  readonly sessionsTranscriptPath: string;
+  readonly transcriptPath: string;
+  readonly workspaceDir: string;
+}): Promise<void> {
+  await seedCredential(input.homeDir, input.selection.provider, input.selection.credential);
+  const expectedVersion = JSON.parse(readFileSync(join(DIST, "package.json"), "utf-8")).version as string;
+  const installedBootstrap = join(input.prefixDir, "lib", "node_modules", "@egavrin", "devagent", "bootstrap.js");
+  const env = buildTuiValidationEnv(input.nodeBin, input.homeDir);
+  const transcriptInput = {
+    outputRoot: input.outputRoot,
+    executable: input.nodeBin,
+    installedBootstrap,
+    selection: input.selection,
+    workspaceDir: input.workspaceDir,
+    env,
+  };
+
+  await runValidatorTranscript(transcriptInput, { transcriptPath: input.transcriptPath, typedCommand: "/help", expectedOutputPattern: "Commands: /clear" });
+  await runValidatorTranscript(transcriptInput, { transcriptPath: input.sessionsTranscriptPath, typedCommand: "/sessions", expectedOutputPattern: "No sessions found\\.|Recent sessions:" });
+  await runValidatorTranscript(transcriptInput, { transcriptPath: input.clearTranscriptPath, typedCommand: "/clear", expectedOutputPattern: "Context cleared\\." });
+
+  const frames = await writeSettledFrames(input);
+  assertTuiFrame(frames.help, { expectedVersion, requiredText: "Commands: /clear" });
+  assertTuiFrame(frames.sessions, { expectedVersion, requiredText: /No sessions found\.|Recent sessions:/ });
+  assertTuiFrame(frames.clear, { expectedVersion, requiredText: "Context cleared." });
+  process.stdout.write(`Validated tarball TUI with provider ${input.selection.provider}. Transcript: ${input.normalizedTranscriptPath}\n`);
+}
+
+function buildTuiValidationEnv(nodeBin: string, homeDir: string): NodeJS.ProcessEnv {
+  return {
+    ...buildNodePreferredEnv(nodeBin),
+    HOME: homeDir,
+    XDG_CONFIG_HOME: join(homeDir, ".config"),
+    XDG_CACHE_HOME: join(homeDir, ".cache"),
+    NO_COLOR: "1",
+    FORCE_COLOR: "0",
+    TERM: process.env["TERM"] ?? "xterm-256color",
+    COLUMNS: "120",
+    LINES: "40",
+    DEVAGENT_DISABLE_UPDATE_CHECK: "1",
+  };
+}
+
+async function writeSettledFrames(input: {
+  readonly clearFramePath: string;
+  readonly clearTranscriptPath: string;
+  readonly helpFramePath: string;
+  readonly normalizedTranscriptPath: string;
+  readonly sessionsFramePath: string;
+  readonly sessionsTranscriptPath: string;
+  readonly transcriptPath: string;
+}): Promise<{ readonly help: string; readonly sessions: string; readonly clear: string }> {
+  const help = extractSettledFrame(readFileSync(input.transcriptPath, "utf-8"));
+  const sessions = extractSettledFrame(readFileSync(input.sessionsTranscriptPath, "utf-8"));
+  const clear = extractSettledFrame(readFileSync(input.clearTranscriptPath, "utf-8"));
+  await writeFile(input.helpFramePath, help);
+  await writeFile(input.sessionsFramePath, sessions);
+  await writeFile(input.clearFramePath, clear);
+  await writeFile(input.normalizedTranscriptPath, ["=== /help ===", help, "", "=== /sessions ===", sessions, "", "=== /clear ===", clear].join("\n"));
+  return { help, sessions, clear };
+}
+
+async function runValidatorTranscript(
+  input: ValidatorTranscriptInput,
+  options: Pick<TuiTranscriptRun, "transcriptPath" | "typedCommand" | "expectedOutputPattern">,
+): Promise<void> {
+  await runTuiTranscript({
+    outputRoot: input.outputRoot,
+    executable: input.executable,
+    args: [input.installedBootstrap, "--provider", input.selection.provider, "--model", input.selection.model, "--mode", "default"],
+    cwd: input.workspaceDir,
+    env: input.env,
+    ...options,
+  });
 }
 
 if (import.meta.main) {

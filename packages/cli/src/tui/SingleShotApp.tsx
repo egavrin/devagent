@@ -49,9 +49,7 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
     let cancelled = false;
 
     const runQuery = async (): Promise<void> => {
-      refs.turnStart.current = Date.now();
-      refs.turnToolCount.current = 0;
-      refs.costAccum.current = 0;
+      refs.turnStart.current = Date.now(); refs.turnToolCount.current = 0; refs.costAccum.current = 0;
       startTurn(nextId("turn"), query, refs.turnStart.current);
       try {
         const result = await onQuery(query);
@@ -83,24 +81,29 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
         );
       }
       setRunning(false);
-      setTimeout(() => { if (!cancelled) exit(); }, 100);
+      scheduleExit(() => cancelled, exit);
     };
 
     void runQuery();
     return () => { cancelled = true; };
   }, [appendTurnPart, completeTurn, exit, flushGroup, flushThinking, model, nextId, onFinalOutput, onQuery, query, refs, startTurn]);
 
-  let hasActiveSubagents = false;
-  for (const a of subagents.values()) { if (a.status === "running") { hasActiveSubagents = true; break; } }
-
   return (
     <>
       <TranscriptView showWelcome={false} transcriptNodes={transcriptNodes} model={model} />
-      {hasActiveSubagents && <SubagentPanel agents={subagents} />}
+      {hasActiveSubagents(subagents) && <SubagentPanel agents={subagents} />}
       <Spinner active={running} message={spinnerMessage} suffix={status.cost > 0 ? `$${status.cost.toFixed(4)}` : ""} />
       <StatusBar {...status} />
     </>
   );
+}
+
+function scheduleExit(isCancelled: () => boolean, exit: () => void): void {
+  setTimeout(() => { if (!isCancelled()) exit(); }, 100);
+}
+
+function hasActiveSubagents(subagents: ReadonlyMap<unknown, { readonly status: string }>): boolean {
+  return Array.from(subagents.values()).some((agent) => agent.status === "running");
 }
 
 function noticeForSingleShotStatus(status: InteractiveQueryResult["status"]): string | null {

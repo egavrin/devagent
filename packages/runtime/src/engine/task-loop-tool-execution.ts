@@ -1,12 +1,14 @@
 import type { DoubleCheck, DoubleCheckResult } from "./double-check.js";
 import { extractEnvFact } from "./session-state.js";
 import type { SessionState } from "./session-state.js";
+import { syncLSPAfterToolResult } from "./task-loop-lsp-sync.js";
 import { normalizeRepoPath } from "./task-loop-paths.js";
 import { formatToolSummary } from "./tool-summary-formatter.js";
 import type {
   ApprovalGate,
   DevAgentConfig,
   EventBus,
+  LSPDocumentSync,
   LLMProvider,
   Message,
   ToolContext,
@@ -47,6 +49,7 @@ interface ToolExecutionHost {
   readonly config: DevAgentConfig;
   readonly repoRoot: string;
   readonly doubleCheck: DoubleCheck | null;
+  readonly lspSync?: LSPDocumentSync | null;
   readonly sessionState: SessionState | null;
   readonly cachedPricing: {
     readonly inputPricePerMillion: number;
@@ -307,6 +310,12 @@ async function runToolHandler(
   );
 
   const originalOutput = result.output;
+  await syncLSPAfterToolResult(
+    state.effectiveCall.name,
+    state.effectiveCall.arguments,
+    result,
+    loop.lspSync,
+  );
   result = await maybeRunDoubleCheck(loop, state, result, preEditBaseline);
   emitToolAfter(loop, {
     callId: state.callId,
@@ -330,6 +339,7 @@ async function callToolHandler(
       callId: state.callId,
       batchId: state.batchContext.batchId,
       batchSize: state.batchContext.batchSize,
+      ...(loop.lspSync ? { lspSync: loop.lspSync } : {}),
       ...loop.getAgentEventFields(),
     });
   } catch (err) {

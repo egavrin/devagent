@@ -216,32 +216,64 @@ function convertDeepSeekTurnMessage(
   droppedToolCallIds: ReadonlySet<string>,
   hasToolUse: boolean,
 ): Record<string, unknown> | null {
-  if (message.role === MessageRole.TOOL) {
-    return {
-      role: "tool",
-      tool_call_id: message.toolCallId ?? "",
-      content: message.content ?? "",
-    };
-  }
+  if (message.role === MessageRole.TOOL) return convertDeepSeekToolResultMessage(message);
+  return convertDeepSeekAssistantTurnMessage(message, droppedToolCallIds, hasToolUse);
+}
 
+function convertDeepSeekToolResultMessage(message: Message): Record<string, unknown> {
+  return {
+    role: "tool",
+    tool_call_id: message.toolCallId ?? "",
+    content: message.content ?? "",
+  };
+}
+
+function convertDeepSeekAssistantTurnMessage(
+  message: Message,
+  droppedToolCallIds: ReadonlySet<string>,
+  hasToolUse: boolean,
+): Record<string, unknown> | null {
   const converted: Record<string, unknown> = {
     role: "assistant",
     content: message.content ?? "",
   };
-  if (!message.toolCalls?.length) {
-    if (message.thinking && hasToolUse) converted["reasoning_content"] = message.thinking;
-    return hasToolUse && !message.thinking ? null : converted;
-  }
+
+  if (!message.toolCalls?.length) return convertDeepSeekAssistantNoToolCallMessage(message, converted, hasToolUse);
   if (!message.thinking) {
-    return hasToolUse ? null : message.content?.trim() ? converted : null;
+    return convertDeepSeekAssistantNoThinkingMessage(message, converted, hasToolUse);
   }
 
   const toolCalls = message.toolCalls.filter((toolCall) => !droppedToolCallIds.has(toolCall.callId));
-  if (toolCalls.length === 0) return message.content?.trim() ? converted : null;
+  if (toolCalls.length === 0) return convertDeepSeekAssistantWithoutToolCalls(message, converted);
 
   converted["reasoning_content"] = message.thinking;
   converted["tool_calls"] = toolCalls.map(convertDeepSeekToolCall);
   return converted;
+}
+
+function convertDeepSeekAssistantNoToolCallMessage(
+  message: Message,
+  converted: Record<string, unknown>,
+  hasToolUse: boolean,
+): Record<string, unknown> | null {
+  if (message.thinking && hasToolUse) converted["reasoning_content"] = message.thinking;
+  return hasToolUse && !message.thinking ? null : converted;
+}
+
+function convertDeepSeekAssistantNoThinkingMessage(
+  message: Message,
+  converted: Record<string, unknown>,
+  hasToolUse: boolean,
+): Record<string, unknown> | null {
+  if (hasToolUse) return null;
+  return convertDeepSeekAssistantWithoutToolCalls(message, converted);
+}
+
+function convertDeepSeekAssistantWithoutToolCalls(
+  message: Message,
+  converted: Record<string, unknown>,
+): Record<string, unknown> | null {
+  return message.content?.trim() ? converted : null;
 }
 
 function convertDeepSeekToolCall(toolCall: NonNullable<Message["toolCalls"]>[number]): Record<string, unknown> {
@@ -357,8 +389,8 @@ async function* streamDeepSeekResponse(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const toolCalls = new Map<number, PendingDeepSeekToolCall>();
+  const streamState = { doneSent: false };
   let buffer = "";
-  let doneSent = false;
 
   try {
     while (true) {
@@ -369,28 +401,16 @@ async function* streamDeepSeekResponse(
       const events = splitCompleteSseEvents(buffer);
       buffer = events.remainder;
       for (const event of events.complete) {
-        const chunk = parseSseData(event);
-        if (!chunk) continue;
-        if (chunk === "[DONE]") {
-          yield* flushDeepSeekToolCalls(toolCalls);
-          if (!doneSent) {
-            doneSent = true;
-            yield { type: "done", content: "" };
-          }
-          return;
-        }
-        const emitted = mapDeepSeekChunk(chunk, toolCalls);
-        for (const item of emitted) yield item;
-        if (emitted.some((item) => item.type === "done")) doneSent = true;
+        const finished = yield* emitDeepSeekSseEvent(event, toolCalls, streamState);
+        if (finished) return;
       }
     }
 
     const tail = parseSseData(buffer);
     if (tail && tail !== "[DONE]") {
-      for (const item of mapDeepSeekChunk(tail, toolCalls)) yield item;
+      yield* emitDeepSeekChunk(tail, toolCalls, streamState);
     }
-    yield* flushDeepSeekToolCalls(toolCalls);
-    if (!doneSent) yield { type: "done", content: "" };
+    yield* finishDeepSeekStream(toolCalls, streamState);
   } catch (err) {
     if (abortController.signal.aborted) {
       yield { type: "done", content: "" };
@@ -400,6 +420,43 @@ async function* streamDeepSeekResponse(
   } finally {
     reader.releaseLock();
   }
+}
+
+function* emitDeepSeekSseEvent(
+  event: string,
+  toolCalls: Map<number, PendingDeepSeekToolCall>,
+  streamState: { doneSent: boolean },
+): Generator<StreamChunk, boolean> {
+  const chunk = parseSseData(event);
+  if (!chunk) return false;
+  if (chunk === "[DONE]") {
+    yield* finishDeepSeekStream(toolCalls, streamState);
+    return true;
+  }
+  yield* emitDeepSeekChunk(chunk, toolCalls, streamState);
+  return false;
+}
+
+function* emitDeepSeekChunk(
+  raw: string,
+  toolCalls: Map<number, PendingDeepSeekToolCall>,
+  streamState: { doneSent: boolean },
+): Generator<StreamChunk> {
+  const emitted = mapDeepSeekChunk(raw, toolCalls);
+  for (const item of emitted) {
+    if (item.type === "done") streamState.doneSent = true;
+    yield item;
+  }
+}
+
+function* finishDeepSeekStream(
+  toolCalls: Map<number, PendingDeepSeekToolCall>,
+  streamState: { doneSent: boolean },
+): Generator<StreamChunk> {
+  yield* flushDeepSeekToolCalls(toolCalls);
+  if (streamState.doneSent) return;
+  streamState.doneSent = true;
+  yield { type: "done", content: "" };
 }
 
 function splitCompleteSseEvents(buffer: string): { readonly complete: string[]; readonly remainder: string } {
@@ -425,7 +482,24 @@ function mapDeepSeekChunk(
   raw: string,
   toolCalls: Map<number, PendingDeepSeekToolCall>,
 ): StreamChunk[] {
-  const parsed = JSON.parse(raw) as {
+  const parsed = parseDeepSeekChunk(raw);
+  const chunks = (parsed.choices ?? []).flatMap((choice) => mapDeepSeekChoice(choice, toolCalls));
+  if (parsed.usage) chunks.push(mapDeepSeekUsage(parsed.usage));
+  return chunks;
+}
+
+function parseDeepSeekChunk(raw: string): {
+  readonly choices?: Array<{
+    readonly delta?: {
+      readonly content?: string | null;
+      readonly reasoning_content?: string | null;
+      readonly tool_calls?: DeepSeekToolCallDelta[] | null;
+    } | null;
+    readonly finish_reason?: string | null;
+  }>;
+  readonly usage?: DeepSeekUsage | null;
+} {
+  return JSON.parse(raw) as {
     choices?: Array<{
       delta?: {
         content?: string | null;
@@ -436,36 +510,36 @@ function mapDeepSeekChunk(
     }>;
     usage?: DeepSeekUsage | null;
   };
+}
 
+function mapDeepSeekChoice(
+  choice: NonNullable<ReturnType<typeof parseDeepSeekChunk>["choices"]>[number],
+  toolCalls: Map<number, PendingDeepSeekToolCall>,
+): StreamChunk[] {
   const chunks: StreamChunk[] = [];
-  for (const choice of parsed.choices ?? []) {
-    const delta = choice.delta;
-    if (delta?.reasoning_content) {
-      chunks.push({ type: "thinking", content: delta.reasoning_content });
-    }
-    if (delta?.content) {
-      chunks.push({ type: "text", content: delta.content });
-    }
-    for (const toolCall of delta?.tool_calls ?? []) {
-      mergeToolCallDelta(toolCalls, toolCall);
-    }
-    if (choice.finish_reason === "tool_calls") {
-      chunks.push(...flushDeepSeekToolCalls(toolCalls));
-    }
+  const delta = choice.delta;
+  if (delta?.reasoning_content) {
+    chunks.push({ type: "thinking", content: delta.reasoning_content });
   }
-
-  if (parsed.usage) {
-    chunks.push({
-      type: "done",
-      content: "",
-      usage: {
-        promptTokens: parsed.usage.prompt_tokens ?? 0,
-        completionTokens: parsed.usage.completion_tokens ?? 0,
-      },
-    });
+  if (delta?.content) {
+    chunks.push({ type: "text", content: delta.content });
   }
-
+  for (const toolCall of delta?.tool_calls ?? []) {
+    mergeToolCallDelta(toolCalls, toolCall);
+  }
+  if (choice.finish_reason === "tool_calls") chunks.push(...flushDeepSeekToolCalls(toolCalls));
   return chunks;
+}
+
+function mapDeepSeekUsage(usage: DeepSeekUsage): StreamChunk {
+  return {
+    type: "done",
+    content: "",
+    usage: {
+      promptTokens: usage.prompt_tokens ?? 0,
+      completionTokens: usage.completion_tokens ?? 0,
+    },
+  };
 }
 
 function mergeToolCallDelta(

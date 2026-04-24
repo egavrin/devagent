@@ -88,9 +88,19 @@ export type {
   ToolScript,
   ToolScriptResult,
   ToolScriptEngineOptions,
+  ToolScriptTelemetry,
 } from "./tool-script.js";
 export { createToolScriptTool } from "./tool-script-tool.js";
 export type { ToolScriptToolContext } from "./tool-script-tool.js";
+export {
+  READONLY_BATCHING_SECTION_TITLE,
+  READONLY_BATCHING_SCRIPT_EXAMPLE,
+  formatReadonlyBatchingGuidance,
+  formatToolScriptDescription,
+  formatToolScriptSchemaDescription,
+  getReadonlyBatchingCoreLines,
+} from "./readonly-batching-guidance.js";
+export type { ReadonlyBatchingGuidanceOptions } from "./readonly-batching-guidance.js";
 
 // Tool search (deferred tool discovery)
 export { createToolSearchTool } from "./tool-search-tool.js";

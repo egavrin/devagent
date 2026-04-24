@@ -21,6 +21,7 @@ import type {
   DevAgentConfig,
   EventBus,
   LLMProvider,
+  LSPDocumentSync,
   Message,
   ReasoningEffort,
   ToolResult,
@@ -76,6 +77,7 @@ export interface DelegateToolContext {
   readonly getParentMessages?: () => ReadonlyArray<Message>;
   /** Parent's system prompt — needed for fork mode (cache prefix alignment). */
   readonly parentSystemPrompt?: string;
+  readonly lspSync?: LSPDocumentSync;
   readonly depth?: number;
   readonly parentAgentType?: AgentType;
   readonly ambient?: AgentAmbientContext;
@@ -202,6 +204,7 @@ interface DelegateRunState {
   readonly batchId: string | undefined;
   readonly batchSize: number | undefined;
   readonly startedAt: number;
+  readonly lspSync: LSPDocumentSync | undefined;
   readonly childDepth: number;
   readonly query: string;
 }
@@ -256,6 +259,7 @@ function prepareDelegateRun(
       batchId: toolContext.batchId,
       batchSize: toolContext.batchSize,
       startedAt: Date.now(),
+      lspSync: toolContext.lspSync ?? ctx.lspSync,
       childDepth: (ctx.depth ?? 0) + 1,
       query: buildDelegationQuery(request!, cappedMax),
     },
@@ -356,6 +360,7 @@ function buildForkAgentOptions(ctx: DelegateToolContext, state: DelegateRunState
     parentId: ctx.parentAgentId,
     agentId: state.agentId,
     parentSessionState: ctx.getParentSessionState?.(),
+    lspSync: state.lspSync,
     depth: state.childDepth,
     ambient: ctx.ambient,
     parentMessages: ctx.getParentMessages!(),
@@ -399,6 +404,7 @@ function buildStandardAgentOptions(ctx: DelegateToolContext, state: DelegateRunS
     parentId: ctx.parentAgentId,
     agentId: state.agentId,
     parentSessionState: ctx.getParentSessionState?.(),
+    lspSync: state.lspSync,
     depth: state.childDepth,
     ambient: {
       ...ctx.ambient,

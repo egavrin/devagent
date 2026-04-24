@@ -465,8 +465,8 @@ const TOOL_RECOVERY: Record<string, { doom: string; fatigue: string }> = {
     fatigue: "The file content does not match your expectations. Re-read the file, verify the exact text you want to replace, and use a broader anchored replacement. If the file has been heavily modified, consider a single large block replacement.",
   },
   execute_tool_script: {
-    doom: "Fix the TypeScript batching script or break it into individual tool calls. Use tools.read_file/tools.search_files/etc. inside the script, inspect ToolResult.output, and print only the synthesized final answer.",
-    fatigue: "Stop using execute_tool_script for this task. Use individual readonly calls (read_file, search_files, find_files) directly — they give clearer error messages while debugging the failed script.",
+    doom: "Fix the TypeScript batching script or break it into individual tool calls. Use tools.read_file/tools.search_files/etc. inside the script, check result.success, inspect ToolResult.output, and print only the synthesized final answer.",
+    fatigue: "Stop using execute_tool_script for this task. Use individual readonly calls (read_file, search_files, find_files) directly — they give clearer error messages while debugging the failed script. Do not retry the same failed script.",
   },
   run_command: {
     doom: "The command keeps failing with the same error. Fix the underlying code or configuration that the command is testing, or try a more targeted command (e.g. run a single test file instead of the full suite).",

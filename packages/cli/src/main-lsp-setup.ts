@@ -6,6 +6,7 @@ import {
 import {
   LSPRouter,
   createCompilerFallbackProvider,
+  createRoutingLSPDocumentSync,
   createRoutingDiagnosticProvider,
   lazyUpgradeLSP,
 } from "./double-check-wiring.js";
@@ -25,7 +26,7 @@ interface LSPSetupOptions {
 
 async function startConfiguredLSPServers(options: LSPSetupOptions): Promise<LSPSetupResult> {
   if (!options.config.lsp?.servers || options.config.lsp.servers.length === 0) {
-    return { lspRouter: null, hasLSPDiagnostics: false };
+    return { lspRouter: null, lspSync: null, hasLSPDiagnostics: false };
   }
   const lspRouter = new LSPRouter(options.projectRoot);
   await Promise.allSettled(options.config.lsp.servers.map(async (serverConfig) => {
@@ -40,14 +41,14 @@ async function startConfiguredLSPServers(options: LSPSetupOptions): Promise<LSPS
   }));
   const hasLSPDiagnostics = registerRoutingLSPTools(lspRouter, options.toolRegistry);
   options.doubleCheck.setDiagnosticProvider(createRoutingDiagnosticProvider(lspRouter, options.trackInternalLSPDiagnostics));
-  return { lspRouter, hasLSPDiagnostics };
+  return { lspRouter, lspSync: createRoutingLSPDocumentSync(lspRouter), hasLSPDiagnostics };
 }
 
 function registerRoutingLSPTools(lspRouter: LSPRouter, toolRegistry: ToolRegistry): boolean {
   const clients = lspRouter.getClients();
   if (clients.length === 0) return false;
   const resolver = (filePath: string) => lspRouter.getClientForFile(filePath);
-  for (const tool of createRoutingLSPTools(resolver)) toolRegistry.register(tool);
+  for (const tool of createRoutingLSPTools(resolver, () => lspRouter.getClients())) toolRegistry.register(tool);
   return true;
 }
 
@@ -92,5 +93,5 @@ export async function setupLSP(options: LSPSetupOptions): Promise<LSPSetupResult
   options.doubleCheck.setDiagnosticProvider(createCompilerFallbackProvider(options.projectRoot));
   const lazyRouter = new LSPRouter(options.projectRoot);
   scheduleLazyLSPUpgrade(options, lazyRouter);
-  return { lspRouter: lazyRouter, hasLSPDiagnostics: false };
+  return { lspRouter: lazyRouter, lspSync: createRoutingLSPDocumentSync(lazyRouter), hasLSPDiagnostics: false };
 }

@@ -45,6 +45,7 @@ import type {
   DevAgentConfig,
   EventBus,
   LLMProvider,
+  LSPDocumentSync,
   Message,
   AgentType,
   ToolSpec,
@@ -112,6 +113,8 @@ export interface TaskLoopOptions {
   readonly finalTextValidator?: FinalTextValidator;
   /** Child-agent identity for nested execution and logging. */
   readonly agentContext?: AgentExecutionContext;
+  /** Optional best-effort LSP document synchronization service. */
+  readonly lspSync?: LSPDocumentSync;
 }
 
 export interface TaskLoopResult {
@@ -170,6 +173,7 @@ interface TaskLoopInitialServices {
   readonly injectSessionStateOnFirstTurn: boolean;
   readonly finalTextValidator: FinalTextValidator | null;
   readonly agentContext: AgentExecutionContext | null;
+  readonly lspSync: LSPDocumentSync | null;
 }
 
 // ─── Tool Output Truncation ─────────────────────────────────
@@ -192,6 +196,7 @@ export class TaskLoop {
   private readonly sessionState: SessionState | null;
   private readonly finalTextValidator: FinalTextValidator | null;
   private readonly agentContext: AgentExecutionContext | null;
+  private readonly lspSync: LSPDocumentSync | null;
   private mode: TaskMode;
   private messages: Message[] = [];
   private iterations = 0;
@@ -249,6 +254,7 @@ export class TaskLoop {
     this.injectSessionStateOnFirstTurn = services.injectSessionStateOnFirstTurn;
     this.finalTextValidator = services.finalTextValidator;
     this.agentContext = services.agentContext;
+    this.lspSync = services.lspSync;
     this.cachedPricing = lookupModelPricing(this.config.model, this.config.provider);
     this.stagnationDetector = new StagnationDetector({
       bus: this.bus,
@@ -762,15 +768,20 @@ const DEFAULT_MIDPOINT_INTERVAL = 15;
 function getInitialServices(options: TaskLoopOptions): TaskLoopInitialServices {
   return {
     mode: options.mode ?? "act",
-    contextManager: options.contextManager ?? null,
-    doubleCheck: options.doubleCheck ?? null,
-    midpointCallback: options.midpointCallback ?? null,
+    contextManager: nullable(options.contextManager),
+    doubleCheck: nullable(options.doubleCheck),
+    midpointCallback: nullable(options.midpointCallback),
     midpointInterval: options.config.context.midpointBriefingInterval ?? DEFAULT_MIDPOINT_INTERVAL,
-    sessionState: options.sessionState ?? null,
+    sessionState: nullable(options.sessionState),
     injectSessionStateOnFirstTurn: options.injectSessionStateOnFirstTurn ?? false,
-    finalTextValidator: options.finalTextValidator ?? null,
-    agentContext: options.agentContext ?? null,
+    finalTextValidator: nullable(options.finalTextValidator),
+    agentContext: nullable(options.agentContext),
+    lspSync: nullable(options.lspSync),
   };
+}
+
+function nullable<T>(value: T | null | undefined): T | null {
+  return value ?? null;
 }
 
 function getInitialMessages(options: TaskLoopOptions): Message[] {

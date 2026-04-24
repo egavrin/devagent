@@ -8,6 +8,10 @@ import {
   clearPromptCache,
 } from "./agent-prompt.js";
 import type { TurnBriefing } from "./briefing.js";
+import {
+  READONLY_BATCHING_SECTION_TITLE,
+  getReadonlyBatchingCoreLines,
+} from "./readonly-batching-guidance.js";
 import { AgentType, SkillRegistry } from "../core/index.js";
 import type { SkillMetadata } from "../core/index.js";
 let repoRoot: string | null = null;
@@ -151,6 +155,25 @@ it("adds delegation guidance only when the child really has delegate", () => {
   expect(prompt).toContain("Prefer multiple readonly `explore` or `reviewer` delegates in one turn");
 });
 
+it("adds LSP guidance for cold workspace symbols and duplicate calls", () => {
+  repoRoot = join(tmpdir(), `devagent-agent-prompt-${Date.now()}-lsp`);
+  mkdirSync(repoRoot, { recursive: true });
+
+  const prompt = assembleAgentSystemPrompt({
+    agentType: AgentType.GENERAL,
+    repoRoot,
+    rolePrompt: "You are a General implementation agent.",
+    availableTools: [
+      ...readonlyTools,
+      { name: "lsp", category: "readonly" },
+    ],
+  });
+
+  expect(prompt).toContain("## LSP Tool");
+  expect(prompt).toContain("If `workspace_symbols` is unexpectedly empty");
+  expect(prompt).toContain("Do not repeat an identical successful `lsp` call");
+});
+
 it("nudges child agents toward programmatic batching for narrowed multi-file audits", () => {
   repoRoot = join(tmpdir(), `devagent-agent-prompt-${Date.now()}-batching`);
   mkdirSync(repoRoot, { recursive: true });
@@ -165,14 +188,12 @@ it("nudges child agents toward programmatic batching for narrowed multi-file aud
     ],
   });
 
-  expect(prompt).toContain("Default to `execute_tool_script` as the first inspection tool");
-  expect(prompt).toContain("known-path multi-file audits");
-  expect(prompt).toContain("verify/disprove whether X leaks");
-  expect(prompt).toContain("implementation/schema/test/prompt-consistency/security-leakage checks");
-  expect(prompt).toContain("Do not spend separate turns on serial `read_file` calls");
-  expect(prompt).toContain("grouped `read_file` calls");
-  expect(prompt).toContain("ToolResult");
-  expect(prompt).toContain("result.output");
+  expect(prompt).toContain(`## ${READONLY_BATCHING_SECTION_TITLE}`);
+  for (const line of getReadonlyBatchingCoreLines()) {
+    expect(prompt).toContain(line);
+  }
+  expect(prompt).toContain("one targeted discovery call, then batch");
+  expect(prompt).toContain("broad regex line-hit dumps");
   expect(prompt).not.toContain("$stepId");
 });
 

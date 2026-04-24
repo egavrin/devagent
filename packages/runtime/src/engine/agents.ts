@@ -18,13 +18,16 @@ import { parseStructuredAgentOutput } from "./subagent-contract.js";
 import { TaskLoop } from "./task-loop.js";
 import type { TaskMode, TaskLoopResult } from "./task-loop.js";
 import type {
-  LLMProvider,
-  DevAgentConfig,
+  ApprovalGate,
   CostRecord,
-  ToolSpec,
-  SkillRegistry,
+  DevAgentConfig,
+  EventBus,
+  LLMProvider,
+  LSPDocumentSync,
   Message,
- EventBus, ApprovalGate } from "../core/index.js";
+  SkillRegistry,
+  ToolSpec,
+} from "../core/index.js";
 import { AgentType, MessageRole } from "../core/index.js";
 import { ToolRegistry } from "../tools/index.js";
 
@@ -64,6 +67,7 @@ export interface AgentRunOptions {
   readonly agentId: string;
   /** Parent's session state — seeded into the subagent so it knows what was already read. */
   readonly parentSessionState?: SessionState;
+  readonly lspSync?: LSPDocumentSync;
   readonly depth: number;
   readonly ambient?: AgentAmbientContext;
   readonly createDelegateTool?: (ctx: {
@@ -76,6 +80,7 @@ export interface AgentRunOptions {
     agentRegistry: AgentRegistry;
     parentAgentId: string;
     getParentSessionState?: () => SessionState | undefined;
+    lspSync?: LSPDocumentSync;
     depth: number;
     parentAgentType: AgentType;
     ambient?: AgentAmbientContext;
@@ -216,6 +221,7 @@ export async function runAgent(
     mode: definition.defaultMode,
     sessionState,
     injectSessionStateOnFirstTurn: true,
+    lspSync: options.lspSync,
     agentContext: {
       agentId: options.agentId,
       parentAgentId: options.parentId,
@@ -280,6 +286,7 @@ export async function runForkedAgent(
     initialMessages,
     sessionState,
     injectSessionStateOnFirstTurn: false,
+    lspSync: options.lspSync,
     agentContext: {
       agentId: options.agentId,
       parentAgentId: options.parentId,
@@ -362,6 +369,7 @@ function createAgentToolRegistry(
     agentRegistry: registry,
     parentAgentId: options.agentId,
     getParentSessionState: () => sessionState,
+    lspSync: options.lspSync,
     depth: options.depth,
     parentAgentType: agentType,
     ambient: options.ambient,

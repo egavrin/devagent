@@ -8,6 +8,7 @@ import type {
   DoubleCheck,
   EventBus,
   LLMProvider,
+  LSPDocumentSync,
   Message,
   Session,
   SessionState,
@@ -39,6 +40,7 @@ export interface RunOptions {
   readonly verbosityConfig: VerbosityConfig;
   readonly sessionState: SessionState;
   readonly briefing?: TurnBriefing;
+  readonly lspSync?: LSPDocumentSync | null;
 }
 
 export interface RunSingleQueryOptions extends RunOptions {
@@ -139,6 +141,7 @@ export interface ToolsSetupResult {
 
 export interface LSPSetupResult {
   lspRouter: LSPRouter | null;
+  lspSync: LSPDocumentSync | null;
   hasLSPDiagnostics: boolean;
 }
 

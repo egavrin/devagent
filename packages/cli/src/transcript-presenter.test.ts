@@ -99,6 +99,35 @@ describe("transcript-presenter tool events", () => {
     expect(parts[1]?.kind).toBe("validation-result");
     expect(parts[2]?.kind).toBe("diagnostic-list");
   });
+
+  it("summarizes execute_tool_script hidden-output telemetry", () => {
+    const parts = presentToolAfterEvent({
+      name: "execute_tool_script",
+      callId: "call-script-1",
+      durationMs: 20,
+      result: {
+        success: true,
+        output: "compact answer",
+        error: null,
+        artifacts: [],
+        metadata: {
+          toolScript: {
+            toolCallCount: 3,
+            innerOutputChars: 12000,
+            finalOutputChars: 14,
+            durationMs: 20,
+            timedOut: false,
+            truncated: false,
+          },
+        },
+      },
+    }, 2, 10);
+
+    expect(parts[0]?.kind).toBe("tool");
+    if (parts[0]?.kind === "tool") {
+      expect(parts[0].event.preview).toBe("3 inner call(s), 12000 hidden chars -> 14 stdout chars");
+    }
+  });
 });
 
 describe("transcript-presenter status events", () => {

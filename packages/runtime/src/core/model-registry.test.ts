@@ -13,11 +13,11 @@ import {
   _resetRegistryForTesting,
 } from "./model-registry.js";
 
-describe("model registry", () => {
-  beforeEach(() => {
-    _resetRegistryForTesting();
-  });
+beforeEach(() => {
+  _resetRegistryForTesting();
+});
 
+describe("model registry custom files", () => {
   it("uses default_max_tokens when present, falling back to response_headroom", () => {
     const modelWithDefault = "zz-test-model-default-max-tokens";
     const modelWithFallback = "zz-test-model-fallback-headroom";
@@ -96,34 +96,27 @@ supports_temperature = true
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
 
+describe("bundled model registry", () => {
   it("loads current DeepSeek V4 model capabilities and pricing", () => {
     const modelsDir = join(import.meta.dirname ?? new URL(".", import.meta.url).pathname, "../../../../models");
     loadModelRegistry(undefined, [modelsDir]);
 
-    const flash = lookupModelEntry("deepseek-v4-flash", "deepseek");
-    expect(flash?.contextWindow).toBe(1_000_000);
-    expect(flash?.responseHeadroom).toBe(384_000);
-    expect(flash?.capabilities.reasoning).toBe(true);
-    expect(flash?.capabilities.supportsTemperature).toBe(false);
-    expect(flash?.pricing).toEqual({
+    expectDeepSeekV4Model("deepseek-v4-flash", {
       inputPricePerMillion: 0.14,
       cacheHitInputPricePerMillion: 0.028,
       outputPricePerMillion: 0.28,
     });
-
-    const pro = lookupModelEntry("deepseek-v4-pro", "deepseek");
-    expect(pro?.contextWindow).toBe(1_000_000);
-    expect(pro?.responseHeadroom).toBe(384_000);
-    expect(pro?.capabilities.reasoning).toBe(true);
-    expect(pro?.capabilities.supportsTemperature).toBe(false);
-    expect(pro?.pricing).toEqual({
+    expectDeepSeekV4Model("deepseek-v4-pro", {
       inputPricePerMillion: 1.74,
       cacheHitInputPricePerMillion: 0.145,
       outputPricePerMillion: 3.48,
     });
   });
+});
 
+describe("model registry provider lookup", () => {
   it("tracks the same model name across multiple providers", () => {
     const modelName = "zz-shared-model";
     const dir = mkdtempSync(join(tmpdir(), "devagent-model-shared-"));
@@ -165,3 +158,19 @@ supports_temperature = false
     }
   });
 });
+
+function expectDeepSeekV4Model(
+  model: string,
+  pricing: {
+    readonly inputPricePerMillion: number;
+    readonly cacheHitInputPricePerMillion: number;
+    readonly outputPricePerMillion: number;
+  },
+): void {
+  const entry = lookupModelEntry(model, "deepseek");
+  expect(entry?.contextWindow).toBe(1_000_000);
+  expect(entry?.responseHeadroom).toBe(384_000);
+  expect(entry?.capabilities.reasoning).toBe(true);
+  expect(entry?.capabilities.supportsTemperature).toBe(false);
+  expect(entry?.pricing).toEqual(pricing);
+}

@@ -285,6 +285,7 @@ async function executeSingleQueryLoop(options: RunSingleQueryOptions, systemProm
     doubleCheck: options.doubleCheck,
     initialMessages: options.initialMessages,
     sessionState: options.sessionState,
+    lspSync: options.lspSync ?? undefined,
     midpointCallback: createMidpointCallback({
       provider: options.provider,
       mode: options.mode,
@@ -386,6 +387,7 @@ export async function runTuiQuery(options: RunSingleQueryOptions): Promise<TaskL
       initialMessages: initialLoopOptions.initialMessages,
       sessionState: options.sessionState,
       injectSessionStateOnFirstTurn: initialLoopOptions.injectSessionStateOnFirstTurn,
+      lspSync: options.lspSync ?? undefined,
     });
   } else {
     tuiLoop.resetIterations();

@@ -6,13 +6,13 @@
  * locally, and return only their final stdout to the main model context.
  */
 
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { transpileModule, DiagnosticCategory, ModuleKind, ScriptTarget } from "typescript";
 
+import { syncLSPAfterToolResult } from "./task-loop-lsp-sync.js";
 import type { AgentType, EventBus, ToolContext, ToolResult } from "../core/index.js";
 import { extractErrorMessage, extractToolFileChangePreviewSummary } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
-import type { ChildProcess } from "node:child_process";
 
 export interface ToolScript {
   readonly script: string;
@@ -20,11 +20,23 @@ export interface ToolScript {
   readonly maxOutputChars?: number;
 }
 
+export interface ToolScriptTelemetry {
+  readonly toolCallCount: number;
+  readonly innerOutputChars: number;
+  readonly finalOutputChars: number;
+  readonly durationMs: number;
+  readonly timedOut: boolean;
+  readonly truncated: boolean;
+}
+
 export interface ToolScriptResult extends ToolResult {
   readonly totalDurationMs: number;
   readonly timedOut: boolean;
   readonly truncated: boolean;
   readonly toolCallCount: number;
+  readonly metadata: {
+    readonly toolScript: ToolScriptTelemetry;
+  };
 }
 
 export interface ToolScriptEngineOptions {
@@ -70,6 +82,37 @@ type ChildToParentMessage =
     readonly toolCallCount: number;
   };
 
+interface RunChildOptions {
+  readonly code: string;
+  readonly timeoutMs: number;
+  readonly maxOutputChars: number;
+  readonly startedAt: number;
+}
+
+interface RunChildState {
+  stderr: string;
+  parentToolCallCount: number;
+  innerOutputChars: number;
+}
+
+interface ChildMessageContext {
+  readonly child: ChildProcess;
+  readonly options: Pick<RunChildOptions, "startedAt" | "maxOutputChars">;
+  readonly settle: (result: ToolScriptResult) => void;
+  readonly nextParentToolCallCount: () => number;
+  readonly addInnerOutputChars: (chars: number) => void;
+  readonly getInnerOutputCharsTotal: () => number;
+}
+
+interface FailureResultOptions {
+  readonly toolCallCount?: number;
+  readonly output?: string;
+  readonly durationMs?: number;
+  readonly timedOut?: boolean;
+  readonly truncated?: boolean;
+  readonly innerOutputChars?: number;
+}
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_CHARS = 16 * 1024;
 const DEFAULT_MAX_TOOL_CALLS = 20;
@@ -112,29 +155,13 @@ export class ToolScriptEngine {
     });
   }
 
-  private runChild(options: {
-    readonly code: string;
-    readonly timeoutMs: number;
-    readonly maxOutputChars: number;
-    readonly startedAt: number;
-  }): Promise<ToolScriptResult> {
+  private runChild(options: RunChildOptions): Promise<ToolScriptResult> {
     const allowedToolNames = this.getAllowedToolNames();
-    const child = spawn(process.execPath, ["--input-type=module", "--eval", CHILD_PROCESS_SOURCE], {
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-      env: {},
-    });
-    let stderr = "";
-    let settled = false;
-    let parentToolCallCount = 0;
-
-    child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.stdout?.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-
+    const child = spawnToolScriptChild();
+    const state: RunChildState = { stderr: "", parentToolCallCount: 0, innerOutputChars: 0 };
+    collectChildOutput(child, state);
     return new Promise<ToolScriptResult>((resolve) => {
+      let settled = false;
       const settle = (result: ToolScriptResult) => {
         if (settled) return;
         settled = true;
@@ -143,22 +170,25 @@ export class ToolScriptEngine {
         resolve(result);
       };
       const timer = setTimeout(() => {
-        settle({
-          success: false,
-          output: "",
-          error: `Script timed out after ${options.timeoutMs}ms`,
-          artifacts: [],
-          totalDurationMs: Date.now() - options.startedAt,
+        const durationMs = Date.now() - options.startedAt;
+        settle(failureResult(`Script timed out after ${options.timeoutMs}ms`, options.startedAt, {
+          durationMs,
+          innerOutputChars: state.innerOutputChars,
           timedOut: true,
-          truncated: false,
-          toolCallCount: parentToolCallCount,
-        });
+          toolCallCount: state.parentToolCallCount,
+        }));
       }, options.timeoutMs);
 
       child.on("message", (raw) => {
-        void this.handleChildMessage(raw, child, options, settle, () => {
-          parentToolCallCount++;
-          return parentToolCallCount;
+        void this.handleChildMessage(raw, {
+          child,
+          options,
+          settle,
+          nextParentToolCallCount: () => ++state.parentToolCallCount,
+          addInnerOutputChars: (chars) => {
+            state.innerOutputChars += chars;
+          },
+          getInnerOutputCharsTotal: () => state.innerOutputChars,
         });
       });
       child.on("error", (error) => {
@@ -166,7 +196,7 @@ export class ToolScriptEngine {
       });
       child.on("exit", (code, signal) => {
         if (settled) return;
-        const detail = stderr.trim() || `Child process exited unexpectedly (${signal ?? code ?? "unknown"})`;
+        const detail = state.stderr.trim() || `Child process exited unexpectedly (${signal ?? code ?? "unknown"})`;
         settle(failureResult(detail, options.startedAt));
       });
 
@@ -183,36 +213,54 @@ export class ToolScriptEngine {
 
   private async handleChildMessage(
     raw: unknown,
-    child: ChildProcess,
-    options: { readonly startedAt: number; readonly maxOutputChars: number },
-    settle: (result: ToolScriptResult) => void,
-    nextParentToolCallCount: () => number,
+    context: ChildMessageContext,
   ): Promise<void> {
     if (!isChildMessage(raw)) {
-      settle(failureResult("Script runner protocol violation: invalid child message", options.startedAt));
+      context.settle(failureResult("Script runner protocol violation: invalid child message", context.options.startedAt));
       return;
     }
     if (raw.type === "done") {
-      settle(successResult(raw.output, raw.toolCallCount, Date.now() - options.startedAt));
+      const totalDurationMs = Date.now() - context.options.startedAt;
+      if (raw.output.trim().length === 0) {
+        context.settle(failureResult("No output printed: call print(...) with the synthesized final answer.", context.options.startedAt, {
+          durationMs: totalDurationMs,
+          innerOutputChars: context.getInnerOutputCharsTotal(),
+          toolCallCount: raw.toolCallCount,
+        }));
+        return;
+      }
+      context.settle(successResult(raw.output, raw.toolCallCount, totalDurationMs, context.getInnerOutputCharsTotal()));
       return;
     }
     if (raw.type === "error") {
-      settle({
+      const totalDurationMs = Date.now() - context.options.startedAt;
+      context.settle({
         success: false,
         output: raw.output,
         error: raw.error,
         artifacts: [],
-        totalDurationMs: Date.now() - options.startedAt,
+        totalDurationMs,
         timedOut: false,
-        truncated: raw.output.length >= options.maxOutputChars,
+        truncated: raw.output.length >= context.options.maxOutputChars,
         toolCallCount: raw.toolCallCount,
+        metadata: {
+          toolScript: {
+            toolCallCount: raw.toolCallCount,
+            innerOutputChars: context.getInnerOutputCharsTotal(),
+            finalOutputChars: raw.output.length,
+            durationMs: totalDurationMs,
+            timedOut: false,
+            truncated: raw.output.length >= context.options.maxOutputChars,
+          },
+        },
       });
       return;
     }
 
-    const toolCallNumber = nextParentToolCallCount();
+    const toolCallNumber = context.nextParentToolCallCount();
     const result = await this.executeNestedTool(raw, toolCallNumber);
-    sendChild(child, { type: "tool_result", id: raw.id, result });
+    context.addInnerOutputChars(getInnerOutputChars(result));
+    sendChild(context.child, { type: "tool_result", id: raw.id, result });
   }
 
   private async executeNestedTool(
@@ -235,6 +283,7 @@ export class ToolScriptEngine {
         ...this.context,
         callId,
       });
+      await syncLSPAfterToolResult(call.name, call.args, result, this.context.lspSync);
     } catch (error) {
       result = {
         success: false,
@@ -311,7 +360,7 @@ function normalizePositiveInt(value: number | undefined, fallback: number): numb
   return Math.max(1, Math.floor(value));
 }
 
-function successResult(output: string, toolCallCount: number, totalDurationMs: number): ToolScriptResult {
+function successResult(output: string, toolCallCount: number, totalDurationMs: number, innerOutputChars = 0): ToolScriptResult {
   return {
     success: true,
     output,
@@ -321,20 +370,70 @@ function successResult(output: string, toolCallCount: number, totalDurationMs: n
     timedOut: false,
     truncated: false,
     toolCallCount,
+    metadata: {
+      toolScript: {
+        toolCallCount,
+        innerOutputChars,
+        finalOutputChars: output.length,
+        durationMs: totalDurationMs,
+        timedOut: false,
+        truncated: false,
+      },
+    },
   };
 }
 
-function failureResult(error: string, startedAt: number): ToolScriptResult {
+function failureResult(
+  error: string,
+  startedAt: number,
+  options: FailureResultOptions = {},
+): ToolScriptResult {
+  const output = options.output ?? "";
+  const durationMs = options.durationMs ?? Date.now() - startedAt;
+  const timedOut = options.timedOut ?? false;
+  const truncated = options.truncated ?? false;
+  const toolCallCount = options.toolCallCount ?? 0;
+  const innerOutputChars = options.innerOutputChars ?? 0;
   return {
     success: false,
-    output: "",
+    output,
     error,
     artifacts: [],
-    totalDurationMs: Date.now() - startedAt,
-    timedOut: false,
-    truncated: false,
-    toolCallCount: 0,
+    totalDurationMs: durationMs,
+    timedOut,
+    truncated,
+    toolCallCount,
+    metadata: {
+      toolScript: {
+        toolCallCount,
+        innerOutputChars,
+        finalOutputChars: output.length,
+        durationMs,
+        timedOut,
+        truncated,
+      },
+    },
   };
+}
+
+function getInnerOutputChars(result: ToolResult): number {
+  return result.output.length;
+}
+
+function spawnToolScriptChild(): ChildProcess {
+  return spawn(process.execPath, ["--input-type=module", "--eval", CHILD_PROCESS_SOURCE], {
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    env: {},
+  });
+}
+
+function collectChildOutput(child: ChildProcess, state: RunChildState): void {
+  child.stderr?.on("data", (chunk) => {
+    state.stderr += String(chunk);
+  });
+  child.stdout?.on("data", (chunk) => {
+    state.stderr += String(chunk);
+  });
 }
 
 function sendChild(child: ChildProcess, message: ParentToChildMessage): void {
@@ -345,9 +444,15 @@ function sendChild(child: ChildProcess, message: ParentToChildMessage): void {
 function isChildMessage(raw: unknown): raw is ChildToParentMessage {
   if (!raw || typeof raw !== "object") return false;
   const msg = raw as Record<string, unknown>;
-  if (msg["type"] === "done" || msg["type"] === "error") {
-    return typeof msg["output"] === "string" && typeof msg["toolCallCount"] === "number";
-  }
+  if (msg["type"] === "done" || msg["type"] === "error") return isChildCompletionMessage(msg);
+  return isChildToolCallMessage(msg);
+}
+
+function isChildCompletionMessage(msg: Record<string, unknown>): boolean {
+  return typeof msg["output"] === "string" && typeof msg["toolCallCount"] === "number";
+}
+
+function isChildToolCallMessage(msg: Record<string, unknown>): boolean {
   return msg["type"] === "tool_call"
     && typeof msg["id"] === "string"
     && typeof msg["name"] === "string"
@@ -381,7 +486,7 @@ process.on("message", (message) => {
     const entry = pending.get(message.id);
     if (!entry) return;
     pending.delete(message.id);
-    entry.resolve(message.result);
+    entry.resolve(wrapToolResult(message.result));
   }
 });
 
@@ -455,6 +560,18 @@ async function callTool(name, args = {}) {
   const safeArgs = normalizeArgs(args);
   process.send?.({ type: "tool_call", id, name, args: safeArgs });
   return await new Promise((resolve) => pending.set(id, { resolve }));
+}
+
+function wrapToolResult(result) {
+  if (result === null || typeof result !== "object") return result;
+  return new Proxy(result, {
+    get(target, prop) {
+      if (prop === "content") {
+        throw new Error("ToolResult has no result.content field; inspect result.output instead.");
+      }
+      return target[prop];
+    },
+  });
 }
 
 function print(...values) {

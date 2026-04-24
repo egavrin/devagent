@@ -8,6 +8,7 @@ When exploring an unfamiliar codebase:
 Rules:
 - Prefer targeted `file_pattern` values over global scans.
 - Avoid speculative full-file reads. Search first, then read focused ranges.
+- Exception: when `execute_tool_script` is available and the task names or clearly implies a 3+ file readonly audit, do not start this serial search sequence. Use `execute_tool_script` as the first inspection tool, read the named paths inside the script, and answer from its stdout after success.
 - Tool names must be exact canonical names (for example `find_files`, not `functions.find_files`).
 
 ## Error Recovery

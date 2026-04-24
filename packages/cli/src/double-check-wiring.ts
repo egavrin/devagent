@@ -10,7 +10,7 @@ import { extractErrorMessage, LANGUAGE_EXTENSIONS, LSPClient, spawnAndCapture } 
 import { execFile } from "node:child_process";
 import { extname } from "node:path";
 
-import type { DiagnosticProvider, DoubleCheck, LSPServerConfig, TestRunner } from "@devagent/runtime";
+import type { DiagnosticProvider, DoubleCheck, LSPDocumentSync, LSPServerConfig, TestRunner } from "@devagent/runtime";
 
 // ─── Language Map ───────────────────────────────────────────
 
@@ -303,6 +303,18 @@ export function createRoutingDiagnosticProvider(
       message: `${filePath}:${d.line}:${d.character}: ${d.message}`,
       severity: d.severity,
     }));
+  };
+}
+
+export function createRoutingLSPDocumentSync(router: LSPRouter): LSPDocumentSync {
+  return {
+    async syncFile(filePath, options) {
+      const match = router.getClientForFile(filePath);
+      if (!match || !match.client.isRunning()) return;
+      await match.client.syncDocument(filePath, match.languageId, {
+        didSave: options?.didSave,
+      });
+    },
   };
 }
 

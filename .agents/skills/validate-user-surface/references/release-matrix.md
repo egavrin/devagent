@@ -13,6 +13,7 @@ Use this file when planning coverage or writing the final report.
 - Pass `bun run check:publint`.
 - Pass `bun run test:bundle-smoke`.
 - Pass `bun run validate:live:provider-smoke` when local provider credentials or services are available.
+- Pass `bun run validate:live:tool-script` when `execute_tool_script` prompt adoption or telemetry changes are in scope.
 - Pass `bun run validate:live:tui` when interactive terminal behavior is in scope.
 - Explain every remaining failure or blocked surface explicitly.
 
@@ -130,6 +131,7 @@ For each provider:
 ## Built-In Validation Helpers
 
 - Run `bun run validate:live:provider-smoke` before declaring provider coverage blocked; it checks stored local credentials and Ollama service availability.
+- Run `bun run validate:live:tool-script --provider <provider> --model <model>` to check natural `execute_tool_script` adoption on clustered readonly audits and explicit script reliability for a real provider.
 - Run `bun run validate:live:tui` for interactive terminal behavior when TUI surfaces change.
 - Add manual coverage for gaps the helpers do not own yet, especially packaging, registry install paths, auth flows, `devagent execute`, and full provider breadth.
 

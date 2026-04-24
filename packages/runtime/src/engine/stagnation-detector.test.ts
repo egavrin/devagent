@@ -265,6 +265,7 @@ it("uses TypeScript execute_tool_script recovery guidance", () => {
 
   expect(warning).toContain("TypeScript batching script");
   expect(warning).toContain("tools.read_file");
+  expect(warning).toContain("result.success");
   expect(warning).toContain("ToolResult.output");
   expect(warning).toContain("print only the synthesized final answer");
   expect(warning).not.toContain("steps");
@@ -296,6 +297,7 @@ it("uses direct readonly fallback guidance after execute_tool_script fatigue", (
   expect(warning).toContain("individual readonly calls");
   expect(warning).toContain("read_file, search_files, find_files");
   expect(warning).toContain("debugging the failed script");
+  expect(warning).toContain("Do not retry the same failed script");
   expect(warning).not.toContain("steps");
   expect(warning).not.toContain("$stepId");
   expect(warning).not.toContain("bare canonical names");

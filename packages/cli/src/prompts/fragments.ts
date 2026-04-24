@@ -1,8 +1,9 @@
-import type {
-  AgentType,
-  ReasoningEffort,
-  TaskMode,
-  ToolSpec,
+import {
+  formatReadonlyBatchingGuidance as formatRuntimeReadonlyBatchingGuidance,
+  type AgentType,
+  type ReasoningEffort,
+  type TaskMode,
+  type ToolSpec,
 } from "@devagent/runtime";
 
 interface RootPromptCapabilities {
@@ -71,6 +72,12 @@ function buildInvestigationPlaybookFragment(capabilities: RootPromptCapabilities
     "- Avoid serial phase plans like `locate -> inspect -> compare -> summarize` for broad investigations.",
     "- Parent-agent synthesis happens after lane evidence exists; do not let one lane drift into the whole investigation.",
   );
+
+  if (capabilities.hasExecuteToolScript) {
+    lines.push(
+      "- For narrowed prompt/schema/test audits with a small known or easily enumerated file set, the readonly batching guidance takes precedence over serial local search.",
+    );
+  }
 
   return lines.join("\n");
 }
@@ -150,32 +157,10 @@ function buildShellOperationsFragment(): string {
 }
 
 function buildBatchingFragment(capabilities: RootPromptCapabilities): string {
-  const lines = [
-    "## Readonly Batching",
-    "",
-    "Default to `execute_tool_script` as the first inspection tool when a narrowed task likely needs 3+ readonly calls that can be planned upfront.",
-    "- Prime fit: known-path multi-file audits where you can group `read_file` calls and synthesize the answer in code.",
-    "- Prime fit: verification prompts such as \"verify/disprove whether X leaks\", \"compare implementation, schema, and tests\", or \"check prompt consistency\" across a small known file set.",
-    "- Good fit: implementation/schema/test/prompt-consistency/security-leakage checks where the files are named or easy to enumerate.",
-    "- Also good: multiple related `search_files` calls, or `find_files` plus focused `read_file` follow-ups that can be filtered in code.",
-    "- Do not spend separate turns on serial `read_file` calls when the file set is already known; batch them and print one compact conclusion.",
-    "- The script can `await tools.read_file(...)`, `tools.search_files(...)`, `tools.find_files(...)`, `tools.git_status(...)`, and `tools.git_diff(...)`.",
-    "- Tool calls return `ToolResult` objects; inspect `result.output` for text content.",
-    "- Print only synthesized findings, counts, paths, or summaries. Do not print raw file contents or raw diffs unless the user asked for them.",
-    "- Use it after lane selection. Do not use broad reconnaissance batches as a substitute for evidence-lane decomposition.",
-  ];
-
-  if (capabilities.hasDelegate) {
-    lines.push(
-      "- For broad research tasks, lane decomposition via `explore` delegates takes priority over local batching.",
-    );
-  }
-
-  lines.push(
-    "- If a script fails, break the failed steps into direct tool calls instead of retrying the same script.",
-  );
-
-  return lines.join("\n");
+  return formatRuntimeReadonlyBatchingGuidance({
+    includeRootGuardrails: true,
+    includeDelegationGuardrail: capabilities.hasDelegate,
+  });
 }
 
 function buildModelPolicyFragment(

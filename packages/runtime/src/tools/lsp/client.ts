@@ -15,6 +15,19 @@ import {
   StreamMessageWriter,
 } from "vscode-jsonrpc/node.js";
 
+import {
+  callHierarchyItemToResult,
+  flattenSymbols,
+  formatHoverContents,
+  normalizeLocations,
+  severityToString,
+  workspaceSymbolToResult,
+  type CallHierarchyResult,
+  type DiagnosticResult,
+  type LocationResult,
+  type SymbolResult,
+  type WorkspaceSymbolResult,
+} from "./client-format.js";
 import type { ChildProcess } from "node:child_process";
 import type { MessageConnection } from "vscode-jsonrpc/node.js";
 import type {
@@ -41,28 +54,16 @@ interface LSPClientOptions {
   readonly diagnosticTimeout?: number;
 }
 
-interface DiagnosticResult {
-  readonly file: string;
-  readonly diagnostics: ReadonlyArray<{
-    readonly line: number;
-    readonly character: number;
-    readonly message: string;
-    readonly severity: string;
-  }>;
+interface OpenDocumentResult {
+  readonly uri: string;
+  readonly sentVersionNotification: boolean;
 }
 
-interface SymbolResult {
-  readonly name: string;
-  readonly kind: string;
-  readonly line: number;
-  readonly character: number;
-  readonly containerName?: string;
-}
-
-interface LocationResult {
-  readonly file: string;
-  readonly line: number;
-  readonly character: number;
+class LSPTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LSPTimeoutError";
+  }
 }
 
 // ─── LRU Map ────────────────────────────────────────────────
@@ -162,19 +163,59 @@ function isIgnorableTransportError(error: unknown): boolean {
     message.includes("connection is disposed");
 }
 
+function isPresent<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined;
+}
+
 async function sendLSPNotification(
   connection: MessageConnection,
   method: string,
   params: unknown,
-  options?: { ignoreTransportErrors?: boolean },
+  options?: { ignoreTransportErrors?: boolean; timeoutMs?: number; onTimeout?: () => void },
 ): Promise<void> {
   try {
-    await connection.sendNotification(method, params);
+    await withPromiseTimeout(
+      connection.sendNotification(method, params),
+      options?.timeoutMs,
+      `LSP notification ${method} timed out`,
+    );
   } catch (error) {
     if (options?.ignoreTransportErrors && isIgnorableTransportError(error)) {
       return;
     }
+    if (error instanceof LSPTimeoutError) {
+      options?.onTimeout?.();
+    }
     throw error;
+  }
+}
+
+function createLSPConnection(processRef: ChildProcess): MessageConnection {
+  if (!processRef.stdin || !processRef.stdout) {
+    throw new Error("Failed to create language server stdio streams");
+  }
+  return createMessageConnection(
+    new StreamMessageReader(processRef.stdout),
+    new StreamMessageWriter(processRef.stdin),
+  );
+}
+
+async function withPromiseTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number | undefined,
+  message: string,
+): Promise<T> {
+  if (!timeoutMs || timeoutMs <= 0) return promise;
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new LSPTimeoutError(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer!);
   }
 }
 
@@ -203,54 +244,36 @@ export class LSPClient {
   async start(): Promise<void> {
     if (this.initialized) return;
 
-    this.process = spawn(this.command, [...this.args], {
-      stdio: ["pipe", "pipe", "pipe"],
-      cwd: this.rootPath,
-    });
-
-    if (!this.process.stdin || !this.process.stdout) {
-      this.process.kill();
-      this.process = null;
-      throw new Error("Failed to create language server stdio streams");
-    }
-
-    // Detect server crash and mark client as dead so callers can restart.
-    this.process.on("exit", () => {
-      this.initialized = false;
-      this.openDocuments.clear();
-      this.connection?.dispose();
-      this.connection = null;
-      this.process = null;
-    });
-
-    this.connection = createMessageConnection(
-      new StreamMessageReader(this.process.stdout),
-      new StreamMessageWriter(this.process.stdin),
-    );
-
-    // Listen for published diagnostics
-    this.connection.onNotification(
-      "textDocument/publishDiagnostics",
-      (params: PublishDiagnosticsParams) => {
-        this.diagnosticsStore.set(params.uri, params.diagnostics);
-      },
-    );
-
+    this.process = this.spawnLanguageServer();
+    this.registerProcessExitHandler();
+    this.connection = createLSPConnection(this.process);
+    this.registerDiagnosticsHandler();
     this.connection.listen();
+    await this.initializeConnection();
+  }
 
+  private async initializeConnection(): Promise<void> {
     try {
-      // Initialize
       await this.withTimeout<InitializeResult>(
-        this.connection.sendRequest("initialize", {
+        this.connection!.sendRequest("initialize", {
           processId: process.pid,
           rootUri: `file://${this.rootPath}`,
           capabilities: {
+            workspace: {
+              symbol: { dynamicRegistration: false },
+            },
             textDocument: {
-              synchronization: { dynamicRegistration: false },
+              synchronization: { dynamicRegistration: false, didSave: true },
               publishDiagnostics: { relatedInformation: true },
+              hover: {
+                dynamicRegistration: false,
+                contentFormat: ["markdown", "plaintext"],
+              },
               definition: { dynamicRegistration: false },
               references: { dynamicRegistration: false },
               documentSymbol: { dynamicRegistration: false },
+              implementation: { dynamicRegistration: false },
+              callHierarchy: { dynamicRegistration: false },
             },
           },
           workspaceFolders: [
@@ -259,10 +282,10 @@ export class LSPClient {
         }),
       );
 
-      await sendLSPNotification(this.connection, "initialized", {});
+      await sendLSPNotification(this.connection!, "initialized", {}, { timeoutMs: this.timeout });
       this.initialized = true;
     } catch (err) {
-      this.connection.dispose();
+      this.connection?.dispose();
       this.connection = null;
       this.process?.kill();
       this.process = null;
@@ -270,6 +293,38 @@ export class LSPClient {
       this.openDocuments.clear();
       throw err;
     }
+  }
+
+  private spawnLanguageServer(): ChildProcess {
+    const processRef = spawn(this.command, [...this.args], {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: this.rootPath,
+    });
+    if (!processRef.stdin || !processRef.stdout) {
+      processRef.kill();
+      throw new Error("Failed to create language server stdio streams");
+    }
+    return processRef;
+  }
+
+  private registerProcessExitHandler(): void {
+    this.process?.on("exit", () => {
+      this.initialized = false;
+      this.openDocuments.clear();
+      this.diagnosticsStore.clear();
+      this.connection?.dispose();
+      this.connection = null;
+      this.process = null;
+    });
+  }
+
+  private registerDiagnosticsHandler(): void {
+    this.connection?.onNotification(
+      "textDocument/publishDiagnostics",
+      (params: PublishDiagnosticsParams) => {
+        this.diagnosticsStore.set(params.uri, params.diagnostics);
+      },
+    );
   }
 
   async stop(): Promise<void> {
@@ -281,7 +336,7 @@ export class LSPClient {
       if (connection && this.initialized) {
         await this.closeAllOpenDocuments(connection);
         await this.withTimeout(connection.sendRequest("shutdown"));
-        await sendLSPNotification(connection, "exit", {}, { ignoreTransportErrors: true });
+        await sendLSPNotification(connection, "exit", {}, { ignoreTransportErrors: true, timeoutMs: this.timeout });
       }
     } catch {
       // Server might already be dead
@@ -293,6 +348,7 @@ export class LSPClient {
     this.process = null;
     this.initialized = false;
     this.openDocuments.clear();
+    this.diagnosticsStore.clear();
   }
 
   isRunning(): boolean {
@@ -301,10 +357,11 @@ export class LSPClient {
 
   async getDiagnostics(filePath: string, languageId?: string): Promise<DiagnosticResult> {
     this.ensureRunning();
-    const { uri } = await this.openOrUpdateDocument(filePath, languageId);
+    const { uri, sentVersionNotification } = await this.openOrUpdateDocument(filePath, languageId);
 
-    // Clear stale diagnostics from previous runs for this URI.
-    this.diagnosticsStore.delete(uri);
+    if (!sentVersionNotification && this.diagnosticsStore.has(uri)) {
+      return this.formatDiagnosticResult(filePath, this.diagnosticsStore.get(uri) ?? []);
+    }
 
     // Poll for diagnostics — servers push them asynchronously.
     // Exit early if diagnostics arrive (saves time for fast servers like clangd).
@@ -318,6 +375,10 @@ export class LSPClient {
     }
     const diagnostics = this.diagnosticsStore.get(uri) ?? [];
 
+    return this.formatDiagnosticResult(filePath, diagnostics);
+  }
+
+  private formatDiagnosticResult(filePath: string, diagnostics: ReadonlyArray<Diagnostic>): DiagnosticResult {
     return {
       file: filePath,
       diagnostics: diagnostics.map((d) => ({
@@ -327,6 +388,20 @@ export class LSPClient {
         severity: severityToString(d.severity),
       })),
     };
+  }
+
+  async syncDocument(
+    filePath: string,
+    languageId?: string,
+    options?: { readonly didSave?: boolean },
+  ): Promise<void> {
+    this.ensureRunning();
+    const { uri } = await this.openOrUpdateDocument(filePath, languageId);
+    if (options?.didSave) {
+      await this.sendNotification("textDocument/didSave", {
+        textDocument: { uri },
+      });
+    }
   }
 
   async getDefinition(
@@ -382,6 +457,71 @@ export class LSPClient {
     }));
   }
 
+  async getHover(
+    filePath: string,
+    line: number,
+    character: number,
+    languageId?: string,
+  ): Promise<string | null> {
+    this.ensureRunning();
+    const { uri } = await this.openOrUpdateDocument(filePath, languageId);
+
+    const result = await this.withTimeout(
+      this.connection!.sendRequest("textDocument/hover", {
+        textDocument: { uri },
+        position: { line: line - 1, character: character - 1 },
+      }),
+    );
+
+    return formatHoverContents(result);
+  }
+
+  async getImplementation(
+    filePath: string,
+    line: number,
+    character: number,
+    languageId?: string,
+  ): Promise<ReadonlyArray<LocationResult>> {
+    this.ensureRunning();
+    const { uri } = await this.openOrUpdateDocument(filePath, languageId);
+
+    const result = await this.withTimeout(
+      this.connection!.sendRequest("textDocument/implementation", {
+        textDocument: { uri },
+        position: { line: line - 1, character: character - 1 },
+      }),
+    );
+
+    return normalizeLocations(result, this.rootPath);
+  }
+
+  async getWorkspaceSymbols(query = ""): Promise<ReadonlyArray<WorkspaceSymbolResult>> {
+    this.ensureRunning();
+    const result = await this.withTimeout(
+      this.connection!.sendRequest("workspace/symbol", { query }),
+    );
+    if (!Array.isArray(result)) return [];
+    return result.map((symbol) => workspaceSymbolToResult(symbol, this.rootPath)).filter(isPresent);
+  }
+
+  async getIncomingCalls(
+    filePath: string,
+    line: number,
+    character: number,
+    languageId?: string,
+  ): Promise<ReadonlyArray<CallHierarchyResult>> {
+    return this.getCallHierarchy(filePath, line, character, "incoming", languageId);
+  }
+
+  async getOutgoingCalls(
+    filePath: string,
+    line: number,
+    character: number,
+    languageId?: string,
+  ): Promise<ReadonlyArray<CallHierarchyResult>> {
+    return this.getCallHierarchy(filePath, line, character, "outgoing", languageId);
+  }
+
   async getSymbols(filePath: string, languageId?: string): Promise<ReadonlyArray<SymbolResult>> {
     this.ensureRunning();
     const { uri } = await this.openOrUpdateDocument(filePath, languageId);
@@ -396,6 +536,44 @@ export class LSPClient {
     return flattenSymbols(result as Array<SymbolInformation | DocumentSymbol>);
   }
 
+  private async getCallHierarchy(
+    filePath: string,
+    line: number,
+    character: number,
+    direction: "incoming" | "outgoing",
+    languageId?: string,
+  ): Promise<ReadonlyArray<CallHierarchyResult>> {
+    this.ensureRunning();
+    const { uri } = await this.openOrUpdateDocument(filePath, languageId);
+    const position = { line: line - 1, character: character - 1 };
+    const prepared = await this.withTimeout(
+      this.connection!.sendRequest("textDocument/prepareCallHierarchy", {
+        textDocument: { uri },
+        position,
+      }),
+    );
+    if (!Array.isArray(prepared) || prepared.length === 0) return [];
+
+    const method = direction === "incoming"
+      ? "callHierarchy/incomingCalls"
+      : "callHierarchy/outgoingCalls";
+    const results: CallHierarchyResult[] = [];
+    for (const item of prepared) {
+      const calls = await this.withTimeout(
+        this.connection!.sendRequest(method, { item }),
+      );
+      if (!Array.isArray(calls)) continue;
+      for (const call of calls) {
+        const hierarchyItem = direction === "incoming"
+          ? (call as { from?: unknown }).from
+          : (call as { to?: unknown }).to;
+        const formatted = callHierarchyItemToResult(hierarchyItem, this.rootPath);
+        if (formatted) results.push(formatted);
+      }
+    }
+    return results;
+  }
+
   // ─── Private ────────────────────────────────────────────────
 
   private ensureRunning(): void {
@@ -407,7 +585,7 @@ export class LSPClient {
   private async openOrUpdateDocument(
     filePath: string,
     languageId?: string,
-  ): Promise<{ uri: string }> {
+  ): Promise<OpenDocumentResult> {
     this.ensureRunning();
     const absPath = resolve(this.rootPath, filePath);
     const uri = `file://${absPath}`;
@@ -415,7 +593,8 @@ export class LSPClient {
     const existing = this.openDocuments.get(uri);
 
     if (!existing) {
-      await sendLSPNotification(this.connection!, "textDocument/didOpen", {
+      this.diagnosticsStore.delete(uri);
+      await this.sendNotification("textDocument/didOpen", {
         textDocument: {
           uri,
           languageId: languageId ?? this.languageId,
@@ -424,28 +603,41 @@ export class LSPClient {
         },
       });
       this.openDocuments.set(uri, { version: 1, content });
-      return { uri };
+      return { uri, sentVersionNotification: true };
     }
 
     if (existing.content !== content) {
       const nextVersion = existing.version + 1;
-      await sendLSPNotification(this.connection!, "textDocument/didChange", {
+      this.diagnosticsStore.delete(uri);
+      await this.sendNotification("textDocument/didChange", {
         textDocument: { uri, version: nextVersion },
         contentChanges: [{ text: content }],
       });
       this.openDocuments.set(uri, { version: nextVersion, content });
+      return { uri, sentVersionNotification: true };
     }
 
-    return { uri };
+    return { uri, sentVersionNotification: false };
   }
 
   private async closeAllOpenDocuments(connection: MessageConnection): Promise<void> {
     for (const uri of this.openDocuments.keys()) {
       await sendLSPNotification(connection, "textDocument/didClose", {
         textDocument: { uri },
-      }, { ignoreTransportErrors: true });
+      }, {
+        ignoreTransportErrors: true,
+        timeoutMs: this.timeout,
+        onTimeout: () => this.markUnhealthy(),
+      });
     }
     this.openDocuments.clear();
+  }
+
+  private async sendNotification(method: string, params: unknown): Promise<void> {
+    await sendLSPNotification(this.connection!, method, params, {
+      timeoutMs: this.timeout,
+      onTimeout: () => this.markUnhealthy(),
+    });
   }
 
   private async withTimeout<T>(promise: Promise<T>): Promise<T> {
@@ -455,69 +647,28 @@ export class LSPClient {
         promise,
         new Promise<T>((_, reject) => {
           timer = setTimeout(
-            () => reject(new Error("LSP request timed out")),
+            () => reject(new LSPTimeoutError("LSP request timed out")),
             this.timeout,
           );
         }),
       ]);
+    } catch (error) {
+      if (error instanceof LSPTimeoutError) {
+        this.markUnhealthy();
+      }
+      throw error;
     } finally {
       clearTimeout(timer!);
     }
   }
-}
 
-// ─── Helpers ────────────────────────────────────────────────
-
-function severityToString(severity: number | undefined): string {
-  switch (severity) {
-    case 1: return "error";
-    case 2: return "warning";
-    case 3: return "info";
-    case 4: return "hint";
-    case undefined: return "unknown";
-    default: return "unknown";
+  private markUnhealthy(): void {
+    (this.connection as { dispose?: () => void } | null)?.dispose?.();
+    this.process?.kill();
+    this.connection = null;
+    this.process = null;
+    this.initialized = false;
+    this.openDocuments.clear();
+    this.diagnosticsStore.clear();
   }
-}
-
-function flattenSymbols(
-  symbols: Array<SymbolInformation | DocumentSymbol>,
-  containerName?: string,
-): SymbolResult[] {
-  const results: SymbolResult[] = [];
-  for (const sym of symbols) {
-    if ("range" in sym) {
-      results.push({
-        name: sym.name,
-        kind: symbolKindToString(sym.kind),
-        line: sym.range.start.line + 1,
-        character: sym.range.start.character + 1,
-        containerName,
-      });
-      if (sym.children) {
-        results.push(...flattenSymbols(sym.children, sym.name));
-      }
-    } else {
-      results.push({
-        name: sym.name,
-        kind: symbolKindToString(sym.kind),
-        line: sym.location.range.start.line + 1,
-        character: sym.location.range.start.character + 1,
-        containerName: sym.containerName,
-      });
-    }
-  }
-  return results;
-}
-
-function symbolKindToString(kind: number): string {
-  const kinds: Record<number, string> = {
-    1: "file", 2: "module", 3: "namespace", 4: "package",
-    5: "class", 6: "method", 7: "property", 8: "field",
-    9: "constructor", 10: "enum", 11: "interface", 12: "function",
-    13: "variable", 14: "constant", 15: "string", 16: "number",
-    17: "boolean", 18: "array", 19: "object", 20: "key",
-    21: "null", 22: "enum_member", 23: "struct", 24: "event",
-    25: "operator", 26: "type_parameter",
-  };
-  return kinds[kind] ?? `kind_${kind}`;
 }

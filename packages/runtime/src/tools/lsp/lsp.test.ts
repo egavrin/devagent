@@ -43,10 +43,10 @@ it("throws if used before start", async () => {
   );
 });
 
-it("does not return stale diagnostics on repeated checks for the same file", async () => {
+it("clears stale diagnostics after a real content change", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-test-"));
   const fileName = "test.ts";
-  writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+  writeFileSync(join(tempDir, fileName), "const x: string = 1;\n", "utf-8");
 
   const client = new LSPClient({
     command: "echo",
@@ -59,19 +59,17 @@ it("does not return stale diagnostics on repeated checks for the same file", asy
   const diagnosticsStore = (client as unknown as {
     diagnosticsStore: Map<string, unknown[]>;
   }).diagnosticsStore;
-  let openCount = 0;
 
   const fakeConnection = {
     sendNotification: (method: string, params: Record<string, unknown>) => {
-      if (method !== "textDocument/didOpen") return;
-      openCount++;
+      if (method !== "textDocument/didOpen" && method !== "textDocument/didChange") return;
       const textDoc = params["textDocument"] as
         | { uri?: string }
         | undefined;
       const uri = textDoc?.uri;
       if (!uri) return;
 
-      if (openCount === 1) {
+      if (method === "textDocument/didOpen") {
         setTimeout(() => {
           diagnosticsStore.set(uri, [{
             range: {
@@ -103,6 +101,7 @@ it("does not return stale diagnostics on repeated checks for the same file", asy
     const first = await client.getDiagnostics(fileName);
     expect(first.diagnostics).toHaveLength(1);
 
+    writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
     const second = await client.getDiagnostics(fileName);
     expect(second.diagnostics).toHaveLength(0);
   } finally {
@@ -213,6 +212,98 @@ it("returns quickly when server publishes an empty diagnostics array", async () 
     // The server pushes [] at 20ms, poll interval is 100ms, so ~100-300ms.
     expect(elapsed).toBeLessThan(500);
     await sleep(30);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+it("returns cached diagnostics after syncDocument sends didSave for unchanged content", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-sync-diag-"));
+  const fileName = "test.ts";
+  writeFileSync(join(tempDir, fileName), "const x: string = 1;\n", "utf-8");
+
+  const client = new LSPClient({
+    command: "echo",
+    args: [],
+    rootPath: tempDir,
+    languageId: "typescript",
+    diagnosticTimeout: 500,
+  });
+
+  const diagnosticsStore = (client as unknown as {
+    diagnosticsStore: Map<string, unknown[]>;
+  }).diagnosticsStore;
+  const notifications: string[] = [];
+  const fakeConnection = {
+    sendNotification: vi.fn(async (method: string, params: Record<string, unknown>) => {
+      notifications.push(method);
+      if (method !== "textDocument/didOpen" && method !== "textDocument/didChange") return;
+      const textDoc = params["textDocument"] as { uri?: string } | undefined;
+      const uri = textDoc?.uri;
+      if (!uri) return;
+      diagnosticsStore.set(uri, [{
+        range: {
+          start: { line: 0, character: 6 },
+          end: { line: 0, character: 7 },
+        },
+        message: "Type 'number' is not assignable to type 'string'.",
+        severity: 1,
+      }]);
+    }),
+  };
+
+  (client as unknown as { initialized: boolean; connection: unknown }).initialized = true;
+  (client as unknown as { initialized: boolean; connection: unknown }).connection = fakeConnection;
+
+  try {
+    await client.syncDocument(fileName, "typescript", { didSave: true });
+    expect(notifications).toEqual(["textDocument/didOpen", "textDocument/didSave"]);
+
+    notifications.length = 0;
+    const result = await client.getDiagnostics(fileName, "typescript");
+
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]!.message).toContain("not assignable");
+    expect(notifications).toEqual([]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+it("returns cached clean diagnostics after syncDocument for unchanged content", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-sync-clean-"));
+  const fileName = "test.ts";
+  writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+
+  const client = new LSPClient({
+    command: "echo",
+    args: [],
+    rootPath: tempDir,
+    languageId: "typescript",
+    diagnosticTimeout: 500,
+  });
+
+  const diagnosticsStore = (client as unknown as {
+    diagnosticsStore: Map<string, unknown[]>;
+  }).diagnosticsStore;
+  const fakeConnection = {
+    sendNotification: vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method !== "textDocument/didOpen") return;
+      const textDoc = params["textDocument"] as { uri?: string } | undefined;
+      const uri = textDoc?.uri;
+      if (uri) diagnosticsStore.set(uri, []);
+    }),
+  };
+
+  (client as unknown as { initialized: boolean; connection: unknown }).initialized = true;
+  (client as unknown as { initialized: boolean; connection: unknown }).connection = fakeConnection;
+
+  try {
+    await client.syncDocument(fileName, "typescript", { didSave: true });
+    const result = await client.getDiagnostics(fileName, "typescript");
+
+    expect(result.diagnostics).toHaveLength(0);
+    expect(fakeConnection.sendNotification).toHaveBeenCalledTimes(2);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -511,6 +602,81 @@ it("returns quickly when server publishes an empty diagnostics array", async () 
     }
   });
 
+  it("times out when didOpen notification never settles", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-open-timeout-"));
+    const fileName = "test.ts";
+    writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: tempDir,
+      languageId: "typescript",
+      timeout: 10,
+    });
+
+    const internals = client as unknown as {
+      initialized: boolean;
+      connection: {
+        sendNotification: (method: string, params?: unknown) => Promise<void>;
+        sendRequest: (method: string) => Promise<unknown[]>;
+      };
+    };
+    internals.initialized = true;
+    internals.connection = {
+      sendNotification: vi.fn(() => new Promise<void>(() => {})),
+      sendRequest: vi.fn(async () => []),
+    };
+
+    try {
+      const result = client.getSymbols(fileName);
+      const handledResult = result.catch((error: unknown) => error);
+      const error = await handledResult;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("LSP notification textDocument/didOpen timed out");
+      expect(client.isRunning()).toBe(false);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks the client not running when a request times out", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-request-timeout-"));
+    const fileName = "test.ts";
+    writeFileSync(join(tempDir, fileName), "const x = 1;\n", "utf-8");
+
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: tempDir,
+      languageId: "typescript",
+      timeout: 10,
+    });
+
+    const internals = client as unknown as {
+      initialized: boolean;
+      connection: {
+        dispose: () => void;
+        sendNotification: (method: string, params?: unknown) => Promise<void>;
+        sendRequest: (method: string) => Promise<unknown[]>;
+      };
+    };
+    internals.initialized = true;
+    internals.connection = {
+      dispose: vi.fn(),
+      sendNotification: vi.fn(async () => undefined),
+      sendRequest: vi.fn(() => new Promise<unknown[]>(() => {})),
+    };
+
+    try {
+      await expect(client.getSymbols(fileName)).rejects.toThrow("LSP request timed out");
+      expect(client.isRunning()).toBe(false);
+      expect(internals.connection).toBeNull();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails immediately when didChange notification rejects", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-change-fail-"));
     const fileName = "test.ts";
@@ -563,8 +729,157 @@ it("returns quickly when server publishes an empty diagnostics array", async () 
     }
   });
 
+  it("completes sequential diagnostics then symbols on the same unchanged open document", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-sequential-"));
+    const fileName = "test.ts";
+    writeFileSync(join(tempDir, fileName), "export function answer() { return 42; }\n", "utf-8");
+
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: tempDir,
+      languageId: "typescript",
+      timeout: 50,
+      diagnosticTimeout: 50,
+    });
+
+    const diagnosticsStore = (client as unknown as {
+      diagnosticsStore: Map<string, unknown[]>;
+    }).diagnosticsStore;
+    const notifications: string[] = [];
+    const fakeConnection = {
+      dispose: vi.fn(),
+      sendNotification: vi.fn(async (method: string, params: Record<string, unknown>) => {
+        notifications.push(method);
+        if (method !== "textDocument/didOpen") return;
+        const textDoc = params["textDocument"] as { uri?: string } | undefined;
+        const uri = textDoc?.uri;
+        if (uri) diagnosticsStore.set(uri, []);
+      }),
+      sendRequest: vi.fn(async (method: string) => {
+        if (method === "textDocument/documentSymbol") {
+          return [{
+            name: "answer",
+            kind: 12,
+            range: { start: { line: 0, character: 16 }, end: { line: 0, character: 22 } },
+            selectionRange: { start: { line: 0, character: 16 }, end: { line: 0, character: 22 } },
+          }];
+        }
+        return [];
+      }),
+    };
+
+    (client as unknown as { initialized: boolean; connection: unknown }).initialized = true;
+    (client as unknown as { initialized: boolean; connection: unknown }).connection = fakeConnection;
+
+    try {
+      const diagnostics = await client.getDiagnostics(fileName, "typescript");
+      const symbols = await client.getSymbols(fileName, "typescript");
+
+      expect(diagnostics.diagnostics).toHaveLength(0);
+      expect(symbols).toEqual([
+        { name: "answer", kind: "function", line: 1, character: 17 },
+      ]);
+      expect(notifications).toEqual(["textDocument/didOpen"]);
+      expect(client.isRunning()).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends protocol requests for hover, implementation, workspace symbols, and call hierarchy", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-ops-"));
+    const fileName = "test.ts";
+    writeFileSync(join(tempDir, fileName), "function caller() { callee(); }\nfunction callee() {}\n", "utf-8");
+
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: tempDir,
+      languageId: "typescript",
+      timeout: 5000,
+    });
+
+    const methods: string[] = [];
+    const fakeConnection = {
+      sendNotification: vi.fn(async () => undefined),
+      sendRequest: vi.fn(async (method: string) => {
+        methods.push(method);
+        if (method === "textDocument/hover") return { contents: { kind: "markdown", value: "**callee**" } };
+        if (method === "textDocument/implementation") {
+          return [{ uri: `file://${tempDir}/${fileName}`, range: { start: { line: 1, character: 9 } } }];
+        }
+        if (method === "workspace/symbol") {
+          return [{
+            name: "callee",
+            kind: 12,
+            location: { uri: `file://${tempDir}/${fileName}`, range: { start: { line: 1, character: 9 } } },
+          }];
+        }
+        if (method === "textDocument/prepareCallHierarchy") {
+          return [{
+            name: "callee",
+            kind: 12,
+            uri: `file://${tempDir}/${fileName}`,
+            range: { start: { line: 1, character: 9 } },
+            selectionRange: { start: { line: 1, character: 9 } },
+          }];
+        }
+        if (method === "callHierarchy/incomingCalls") {
+          return [{
+            from: {
+              name: "caller",
+              kind: 12,
+              uri: `file://${tempDir}/${fileName}`,
+              range: { start: { line: 0, character: 9 } },
+              selectionRange: { start: { line: 0, character: 9 } },
+            },
+          }];
+        }
+        if (method === "callHierarchy/outgoingCalls") {
+          return [{
+            to: {
+              name: "callee",
+              kind: 12,
+              uri: `file://${tempDir}/${fileName}`,
+              range: { start: { line: 1, character: 9 } },
+              selectionRange: { start: { line: 1, character: 9 } },
+            },
+          }];
+        }
+        return [];
+      }),
+    };
+
+    (client as unknown as { initialized: boolean; connection: unknown }).initialized = true;
+    (client as unknown as { initialized: boolean; connection: unknown }).connection = fakeConnection;
+
+    try {
+      expect(await client.getHover(fileName, 1, 10)).toContain("callee");
+      expect(await client.getImplementation(fileName, 1, 10)).toEqual([
+        { file: fileName, line: 2, character: 10 },
+      ]);
+      expect(await client.getWorkspaceSymbols("callee")).toEqual([
+        { name: "callee", kind: "function", file: fileName, line: 2, character: 10 },
+      ]);
+      expect(await client.getIncomingCalls(fileName, 2, 10)).toEqual([
+        { name: "caller", kind: "function", file: fileName, line: 1, character: 10 },
+      ]);
+      expect(await client.getOutgoingCalls(fileName, 1, 10)).toEqual([
+        { name: "callee", kind: "function", file: fileName, line: 2, character: 10 },
+      ]);
+      expect(methods).toContain("textDocument/hover");
+      expect(methods).toContain("textDocument/implementation");
+      expect(methods).toContain("workspace/symbol");
+      expect(methods).toContain("callHierarchy/incomingCalls");
+      expect(methods).toContain("callHierarchy/outgoingCalls");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
 describe("createLSPTools", () => {
-  it("creates 4 code analysis tools", () => {
+  it("creates one generic LSP tool", () => {
     const client = new LSPClient({
       command: "echo",
       args: [],
@@ -573,13 +888,10 @@ describe("createLSPTools", () => {
     });
 
     const tools = createLSPTools(client);
-    expect(tools.length).toBe(4);
+    expect(tools.length).toBe(1);
 
     const names = tools.map((t) => t.name);
-    expect(names).toContain("diagnostics");
-    expect(names).toContain("definitions");
-    expect(names).toContain("references");
-    expect(names).toContain("symbols");
+    expect(names).toEqual(["lsp"]);
   });
 
   it("all LSP tools are readonly", () => {
@@ -605,11 +917,11 @@ describe("createLSPTools", () => {
     });
 
     const tools = createLSPTools(client);
-    const diagnosticsTool = tools.find((t) => t.name === "diagnostics");
-    expect(diagnosticsTool).toBeDefined();
+    const lspTool = tools.find((t) => t.name === "lsp");
+    expect(lspTool).toBeDefined();
 
-    const result = await diagnosticsTool!.handler(
-      { path: "test.ts" },
+    const result = await lspTool!.handler(
+      { operation: "diagnostics", path: "test.ts" },
       { repoRoot: "/tmp", config: {} as never, sessionId: "" },
     );
 
@@ -619,7 +931,7 @@ describe("createLSPTools", () => {
 });
 
 describe("createRoutingLSPTools", () => {
-  it("routes diagnostics to the correct client based on file extension", async () => {
+  it("routes diagnostics through the generic LSP tool based on file extension", async () => {
     const tsClient = new LSPClient({
       command: "echo",
       args: [],
@@ -640,22 +952,22 @@ describe("createRoutingLSPTools", () => {
     };
 
     const tools = createRoutingLSPTools(resolver);
-    expect(tools.length).toBe(6);
+    expect(tools.length).toBe(1);
 
     // Both clients are not running, but the error message should differ
     // to prove routing happened — the tool should return "not running"
     // because the resolved client isn't started.
-    const diagnosticsTool = tools.find((t) => t.name === "diagnostics")!;
+    const lspTool = tools.find((t) => t.name === "lsp")!;
 
-    const tsResult = await diagnosticsTool.handler(
-      { path: "foo.ts" },
+    const tsResult = await lspTool.handler(
+      { operation: "diagnostics", path: "foo.ts" },
       { repoRoot: "/tmp", config: {} as never, sessionId: "" },
     );
     expect(tsResult.success).toBe(false);
     expect(tsResult.error).toContain("not running");
 
-    const pyResult = await diagnosticsTool.handler(
-      { path: "bar.py" },
+    const pyResult = await lspTool.handler(
+      { operation: "diagnostics", path: "bar.py" },
       { repoRoot: "/tmp", config: {} as never, sessionId: "" },
     );
     expect(pyResult.success).toBe(false);
@@ -666,10 +978,10 @@ describe("createRoutingLSPTools", () => {
     const resolver = () => null;
 
     const tools = createRoutingLSPTools(resolver);
-    const diagnosticsTool = tools.find((t) => t.name === "diagnostics")!;
+    const lspTool = tools.find((t) => t.name === "lsp")!;
 
-    const result = await diagnosticsTool.handler(
-      { path: "unknown.xyz" },
+    const result = await lspTool.handler(
+      { operation: "diagnostics", path: "unknown.xyz" },
       { repoRoot: "/tmp", config: {} as never, sessionId: "" },
     );
     expect(result.success).toBe(false);
@@ -677,89 +989,175 @@ describe("createRoutingLSPTools", () => {
   });
 });
 
-describe("name-based LSP tools", () => {
-  function makeMockClient(overrides: Record<string, unknown> = {}) {
-    return {
-      isRunning: () => true,
-      getSymbols: vi.fn(),
-      getDefinition: vi.fn(),
-      getReferences: vi.fn(),
-      ...overrides,
-    } as unknown as LSPClient;
-  }
+function makeMockClient(overrides: Record<string, unknown> = {}) {
+  return {
+    isRunning: () => true,
+    getDiagnostics: vi.fn(),
+    getSymbols: vi.fn(),
+    getDefinition: vi.fn(),
+    getReferences: vi.fn(),
+    getHover: vi.fn(),
+    getImplementation: vi.fn(),
+    getWorkspaceSymbols: vi.fn(),
+    getIncomingCalls: vi.fn(),
+    getOutgoingCalls: vi.fn(),
+    ...overrides,
+  } as unknown as LSPClient;
+}
 
-  const ctx = { repoRoot: "/tmp", config: {} as never, sessionId: "" };
+const ctx = { repoRoot: "/tmp", config: {} as never, sessionId: "" };
 
-  it("definition_by_name resolves symbol position via getSymbols then calls getDefinition", async () => {
+describe("generic LSP position operations", () => {
+  it("runs definitions with path, line, and character", async () => {
     const client = makeMockClient();
-    (client.getSymbols as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { name: "Foo", kind: "class", line: 10, character: 5 },
-    ]);
     (client.getDefinition as ReturnType<typeof vi.fn>).mockResolvedValue([
       { file: "src/other.ts", line: 42, character: 1 },
     ]);
 
     const resolver = () => ({ client, languageId: "typescript" });
     const tools = createRoutingLSPTools(resolver);
-    const tool = tools.find((t) => t.name === "definition_by_name")!;
+    const tool = tools.find((t) => t.name === "lsp")!;
     expect(tool).toBeDefined();
 
-    const result = await tool.handler({ path: "src/foo.ts", symbol_name: "Foo" }, ctx);
+    const result = await tool.handler({ operation: "definitions", path: "src/foo.ts", line: 10, character: 5 }, ctx);
     expect(result.success).toBe(true);
     expect(result.output).toContain("Definition(s):");
     expect(result.output).toContain("src/other.ts:42:1");
     expect(client.getDefinition).toHaveBeenCalledWith("src/foo.ts", 10, 5, "typescript");
   });
 
-  it("definition_by_name returns error when symbol not found in file", async () => {
+  it("returns validation errors for position operations missing coordinates", async () => {
     const client = makeMockClient();
-    (client.getSymbols as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const resolver = () => ({ client, languageId: "typescript" });
     const tools = createRoutingLSPTools(resolver);
-    const tool = tools.find((t) => t.name === "definition_by_name")!;
+    const tool = tools.find((t) => t.name === "lsp")!;
 
-    const result = await tool.handler({ path: "src/foo.ts", symbol_name: "Missing" }, ctx);
+    const result = await tool.handler({ operation: "hover", path: "src/foo.ts" }, ctx);
     expect(result.success).toBe(false);
-    expect(result.error).toContain("not found");
+    expect(result.error).toContain("requires");
   });
 
-  it("references_by_name finds all usages of a symbol by name", async () => {
+  it("runs workspace_symbols across all running clients", async () => {
     const client = makeMockClient();
-    (client.getSymbols as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { name: "bar", kind: "function", line: 5, character: 10 },
-    ]);
-    (client.getReferences as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { file: "src/a.ts", line: 1, character: 1 },
-      { file: "src/b.ts", line: 20, character: 5 },
-      { file: "src/c.ts", line: 30, character: 8 },
+    (client.getWorkspaceSymbols as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "Foo", kind: "class", file: "src/foo.ts", line: 1, character: 8 },
     ]);
 
     const resolver = () => ({ client, languageId: "typescript" });
-    const tools = createRoutingLSPTools(resolver);
-    const tool = tools.find((t) => t.name === "references_by_name")!;
+    const tools = createRoutingLSPTools(resolver, () => [client]);
+    const tool = tools.find((t) => t.name === "lsp")!;
     expect(tool).toBeDefined();
 
-    const result = await tool.handler({ path: "src/bar.ts", symbol_name: "bar" }, ctx);
+    const result = await tool.handler({ operation: "workspace_symbols", query: "Foo" }, ctx);
     expect(result.success).toBe(true);
-    expect(result.output).toContain("3 reference(s):");
-    expect(result.output).toContain("src/a.ts:1:1");
-    expect(client.getReferences).toHaveBeenCalledWith("src/bar.ts", 5, 10, "typescript");
+    expect(result.output).toContain("class Foo");
+    expect(client.getWorkspaceSymbols).toHaveBeenCalledWith("Foo");
   });
+});
 
-  it("references_by_name returns error when symbol not found in file", async () => {
-    const client = makeMockClient();
-    (client.getSymbols as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { name: "other", kind: "variable", line: 1, character: 1 },
+describe("generic LSP workspace and timeout operations", () => {
+  it("returns partial workspace_symbols results when one running client fails", async () => {
+    const failingClient = makeMockClient();
+    const workingClient = makeMockClient();
+    (failingClient.getWorkspaceSymbols as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("ts server down"));
+    (workingClient.getWorkspaceSymbols as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "Foo", kind: "class", file: "src/foo.ts", line: 1, character: 8 },
     ]);
 
-    const resolver = () => ({ client, languageId: "typescript" });
-    const tools = createRoutingLSPTools(resolver);
-    const tool = tools.find((t) => t.name === "references_by_name")!;
+    const resolver = () => ({ client: workingClient, languageId: "typescript" });
+    const tools = createRoutingLSPTools(resolver, () => [failingClient, workingClient]);
+    const tool = tools.find((t) => t.name === "lsp")!;
 
-    const result = await tool.handler({ path: "src/bar.ts", symbol_name: "bar" }, ctx);
+    const result = await tool.handler({ operation: "workspace_symbols", query: "Foo" }, ctx);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("class Foo");
+    expect(failingClient.getWorkspaceSymbols).toHaveBeenCalledWith("Foo");
+    expect(workingClient.getWorkspaceSymbols).toHaveBeenCalledWith("Foo");
+  });
+
+  it("fails workspace_symbols when every running client fails across retries", async () => {
+    vi.useFakeTimers();
+    const firstClient = makeMockClient();
+    const secondClient = makeMockClient();
+    (firstClient.getWorkspaceSymbols as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("typescript failed"));
+    (secondClient.getWorkspaceSymbols as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("python failed"));
+
+    const resolver = () => ({ client: firstClient, languageId: "typescript" });
+    const tools = createRoutingLSPTools(resolver, () => [firstClient, secondClient]);
+    const tool = tools.find((t) => t.name === "lsp")!;
+
+    const resultPromise = tool.handler({ operation: "workspace_symbols", query: "Foo" }, ctx);
+    await vi.advanceTimersByTimeAsync(350);
+    const result = await resultPromise;
+
     expect(result.success).toBe(false);
-    expect(result.error).toContain("not found");
+    expect(result.error).toContain("workspace_symbols failed for all LSP clients");
+    expect(result.error).toContain("typescript failed");
+    expect(result.error).toContain("python failed");
+    expect(firstClient.getWorkspaceSymbols).toHaveBeenCalledTimes(3);
+    expect(secondClient.getWorkspaceSymbols).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not fail workspace_symbols when a retry succeeds with empty results", async () => {
+    vi.useFakeTimers();
+    const client = makeMockClient();
+    (client.getWorkspaceSymbols as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("index warming"))
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("later failure"));
+
+    const resolver = () => ({ client, languageId: "typescript" });
+    const tools = createRoutingLSPTools(resolver, () => [client]);
+    const tool = tools.find((t) => t.name === "lsp")!;
+
+    const resultPromise = tool.handler({ operation: "workspace_symbols", query: "Missing" }, ctx);
+    await vi.advanceTimersByTimeAsync(350);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("No workspace symbols found");
+    expect(client.getWorkspaceSymbols).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns an error when an LSP operation never resolves", async () => {
+    vi.useFakeTimers();
+    const client = makeMockClient();
+    (client.getDiagnostics as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
+
+    const resolver = () => ({ client, languageId: "typescript" });
+    const tools = createRoutingLSPTools(resolver, () => [client]);
+    const tool = tools.find((t) => t.name === "lsp")!;
+
+    const resultPromise = tool.handler({ operation: "diagnostics", path: "src/foo.ts" }, ctx);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("LSP operation timed out after 30000ms");
+  });
+
+  it("retries empty workspace_symbols results to allow cold indexes to settle", async () => {
+    vi.useFakeTimers();
+    const client = makeMockClient();
+    (client.getWorkspaceSymbols as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { name: "Foo", kind: "class", file: "src/foo.ts", line: 1, character: 8 },
+      ]);
+
+    const resolver = () => ({ client, languageId: "typescript" });
+    const tools = createRoutingLSPTools(resolver, () => [client]);
+    const tool = tools.find((t) => t.name === "lsp")!;
+
+    const resultPromise = tool.handler({ operation: "workspace_symbols", query: "Foo" }, ctx);
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("class Foo");
+    expect(client.getWorkspaceSymbols).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -773,7 +1171,7 @@ describe("LSP tool errorGuidance", () => {
     });
 
     const tools = createLSPTools(client);
-    expect(tools).toHaveLength(4);
+    expect(tools).toHaveLength(1);
 
     for (const tool of tools) {
       expect(tool.errorGuidance, `${tool.name} missing errorGuidance`).toBeDefined();
@@ -798,7 +1196,7 @@ describe("LSP tool errorGuidance", () => {
     }
   });
 
-  it("diagnostics common hint mentions file path", () => {
+  it("common hint mentions file path", () => {
     const client = new LSPClient({
       command: "echo",
       args: [],
@@ -807,8 +1205,8 @@ describe("LSP tool errorGuidance", () => {
     });
 
     const tools = createLSPTools(client);
-    const diag = tools.find((t) => t.name === "diagnostics")!;
-    expect(diag.errorGuidance!.common).toContain("file path");
+    const lsp = tools.find((t) => t.name === "lsp")!;
+    expect(lsp.errorGuidance!.common).toContain("file path");
   });
 });
 
@@ -816,7 +1214,7 @@ describe("Routing LSP tool errorGuidance", () => {
   it("all routing LSP tools have errorGuidance", () => {
     const resolver: LSPClientResolver = () => null;
     const tools = createRoutingLSPTools(resolver);
-    expect(tools).toHaveLength(6);
+    expect(tools).toHaveLength(1);
 
     for (const tool of tools) {
       expect(tool.errorGuidance, `${tool.name} missing errorGuidance`).toBeDefined();
@@ -836,31 +1234,10 @@ describe("Routing LSP tool errorGuidance", () => {
     }
   });
 
-  it("name-based tools have 'not found in' pattern for missing symbols", () => {
+  it("routing LSP tool covers missing parameter guidance", () => {
     const resolver: LSPClientResolver = () => null;
-    const tools = createRoutingLSPTools(resolver);
-    const nameTools = tools.filter(
-      (t) => t.name === "definition_by_name" || t.name === "references_by_name",
-    );
-    expect(nameTools).toHaveLength(2);
-
-    for (const tool of nameTools) {
-      const matches = tool.errorGuidance!.patterns!.map((p) => p.match);
-      expect(matches, `${tool.name} missing 'not found in'`).toContain("not found in");
-    }
-  });
-
-  it("position-based tools do NOT have 'not found in' pattern", () => {
-    const resolver: LSPClientResolver = () => null;
-    const tools = createRoutingLSPTools(resolver);
-    const posTools = tools.filter(
-      (t) => t.name !== "definition_by_name" && t.name !== "references_by_name",
-    );
-    expect(posTools).toHaveLength(4);
-
-    for (const tool of posTools) {
-      const matches = tool.errorGuidance!.patterns!.map((p) => p.match);
-      expect(matches, `${tool.name} has 'not found in' but shouldn't`).not.toContain("not found in");
-    }
+    const [tool] = createRoutingLSPTools(resolver);
+    const matches = tool!.errorGuidance!.patterns!.map((p) => p.match);
+    expect(matches).toContain("requires");
   });
 });

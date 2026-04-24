@@ -416,10 +416,9 @@ function restartSpinnerIfIdle(ctx: EventHandlerContext): void {
 }
 
 function registerLspToolTracking(bus: EventBus): Map<string, number> {
-  const lspToolNames = new Set(["diagnostics", "definitions", "references", "symbols", "definition_by_name", "references_by_name"]);
   const lspToolCounts = new Map<string, number>();
   bus.on("tool:after", (event) => {
-    if (lspToolNames.has(event.name)) {
+    if (event.name === "lsp") {
       lspToolCounts.set(event.name, (lspToolCounts.get(event.name) ?? 0) + 1);
     }
   });

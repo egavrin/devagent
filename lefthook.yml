@@ -3,7 +3,7 @@ pre-commit:
   commands:
     eslint:
       glob: "*.{ts,tsx,js,mjs}"
-      run: bunx eslint --fix {staged_files}
+      run: bunx eslint --fix --max-warnings=0 {staged_files}
 
 pre-push:
   commands:

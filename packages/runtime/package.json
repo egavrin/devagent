@@ -17,7 +17,7 @@
   "scripts": {
     "build": "bun run ../../scripts/embed-assets.ts && tsc && mkdir -p dist/engine/prompts && cp src/engine/prompts/*.md dist/engine/prompts/",
     "test": "bun run ../../scripts/embed-assets.ts && vitest run --passWithNoTests",
-    "lint": "eslint src/",
+    "lint": "eslint src/ --max-warnings=0",
     "typecheck": "bun run ../../scripts/embed-assets.ts && tsc --noEmit",
     "clean": "rm -rf dist"
   },

@@ -54,7 +54,7 @@ beforeEach(() => {
   bus = new EventBus();
 });
 
-describe("ToolScriptEngine", () => {
+describe("ToolScriptEngine execution", () => {
   it("executes TypeScript that calls multiple readonly tools and prints only a summary", async () => {
     registry.register(makeReadonlyTool("read_file", async ({ path }) => successResult(`contents:${path}`)));
     registry.register(makeReadonlyTool("git_status", async () => successResult("On branch main")));
@@ -74,6 +74,14 @@ describe("ToolScriptEngine", () => {
     expect(result.output.trim()).toBe('{"rows":[{"path":"a.ts","size":13}],"status":true}');
     expect(result.output).not.toContain("On branch main");
     expect(result.toolCallCount).toBe(2);
+    expect(result.metadata.toolScript).toMatchObject({
+      toolCallCount: 2,
+      innerOutputChars: "contents:a.ts".length + "On branch main".length,
+      finalOutputChars: result.output.length,
+      durationMs: result.totalDurationMs,
+      timedOut: false,
+      truncated: false,
+    });
   });
 
   it("supports Promise.all for parallel readonly calls", async () => {
@@ -110,6 +118,44 @@ describe("ToolScriptEngine", () => {
     expect(result.output.trim()).toBe("handled:missing file");
   });
 
+  it("turns result.content mistakes into actionable script errors", async () => {
+    registry.register(makeReadonlyTool("read_file", async () => successResult("file text")));
+
+    const engine = new ToolScriptEngine({ registry, context: defaultContext, bus });
+    const result = await engine.execute({
+      script: `
+        const result = await tools.read_file({ path: "a.ts" });
+        print(result.content);
+      `,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("result.content");
+    expect(result.error).toContain("result.output");
+    expect(result.metadata.toolScript.innerOutputChars).toBe("file text".length);
+  });
+
+  it("fails clearly when a script never prints final stdout", async () => {
+    registry.register(makeReadonlyTool("read_file", async () => successResult("hidden raw output")));
+
+    const engine = new ToolScriptEngine({ registry, context: defaultContext, bus });
+    const result = await engine.execute({
+      script: `await tools.read_file({ path: "a.ts" });`,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("No output printed");
+    expect(result.error).toContain("print");
+    expect(result.output).toBe("");
+    expect(result.metadata.toolScript).toMatchObject({
+      toolCallCount: 1,
+      innerOutputChars: "hidden raw output".length,
+      finalOutputChars: 0,
+    });
+  });
+});
+
+describe("ToolScriptEngine telemetry", () => {
   it("emits nested tool telemetry scoped to the outer script call", async () => {
     const before: string[] = [];
     const after: Array<{ name: string; callId: string; agentId?: string; parentAgentId?: string | null }> = [];
@@ -169,7 +215,9 @@ describe("ToolScriptEngine", () => {
     expect(new Set(callIds).size).toBe(2);
     expect(callIds.every((callId) => callId.endsWith("_script_read_file_1"))).toBe(true);
   });
+});
 
+describe("ToolScriptEngine restrictions", () => {
   it("rejects non-readonly tools", async () => {
     registry.register(makeTool("run_command", "workflow", async () => successResult("bad")));
 
@@ -236,6 +284,7 @@ describe("ToolScriptEngine", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("timed out");
+    expect(result.metadata.toolScript.timedOut).toBe(true);
   });
 
   it("enforces stdout and inner tool call limits", async () => {
@@ -256,6 +305,7 @@ describe("ToolScriptEngine", () => {
 
     expect(cappedOutput.success).toBe(false);
     expect(cappedOutput.error).toContain("stdout exceeded");
+    expect(cappedOutput.metadata.toolScript.truncated).toBe(true);
     expect(cappedCalls.success).toBe(false);
     expect(cappedCalls.error).toContain("maximum of 2 tool call");
   });
@@ -267,12 +317,25 @@ describe("createToolScriptTool", () => {
     const scriptProperty = (tool.paramSchema.properties as Record<string, { description?: string }>)["script"];
 
     expect(tool.description).toContain("Default to this as the first inspection tool");
+    expect(tool.description).toContain("Valid example");
+    expect(tool.description).toContain("Promise.all");
+    expect(tool.description).toContain("one targeted discovery call");
+    expect(tool.description).toContain("Check result.success");
+    expect(tool.description).toContain("After a successful script");
     expect(tool.description).toContain("known-path multi-file audits");
     expect(tool.description).toContain("grouped read_file checks");
     expect(tool.description).toContain("security-leakage verification");
     expect(tool.description).toContain("broad unknown-scope reconnaissance");
+    expect(tool.description).toContain("broad regex line-hit dumps");
     expect(scriptProperty?.description).toContain("3+ readonly calls");
     expect(scriptProperty?.description).toContain("known-path multi-file read_file batches");
+    expect(scriptProperty?.description).toContain("one targeted discovery call");
+    expect(scriptProperty?.description).toContain("check result.success");
+    expect(scriptProperty?.description).toContain("result.output");
+    expect(scriptProperty?.description).toContain("not result.content");
+    expect(scriptProperty?.description).toContain("do not blindly JSON.parse");
+    expect(scriptProperty?.description).toContain("Do not print raw file contents");
+    expect(scriptProperty?.description).toContain("After success, answer from stdout");
   });
 
   it("runs script input and returns final stdout", async () => {

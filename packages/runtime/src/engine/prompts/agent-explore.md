@@ -23,10 +23,14 @@ Follow a progressive-narrowing approach:
    specific symbols, patterns, or string literals.
 4. **Focused reading** — `read_file` with `start_line`/`end_line` to read only
    the relevant sections. Never read entire large files speculatively.
-5. **Structural analysis** — `symbols` to get function/class outlines when you
-   need structural understanding without reading full source.
-6. **Cross-reference** — `definitions` and `references` to trace symbol usage
-   across the codebase.
+5. **Structural analysis** — `lsp` with `symbols` to get function/class
+   outlines when you need structural understanding without reading full source.
+6. **Cross-reference** — `lsp` with `definitions`, `references`, hover,
+   implementations, or call hierarchy to trace symbol usage across the codebase.
+
+For narrowed audits where the prompt already implies a small 3+ file set, follow
+the readonly batching guidance when `execute_tool_script` is available instead of
+serializing discovery, search, and file reads.
 
 ## Rules
 
@@ -39,11 +43,6 @@ Follow a progressive-narrowing approach:
 - If you find the answer in 3 iterations or fewer, stop immediately.
 - Do not begin with `**` or similar whole-tree broad globbing on large parent
   directories when the task already implies narrower targets.
-- If the narrowed task needs 3+ readonly calls, default to `execute_tool_script`
-  as the first inspection tool. This includes known-path multi-file audits,
-  grouped `read_file` checks, implementation/schema/test comparisons,
-  prompt-consistency checks, and security-leakage verification. Print only
-  synthesized findings, not raw intermediate outputs.
 - Report findings with exact file paths and line numbers.
 - When you find the answer, state it immediately — do not continue searching
   for additional context unless the question explicitly requires it.
