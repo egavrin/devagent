@@ -19,6 +19,7 @@ import { dim, formatError, formatSessionSummary, green, isCategoryEnabled, red, 
 import { setupConfig, setupProvider, validateOllamaAvailability } from "./main-config-setup.js";
 import { setupLSP } from "./main-lsp-setup.js";
 import {
+  abortTuiQuery,
   buildInteractiveSystemPrompt,
   renderStdoutForSingleShot,
   resetTuiLoop,
@@ -324,6 +325,7 @@ async function runInteractiveMode(ctx: AgentSessionContext, seed: InteractiveRes
     version: getVersion(),
     onListSessions: () => listSessionPreviews(ctx.persistence),
     onQuery: createInteractiveQueryHandler(ctx, seed, approvalState),
+    onCancelQuery: abortTuiQuery,
     onCycleApprovalMode: createApprovalModeCycler(ctx, seed, approvalState),
     onClear: createInteractiveClearHandler(ctx, seed),
   });

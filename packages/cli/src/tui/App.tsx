@@ -41,6 +41,7 @@ const ABORTED_NOTICE = "Run stopped before completion. Type /continue to retry f
 export interface AppProps {
   readonly bus: EventBus;
   readonly onQuery: (query: string) => Promise<InteractiveQueryResult>;
+  readonly onCancelQuery?: () => void;
   readonly onClear: () => void;
   readonly onCycleApprovalMode: (mode: SafetyMode) => void;
   readonly onListSessions?: () => ReadonlyArray<SessionPreview>;
@@ -63,6 +64,7 @@ type BuiltinCommandAction = "clear" | "exit" | "help" | "resume" | "run-continue
 
 interface BuiltinCommandContext {
   readonly exit: () => void;
+  readonly clearSession: () => void;
   readonly onClear: () => void;
   readonly clearSubagents: () => void;
   readonly onListSessions: (() => ReadonlyArray<SessionPreview>) | undefined;
@@ -85,6 +87,7 @@ interface QueryRunContext {
   readonly setShowWelcome: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setQueryHistory: React.Dispatch<React.SetStateAction<string[]>>;
   readonly setRunning: React.Dispatch<React.SetStateAction<boolean>>;
+  readonly setCancelPending: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setSpinnerMessage: React.Dispatch<React.SetStateAction<string | undefined>>;
 }
 
@@ -106,7 +109,7 @@ const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommandAction>> = {
 
 const BUILTIN_COMMAND_HANDLERS: Record<BuiltinCommandAction, (context: BuiltinCommandContext) => BuiltinCommandResult> = {
   clear: (context) => {
-    clearInteractiveSession(context);
+    context.clearSession();
     return "handled";
   },
   exit: (context) => {
@@ -133,7 +136,15 @@ function handleBuiltinCommand(command: string, context: BuiltinCommandContext): 
   return action ? BUILTIN_COMMAND_HANDLERS[action](context) : "not-builtin";
 }
 
-function clearInteractiveSession(context: BuiltinCommandContext): void {
+interface ClearSessionContext {
+  readonly onClear: () => void;
+  readonly clearSubagents: () => void;
+  readonly setStatus: React.Dispatch<React.SetStateAction<ReturnType<typeof useAgentLog>["status"]>>;
+  readonly appendStandalonePart: (id: string, part: ReturnType<typeof makeInfoPart>) => void;
+  readonly nextId: (prefix: string) => string;
+}
+
+function clearInteractiveSession(context: ClearSessionContext): void {
   context.onClear();
   context.clearSubagents();
   context.setStatus((status) => ({ ...status, cost: 0, iteration: 0, inputTokens: 0 }));
@@ -185,11 +196,6 @@ async function completeSuccessfulQueryTurn(query: string, context: QueryRunConte
   context.flushThinking();
   context.flushGroup();
   appendQueryResult(result, context);
-  const turnStatus = result.status === "success"
-    ? "completed"
-    : result.status === "budget_exceeded"
-      ? "budget_exceeded"
-      : "error";
   context.completeTurn(
     context.nextId("summary"),
     makeTurnSummaryPart({
@@ -198,7 +204,7 @@ async function completeSuccessfulQueryTurn(query: string, context: QueryRunConte
       cost: context.refs.costAccum.current,
       elapsedMs: Date.now() - context.refs.turnStart.current,
     }),
-    { status: turnStatus, finishedAt: Date.now() },
+    { status: turnStatusForQueryStatus(result.status), finishedAt: Date.now() },
   );
 }
 
@@ -213,7 +219,13 @@ function appendQueryResult(result: InteractiveQueryResult, context: QueryRunCont
   }
 }
 
-function noticeForQueryStatus(status: InteractiveQueryResult["status"]): string | null {
+export function turnStatusForQueryStatus(status: InteractiveQueryResult["status"]): "completed" | "budget_exceeded" | "error" {
+  if (status === "success") return "completed";
+  if (status === "budget_exceeded") return "budget_exceeded";
+  return "error";
+}
+
+export function noticeForQueryStatus(status: InteractiveQueryResult["status"]): string | null {
   if (status === "budget_exceeded") return ITERATION_LIMIT_NOTICE;
   if (status === "empty_response") return EMPTY_RESPONSE_NOTICE;
   if (status === "aborted") return ABORTED_NOTICE;
@@ -239,6 +251,7 @@ function completeFailedQueryTurn(err: unknown, context: QueryRunContext): void {
 
 function finishQueryTurn(context: QueryRunContext): void {
   context.setRunning(false);
+  context.setCancelPending(false);
   context.clearSubagents();
   context.setSpinnerMessage(undefined);
   context.refs.textBuffer.current = "";
@@ -259,17 +272,21 @@ function useSubmitHandler(options: SubmitHandlerOptions): (value: string) => Pro
 
 function useTuiKeyboardShortcuts(options: {
   readonly appendStandalonePart: ReturnType<typeof useAgentLog>["appendStandalonePart"];
+  readonly cancelPending: boolean;
   readonly exit: () => void;
   readonly handleApproval: (approved: boolean, session?: boolean, reason?: string) => void;
   readonly nextId: (prefix: string) => string;
+  readonly onCancelQuery: (() => void) | undefined;
   readonly pendingApproval: ApprovalRequest | null;
   readonly running: boolean;
+  readonly setCancelPending: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setRunning: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setShowCommandPalette: React.Dispatch<React.SetStateAction<boolean>>;
+  readonly setSpinnerMessage: React.Dispatch<React.SetStateAction<string | undefined>>;
   readonly showCommandPalette: boolean;
 }): void {
   useInput((input, key) => {
-    if (key.ctrl && input === "c") {
+    if ((key.ctrl && input === "c") || input === "\x03") {
       handleCancelShortcut(options);
     }
     if (key.ctrl && input === "k" && !options.running) {
@@ -278,15 +295,19 @@ function useTuiKeyboardShortcuts(options: {
   });
 }
 
-function handleCancelShortcut(options: {
+export function handleCancelShortcut(options: {
   readonly appendStandalonePart: ReturnType<typeof useAgentLog>["appendStandalonePart"];
+  readonly cancelPending: boolean;
   readonly exit: () => void;
   readonly handleApproval: (approved: boolean, session?: boolean, reason?: string) => void;
   readonly nextId: (prefix: string) => string;
+  readonly onCancelQuery: (() => void) | undefined;
   readonly pendingApproval: ApprovalRequest | null;
   readonly running: boolean;
+  readonly setCancelPending: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setRunning: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setShowCommandPalette: React.Dispatch<React.SetStateAction<boolean>>;
+  readonly setSpinnerMessage: React.Dispatch<React.SetStateAction<string | undefined>>;
   readonly showCommandPalette: boolean;
 }): void {
   if (options.showCommandPalette) {
@@ -294,8 +315,10 @@ function handleCancelShortcut(options: {
   } else if (options.pendingApproval) {
     options.handleApproval(false);
   } else if (options.running) {
-    options.appendStandalonePart(options.nextId("cancel"), makeInfoPart("status", ["Cancelled."]));
-    options.setRunning(false);
+    if (options.cancelPending) return;
+    options.onCancelQuery?.();
+    options.setCancelPending(true);
+    options.setSpinnerMessage("Cancelling...");
   } else {
     options.exit();
   }
@@ -303,14 +326,13 @@ function handleCancelShortcut(options: {
 
 function buildCommands(options: {
   readonly addToast: (message: string, variant?: "info" | "success" | "warning" | "error") => void;
-  readonly clearSubagents: () => void;
+  readonly clearSession: () => void;
   readonly exit: () => void;
   readonly handleCycleApprovalMode: () => void;
-  readonly onClear: () => void;
   readonly runCommand: (command: string) => void;
 }): Command[] {
   return [
-    { name: "Clear context", description: "Reset conversation and session state", shortcut: "/clear", action: () => { options.onClear(); options.clearSubagents(); options.addToast("Context cleared", "success"); } },
+    { name: "Clear context", description: "Reset conversation and session state", shortcut: "/clear", action: () => { options.clearSession(); options.addToast("Context cleared", "success"); } },
     { name: "Continue", description: "Continue the current session after a pause or budget limit", shortcut: "/continue", action: () => options.runCommand("/continue") },
     { name: "Session list", description: "Show recent sessions", shortcut: "/sessions", action: () => options.runCommand("/sessions") },
     { name: "Help", description: "Show available commands", shortcut: "/help", action: () => options.runCommand("/help") },
@@ -472,11 +494,12 @@ export function renderResumeCommandOutput(sessions: ReadonlyArray<SessionPreview
 }
 
 // ─── App Component ──────────────────────────────────────────
-export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions, model, approvalMode, cwd, version }: AppProps): React.ReactElement {
+export function App({ bus, onQuery, onCancelQuery, onClear, onCycleApprovalMode, onListSessions, model, approvalMode, cwd, version }: AppProps): React.ReactElement {
   const [showWelcome, setShowWelcome] = useState(true);
   const { exit } = useApp();
   const [queryHistory, setQueryHistory] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
+  const [cancelPending, setCancelPending] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -495,10 +518,14 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
     setSubagents((prev) => (prev.size === 0 ? prev : new Map()));
   }, [setSubagents]);
 
+  const clearSession = useCallback(() => {
+    clearInteractiveSession({ onClear, clearSubagents, setStatus, appendStandalonePart, nextId });
+  }, [appendStandalonePart, clearSubagents, nextId, onClear, setStatus]);
+
   const handleSubmit = useSubmitHandler({
-    exit, onClear, clearSubagents, onListSessions, appendStandalonePart, nextId, setStatus,
+    exit, clearSession, onClear, clearSubagents, onListSessions, appendStandalonePart, nextId, setStatus,
     onQuery, refs, startTurn, appendTurnPart, completeTurn, flushThinking, flushGroup,
-    addToast, setShowWelcome, setQueryHistory, setRunning, setSpinnerMessage,
+    addToast, setShowWelcome, setQueryHistory, setRunning, setCancelPending, setSpinnerMessage,
   });
 
   const handleCycleApprovalMode = useCallback(() => {
@@ -521,8 +548,8 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
   }, [bus, pendingApproval]);
 
   useTuiKeyboardShortcuts({
-    appendStandalonePart, exit, handleApproval, nextId, pendingApproval,
-    running, setRunning, setShowCommandPalette, showCommandPalette,
+    appendStandalonePart, cancelPending, exit, handleApproval, nextId, onCancelQuery, pendingApproval,
+    running, setCancelPending, setRunning, setShowCommandPalette, setSpinnerMessage, showCommandPalette,
   });
 
   const dismissToast = useCallback((id: string) => {
@@ -535,7 +562,7 @@ export function App({ bus, onQuery, onClear, onCycleApprovalMode, onListSessions
 
   const showPrompt = !running && !pendingApproval && !showCommandPalette;
 
-  const commands = buildCommands({ addToast, clearSubagents, exit, handleCycleApprovalMode, onClear, runCommand });
+  const commands = buildCommands({ addToast, clearSession, exit, handleCycleApprovalMode, runCommand });
   const hasActiveSubagents = hasRunningSubagents(subagents);
 
   return <AppView {...{

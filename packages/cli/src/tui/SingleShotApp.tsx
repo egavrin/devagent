@@ -8,13 +8,13 @@
 import { useApp } from "ink";
 import React, { useEffect, useRef, useState } from "react";
 
-import { TranscriptView } from "./App.js";
+import { TranscriptView, noticeForQueryStatus, turnStatusForQueryStatus } from "./App.js";
 import type { InteractiveQueryResult } from "./shared.js";
 import { Spinner } from "./Spinner.js";
 import { StatusBar } from "./StatusBar.js";
 import { SubagentPanel } from "./SubagentPanel.js";
 import { useAgentLog } from "./useAgentLog.js";
-import { makeErrorPart, makeTurnSummaryPart } from "../transcript-presenter.js";
+import { makeErrorPart, makeInfoPart, makeTurnSummaryPart } from "../transcript-presenter.js";
 import type { EventBus } from "@devagent/runtime";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -64,11 +64,15 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
           appendTurnPart(nextId("final"), { kind: "final-output", data: { text: finalText } });
           onFinalOutput(finalText);
         }
+        const notice = noticeForQueryStatus(result.status);
+        if (notice) {
+          appendTurnPart(nextId("status"), makeInfoPart("status", [notice]));
+        }
 
         completeTurn(
           nextId("summary"),
           makeTurnSummaryPart({ iterations: result.iterations, toolCalls: refs.turnToolCount.current, cost: refs.costAccum.current, elapsedMs: Date.now() - refs.turnStart.current }),
-          { status: result.status === "budget_exceeded" ? "budget_exceeded" : "completed", finishedAt: Date.now() },
+          { status: turnStatusForQueryStatus(result.status), finishedAt: Date.now() },
         );
       } catch (err) {
         appendTurnPart(nextId("e"), makeErrorPart({ message: err instanceof Error ? err.message : String(err), code: "QUERY_ERROR" }));

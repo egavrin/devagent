@@ -360,6 +360,10 @@ export function resetTuiLoop(): void {
   tuiLoop = null;
 }
 
+export function abortTuiQuery(): void {
+  tuiLoop?.abort();
+}
+
 export function updateTuiSystemPrompt(prompt: string): void {
   if (tuiLoop) tuiLoop.updateSystemPrompt(prompt);
 }

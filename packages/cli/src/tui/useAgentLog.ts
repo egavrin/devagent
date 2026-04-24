@@ -199,7 +199,7 @@ function registerToolBeforeEvent(
   failureBuffer: { count: number },
 ): void {
   unsubs.push(runtime.bus.on("tool:before", (event) => {
-    if (event.agentId || event.name === "delegate" || event.name === "update_plan" || event.name === "execute_tool_script") return;
+    if (event.agentId || event.name === "delegate" || event.name === "update_plan") return;
     runtime.flushThinking();
     runtime.onToolStart?.();
     runtime.turnToolCountRef.current++;
@@ -244,7 +244,6 @@ function shouldSkipToolAfter(event: ToolAfterEvent): boolean {
   return Boolean(
     event.agentId
     || event.name === "update_plan"
-    || event.name === "execute_tool_script"
     || (event.name === "delegate" && event.result.metadata?.["agentMeta"])
   );
 }
@@ -266,7 +265,7 @@ function registerToolAfterEvent(
 ): void {
   unsubs.push(runtime.bus.on("tool:after", (event) => {
     if (shouldSkipToolAfter(event)) return;
-    if (runtime.collapseFailures && !event.result.success) {
+    if (runtime.collapseFailures && !event.result.success && event.name !== "execute_tool_script") {
       failureBuffer.count++;
       return;
     }

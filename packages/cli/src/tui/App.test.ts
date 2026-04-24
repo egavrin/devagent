@@ -8,9 +8,11 @@ import {
   App,
   ITERATION_LIMIT_NOTICE,
   TranscriptView,
+  handleCancelShortcut,
   renderResumeCommandOutput,
   renderSessionsCommandOutput,
 } from "./App.js";
+import { SingleShotApp } from "./SingleShotApp.js";
 import type { TranscriptNode } from "./shared.js";
 import { StatusBar } from "./StatusBar.js";
 import { useAgentLog } from "./useAgentLog.js";
@@ -59,6 +61,10 @@ class TestOutput extends Writable {
 
   readAll(): string {
     return this.chunks.join("");
+  }
+
+  clear(): void {
+    this.chunks.length = 0;
   }
 }
 
@@ -387,6 +393,52 @@ function ToolSpecificHarness(): React.ReactElement {
 
     completeTurn(nextId("summary"), makeTurnSummaryPart({ iterations: 1, toolCalls: 2, cost: 0, elapsedMs: 50 }));
   }, [bus, startTurn, completeTurn, nextId]);
+
+  return React.createElement(TranscriptView, {
+    showWelcome: false,
+    transcriptNodes,
+    model: "test-model",
+  });
+}
+
+function ToolScriptHarness({ success }: { readonly success: boolean }): React.ReactElement {
+  const bus = useMemo(() => new EventBus(), []);
+  const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
+    bus,
+    model: "test-model",
+    collapseFailures: true,
+  });
+
+  useEffect(() => {
+    startTurn(nextId("turn"), "Audit with script", Date.now());
+    bus.emit("tool:before", {
+      name: "execute_tool_script",
+      params: { script: "print('done')" },
+      callId: "call-script-1",
+    });
+    bus.emit("tool:after", {
+      name: "execute_tool_script",
+      callId: "call-script-1",
+      durationMs: 20,
+      result: {
+        success,
+        output: success ? "compact answer" : "",
+        error: success ? null : "No output printed: call print(...) with the synthesized final answer.",
+        artifacts: [],
+        metadata: {
+          toolScript: {
+            toolCallCount: 3,
+            innerOutputChars: 12000,
+            finalOutputChars: success ? 14 : 0,
+            durationMs: 20,
+            timedOut: false,
+            truncated: false,
+          },
+        },
+      },
+    });
+    completeTurn(nextId("summary"), makeTurnSummaryPart({ iterations: 1, toolCalls: 1, cost: 0, elapsedMs: 20 }));
+  }, [bus, completeTurn, nextId, startTurn, success]);
 
   return React.createElement(TranscriptView, {
     showWelcome: false,
@@ -860,6 +912,27 @@ describe("interactive transcript typed rows", () => {
     expect(plain).not.toContain("↵");
   });
 
+  it("renders execute_tool_script telemetry in the TUI transcript", async () => {
+    const view = renderForTest(React.createElement(ToolScriptHarness, { success: true }));
+
+    await settle();
+
+    const output = stripAnsi(view.stdout.readAll());
+    expect(output).toContain("execute_tool_script");
+    expect(output).toContain("3 inner call(s), 12000 hidden chars -> 14 stdout chars");
+  });
+
+  it("renders execute_tool_script failures instead of hiding them in collapsed failures", async () => {
+    const view = renderForTest(React.createElement(ToolScriptHarness, { success: false }));
+
+    await settle();
+
+    const output = stripAnsi(view.stdout.readAll());
+    expect(output).toContain("execute_tool_script");
+    expect(output).toContain("No output printed");
+    expect(output).not.toContain("1 calls failed");
+  });
+
   it("caps large snapshot diffs in condensed mode", async () => {
     const view = renderForTest(React.createElement(LargeCreateHarness));
 
@@ -1061,6 +1134,47 @@ describe("interactive incomplete query status", () => {
   });
 });
 
+describe("single-shot incomplete query status", () => {
+  it.each([
+    {
+      name: "empty model response",
+      status: "empty_response",
+      notice: "Model returned no final response. Type /continue to retry",
+    },
+    {
+      name: "aborted run",
+      status: "aborted",
+      notice: "Run stopped before completion. Type /continue to retry",
+    },
+  ] as const)("surfaces an $name as an incomplete turn", async ({ status, notice }) => {
+    let finalOutput: string | null = null;
+    const view = renderForTest(
+      React.createElement(SingleShotApp, {
+        bus: new EventBus(),
+        query: "single shot",
+        model: "test-model",
+        onFinalOutput: (text) => {
+          finalOutput = text;
+        },
+        onQuery: async () => ({
+          iterations: 1,
+          toolCalls: 0,
+          lastText: null,
+          status,
+        }),
+      }),
+    );
+
+    await waitForRenders();
+
+    const output = stripAnsi(view.stdout.readAll());
+    expect(output).toContain("╭─ error single shot");
+    expect(output).toContain(notice);
+    expect(output).not.toContain("╭─ completed single shot");
+    expect(finalOutput).toBeNull();
+  });
+});
+
 describe("interactive prompt commands", () => {
   it("keeps prompt scrollback stable after idle slash-command output", async () => {
     const view = renderForTest(
@@ -1087,6 +1201,116 @@ describe("interactive prompt commands", () => {
     const output = view.stdout.readAll();
     expect(countPromptPlaceholders(output)).toBe(2);
     expect(output).toContain("Commands: /clear (reset)");
+  });
+
+  it("keeps the active run open while Ctrl+C requests cancellation", () => {
+    let cancelCalls = 0;
+    const runningStates: boolean[] = [];
+    const cancelStates: boolean[] = [];
+    const spinnerMessages: Array<string | undefined> = [];
+    const appendIds: string[] = [];
+
+    handleCancelShortcut({
+      appendStandalonePart: (id) => {
+        appendIds.push(id);
+      },
+      cancelPending: false,
+      exit: () => {},
+      handleApproval: () => {},
+      nextId: (prefix) => `${prefix}-1`,
+      onCancelQuery: () => {
+        cancelCalls += 1;
+      },
+      pendingApproval: null,
+      running: true,
+      setCancelPending: (value) => {
+        cancelStates.push(typeof value === "function" ? value(false) : value);
+      },
+      setRunning: (value) => {
+        runningStates.push(typeof value === "function" ? value(true) : value);
+      },
+      setShowCommandPalette: () => {},
+      setSpinnerMessage: (value) => {
+        spinnerMessages.push(typeof value === "function" ? value(undefined) : value);
+      },
+      showCommandPalette: false,
+    });
+
+    expect(cancelCalls).toBe(1);
+    expect(cancelStates).toEqual([true]);
+    expect(spinnerMessages).toEqual(["Cancelling..."]);
+    expect(runningStates).toEqual([]);
+    expect(appendIds).toEqual([]);
+
+    handleCancelShortcut({
+      appendStandalonePart: () => {},
+      cancelPending: true,
+      exit: () => {},
+      handleApproval: () => {},
+      nextId: (prefix) => `${prefix}-1`,
+      onCancelQuery: () => {
+        cancelCalls += 1;
+      },
+      pendingApproval: null,
+      running: true,
+      setCancelPending: () => {},
+      setRunning: () => {},
+      setShowCommandPalette: () => {},
+      setSpinnerMessage: () => {},
+      showCommandPalette: false,
+    });
+
+    expect(cancelCalls).toBe(1);
+  });
+
+  it("uses the same clear behavior from the command palette as /clear", async () => {
+    let clearCalls = 0;
+    const bus = new EventBus();
+    const view = renderForTest(
+      React.createElement(App, {
+        bus,
+        model: "test-model",
+        approvalMode: "autopilot",
+        cwd: "/tmp/devagent",
+        onClear: () => {
+          clearCalls += 1;
+        },
+        onCycleApprovalMode: () => {},
+        onQuery: async () => ({
+          iterations: 0,
+          toolCalls: 0,
+          lastText: null,
+          status: "success" as const,
+        }),
+      }),
+    );
+
+    bus.emit("iteration:start", {
+      iteration: 7,
+      maxIterations: 10,
+      estimatedTokens: 42_000,
+      maxContextTokens: 100_000,
+    });
+    bus.emit("cost:update", {
+      inputTokens: 42_000,
+      outputTokens: 100,
+      totalCost: 0.1234,
+      model: "test-model",
+    });
+    await waitForRenders();
+    view.stdout.clear();
+    view.stdin.write("\x0b");
+    await settle();
+    view.stdin.write("\r");
+    await waitForRenders();
+
+    const output = stripAnsi(view.stdout.readAll());
+    const clearedFrame = output.slice(output.lastIndexOf("Context cleared."));
+    expect(clearCalls).toBe(1);
+    expect(output).toContain("Context cleared.");
+    expect(clearedFrame).not.toContain("$0.123");
+    expect(clearedFrame).not.toContain("42k/100k");
+    expect(clearedFrame).not.toContain("iter 7/10");
   });
 });
 
