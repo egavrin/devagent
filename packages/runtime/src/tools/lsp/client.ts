@@ -59,6 +59,10 @@ interface OpenDocumentResult {
   readonly sentVersionNotification: boolean;
 }
 
+interface LSPClientStopOptions {
+  readonly deadlineMs?: number;
+}
+
 class LSPTimeoutError extends Error {
   constructor(message: string) {
     super(message);
@@ -212,11 +216,16 @@ async function withPromiseTimeout<T>(
       promise,
       new Promise<T>((_, reject) => {
         timer = setTimeout(() => reject(new LSPTimeoutError(message)), timeoutMs);
+        unrefTimer(timer);
       }),
     ]);
   } finally {
     clearTimeout(timer!);
   }
+}
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  (timer as { unref?: () => void }).unref?.();
 }
 
 export class LSPClient {
@@ -327,7 +336,25 @@ export class LSPClient {
     );
   }
 
-  async stop(): Promise<void> {
+  async stop(options?: LSPClientStopOptions): Promise<void> {
+    if (options?.deadlineMs && options.deadlineMs > 0) {
+      try {
+        await withPromiseTimeout(
+          this.stopGracefully(),
+          options.deadlineMs,
+          `LSP stop timed out after ${options.deadlineMs}ms`,
+        );
+      } catch {
+        // Stop is best-effort during shutdown/restart. Force-dispose below.
+      }
+      this.forceDispose();
+      return;
+    }
+
+    await this.stopGracefully();
+  }
+
+  private async stopGracefully(): Promise<void> {
     const connection = this.connection;
     const processRef = this.process;
     if (!connection && !processRef) return;
@@ -342,13 +369,7 @@ export class LSPClient {
       // Server might already be dead
     }
 
-    connection?.dispose();
-    processRef?.kill();
-    this.connection = null;
-    this.process = null;
-    this.initialized = false;
-    this.openDocuments.clear();
-    this.diagnosticsStore.clear();
+    this.forceDispose(connection, processRef);
   }
 
   isRunning(): boolean {
@@ -650,6 +671,7 @@ export class LSPClient {
             () => reject(new LSPTimeoutError("LSP request timed out")),
             this.timeout,
           );
+          unrefTimer(timer);
         }),
       ]);
     } catch (error) {
@@ -663,8 +685,15 @@ export class LSPClient {
   }
 
   private markUnhealthy(): void {
-    (this.connection as { dispose?: () => void } | null)?.dispose?.();
-    this.process?.kill();
+    this.forceDispose();
+  }
+
+  private forceDispose(
+    connection: MessageConnection | null = this.connection,
+    processRef: ChildProcess | null = this.process,
+  ): void {
+    (connection as { dispose?: () => void } | null)?.dispose?.();
+    processRef?.kill();
     this.connection = null;
     this.process = null;
     this.initialized = false;

@@ -1,6 +1,4 @@
 import { EventBus } from "@devagent/runtime";
-import { render } from "ink";
-import { PassThrough, Writable } from "node:stream";
 import React, { useEffect, useMemo, useRef } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -11,6 +9,16 @@ import {
   renderResumeCommandOutput,
   renderSessionsCommandOutput,
 } from "./App.js";
+import {
+  cleanupRenderedInstances,
+  countPromptPlaceholders,
+  insertModifiedReturn,
+  renderForTest,
+  settle,
+  stripAnsi,
+  typeAndSubmit,
+  waitForRenders,
+} from "./App.test-utils.js";
 import type { TranscriptNode } from "./shared.js";
 import { SingleShotApp } from "./SingleShotApp.js";
 import { StatusBar } from "./StatusBar.js";
@@ -23,69 +31,6 @@ import {
   makeTurnSummaryPart,
   type TranscriptPart,
 } from "../transcript-presenter.js";
-
-class TestInput extends PassThrough {
-  readonly isTTY = true;
-
-  setRawMode(_value: boolean): void {}
-
-  ref(): this {
-    return this;
-  }
-
-  unref(): this {
-    return this;
-  }
-}
-
-class TestOutput extends Writable {
-  readonly isTTY = true;
-  readonly columns: number;
-  readonly rows = 40;
-  private readonly chunks: string[] = [];
-
-  constructor(columns: number = 120) {
-    super();
-    this.columns = columns;
-  }
-
-  override _write(
-    chunk: string | Uint8Array,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void {
-    this.chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-    callback();
-  }
-
-  readAll(): string {
-    return this.chunks.join("");
-  }
-
-  clear(): void {
-    this.chunks.length = 0;
-  }
-}
-
-const instances: Array<{ unmount: () => void; cleanup: () => void }> = [];
-
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 20));
-}
-
-async function waitForRenders(cycles: number = 6): Promise<void> {
-  for (let index = 0; index < cycles; index++) {
-    await settle();
-  }
-}
-
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
-function countPromptPlaceholders(text: string): number {
-  return (stripAnsi(text).match(/Ask anything…/g) ?? []).length;
-}
 
 function outputLines(text: string): string[] {
   return stripAnsi(text).replace(/\r/g, "\n").split("\n");
@@ -102,47 +47,6 @@ function expectWrappedCardFragmentsInsideGutter(text: string, fragments: Readonl
   }
 }
 
-async function typeAndSubmit(stdin: TestInput, text: string): Promise<void> {
-  stdin.write(text);
-  await settle();
-  stdin.write("\r");
-}
-
-async function insertModifiedReturn(stdin: TestInput): Promise<void> {
-  stdin.write("\x1b\r");
-  await settle();
-}
-
-function renderForTest(
-  node: React.ReactElement,
-  options?: { readonly columns?: number },
-): {
-  readonly stdout: TestOutput;
-  readonly stdin: TestInput;
-  readonly rerender: (tree: React.ReactElement) => void;
-  readonly unmount: () => void;
-  readonly cleanup: () => void;
-} {
-  const stdout = new TestOutput(options?.columns);
-  const stdin = new TestInput();
-  const stderr = new TestOutput(options?.columns);
-  const instance = render(node, {
-    stdout: stdout as unknown as NodeJS.WriteStream,
-    stdin: stdin as unknown as NodeJS.ReadStream,
-    stderr: stderr as unknown as NodeJS.WriteStream,
-    debug: true,
-    exitOnCtrlC: false,
-    patchConsole: false,
-  });
-  instances.push(instance);
-  return {
-    stdout,
-    stdin,
-    rerender: instance.rerender,
-    unmount: instance.unmount,
-    cleanup: instance.cleanup,
-  };
-}
 function makeTurnNode(
   userText: string,
   entries: ReadonlyArray<{ readonly id: string; readonly part: TranscriptPart }>,
@@ -669,13 +573,7 @@ function NarrowHarness(): React.ReactElement {
   });
 }
 
-afterEach(() => {
-  while (instances.length > 0) {
-    const instance = instances.pop();
-    instance?.unmount();
-    instance?.cleanup();
-  }
-});
+afterEach(cleanupRenderedInstances);
 
 describe("interactive completion notices", () => {
   it("keeps the budget-exhausted follow-up hint stable", () => {

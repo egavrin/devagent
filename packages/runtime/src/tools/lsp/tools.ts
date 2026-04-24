@@ -189,6 +189,7 @@ async function withOperationTimeout(output: Promise<string>): Promise<string> {
           () => reject(new Error(`LSP operation timed out after ${LSP_OPERATION_TIMEOUT_MS}ms`)),
           LSP_OPERATION_TIMEOUT_MS,
         );
+        (timer as { unref?: () => void }).unref?.();
       }),
     ]);
   } finally {

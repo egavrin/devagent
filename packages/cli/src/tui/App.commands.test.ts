@@ -1,102 +1,19 @@
 import { EventBus } from "@devagent/runtime";
-import { render } from "ink";
-import { PassThrough, Writable } from "node:stream";
 import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { App, handleCancelShortcut } from "./App.js";
+import {
+  cleanupRenderedInstances,
+  countPromptPlaceholders,
+  renderForTest,
+  settle,
+  stripAnsi,
+  typeAndSubmit,
+  waitForRenders,
+} from "./App.test-utils.js";
 
-class TestInput extends PassThrough {
-  readonly isTTY = true;
-
-  setRawMode(_value: boolean): void {}
-
-  ref(): this {
-    return this;
-  }
-
-  unref(): this {
-    return this;
-  }
-}
-
-class TestOutput extends Writable {
-  readonly isTTY = true;
-  readonly columns: number;
-  readonly rows = 40;
-  private readonly chunks: string[] = [];
-
-  constructor(columns: number = 120) {
-    super();
-    this.columns = columns;
-  }
-
-  override _write(
-    chunk: string | Uint8Array,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void {
-    this.chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-    callback();
-  }
-
-  readAll(): string {
-    return this.chunks.join("");
-  }
-
-  clear(): void {
-    this.chunks.length = 0;
-  }
-}
-
-const instances: Array<{ unmount: () => void; cleanup: () => void }> = [];
-
-afterEach(() => {
-  while (instances.length > 0) {
-    const instance = instances.pop();
-    instance?.unmount();
-    instance?.cleanup();
-  }
-});
-
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 20));
-}
-
-async function waitForRenders(cycles: number = 6): Promise<void> {
-  for (let index = 0; index < cycles; index++) {
-    await settle();
-  }
-}
-
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
-function countPromptPlaceholders(text: string): number {
-  return (stripAnsi(text).match(/Ask anything…/g) ?? []).length;
-}
-
-async function typeAndSubmit(stdin: TestInput, text: string): Promise<void> {
-  stdin.write(text);
-  await settle();
-  stdin.write("\r");
-}
-
-function renderForTest(node: React.ReactElement): { readonly stdout: TestOutput; readonly stdin: TestInput } {
-  const stdout = new TestOutput();
-  const stdin = new TestInput();
-  const stderr = new TestOutput();
-  instances.push(render(node, {
-    stdout: stdout as unknown as NodeJS.WriteStream,
-    stdin: stdin as unknown as NodeJS.ReadStream,
-    stderr: stderr as unknown as NodeJS.WriteStream,
-    debug: true,
-    exitOnCtrlC: false,
-    patchConsole: false,
-  }));
-  return { stdout, stdin };
-}
+afterEach(cleanupRenderedInstances);
 
 function makeIdleAppProps(overrides?: { readonly bus?: EventBus; readonly onClear?: () => void }) {
   return {

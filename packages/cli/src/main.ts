@@ -429,6 +429,7 @@ function toInteractiveQueryResult(result: import("@devagent/runtime").TaskLoopRe
 async function finalizeAgentSession(ctx: AgentSessionContext): Promise<void> {
   writeLspUsageSummary(ctx.tools, ctx.cliArgs);
   writeSessionSummary(ctx);
+  ctx.persistence.close();
   if (ctx.lsp.lspRouter) {
     try {
       await ctx.lsp.lspRouter.stopAll();
@@ -436,7 +437,6 @@ async function finalizeAgentSession(ctx: AgentSessionContext): Promise<void> {
       // Servers might already be dead.
     }
   }
-  ctx.persistence.close();
 }
 
 function writeLspUsageSummary(tools: ToolsSetupResult, cliArgs: CliArgs): void {

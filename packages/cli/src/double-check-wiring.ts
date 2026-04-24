@@ -165,6 +165,7 @@ export class LSPRouter {
   /** Map from file extension to language ID. */
   private extensionMap = new Map<string, string>();
   private readonly rootPath: string;
+  private readonly shutdownDeadlineMs = 2_000;
 
   constructor(rootPath: string) {
     this.rootPath = rootPath;
@@ -223,13 +224,13 @@ export class LSPRouter {
   /** Stop all LSP servers. */
   async stopAll(): Promise<void> {
     const uniqueClients = new Set(this.clients.values());
-    for (const client of uniqueClients) {
+    await Promise.all([...uniqueClients].map(async (client) => {
       try {
-        await client.stop();
+        await client.stop({ deadlineMs: this.shutdownDeadlineMs });
       } catch {
         /* already dead */
       }
-    }
+    }));
     this.clients.clear();
     this.extensionMap.clear();
   }

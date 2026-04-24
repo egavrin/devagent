@@ -556,6 +556,43 @@ it("returns cached clean diagnostics after syncDocument for unchanged content", 
     expect(kill).toHaveBeenCalledOnce();
   });
 
+  it("stop with a deadline force-disposes instead of waiting on a wedged shutdown", async () => {
+    const client = new LSPClient({
+      command: "echo",
+      args: [],
+      rootPath: "/tmp",
+      languageId: "typescript",
+      timeout: 5000,
+    });
+
+    const dispose = vi.fn();
+    const kill = vi.fn();
+    const internals = client as unknown as {
+      initialized: boolean;
+      process: { kill: () => void };
+      connection: {
+        dispose: () => void;
+        sendRequest: (method: string) => Promise<void>;
+        sendNotification: (method: string, params?: unknown) => Promise<void>;
+      };
+    };
+    internals.initialized = true;
+    internals.process = { kill };
+    internals.connection = {
+      dispose,
+      sendRequest: vi.fn(() => new Promise<void>(() => {})),
+      sendNotification: vi.fn(async () => undefined),
+    };
+
+    const startedAt = Date.now();
+    await client.stop({ deadlineMs: 10 });
+
+    expect(Date.now() - startedAt).toBeLessThan(200);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(kill).toHaveBeenCalledOnce();
+    expect(client.isRunning()).toBe(false);
+  });
+
   it("fails immediately when didOpen notification rejects", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "devagent-lsp-open-fail-"));
     const fileName = "test.ts";

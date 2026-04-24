@@ -240,7 +240,7 @@ describe("LSPRouter", () => {
     expect(router.getClientForFile("src/foo.ts")).toBeNull();
     expect(router.getClients()).toHaveLength(0);
     expect(router.getLanguages()).toHaveLength(0);
-    expect(mockClient.stop).toHaveBeenCalled();
+    expect(mockClient.stop).toHaveBeenCalledWith({ deadlineMs: 2000 });
   });
 });
 
