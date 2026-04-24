@@ -2,7 +2,6 @@ import type { DoubleCheck, DoubleCheckResult } from "./double-check.js";
 import { extractEnvFact } from "./session-state.js";
 import type { SessionState } from "./session-state.js";
 import { normalizeRepoPath } from "./task-loop-paths.js";
-import type { ToolScriptStep } from "./tool-script.js";
 import { formatToolSummary } from "./tool-summary-formatter.js";
 import type {
   ApprovalGate,
@@ -10,6 +9,7 @@ import type {
   EventBus,
   LLMProvider,
   Message,
+  ToolContext,
   ToolResult,
   ToolSpec,
   ToolValidationResultMetadata,
@@ -26,7 +26,6 @@ interface PendingToolCall {
 interface NormalizedToolCall {
   readonly toolCall: PendingToolCall;
   readonly bypassResult: ToolResult | null;
-  readonly scriptSteps: ToolScriptStep[] | null;
 }
 
 interface ToolExecutionBatchContext {
@@ -66,14 +65,10 @@ interface ToolExecutionHost {
   successfulReadonlyCallKeys: Set<string>;
   iterations: number;
   getMessagesForProvider(): ReadonlyArray<Message>;
-  getAgentEventFields(): Record<string, unknown>;
+  getAgentEventFields(): Pick<ToolContext, "agentId" | "parentAgentId" | "depth" | "agentType">;
   emitSubagentUpdate(event: Record<string, unknown>): void;
   normalizeToolCall(toolCall: PendingToolCall, category: ToolSpec["category"]): NormalizedToolCall;
   applyErrorGuidance(result: ToolResult, tool: ToolSpec): void;
-  collectSuccessfulScriptStepResults(
-    steps: ReadonlyArray<ToolScriptStep>,
-    scriptOutput: string,
-  ): Array<{ step: ToolScriptStep; output: string }>;
   getSummaryTarget(toolName: string, args: Record<string, unknown>): string | null;
   captureReviewScopeFiles(toolCall: PendingToolCall, originalOutput: string): void;
   stagnationDetector: {
@@ -85,14 +80,12 @@ interface ExecutionState {
   readonly callId: string;
   readonly tool: ToolSpec;
   readonly effectiveCall: PendingToolCall;
-  readonly scriptSteps: ToolScriptStep[] | null;
   readonly batchContext: ToolExecutionBatchContext;
 }
 
 interface ExecutedToolResult {
   result: ToolResult;
   readonly originalOutput: string;
-  readonly successfulScriptResults: Array<{ step: ToolScriptStep; output: string }>;
 }
 
 export async function streamTaskLoopLLMResponse(
@@ -241,7 +234,6 @@ function createExecutionState(
     callId: toolCall.callId,
     tool,
     effectiveCall: normalizedCall.toolCall,
-    scriptSteps: normalizedCall.scriptSteps,
     batchContext,
   };
 }
@@ -315,9 +307,6 @@ async function runToolHandler(
   );
 
   const originalOutput = result.output;
-  const successfulScriptResults = state.scriptSteps && result.success
-    ? loop.collectSuccessfulScriptStepResults(state.scriptSteps, originalOutput)
-    : [];
   result = await maybeRunDoubleCheck(loop, state, result, preEditBaseline);
   emitToolAfter(loop, {
     callId: state.callId,
@@ -326,7 +315,7 @@ async function runToolHandler(
     durationMs,
     batchContext: state.batchContext,
   });
-  return { result, originalOutput, successfulScriptResults };
+  return { result, originalOutput };
 }
 
 async function callToolHandler(
@@ -341,6 +330,7 @@ async function callToolHandler(
       callId: state.callId,
       batchId: state.batchContext.batchId,
       batchSize: state.batchContext.batchSize,
+      ...loop.getAgentEventFields(),
     });
   } catch (err) {
     return {
@@ -455,7 +445,6 @@ function recordSuccessfulToolState(
   loop.captureReviewScopeFiles(state.effectiveCall, executed.originalOutput);
   addToolSummary(loop, state.effectiveCall, target, executed.originalOutput);
   recordReadonlyCoverage(loop, state.tool.category, state.effectiveCall);
-  recordScriptStepSummaries(loop, executed.successfulScriptResults);
 }
 
 function getPrimarySummaryTarget(
@@ -504,25 +493,6 @@ function recordReadonlyCoverage(
   if (coverageTarget) loop.sessionState!.recordReadonlyCoverage(toolCall.name, coverageTarget);
 }
 
-function recordScriptStepSummaries(
-  loop: ToolExecutionHost,
-  stepResults: ReadonlyArray<{ step: ToolScriptStep; output: string }>,
-): void {
-  for (const stepResult of stepResults) {
-    const stepTarget = loop.getSummaryTarget(stepResult.step.tool, stepResult.step.args);
-    if (!stepTarget) continue;
-    addToolSummary(loop, {
-      name: stepResult.step.tool,
-      arguments: stepResult.step.args,
-      callId: stepResult.step.id,
-    }, stepTarget, stepResult.output);
-    if (stepResult.step.tool === "git_diff" || stepResult.step.tool === "read_file") {
-      loop.sessionState!.recordModifiedFile(stepTarget);
-    }
-    loop.sessionState!.recordReadonlyCoverage(stepResult.step.tool, stepTarget);
-  }
-}
-
 function recordFailedToolEnvironment(
   loop: ToolExecutionHost,
   state: ExecutionState,
@@ -540,10 +510,6 @@ function recordSuccessfulReadonlyCall(
 ): void {
   if (!executed.result.success || state.tool.category !== "readonly") return;
   loop.successfulReadonlyCallKeys.add(buildReadonlyCallKey(state.effectiveCall.name, state.effectiveCall.arguments));
-  if (!state.scriptSteps) return;
-  for (const stepResult of executed.successfulScriptResults) {
-    loop.successfulReadonlyCallKeys.add(buildReadonlyCallKey(stepResult.step.tool, stepResult.step.args));
-  }
 }
 
 function buildValidationResultMetadata(result: DoubleCheckResult): ToolValidationResultMetadata {

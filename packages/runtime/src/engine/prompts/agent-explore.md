@@ -39,9 +39,11 @@ Follow a progressive-narrowing approach:
 - If you find the answer in 3 iterations or fewer, stop immediately.
 - Do not begin with `**` or similar whole-tree broad globbing on large parent
   directories when the task already implies narrower targets.
-- If you need to search 3+ patterns, plan them upfront and use
-  `execute_tool_script` to batch readonly operations after the search scope is
-  narrowed.
+- If the narrowed task needs 3+ readonly calls, default to `execute_tool_script`
+  as the first inspection tool. This includes known-path multi-file audits,
+  grouped `read_file` checks, implementation/schema/test comparisons,
+  prompt-consistency checks, and security-leakage verification. Print only
+  synthesized findings, not raw intermediate outputs.
 - Report findings with exact file paths and line numbers.
 - When you find the answer, state it immediately — do not continue searching
   for additional context unless the question explicitly requires it.

@@ -151,6 +151,31 @@ it("adds delegation guidance only when the child really has delegate", () => {
   expect(prompt).toContain("Prefer multiple readonly `explore` or `reviewer` delegates in one turn");
 });
 
+it("nudges child agents toward programmatic batching for narrowed multi-file audits", () => {
+  repoRoot = join(tmpdir(), `devagent-agent-prompt-${Date.now()}-batching`);
+  mkdirSync(repoRoot, { recursive: true });
+
+  const prompt = assembleAgentSystemPrompt({
+    agentType: AgentType.EXPLORE,
+    repoRoot,
+    rolePrompt: "You are an Explore agent.",
+    availableTools: [
+      ...readonlyTools,
+      { name: "execute_tool_script", category: "readonly" },
+    ],
+  });
+
+  expect(prompt).toContain("Default to `execute_tool_script` as the first inspection tool");
+  expect(prompt).toContain("known-path multi-file audits");
+  expect(prompt).toContain("verify/disprove whether X leaks");
+  expect(prompt).toContain("implementation/schema/test/prompt-consistency/security-leakage checks");
+  expect(prompt).toContain("Do not spend separate turns on serial `read_file` calls");
+  expect(prompt).toContain("grouped `read_file` calls");
+  expect(prompt).toContain("ToolResult");
+  expect(prompt).toContain("result.output");
+  expect(prompt).not.toContain("$stepId");
+});
+
 it("cache hits on identical inputs", () => {
   repoRoot = join(tmpdir(), `devagent-agent-prompt-${Date.now()}-cache-hit`);
   mkdirSync(repoRoot, { recursive: true });

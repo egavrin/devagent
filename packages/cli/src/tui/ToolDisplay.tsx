@@ -23,9 +23,6 @@ function cleanError(error: string): string {
   if (clean.includes("Invalid path") || clean.includes("Path must stay")) {
     return "path outside repo";
   }
-  if (clean.includes("All steps failed")) {
-    return "all steps failed";
-  }
   if (clean.length > 70) {
     const cut = clean.lastIndexOf(" ", 70);
     clean = clean.slice(0, cut > 40 ? cut : 70) + "…";

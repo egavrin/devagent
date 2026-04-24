@@ -18,6 +18,7 @@ import type {
   LLMProvider,
   ToolSpec,
   StreamChunk,
+  ToolContext,
 } from "../core/index.js";
 import {
   AgentType,
@@ -534,8 +535,20 @@ beforeEach(() => {
       ],
     ]);
 
+    const receivedContexts: ToolContext[] = [];
     const registry = new ToolRegistry();
-    registry.register(makeEchoTool());
+    registry.register({
+      ...makeEchoTool(),
+      handler: async (params, context) => {
+        receivedContexts.push(context);
+        return {
+          success: true,
+          output: String(params["text"] ?? ""),
+          error: null,
+          artifacts: [],
+        };
+      },
+    });
     const gate = new ApprovalGate(config.approval, bus);
 
     const userEvents: Array<{ agentId?: string; parentAgentId?: string | null }> = [];
@@ -573,6 +586,9 @@ beforeEach(() => {
     expect(assistantEvents.some((event) => event.agentId === "root-sub-1")).toBe(true);
     expect(toolEvents.some((event) => event.agentId === "root-sub-1")).toBe(true);
     expect(toolEvents.every((event) => event.parentAgentId === "root")).toBe(true);
+    expect(receivedContexts[0]?.agentId).toBe("root-sub-1");
+    expect(receivedContexts[0]?.parentAgentId).toBe("root");
+    expect(receivedContexts[0]?.agentType).toBe(AgentType.EXPLORE);
   });
 
 
@@ -1150,35 +1166,16 @@ beforeEach(() => {
     expect(ss.getReadonlyCoverage().get("git_diff")).toEqual(["packages/runtime/src/core/config.ts"]);
   });
 
-  it("persists execute_tool_script inner git_diff coverage and skips repeated steps", async () => {
+  it("records only execute_tool_script final stdout in model history", async () => {
     let scriptHandlerCalls = 0;
-    const seenStepCounts: number[] = [];
     const provider = createMockProvider([
       [
         {
           type: "tool_call",
           content: JSON.stringify({
-            steps: JSON.stringify([
-              { id: "s1", tool: "git_diff", args: { path: "src/a.ts", staged: true } },
-              { id: "s2", tool: "git_diff", args: { path: "src/a.ts", staged: true } },
-              { id: "s3", tool: "git_diff", args: { path: "src/b.ts", staged: true } },
-            ]),
+            script: "const diff = await tools.git_diff({ path: 'src/a.ts' }); print('changed=' + diff.success);",
           }),
           toolCallId: "call_script_1",
-          toolName: "execute_tool_script",
-        },
-        { type: "done", content: "", usage: { promptTokens: 100, completionTokens: 50 } },
-      ],
-      [
-        {
-          type: "tool_call",
-          content: JSON.stringify({
-            steps: JSON.stringify([
-              { id: "r1", tool: "git_diff", args: { path: "src/a.ts", staged: true } },
-              { id: "r2", tool: "git_diff", args: { path: "src/b.ts", staged: true } },
-            ]),
-          }),
-          toolCallId: "call_script_2",
           toolName: "execute_tool_script",
         },
         { type: "done", content: "", usage: { promptTokens: 100, completionTokens: 50 } },
@@ -1196,27 +1193,15 @@ beforeEach(() => {
       category: "readonly",
       paramSchema: {
         type: "object",
-        properties: { steps: { type: "string" } },
-        required: ["steps"],
+        properties: { script: { type: "string" } },
+        required: ["script"],
       },
       resultSchema: { type: "object" },
-      handler: async (params) => {
+      handler: async () => {
         scriptHandlerCalls++;
-        const raw = params["steps"];
-        const steps = (Array.isArray(raw) ? raw : JSON.parse(raw as string)) as Array<{
-          id: string;
-          tool: string;
-          args: { path?: string };
-        }>;
-        seenStepCounts.push(steps.length);
-        const sections = steps.map((step) =>
-          `=== Step ${step.id} (${step.tool}) [1ms] ===\n` +
-          `diff --git a/${step.args.path ?? "x"} b/${step.args.path ?? "x"}\n` +
-          "@@ -1 +1 @@\n-a\n+b"
-        );
         return {
           success: true,
-          output: `${sections.join("\n\n")}\n\n[Script completed: ${steps.length}/${steps.length} steps succeeded in 3ms]`,
+          output: "changed=true",
           error: null,
           artifacts: [],
         };
@@ -1238,83 +1223,12 @@ beforeEach(() => {
 
     const result = await loop.run("Review changes");
     expect(scriptHandlerCalls).toBe(1);
-    expect(seenStepCounts).toEqual([2]);
-    expect(ss.getModifiedFiles()).toEqual(["src/a.ts", "src/b.ts"]);
-
-    const diffSummaries = ss.getToolSummaries().filter((s) => s.tool === "git_diff");
-    expect(diffSummaries.map((s) => s.target).sort()).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(ss.getReadonlyCoverage().get("git_diff")).toEqual(["src/a.ts", "src/b.ts"]);
-
-    const skippedScript = result.messages.find(
-      (m) =>
-        m.role === MessageRole.TOOL
-        && m.content?.includes("Skipped execute_tool_script: all 2 step(s) were already completed"),
-    );
-    expect(skippedScript).toBeDefined();
-  });
-
-  it("preserves referenced step IDs when deduplicating execute_tool_script steps", async () => {
-    const seenStepIds: string[][] = [];
-    const provider = createMockProvider([
-      [
-        {
-          type: "tool_call",
-          content: JSON.stringify({
-            steps: JSON.stringify([
-              { id: "s1", tool: "git_diff", args: { path: "src/a.ts", staged: true } },
-              { id: "s2", tool: "git_diff", args: { path: "src/a.ts", staged: true } },
-              { id: "s3", tool: "run_command", args: { command: "echo $s2.lines[0]" } },
-            ]),
-          }),
-          toolCallId: "call_script_1",
-          toolName: "execute_tool_script",
-        },
-        { type: "done", content: "", usage: { promptTokens: 50, completionTokens: 20 } },
-      ],
-      [
-        { type: "text", content: "Done." },
-        { type: "done", content: "" },
-      ],
-    ]);
-
-    const registry = new ToolRegistry();
-    registry.register({
-      name: "execute_tool_script",
-      description: "Execute readonly script",
-      category: "readonly",
-      paramSchema: {
-        type: "object",
-        properties: { steps: { type: "string" } },
-        required: ["steps"],
-      },
-      resultSchema: { type: "object" },
-      handler: async (params) => {
-        const raw = params["steps"];
-        const steps = (Array.isArray(raw) ? raw : JSON.parse(raw as string)) as Array<{ id: string; tool: string }>;
-        seenStepIds.push(steps.map((s) => s.id));
-        return {
-          success: true,
-          output: steps.map((s) => `=== Step ${s.id} (${s.tool}) [1ms] ===\nok`).join("\n\n"),
-          error: null,
-          artifacts: [],
-        };
-      },
-    });
-
-    const gate = new ApprovalGate(config.approval, bus);
-    const loop = new TaskLoop({
-      provider,
-      tools: registry,
-      bus,
-      approvalGate: gate,
-      config,
-      systemPrompt: "Test",
-      sessionState: new SessionState(),
-      repoRoot: "/tmp",
-    });
-
-    await loop.run("Run script");
-    expect(seenStepIds).toEqual([["s1", "s2", "s3"]]);
+    const toolMessages = result.messages.filter((m) => m.role === MessageRole.TOOL);
+    expect(toolMessages).toHaveLength(1);
+    expect(toolMessages[0]!.content).toContain("changed=true");
+    expect(toolMessages[0]!.content).not.toContain("diff --git");
+    expect(ss.getToolSummaries().filter((s) => s.tool === "git_diff")).toHaveLength(0);
+    expect(ss.getToolSummaries().filter((s) => s.tool === "execute_tool_script")).toHaveLength(1);
   });
 
   it("includes readonly summaries in session state system message", async () => {

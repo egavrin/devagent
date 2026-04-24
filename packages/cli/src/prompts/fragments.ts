@@ -153,8 +153,15 @@ function buildBatchingFragment(capabilities: RootPromptCapabilities): string {
   const lines = [
     "## Readonly Batching",
     "",
-    "Use `execute_tool_script` when you can plan multiple readonly operations upfront.",
-    "- Good fit: multiple related `search_files` calls, or `find_files` plus focused `read_file` follow-ups.",
+    "Default to `execute_tool_script` as the first inspection tool when a narrowed task likely needs 3+ readonly calls that can be planned upfront.",
+    "- Prime fit: known-path multi-file audits where you can group `read_file` calls and synthesize the answer in code.",
+    "- Prime fit: verification prompts such as \"verify/disprove whether X leaks\", \"compare implementation, schema, and tests\", or \"check prompt consistency\" across a small known file set.",
+    "- Good fit: implementation/schema/test/prompt-consistency/security-leakage checks where the files are named or easy to enumerate.",
+    "- Also good: multiple related `search_files` calls, or `find_files` plus focused `read_file` follow-ups that can be filtered in code.",
+    "- Do not spend separate turns on serial `read_file` calls when the file set is already known; batch them and print one compact conclusion.",
+    "- The script can `await tools.read_file(...)`, `tools.search_files(...)`, `tools.find_files(...)`, `tools.git_status(...)`, and `tools.git_diff(...)`.",
+    "- Tool calls return `ToolResult` objects; inspect `result.output` for text content.",
+    "- Print only synthesized findings, counts, paths, or summaries. Do not print raw file contents or raw diffs unless the user asked for them.",
     "- Use it after lane selection. Do not use broad reconnaissance batches as a substitute for evidence-lane decomposition.",
   ];
 

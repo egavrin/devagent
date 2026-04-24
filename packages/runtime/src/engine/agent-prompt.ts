@@ -165,8 +165,14 @@ function buildBatchingFragment(): string {
   return [
     "## Batched Readonly Calls",
     "",
-    "- Use `execute_tool_script` only after you have already narrowed the search scope.",
-    "- Batch independent readonly calls when it reduces round-trips.",
+    "- Default to `execute_tool_script` as the first inspection tool when a narrowed task likely needs 3+ readonly calls.",
+    "- Prime fit: known-path multi-file audits where grouped `read_file` calls can be filtered or summarized in code.",
+    "- Prime fit: verification prompts such as \"verify/disprove whether X leaks\", \"compare implementation, schema, and tests\", or \"check prompt consistency\" across a small known file set.",
+    "- Good fit: implementation/schema/test/prompt-consistency/security-leakage checks where the files are named or easy to enumerate.",
+    "- Do not spend separate turns on serial `read_file` calls when the file set is already known; batch them and print one compact conclusion.",
+    "- Write one TypeScript script that calls readonly tools through `tools.*` and filters or aggregates results in code.",
+    "- Tool calls return `ToolResult` objects; inspect `result.output` for text content.",
+    "- Print only synthesized findings, counts, paths, or summaries. Avoid dumping raw intermediate tool output.",
     "- If a script fails, break the failed steps into direct tool calls instead of retrying the same script.",
   ].join("\n");
 }

@@ -243,6 +243,14 @@ describe("assembleSystemPrompt unavailable capabilities", () => {
     });
 
     expect(prompt).toContain("Use it after lane selection. Do not use broad reconnaissance batches as a substitute for evidence-lane decomposition.");
+    expect(prompt).toContain("Default to `execute_tool_script` as the first inspection tool");
+    expect(prompt).toContain("known-path multi-file audits");
+    expect(prompt).toContain("verify/disprove whether X leaks");
+    expect(prompt).toContain("implementation/schema/test/prompt-consistency/security-leakage checks");
+    expect(prompt).toContain("Do not spend separate turns on serial `read_file` calls");
+    expect(prompt).toContain("group `read_file` calls");
+    expect(prompt).toContain("inspect `result.output`");
+    expect(prompt).toContain("Print only synthesized findings");
     expect(prompt).toContain("lane decomposition via `explore` delegates takes priority over local batching.");
   });
 });

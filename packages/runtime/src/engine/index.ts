@@ -85,9 +85,7 @@ export { createSkillTool } from "./skill-tool.js";
 // Tool script — batched readonly tool execution
 export { ToolScriptEngine } from "./tool-script.js";
 export type {
-  ToolScriptStep,
   ToolScript,
-  StepResult,
   ToolScriptResult,
   ToolScriptEngineOptions,
 } from "./tool-script.js";

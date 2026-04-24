@@ -23,7 +23,6 @@ import { runTaskLoop } from "./task-loop-run.js";
 import { injectTaskLoopSessionState } from "./task-loop-session-state.js";
 import {
   coalesceTaskLoopReplaceAllCalls,
-  collectSuccessfulTaskLoopScriptStepResults,
   createTaskLoopBatchContextForCall,
   isTaskLoopParallelReadonlyDelegateCall,
   normalizeTaskLoopToolCall,
@@ -38,7 +37,6 @@ import {
   maybeMergeTaskLoopDelegatedState,
 } from "./task-loop-tool-results.js";
 export { truncateToolOutput } from "./task-loop-tool-results.js";
-import type { ToolScriptStep } from "./tool-script.js";
 import { ToolUseSummaryGenerator } from "./tool-use-summary.js";
 import type {
   ApprovalGate,
@@ -139,7 +137,6 @@ interface PendingToolCall {
 interface NormalizedToolCall {
   readonly toolCall: PendingToolCall;
   readonly bypassResult: ToolResult | null;
-  readonly scriptSteps: ToolScriptStep[] | null;
 }
 
 interface ToolExecutionBatchContext {
@@ -667,12 +664,6 @@ export class TaskLoop {
     );
   }
 
-  private collectSuccessfulScriptStepResults(
-    steps: ReadonlyArray<ToolScriptStep>,
-    scriptOutput: string,
-  ): Array<{ step: ToolScriptStep; output: string }> {
-    return collectSuccessfulTaskLoopScriptStepResults(steps, scriptOutput);
-  }
   private getSummaryTarget(
     toolName: string,
     args: Record<string, unknown>,

@@ -1,509 +1,493 @@
 /**
- * ToolScriptEngine — batched readonly tool execution.
+ * Programmatic readonly tool script runner.
  *
- * Accepts a script (array of steps), validates all tools are readonly,
- * executes sequentially with inter-step reference resolution, and returns
- * aggregated results. Reduces N LLM round-trips to 1 for information-gathering.
- *
- * Reference syntax:
- *   $stepId       → full output of that step
- *   $stepId.lines[N] → Nth line (0-indexed) of that step's output
+ * Executes generated TypeScript in a child process with a restricted vm
+ * context. Scripts can call readonly tools through `tools.*`, process results
+ * locally, and return only their final stdout to the main model context.
  */
 
-import type { ToolResult, ToolContext , EventBus } from "../core/index.js";
+import { spawn } from "node:child_process";
+import { transpileModule, DiagnosticCategory, ModuleKind, ScriptTarget } from "typescript";
+
+import type { AgentType, EventBus, ToolContext, ToolResult } from "../core/index.js";
 import { extractErrorMessage, extractToolFileChangePreviewSummary } from "../core/index.js";
 import type { ToolRegistry } from "../tools/index.js";
-
-// ─── Types ──────────────────────────────────────────────────
-
-export interface ToolScriptStep {
-  readonly id: string;
-  readonly tool: string;
-  readonly args: Record<string, unknown>;
-}
+import type { ChildProcess } from "node:child_process";
 
 export interface ToolScript {
-  readonly steps: ReadonlyArray<ToolScriptStep>;
+  readonly script: string;
+  readonly timeoutMs?: number;
+  readonly maxOutputChars?: number;
 }
 
-/**
- * Parse a raw `steps` argument from provider output into validated steps.
- * Accepts both arrays (primary path) and JSON strings (legacy fallback).
- * Returns null if the input is malformed.
- */
-export function parseToolScriptStepsArg(raw: unknown): ToolScriptStep[] | null {
-  const entries = parseStepEntries(raw);
-  if (!entries) return null;
-  const steps = entries.map(parseToolScriptStepEntry);
-  return steps.every((step): step is ToolScriptStep => step !== null) ? steps : null;
-}
-
-function parseStepEntries(raw: unknown): unknown[] | null {
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw !== "string") return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function parseToolScriptStepEntry(entry: unknown): ToolScriptStep | null {
-  if (!entry || typeof entry !== "object") return null;
-  const step = entry as Record<string, unknown>;
-  const args = parseStepArgs(step["args"]);
-  if (typeof step["id"] !== "string" || typeof step["tool"] !== "string" || !args) {
-    return null;
-  }
-  return {
-    id: step["id"],
-    tool: step["tool"],
-    args,
-  };
-}
-
-function parseStepArgs(rawArgs: unknown): Record<string, unknown> | null {
-  const args = typeof rawArgs === "string" ? parseJsonObject(rawArgs) : rawArgs;
-  return args && typeof args === "object" && !Array.isArray(args)
-    ? { ...(args as Record<string, unknown>) }
-    : null;
-}
-
-function parseJsonObject(text: string): unknown {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-export interface StepResult {
-  readonly id: string;
-  readonly tool: string;
-  readonly success: boolean;
-  readonly output: string;
-  readonly error: string | null;
-  readonly durationMs: number;
-}
-
-export interface ToolScriptResult {
-  readonly steps: ReadonlyArray<StepResult>;
+export interface ToolScriptResult extends ToolResult {
   readonly totalDurationMs: number;
+  readonly timedOut: boolean;
   readonly truncated: boolean;
+  readonly toolCallCount: number;
 }
 
 export interface ToolScriptEngineOptions {
   readonly registry: ToolRegistry;
   readonly context: ToolContext;
   readonly bus: EventBus;
-  readonly maxOutputBytes?: number; // default: 50KB
-  readonly maxSteps?: number; // default: 20
+  readonly defaultTimeoutMs?: number;
+  readonly defaultMaxOutputChars?: number;
+  readonly maxToolCalls?: number;
 }
 
-// ─── Constants ──────────────────────────────────────────────
+type ParentToChildMessage =
+  | {
+    readonly type: "run";
+    readonly code: string;
+    readonly allowedToolNames: readonly string[];
+    readonly timeoutMs: number;
+    readonly maxOutputChars: number;
+    readonly maxToolCalls: number;
+  }
+  | {
+    readonly type: "tool_result";
+    readonly id: string;
+    readonly result: ToolResult;
+  };
 
-const DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024; // 50KB
-const DEFAULT_MAX_STEPS = 20;
+type ChildToParentMessage =
+  | {
+    readonly type: "tool_call";
+    readonly id: string;
+    readonly name: string;
+    readonly args: Record<string, unknown>;
+  }
+  | {
+    readonly type: "done";
+    readonly output: string;
+    readonly toolCallCount: number;
+  }
+  | {
+    readonly type: "error";
+    readonly error: string;
+    readonly output: string;
+    readonly toolCallCount: number;
+  };
 
-/** Tools that cannot appear in scripts (recursion guard). */
+const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_OUTPUT_CHARS = 16 * 1024;
+const DEFAULT_MAX_TOOL_CALLS = 20;
 const BLOCKED_TOOLS = new Set(["execute_tool_script"]);
-
-/** Pattern: $stepId or $stepId.lines[N] */
-const REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_]*)(?:\.lines\[(\d+)\])?/g;
-
-interface ExecuteScriptState {
-  readonly results: Map<string, StepResult>;
-  readonly completed: Set<string>;
-  readonly stepResults: StepResult[];
-  cumulativeOutputBytes: number;
-  truncated: boolean;
-}
-
-// ─── Engine ─────────────────────────────────────────────────
+const IMPORT_EXPORT_PATTERN = /(^|\n)\s*(import|export)\b|\bimport\s*\(/;
+let fallbackScriptRunCounter = 0;
 
 export class ToolScriptEngine {
   private readonly registry: ToolRegistry;
   private readonly context: ToolContext;
   private readonly bus: EventBus;
-  private readonly maxOutputBytes: number;
-  private readonly maxSteps: number;
+  private readonly defaultTimeoutMs: number;
+  private readonly defaultMaxOutputChars: number;
+  private readonly maxToolCalls: number;
+  private readonly scriptCallIdPrefix: string;
 
   constructor(options: ToolScriptEngineOptions) {
     this.registry = options.registry;
     this.context = options.context;
     this.bus = options.bus;
-    this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-    this.maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
+    this.defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.defaultMaxOutputChars = options.defaultMaxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
+    this.maxToolCalls = options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
+    this.scriptCallIdPrefix = options.context.callId ?? `script_run_${++fallbackScriptRunCounter}`;
   }
 
-  /**
-   * Execute a tool script — validate, then run steps using a dependency-aware
-   * hybrid scheduler. Steps with no dependencies run in parallel; steps that
-   * reference earlier outputs wait for their dependencies to complete first.
-   */
   async execute(script: ToolScript): Promise<ToolScriptResult> {
-    const validationError = this.validate(script);
-    if (validationError) {
-      return {
-        steps: [
-          {
-            id: "__validation__",
-            tool: "",
-            success: false,
-            output: "",
-            error: validationError,
-            durationMs: 0,
-          },
-        ],
-        totalDurationMs: 0,
-        truncated: false,
-      };
-    }
+    const startedAt = Date.now();
+    const validationError = validateScript(script.script);
+    if (validationError) return failureResult(validationError, startedAt);
 
-    const totalStart = Date.now();
-    const deps = buildDependencyGraph(script.steps, (args) => this.extractReferences(args));
-    const state = makeExecuteScriptState();
-    await this.executeReadyWaves(script.steps, deps, state);
+    const compiled = transpileScript(script.script);
+    if (compiled.error) return failureResult(compiled.error, startedAt);
 
-    return {
-      steps: state.stepResults,
-      totalDurationMs: Date.now() - totalStart,
-      truncated: state.truncated,
-    };
+    return this.runChild({
+      code: compiled.code,
+      timeoutMs: normalizePositiveInt(script.timeoutMs, this.defaultTimeoutMs),
+      maxOutputChars: normalizePositiveInt(script.maxOutputChars, this.defaultMaxOutputChars),
+      startedAt,
+    });
   }
 
-  private async executeReadyWaves(
-    steps: ReadonlyArray<ToolScriptStep>,
-    deps: ReadonlyMap<string, ReadonlySet<string>>,
-    state: ExecuteScriptState,
-  ): Promise<void> {
-    while (state.completed.size < steps.length && !state.truncated) {
-      const ready = getReadySteps(steps, deps, state.completed);
-      if (ready.length === 0) break;
-      const waveResults = await this.executeWave(ready, state.results);
-      this.recordWaveResults(waveResults, steps, state);
-    }
-  }
+  private runChild(options: {
+    readonly code: string;
+    readonly timeoutMs: number;
+    readonly maxOutputChars: number;
+    readonly startedAt: number;
+  }): Promise<ToolScriptResult> {
+    const allowedToolNames = this.getAllowedToolNames();
+    const child = spawn(process.execPath, ["--input-type=module", "--eval", CHILD_PROCESS_SOURCE], {
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      env: {},
+    });
+    let stderr = "";
+    let settled = false;
+    let parentToolCallCount = 0;
 
-  private async executeWave(
-    ready: ReadonlyArray<ToolScriptStep>,
-    results: Map<string, StepResult>,
-  ): Promise<StepResult[]> {
-    return ready.length === 1
-      ? [await this.executeStep(ready[0]!, results)]
-      : Promise.all(ready.map((step) => this.executeStep(step, results)));
-  }
-
-  private recordWaveResults(
-    waveResults: ReadonlyArray<StepResult>,
-    steps: ReadonlyArray<ToolScriptStep>,
-    state: ExecuteScriptState,
-  ): void {
-    for (const stepResult of waveResults) {
-      recordStepResult(stepResult, state);
-      if (state.cumulativeOutputBytes > this.maxOutputBytes) {
-        state.truncated = true;
-        appendSkippedSteps(steps, state, this.maxOutputBytes);
-        break;
-      }
-    }
-  }
-
-  // ─── Step Execution ─────────────────────────────────────────
-
-  /**
-   * Execute a single step: resolve references, call handler, emit events.
-   */
-  private async executeStep(
-    step: ToolScriptStep,
-    results: Map<string, StepResult>,
-  ): Promise<StepResult> {
-    const resolvedArgs = this.resolveReferences(step.args, results);
-    const tool = this.registry.get(step.tool);
-
-    // Emit tool:before
-    const callId = `script_${step.id}`;
-    this.bus.emit("tool:before", {
-      name: step.tool,
-      params: resolvedArgs,
-      callId,
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.stdout?.on("data", (chunk) => {
+      stderr += String(chunk);
     });
 
-    // Execute
-    const stepStart = Date.now();
-    let toolResult: ToolResult;
+    return new Promise<ToolScriptResult>((resolve) => {
+      const settle = (result: ToolScriptResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.kill();
+        resolve(result);
+      };
+      const timer = setTimeout(() => {
+        settle({
+          success: false,
+          output: "",
+          error: `Script timed out after ${options.timeoutMs}ms`,
+          artifacts: [],
+          totalDurationMs: Date.now() - options.startedAt,
+          timedOut: true,
+          truncated: false,
+          toolCallCount: parentToolCallCount,
+        });
+      }, options.timeoutMs);
+
+      child.on("message", (raw) => {
+        void this.handleChildMessage(raw, child, options, settle, () => {
+          parentToolCallCount++;
+          return parentToolCallCount;
+        });
+      });
+      child.on("error", (error) => {
+        settle(failureResult(extractErrorMessage(error), options.startedAt));
+      });
+      child.on("exit", (code, signal) => {
+        if (settled) return;
+        const detail = stderr.trim() || `Child process exited unexpectedly (${signal ?? code ?? "unknown"})`;
+        settle(failureResult(detail, options.startedAt));
+      });
+
+      sendChild(child, {
+        type: "run",
+        code: options.code,
+        allowedToolNames,
+        timeoutMs: options.timeoutMs,
+        maxOutputChars: options.maxOutputChars,
+        maxToolCalls: this.maxToolCalls,
+      });
+    });
+  }
+
+  private async handleChildMessage(
+    raw: unknown,
+    child: ChildProcess,
+    options: { readonly startedAt: number; readonly maxOutputChars: number },
+    settle: (result: ToolScriptResult) => void,
+    nextParentToolCallCount: () => number,
+  ): Promise<void> {
+    if (!isChildMessage(raw)) {
+      settle(failureResult("Script runner protocol violation: invalid child message", options.startedAt));
+      return;
+    }
+    if (raw.type === "done") {
+      settle(successResult(raw.output, raw.toolCallCount, Date.now() - options.startedAt));
+      return;
+    }
+    if (raw.type === "error") {
+      settle({
+        success: false,
+        output: raw.output,
+        error: raw.error,
+        artifacts: [],
+        totalDurationMs: Date.now() - options.startedAt,
+        timedOut: false,
+        truncated: raw.output.length >= options.maxOutputChars,
+        toolCallCount: raw.toolCallCount,
+      });
+      return;
+    }
+
+    const toolCallNumber = nextParentToolCallCount();
+    const result = await this.executeNestedTool(raw, toolCallNumber);
+    sendChild(child, { type: "tool_result", id: raw.id, result });
+  }
+
+  private async executeNestedTool(
+    call: Extract<ChildToParentMessage, { readonly type: "tool_call" }>,
+    toolCallNumber: number,
+  ): Promise<ToolResult> {
+    const tool = this.registry.get(call.name);
+    const callId = `${this.scriptCallIdPrefix}_script_${call.name}_${toolCallNumber}`;
+    this.bus.emit("tool:before", {
+      name: call.name,
+      params: call.args,
+      callId,
+      ...this.getAgentEventFields(),
+    });
+
+    const startedAt = Date.now();
+    let result: ToolResult;
     try {
-      toolResult = await tool.handler(resolvedArgs, this.context);
-    } catch (err) {
-      const message = extractErrorMessage(err);
-      toolResult = {
+      result = await tool.handler(call.args, {
+        ...this.context,
+        callId,
+      });
+    } catch (error) {
+      result = {
         success: false,
         output: "",
-        error: message,
+        error: extractErrorMessage(error),
         artifacts: [],
       };
     }
-    const durationMs = Date.now() - stepStart;
-
-    // Emit tool:after
-    const fileEditSummary = extractToolFileChangePreviewSummary(toolResult.metadata);
+    const durationMs = Date.now() - startedAt;
+    const fileEditSummary = extractToolFileChangePreviewSummary(result.metadata);
     this.bus.emit("tool:after", {
-      name: step.tool,
-      result: toolResult,
+      name: call.name,
+      result,
       fileEdits: fileEditSummary.fileEdits,
       fileEditHiddenCount: fileEditSummary.hiddenFileCount > 0 ? fileEditSummary.hiddenFileCount : undefined,
       callId,
       durationMs,
+      ...this.getAgentEventFields(),
     });
+    return result;
+  }
 
+  private getAgentEventFields(): {
+    readonly agentId?: string;
+    readonly parentAgentId?: string | null;
+    readonly depth?: number;
+    readonly agentType?: AgentType;
+  } {
     return {
-      id: step.id,
-      tool: step.tool,
-      success: toolResult.success,
-      output: toolResult.success
-        ? toolResult.output
-        : `Error: ${toolResult.error}`,
-      error: toolResult.error,
-      durationMs,
+      ...(this.context.agentId ? { agentId: this.context.agentId } : {}),
+      ...(this.context.parentAgentId !== undefined ? { parentAgentId: this.context.parentAgentId } : {}),
+      ...(this.context.depth !== undefined ? { depth: this.context.depth } : {}),
+      ...(this.context.agentType ? { agentType: this.context.agentType } : {}),
     };
   }
 
-  // ─── Validation ─────────────────────────────────────────────
-
-  /**
-   * Validate a script before execution. Returns error string or null if valid.
-   */
-  validate(script: ToolScript): string | null {
-    if (!script.steps || script.steps.length === 0) {
-      return "Script must have at least one step";
-    }
-
-    if (script.steps.length > this.maxSteps) {
-      return `Script exceeds maximum of ${this.maxSteps} steps (got ${script.steps.length})`;
-    }
-
-    const seenIds = new Set<string>();
-    const declaredIds: string[] = [];
-
-    for (const step of script.steps) {
-      const validationError = this.validateStep(step, seenIds, declaredIds);
-      if (validationError) return validationError;
-
-      declaredIds.push(step.id);
-    }
-
-    return null;
-  }
-
-  private validateStep(
-    step: ToolScriptStep,
-    seenIds: Set<string>,
-    declaredIds: ReadonlyArray<string>,
-  ): string | null {
-    const idError = validateStepId(step, seenIds);
-    if (idError) return idError;
-    const toolError = validateStepTool(step, this.registry);
-    if (toolError) return toolError;
-    return validateStepReferences(step, declaredIds, this.extractReferences(step.args));
-  }
-
-  // ─── Reference Resolution ──────────────────────────────────
-
-  /**
-   * Deep-resolve references in tool arguments using results from earlier steps.
-   */
-  private resolveReferences(
-    args: Record<string, unknown>,
-    results: Map<string, StepResult>,
-  ): Record<string, unknown> {
-    const resolved: Record<string, unknown> = {};
-
-    for (const [key, value] of Object.entries(args)) {
-      if (typeof value === "string") {
-        resolved[key] = this.resolveStringReferences(value, results);
-      } else if (Array.isArray(value)) {
-        resolved[key] = value.map((item) =>
-          typeof item === "string"
-            ? this.resolveStringReferences(item, results)
-            : item,
-        );
-      } else {
-        resolved[key] = value;
-      }
-    }
-
-    return resolved;
-  }
-
-  /**
-   * Resolve $stepId and $stepId.lines[N] references in a string.
-   */
-  private resolveStringReferences(
-    str: string,
-    results: Map<string, StepResult>,
-  ): string {
-    return str.replace(
-      REF_PATTERN,
-      (match: string, stepId: string, lineIndex: string | undefined) => {
-        const stepResult = results.get(stepId);
-        if (!stepResult) {
-          return match; // Not a reference — leave as-is
-        }
-
-        if (!stepResult.success) {
-          return `<ref error: step "${stepId}" failed>`;
-        }
-
-        if (lineIndex !== undefined) {
-          const lines = stepResult.output.split("\n");
-          const idx = parseInt(lineIndex, 10);
-          if (idx < 0 || idx >= lines.length) {
-            return `<ref error: $${stepId}.lines[${lineIndex}] out of bounds (${lines.length} lines)>`;
-          }
-          return lines[idx]!;
-        }
-
-        return stepResult.output;
-      },
-    );
-  }
-
-  /**
-   * Extract all reference IDs from args (for forward-reference validation).
-   */
-  private extractReferences(args: Record<string, unknown>): string[] {
-    const refs: string[] = [];
-
-    const extractFromValue = (value: unknown): void => {
-      if (typeof value === "string") {
-        let m: RegExpExecArray | null;
-        const pattern = new RegExp(REF_PATTERN.source, REF_PATTERN.flags);
-        while ((m = pattern.exec(value)) !== null) {
-          refs.push(m[1]!);
-        }
-      } else if (Array.isArray(value)) {
-        for (const item of value) {
-          extractFromValue(item);
-        }
-      }
-    };
-
-    for (const value of Object.values(args)) {
-      extractFromValue(value);
-    }
-
-    return refs;
+  private getAllowedToolNames(): string[] {
+    return this.registry
+      .getReadOnly()
+      .map((tool) => tool.name)
+      .filter((name) => !BLOCKED_TOOLS.has(name))
+      .sort();
   }
 }
 
-function makeExecuteScriptState(): ExecuteScriptState {
+function validateScript(script: string): string | null {
+  if (typeof script !== "string" || script.trim().length === 0) {
+    return "Invalid script parameter: execute_tool_script requires a non-empty TypeScript script string.";
+  }
+  if (IMPORT_EXPORT_PATTERN.test(script)) {
+    return "Programmatic tool scripts cannot use import/export or dynamic import; use only the provided readonly tools object.";
+  }
+  return null;
+}
+
+function transpileScript(script: string): { readonly code: string; readonly error: null } | { readonly code: ""; readonly error: string } {
+  const output = transpileModule(script, {
+    compilerOptions: {
+      module: ModuleKind.None,
+      target: ScriptTarget.ES2022,
+      noEmitOnError: true,
+    },
+    reportDiagnostics: true,
+  });
+  const error = output.diagnostics?.find((diagnostic) => diagnostic.category === DiagnosticCategory.Error);
+  if (error) {
+    return { code: "", error: `TypeScript transpile error: ${String(error.messageText)}` };
+  }
+  return { code: output.outputText, error: null };
+}
+
+function normalizePositiveInt(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || value === undefined) return fallback;
+  return Math.max(1, Math.floor(value));
+}
+
+function successResult(output: string, toolCallCount: number, totalDurationMs: number): ToolScriptResult {
   return {
-    results: new Map(),
-    completed: new Set(),
-    stepResults: [],
-    cumulativeOutputBytes: 0,
+    success: true,
+    output,
+    error: null,
+    artifacts: [],
+    totalDurationMs,
+    timedOut: false,
     truncated: false,
+    toolCallCount,
   };
 }
 
-function buildDependencyGraph(
-  steps: ReadonlyArray<ToolScriptStep>,
-  extractReferences: (args: Record<string, unknown>) => ReadonlyArray<string>,
-): Map<string, Set<string>> {
-  const deps = new Map<string, Set<string>>();
-  for (const step of steps) {
-    deps.set(step.id, new Set(extractReferences(step.args)));
-  }
-  return deps;
+function failureResult(error: string, startedAt: number): ToolScriptResult {
+  return {
+    success: false,
+    output: "",
+    error,
+    artifacts: [],
+    totalDurationMs: Date.now() - startedAt,
+    timedOut: false,
+    truncated: false,
+    toolCallCount: 0,
+  };
 }
 
-function getReadySteps(
-  steps: ReadonlyArray<ToolScriptStep>,
-  deps: ReadonlyMap<string, ReadonlySet<string>>,
-  completed: ReadonlySet<string>,
-): ToolScriptStep[] {
-  return steps.filter((step) => {
-    if (completed.has(step.id)) return false;
-    const stepDeps = deps.get(step.id) ?? new Set<string>();
-    return [...stepDeps].every((dependency) => completed.has(dependency));
+function sendChild(child: ChildProcess, message: ParentToChildMessage): void {
+  if (!child.connected) return;
+  child.send?.(message);
+}
+
+function isChildMessage(raw: unknown): raw is ChildToParentMessage {
+  if (!raw || typeof raw !== "object") return false;
+  const msg = raw as Record<string, unknown>;
+  if (msg["type"] === "done" || msg["type"] === "error") {
+    return typeof msg["output"] === "string" && typeof msg["toolCallCount"] === "number";
+  }
+  return msg["type"] === "tool_call"
+    && typeof msg["id"] === "string"
+    && typeof msg["name"] === "string"
+    && Boolean(msg["args"])
+    && typeof msg["args"] === "object"
+    && !Array.isArray(msg["args"]);
+}
+
+const CHILD_PROCESS_SOURCE = String.raw`
+import vm from "node:vm";
+
+let stdout = "";
+let toolCallCount = 0;
+let activeConfig = null;
+const pending = new Map();
+
+process.on("uncaughtException", (error) => {
+  sendError(error instanceof Error ? error.message : String(error));
+});
+process.on("unhandledRejection", (error) => {
+  sendError(error instanceof Error ? error.message : String(error));
+});
+
+process.on("message", (message) => {
+  if (!message || typeof message !== "object") return;
+  if (message.type === "run") {
+    void run(message);
+    return;
+  }
+  if (message.type === "tool_result") {
+    const entry = pending.get(message.id);
+    if (!entry) return;
+    pending.delete(message.id);
+    entry.resolve(message.result);
+  }
+});
+
+async function run(config) {
+  activeConfig = config;
+  try {
+    const context = createSandbox(config);
+    const script = new vm.Script('(async () => {\n"use strict";\n' + config.code + '\n})()');
+    await script.runInContext(context, {
+      timeout: Math.max(1, Math.min(config.timeoutMs, 1000)),
+      breakOnSigint: false,
+    });
+    process.send?.({ type: "done", output: stdout, toolCallCount });
+  } catch (error) {
+    sendError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function createSandbox(config) {
+  const sandbox = {
+    __toolNames: config.allowedToolNames,
+    __print: print,
+    __callTool: callTool,
+  };
+  const context = vm.createContext(sandbox, {
+    codeGeneration: { strings: false, wasm: false },
+  });
+  new vm.Script([
+    "(() => {",
+    "  const localPrint = __print;",
+    "  const localCallTool = __callTool;",
+    "  const toolNames = Array.from(__toolNames);",
+    "  const localTools = Object.create(null);",
+    "  for (const name of toolNames) {",
+    "    Object.defineProperty(localTools, name, {",
+    "      enumerable: true,",
+    "      value: async (args = {}) => localCallTool(name, args),",
+    "    });",
+    "  }",
+    "  const proxyTools = new Proxy(localTools, {",
+    "    get(target, prop) {",
+    "      if (typeof prop !== \"string\") return undefined;",
+    "      if (Object.prototype.hasOwnProperty.call(target, prop)) return target[prop];",
+    "      return async (args = {}) => localCallTool(prop, args);",
+    "    },",
+    "  });",
+    "  Object.defineProperty(globalThis, \"tools\", { enumerable: true, value: Object.freeze(proxyTools) });",
+    "  const printWrapper = (...values) => localPrint(...values);",
+    "  Object.defineProperty(globalThis, \"print\", { enumerable: true, value: printWrapper });",
+    "  Object.defineProperty(globalThis, \"console\", {",
+    "    enumerable: true,",
+    "    value: Object.freeze({ log: printWrapper, info: printWrapper, warn: printWrapper, error: printWrapper }),",
+    "  });",
+    "  delete globalThis.__toolNames;",
+    "  delete globalThis.__print;",
+    "  delete globalThis.__callTool;",
+    "})();",
+  ].join("\n")).runInContext(context, { timeout: 1000 });
+  return context;
+}
+
+async function callTool(name, args = {}) {
+  if (!activeConfig.allowedToolNames.includes(name)) {
+    throw new Error('Tool "' + name + '" is not available to programmatic scripts. Only readonly tools are exposed.');
+  }
+  if (toolCallCount >= activeConfig.maxToolCalls) {
+    throw new Error("Script exceeded maximum of " + activeConfig.maxToolCalls + " tool call(s)");
+  }
+  toolCallCount++;
+  const id = String(toolCallCount);
+  const safeArgs = normalizeArgs(args);
+  process.send?.({ type: "tool_call", id, name, args: safeArgs });
+  return await new Promise((resolve) => pending.set(id, { resolve }));
+}
+
+function print(...values) {
+  appendStdout(values.map(formatValue).join(" ") + "\n");
+}
+
+function appendStdout(chunk) {
+  stdout += chunk;
+  if (stdout.length > activeConfig.maxOutputChars) {
+    throw new Error("Script stdout exceeded maximum of " + activeConfig.maxOutputChars + " character(s)");
+  }
+}
+
+function normalizeArgs(args) {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return {};
+  return JSON.parse(JSON.stringify(args));
+}
+
+function formatValue(value) {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function sendError(error) {
+  process.send?.({
+    type: "error",
+    error,
+    output: stdout,
+    toolCallCount,
   });
 }
-
-function recordStepResult(stepResult: StepResult, state: ExecuteScriptState): void {
-  state.results.set(stepResult.id, stepResult);
-  state.completed.add(stepResult.id);
-  state.stepResults.push(stepResult);
-  state.cumulativeOutputBytes += Buffer.byteLength(stepResult.output, "utf8");
-}
-
-function appendSkippedSteps(
-  steps: ReadonlyArray<ToolScriptStep>,
-  state: ExecuteScriptState,
-  maxOutputBytes: number,
-): void {
-  for (const step of steps) {
-    if (state.completed.has(step.id)) continue;
-    state.stepResults.push({
-      id: step.id,
-      tool: step.tool,
-      success: false,
-      output: "",
-      error: `Skipped: output limit exceeded (${maxOutputBytes} bytes)`,
-      durationMs: 0,
-    });
-    state.completed.add(step.id);
-  }
-}
-
-function validateStepId(
-  step: ToolScriptStep,
-  seenIds: Set<string>,
-): string | null {
-  if (!step.id || typeof step.id !== "string") {
-    return `Step missing required 'id' field`;
-  }
-  if (seenIds.has(step.id)) {
-    return `Duplicate step ID: "${step.id}"`;
-  }
-  seenIds.add(step.id);
-  return null;
-}
-
-function validateStepTool(step: ToolScriptStep, registry: ToolRegistry): string | null {
-  const namespacedHint = namespacedToolHint(step.tool, registry);
-  if (namespacedHint) return namespacedHint;
-  if (BLOCKED_TOOLS.has(step.tool)) {
-    return `Tool "${step.tool}" cannot be used inside scripts (recursion prevention)`;
-  }
-  if (!registry.has(step.tool)) return `Unknown tool: "${step.tool}"`;
-  const tool = registry.get(step.tool);
-  return tool.category === "readonly"
-    ? null
-    : `Only readonly tools are allowed in scripts. "${step.tool}" is "${tool.category}"`;
-}
-
-function validateStepReferences(
-  step: ToolScriptStep,
-  declaredIds: ReadonlyArray<string>,
-  refs: ReadonlyArray<string>,
-): string | null {
-  for (const refId of refs) {
-    if (refId === step.id) return `Step "${step.id}" references itself`;
-    if (!declaredIds.includes(refId)) {
-      return `Step "${step.id}" has forward reference to undeclared step "${refId}"`;
-    }
-  }
-  return null;
-}
-
-function namespacedToolHint(toolName: string, registry: ToolRegistry): string | null {
-  if (!/^(?:functions|function|tools)\./.test(toolName)) return null;
-
-  const canonical = toolName.replace(/^(?:functions|function|tools)\./, "");
-  if (registry.has(canonical)) {
-    return `Invalid tool name "${toolName}". Use canonical tool names only: "${canonical}" (without namespace prefixes).`;
-  }
-
-  return `Invalid tool name "${toolName}". Use canonical tool names only (no prefixes like functions./function./tools.).`;
-}
+`;

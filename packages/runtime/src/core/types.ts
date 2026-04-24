@@ -60,6 +60,10 @@ export interface ToolContext {
   readonly callId?: string;
   readonly batchId?: string;
   readonly batchSize?: number;
+  readonly agentId?: string;
+  readonly parentAgentId?: string | null;
+  readonly depth?: number;
+  readonly agentType?: AgentType;
 }
 
 export interface ToolFileChangeLine {

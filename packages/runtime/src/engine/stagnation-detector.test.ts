@@ -249,3 +249,55 @@ it("emits LLM_STAGNATION_DETECTED error event when stagnation detected", async (
   expect(errors).toHaveLength(1);
   expect(errors[0]!.code).toBe("LLM_STAGNATION_DETECTED");
 });
+
+it("uses TypeScript execute_tool_script recovery guidance", () => {
+  const { detector } = makeDetector();
+  const args = { script: "const result = await tools.read_file({ path: 'x.ts' });" };
+  const toolCalls = [
+    { name: "execute_tool_script", arguments: args, callId: "tc1" },
+  ];
+
+  detector.recordToolResult("execute_tool_script", args, false);
+  detector.recordToolResult("execute_tool_script", args, false);
+  detector.recordToolResult("execute_tool_script", args, false);
+
+  const warning = detector.checkDoomLoop(toolCalls);
+
+  expect(warning).toContain("TypeScript batching script");
+  expect(warning).toContain("tools.read_file");
+  expect(warning).toContain("ToolResult.output");
+  expect(warning).toContain("print only the synthesized final answer");
+  expect(warning).not.toContain("steps");
+  expect(warning).not.toContain("$stepId");
+  expect(warning).not.toContain("bare canonical names");
+  expect(warning).not.toContain("valid JSON strings");
+});
+
+it("uses direct readonly fallback guidance after execute_tool_script fatigue", () => {
+  const { detector } = makeDetector();
+  const toolCalls = [
+    {
+      name: "execute_tool_script",
+      arguments: { script: "const result = await tools.read_file({ path: 'e.ts' });" },
+      callId: "tc5",
+    },
+  ];
+
+  for (const path of ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]) {
+    detector.recordToolResult(
+      "execute_tool_script",
+      { script: `const result = await tools.read_file({ path: '${path}' });` },
+      false,
+    );
+  }
+
+  const warning = detector.checkToolFatigue(toolCalls);
+
+  expect(warning).toContain("individual readonly calls");
+  expect(warning).toContain("read_file, search_files, find_files");
+  expect(warning).toContain("debugging the failed script");
+  expect(warning).not.toContain("steps");
+  expect(warning).not.toContain("$stepId");
+  expect(warning).not.toContain("bare canonical names");
+  expect(warning).not.toContain("valid JSON strings");
+});

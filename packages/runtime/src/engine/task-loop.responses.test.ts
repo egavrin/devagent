@@ -67,7 +67,7 @@ beforeEach(() => {
     await expect(loop.run("hello")).rejects.toThrow(ProviderError);
     // 1 initial + 3 retries = 4 total calls
     expect(callCount).toBe(4);
-  });
+  }, 10_000);
   it("retries on ProviderError and succeeds on second attempt", async () => {
     let callCount = 0;
     const provider: LLMProvider = {

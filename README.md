@@ -9,6 +9,8 @@ DevAgent has two primary surfaces:
 
 The `execute` contract is the core product surface. It turns a typed request into stage-specific artifacts and events so an external orchestrator can connect DevAgent to issues, branches, pull requests, code review, and team workflows without reducing the work to an unstructured prompt.
 
+See [AUTONOMOUS_REPOSITORY_DEVELOPER.md](AUTONOMOUS_REPOSITORY_DEVELOPER.md) for the longer product direction and roadmap.
+
 ## Install
 
 DevAgent requires Node.js 20+ or Bun 1.3+.

@@ -1,6 +1,5 @@
 import type { SessionState } from "./session-state.js";
 import { normalizeRepoPath } from "./task-loop-paths.js";
-import { parseToolScriptStepsArg } from "./tool-script.js";
 
 interface PendingToolCall {
   readonly name: string;
@@ -15,7 +14,6 @@ export function captureTaskLoopReviewScopeFiles(
 ): void {
   if (!sessionState) return;
   if (captureGitDiffPath(sessionState, toolCall)) return;
-  if (captureToolScriptPaths(sessionState, toolCall)) return;
   captureGitDiffNameOnlyOutput(sessionState, toolCall, originalOutput);
 }
 
@@ -26,24 +24,6 @@ function captureGitDiffPath(sessionState: SessionState, toolCall: PendingToolCal
     sessionState.recordModifiedFile(normalizeRepoPath(path));
   }
   return true;
-}
-
-function captureToolScriptPaths(sessionState: SessionState, toolCall: PendingToolCall): boolean {
-  if (toolCall.name !== "execute_tool_script") return false;
-  const steps = parseToolScriptStepsArg(toolCall.arguments["steps"]);
-  if (!steps) return true;
-  for (const step of steps) {
-    const path = getReviewScopeStepPath(step.tool, step.args);
-    if (path) sessionState.recordModifiedFile(path);
-  }
-  return true;
-}
-
-function getReviewScopeStepPath(tool: string, args: Record<string, unknown>): string | null {
-  if (tool !== "git_diff" && tool !== "read_file") return null;
-  const path = args["path"];
-  if (typeof path !== "string" || path.trim().length === 0) return null;
-  return normalizeRepoPath(path);
 }
 
 function captureGitDiffNameOnlyOutput(
