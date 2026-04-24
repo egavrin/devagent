@@ -273,16 +273,6 @@ export function loadAgentProjectInstructions(repoRoot: string): string | null {
     .join("\n\n");
 }
 
-/** @deprecated Prompts are now embedded constants — cache reset is a no-op. */
-export function __resetCommonPromptCacheForTesting(): void {
-  // No-op: prompts are embedded constants, no filesystem cache to reset.
-}
-
-/** @deprecated Prompts are now embedded constants — always returns 0. */
-export function __getCommonPromptReadCountForTesting(): number {
-  return 0;
-}
-
 /** Format the deferred tools prompt section. Shared by CLI and engine prompt assemblers. */
 export function formatDeferredToolsSection(
   tools: ReadonlyArray<{ name: string; description: string }>,

@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  __getCommonPromptReadCountForTesting,
-  __resetCommonPromptCacheForTesting,
   assembleAgentSystemPrompt,
   clearPromptCache,
 } from "./agent-prompt.js";
@@ -111,29 +109,6 @@ it("preserves strong delegation rules in the role prompt when provided", () => {
   });
 
   expect(prompt).toContain("Delegation is required when task instructions explicitly require it.");
-});
-
-it("caches the shared common prompt across prompt assemblies", () => {
-  repoRoot = join(tmpdir(), `devagent-agent-prompt-${Date.now()}-cache`);
-  mkdirSync(repoRoot, { recursive: true });
-  __resetCommonPromptCacheForTesting();
-
-  assembleAgentSystemPrompt({
-    agentType: AgentType.EXPLORE,
-    repoRoot,
-    rolePrompt: "You are an Explore agent.",
-    availableTools: readonlyTools,
-  });
-  assembleAgentSystemPrompt({
-    agentType: AgentType.REVIEWER,
-    repoRoot,
-    rolePrompt: "You are a Reviewer agent.",
-    availableTools: readonlyTools,
-  });
-
-  // Prompts are now embedded constants — read count is always 0
-  expect(__getCommonPromptReadCountForTesting()).toBe(0);
-  __resetCommonPromptCacheForTesting();
 });
 
 it("omits delegation guidance when the child does not actually have delegate", () => {
