@@ -369,7 +369,6 @@ export function updateTuiSystemPrompt(prompt: string): void {
 }
 
 export async function runTuiQuery(options: RunSingleQueryOptions): Promise<TaskLoopRunResult> {
-  const preparedQuery = await prepareQueryForExecution(options.query, options.repoRoot);
   if (!tuiLoop) {
     const initialLoopOptions = createInitialTuiLoopOptions(options);
     setupSummarizeCallback(options.contextManager, options.provider, options.sessionState);
@@ -391,6 +390,7 @@ export async function runTuiQuery(options: RunSingleQueryOptions): Promise<TaskL
   } else {
     tuiLoop.resetIterations();
   }
+  const preparedQuery = await prepareQueryForExecution(options.query, options.repoRoot);
   return tuiLoop.run(preparedQuery.query, {
     prependedMessages: preparedQuery.prependedMessages,
     finalTextValidator: preparedQuery.finalTextValidator,

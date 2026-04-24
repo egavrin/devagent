@@ -8,7 +8,7 @@
 import { useApp } from "ink";
 import React, { useEffect, useRef, useState } from "react";
 
-import { TranscriptView, noticeForQueryStatus, turnStatusForQueryStatus } from "./App.js";
+import { TranscriptView, turnStatusForQueryStatus } from "./App.js";
 import type { InteractiveQueryResult } from "./shared.js";
 import { Spinner } from "./Spinner.js";
 import { StatusBar } from "./StatusBar.js";
@@ -64,7 +64,7 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
           appendTurnPart(nextId("final"), { kind: "final-output", data: { text: finalText } });
           onFinalOutput(finalText);
         }
-        const notice = noticeForQueryStatus(result.status);
+        const notice = noticeForSingleShotStatus(result.status);
         if (notice) {
           appendTurnPart(nextId("status"), makeInfoPart("status", [notice]));
         }
@@ -101,4 +101,17 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
       <StatusBar {...status} />
     </>
   );
+}
+
+function noticeForSingleShotStatus(status: InteractiveQueryResult["status"]): string | null {
+  if (status === "budget_exceeded") {
+    return "Iteration limit exhausted before completion. Re-run with a higher iteration limit or start interactive mode to continue.";
+  }
+  if (status === "empty_response") {
+    return "Model returned no final response. Re-run the command to retry, or switch provider/model if it repeats.";
+  }
+  if (status === "aborted") {
+    return "Run stopped before completion. Re-run the command to retry.";
+  }
+  return null;
 }

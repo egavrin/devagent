@@ -1137,16 +1137,31 @@ describe("interactive incomplete query status", () => {
 describe("single-shot incomplete query status", () => {
   it.each([
     {
+      name: "budget exhausted run",
+      status: "budget_exceeded",
+      label: "budget",
+      noticeFragments: [
+        "Iteration limit exhausted before completion.",
+        "Re-run with a higher iteration limit or start interactive mode to",
+        "continue.",
+      ],
+    },
+    {
       name: "empty model response",
       status: "empty_response",
-      notice: "Model returned no final response. Type /continue to retry",
+      label: "error",
+      noticeFragments: [
+        "Model returned no final response.",
+        "Re-run the command to retry, or switch provider/model if it repeats.",
+      ],
     },
     {
       name: "aborted run",
       status: "aborted",
-      notice: "Run stopped before completion. Type /continue to retry",
+      label: "error",
+      noticeFragments: ["Run stopped before completion. Re-run the command to retry."],
     },
-  ] as const)("surfaces an $name as an incomplete turn", async ({ status, notice }) => {
+  ] as const)("surfaces an $name as an incomplete turn", async ({ status, label, noticeFragments }) => {
     let finalOutput: string | null = null;
     const view = renderForTest(
       React.createElement(SingleShotApp, {
@@ -1163,13 +1178,17 @@ describe("single-shot incomplete query status", () => {
           status,
         }),
       }),
+      { columns: 180 },
     );
 
     await waitForRenders();
 
     const output = stripAnsi(view.stdout.readAll());
-    expect(output).toContain("╭─ error single shot");
-    expect(output).toContain(notice);
+    expect(output).toContain(`╭─ ${label} single shot`);
+    for (const fragment of noticeFragments) {
+      expect(output).toContain(fragment);
+    }
+    expect(output).not.toContain("/continue");
     expect(output).not.toContain("╭─ completed single shot");
     expect(finalOutput).toBeNull();
   });
@@ -1311,6 +1330,57 @@ describe("interactive prompt commands", () => {
     expect(clearedFrame).not.toContain("$0.123");
     expect(clearedFrame).not.toContain("42k/100k");
     expect(clearedFrame).not.toContain("iter 7/10");
+    expect(clearedFrame).not.toContain("100k");
+    expect(clearedFrame).not.toContain("iter");
+  });
+
+  it("fully resets status values when clearing with /clear", async () => {
+    let clearCalls = 0;
+    const bus = new EventBus();
+    const view = renderForTest(
+      React.createElement(App, {
+        bus,
+        model: "test-model",
+        approvalMode: "autopilot",
+        cwd: "/tmp/devagent",
+        onClear: () => {
+          clearCalls += 1;
+        },
+        onCycleApprovalMode: () => {},
+        onQuery: async () => ({
+          iterations: 0,
+          toolCalls: 0,
+          lastText: null,
+          status: "success" as const,
+        }),
+      }),
+    );
+
+    bus.emit("iteration:start", {
+      iteration: 7,
+      maxIterations: 10,
+      estimatedTokens: 42_000,
+      maxContextTokens: 100_000,
+    });
+    bus.emit("cost:update", {
+      inputTokens: 42_000,
+      outputTokens: 100,
+      totalCost: 0.1234,
+      model: "test-model",
+    });
+    await waitForRenders();
+    view.stdout.clear();
+    await typeAndSubmit(view.stdin, "/clear");
+    await waitForRenders();
+
+    const output = stripAnsi(view.stdout.readAll());
+    const clearedFrame = output.slice(output.lastIndexOf("Context cleared."));
+    expect(clearCalls).toBe(1);
+    expect(output).toContain("Context cleared.");
+    expect(clearedFrame).not.toContain("$0.123");
+    expect(clearedFrame).not.toContain("42k");
+    expect(clearedFrame).not.toContain("100k");
+    expect(clearedFrame).not.toContain("iter");
   });
 });
 

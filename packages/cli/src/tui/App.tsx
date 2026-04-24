@@ -147,7 +147,14 @@ interface ClearSessionContext {
 function clearInteractiveSession(context: ClearSessionContext): void {
   context.onClear();
   context.clearSubagents();
-  context.setStatus((status) => ({ ...status, cost: 0, iteration: 0, inputTokens: 0 }));
+  context.setStatus((status) => ({
+    ...status,
+    cost: 0,
+    iteration: 0,
+    inputTokens: 0,
+    maxIterations: 0,
+    maxContextTokens: 0,
+  }));
   context.appendStandalonePart(context.nextId("clear"), makeInfoPart("info", ["Context cleared."]));
 }
 
@@ -225,7 +232,7 @@ export function turnStatusForQueryStatus(status: InteractiveQueryResult["status"
   return "error";
 }
 
-export function noticeForQueryStatus(status: InteractiveQueryResult["status"]): string | null {
+function noticeForQueryStatus(status: InteractiveQueryResult["status"]): string | null {
   if (status === "budget_exceeded") return ITERATION_LIMIT_NOTICE;
   if (status === "empty_response") return EMPTY_RESPONSE_NOTICE;
   if (status === "aborted") return ABORTED_NOTICE;
