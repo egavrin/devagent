@@ -1,6 +1,10 @@
 import {
   SafetyMode,
   loggedSubagentRunFromEvent,
+  type DevAgentConfig,
+  type EventBus,
+  type EventMap,
+  type VerbosityConfig,
 } from "@devagent/runtime";
 
 import {
@@ -37,12 +41,6 @@ import {
   presentToolAfterEvent,
   presentToolBeforeEvent,
 } from "./transcript-presenter.js";
-import type {
-  DevAgentConfig,
-  EventBus,
-  EventMap,
-  VerbosityConfig,
-} from "@devagent/runtime";
 
 type Verbosity = "quiet" | "normal" | "verbose";
 
@@ -106,9 +104,7 @@ export function setupEventHandlers(
 }
 
 function createStatusLine(config: DevAgentConfig, verbosity: Verbosity): StatusLine | null {
-  return verbosity === "quiet"
-    ? null
-    : new StatusLine(config.model, getInteractiveSafetyMode(config));
+  return verbosity === "quiet" ? null : new StatusLine(config.model, getInteractiveSafetyMode(config));
 }
 
 function getInteractiveSafetyMode(config: DevAgentConfig): SafetyMode {
@@ -344,6 +340,7 @@ function startPendingToolGroup(
   ctx.os.pendingToolGroup = {
     name: event.name,
     count: 1,
+    completed: 0,
     params: summary ? [summary] : [],
     totalDurationMs: 0,
     lastSuccess: true,
@@ -382,12 +379,16 @@ function appendToolResultToGroup(ctx: EventHandlerContext, event: EventMap["tool
     return false;
   }
   group.totalDurationMs += event.durationMs;
+  group.completed++;
   if (!event.result.success) {
     group.lastSuccess = false;
     group.lastError = event.result.error ?? undefined;
   }
   if (group.count === 1) {
     renderToolResultParts(ctx, event);
+  }
+  if (group.count > 1 && group.completed >= group.count) {
+    flushToolGroup(ctx);
   }
   return true;
 }

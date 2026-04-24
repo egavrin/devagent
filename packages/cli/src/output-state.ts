@@ -65,6 +65,7 @@ export class OutputState {
   pendingToolGroup: {
     name: string;
     count: number;
+    completed: number;
     params: string[];
     totalDurationMs: number;
     lastSuccess: boolean;

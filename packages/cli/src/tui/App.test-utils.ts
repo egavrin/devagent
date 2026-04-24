@@ -3,7 +3,7 @@ import { PassThrough, Writable } from "node:stream";
 
 import type React from "react";
 
-export class TestInput extends PassThrough {
+class TestInput extends PassThrough {
   readonly isTTY = true;
 
   setRawMode(_value: boolean): void {}
@@ -17,7 +17,7 @@ export class TestInput extends PassThrough {
   }
 }
 
-export class TestOutput extends Writable {
+class TestOutput extends Writable {
   readonly isTTY = true;
   readonly columns: number;
   readonly rows = 40;

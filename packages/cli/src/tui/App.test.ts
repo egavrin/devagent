@@ -180,6 +180,57 @@ function ToolDiffHarness(): React.ReactElement {
   });
 }
 
+function ToolGroupFlushHarness(): React.ReactElement {
+  const bus = useMemo(() => new EventBus(), []);
+  const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
+    bus,
+    model: "test-model",
+  });
+
+  useEffect(() => {
+    startTurn(nextId("turn"), "Check LSP", Date.now());
+    bus.emit("tool:before", {
+      name: "lsp",
+      params: { operation: "diagnostics", path: "src/tmp-lsp-validation.ts" },
+      callId: "call-1",
+    });
+    bus.emit("tool:before", {
+      name: "lsp",
+      params: { operation: "symbols", path: "src/tmp-lsp-validation.ts" },
+      callId: "call-2",
+    });
+    bus.emit("tool:after", {
+      name: "lsp",
+      callId: "call-1",
+      durationMs: 1,
+      result: {
+        success: true,
+        output: "No diagnostics.",
+        error: null,
+        artifacts: [],
+      },
+    });
+    bus.emit("tool:after", {
+      name: "lsp",
+      callId: "call-2",
+      durationMs: 9,
+      result: {
+        success: true,
+        output: "1 symbol.",
+        error: null,
+        artifacts: [],
+      },
+    });
+    completeTurn(nextId("summary"), makeTurnSummaryPart({ iterations: 1, toolCalls: 2, cost: 0, elapsedMs: 10 }));
+  }, [bus, startTurn, completeTurn, nextId]);
+
+  return React.createElement(TranscriptView, {
+    showWelcome: false,
+    transcriptNodes,
+    model: "test-model",
+  });
+}
+
 function StatusHarness(): React.ReactElement {
   const bus = useMemo(() => new EventBus(), []);
   const { transcriptNodes, startTurn, completeTurn, nextId } = useAgentLog({
@@ -700,6 +751,17 @@ describe("interactive completion notices", () => {
     expect(output).not.toContain("--- /dev/null");
     expect(output).not.toContain("+++ b/src/new-file.ts");
     expect(output).toContain("... +2 more files");
+  });
+
+  it("flushes grouped tool rows as soon as all calls complete", async () => {
+    const view = renderForTest(React.createElement(ToolGroupFlushHarness));
+
+    await settle();
+
+    const plain = stripAnsi(view.stdout.readAll());
+    expect(plain).toContain("Check LSP");
+    expect(plain).toContain("✓ lsp ×2");
+    expect(plain).toContain("tmp-lsp-validation.ts, tmp-lsp-validation.ts");
   });
 });
 

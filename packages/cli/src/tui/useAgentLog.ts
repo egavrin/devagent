@@ -82,6 +82,7 @@ interface UseAgentLogResult {
 interface PendingToolGroup {
   name: string;
   count: number;
+  completed: number;
   summaries: string[];
   totalMs: number;
   lastSuccess: boolean;
@@ -214,6 +215,7 @@ function registerToolBeforeEvent(
       runtime.pendingGroupRef.current = {
         name: event.name,
         count: 1,
+        completed: 0,
         summaries: summary ? [summary] : [],
         totalMs: 0,
         lastSuccess: true,
@@ -291,8 +293,12 @@ function applyPendingToolResult(
     return false;
   }
   pendingGroup.totalMs += event.durationMs;
+  pendingGroup.completed++;
   if (!event.result.success) pendingGroup.lastSuccess = false;
   if (pendingGroup.count === 1) addToolAfterParts(event, runtime);
+  if (pendingGroup.count > 1 && pendingGroup.completed >= pendingGroup.count) {
+    runtime.flushGroup();
+  }
   return true;
 }
 
