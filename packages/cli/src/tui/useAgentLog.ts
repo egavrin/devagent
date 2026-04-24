@@ -267,6 +267,7 @@ function registerToolAfterEvent(
 ): void {
   unsubs.push(runtime.bus.on("tool:after", (event) => {
     if (shouldSkipToolAfter(event)) return;
+    runtime.setSpinnerMessage(undefined);
     if (runtime.collapseFailures && !event.result.success && event.name !== "execute_tool_script") {
       failureBuffer.count++;
       return;
@@ -295,7 +296,10 @@ function applyPendingToolResult(
   pendingGroup.totalMs += event.durationMs;
   pendingGroup.completed++;
   if (!event.result.success) pendingGroup.lastSuccess = false;
-  if (pendingGroup.count === 1) addToolAfterParts(event, runtime);
+  if (pendingGroup.count === 1) {
+    addToolAfterParts(event, runtime);
+    runtime.pendingGroupRef.current = null;
+  }
   if (pendingGroup.count > 1 && pendingGroup.completed >= pendingGroup.count) {
     runtime.flushGroup();
   }
@@ -367,6 +371,7 @@ function registerApprovalAndSessionEvents(unsubs: Array<() => void>, runtime: Ag
     runtime.appendTurnPart(runtime.nextId("approval-response"), presentApprovalResponseEvent(event));
   }));
   unsubs.push(runtime.bus.on("session:end", () => {
+    runtime.setSpinnerMessage(undefined);
     runtime.setSubagents(new Map());
   }));
 }

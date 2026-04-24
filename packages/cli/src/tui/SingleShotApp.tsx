@@ -33,6 +33,7 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
   const { exit } = useApp();
   const [running, setRunning] = useState(true);
   const hasStartedRef = useRef(false);
+  const mountedRef = useRef(true);
 
   const {
     transcriptNodes, status, subagents, spinnerMessage,
@@ -40,20 +41,17 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
     refs,
   } = useAgentLog({ bus, model });
 
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   useEffect(() => {
-    if (hasStartedRef.current) {
-      return;
-    }
+    if (hasStartedRef.current) return;
     hasStartedRef.current = true;
-
-    let cancelled = false;
-
     const runQuery = async (): Promise<void> => {
       refs.turnStart.current = Date.now(); refs.turnToolCount.current = 0; refs.costAccum.current = 0;
       startTurn(nextId("turn"), query, refs.turnStart.current);
       try {
         const result = await onQuery(query);
-        if (cancelled) return;
+        if (!mountedRef.current) return;
         flushThinking();
         flushGroup();
 
@@ -63,9 +61,7 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
           onFinalOutput(finalText);
         }
         const notice = noticeForSingleShotStatus(result.status);
-        if (notice) {
-          appendTurnPart(nextId("status"), makeInfoPart("status", [notice]));
-        }
+        if (notice) appendTurnPart(nextId("status"), makeInfoPart("status", [notice]));
 
         completeTurn(
           nextId("summary"),
@@ -73,6 +69,7 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
           { status: turnStatusForQueryStatus(result.status), finishedAt: Date.now() },
         );
       } catch (err) {
+        if (!mountedRef.current) return;
         appendTurnPart(nextId("e"), makeErrorPart({ message: err instanceof Error ? err.message : String(err), code: "QUERY_ERROR" }));
         completeTurn(
           nextId("summary"),
@@ -81,16 +78,15 @@ export function SingleShotApp({ bus, query, onQuery, model, onFinalOutput }: Sin
         );
       }
       setRunning(false);
-      scheduleExit(() => cancelled, exit);
+      scheduleExit(() => !mountedRef.current, exit);
     };
 
     void runQuery();
-    return () => { cancelled = true; };
   }, [appendTurnPart, completeTurn, exit, flushGroup, flushThinking, model, nextId, onFinalOutput, onQuery, query, refs, startTurn]);
 
   return (
     <>
-      <TranscriptView showWelcome={false} transcriptNodes={transcriptNodes} model={model} />
+      <TranscriptView showWelcome={false} transcriptNodes={transcriptNodes} model={model} keepLatestNodeLive />
       {hasActiveSubagents(subagents) && <SubagentPanel agents={subagents} />}
       <Spinner active={running} message={spinnerMessage} suffix={status.cost > 0 ? `$${status.cost.toFixed(4)}` : ""} />
       <StatusBar {...status} />
