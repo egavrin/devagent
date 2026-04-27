@@ -83,6 +83,18 @@ supports_tools = true
 supports_temperature = true
 default_max_tokens = 4096
 
+["qwen3:32b"]
+context_window = 32768
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
+["qwen3.5:9b"]
+context_window = 32768
+supports_tools = true
+supports_temperature = true
+default_max_tokens = 4096
+
 ["glm-4.7-flash"]
 context_window = 32768
 supports_tools = true

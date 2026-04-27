@@ -6,7 +6,7 @@
     "devagent": "dist/index.js"
   },
   "scripts": {
-    "build": "bun run ../../scripts/embed-assets.ts && tsc && cp src/prompts/*.md dist/prompts/",
+    "build": "bun run ../../scripts/embed-assets.ts && tsc --build --force && cp src/prompts/*.md dist/prompts/",
     "test": "bun run ../../scripts/embed-assets.ts && vitest run --passWithNoTests",
     "lint": "eslint src/ --max-warnings=0",
     "typecheck": "bun run ../../scripts/embed-assets.ts && tsc --noEmit",

@@ -1,5 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [
+    "models/**",
+    "prompts/**",
+    "scripts/embed-assets.ts"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
