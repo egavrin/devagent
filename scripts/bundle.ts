@@ -104,7 +104,7 @@ const distPkg = {
     "typescript": "^5.7.0",
     "pyright": "^1.1.0",
     "bash-language-server": "^5.4.0",
-    "undici": "^8.1.0",
+    "undici": "^6.22.0",
   },
 };
 

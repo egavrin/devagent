@@ -5,6 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+import { MINIMUM_NODE_MAJOR } from "../packages/cli/src/runtime-version.ts";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
   const npmBin = resolveNpmBinary();
   const stagedDist = stagePublishRuntime();
   installPublishDependencies(stagedDist, npmBin, nodeBin);
+  verifyInstalledUndici(stagedDist, nodeBin);
   const expectedVersion = JSON.parse(readFileSync(join(stagedDist, "package.json"), "utf-8")).version as string;
 
   const isolatedHome = mkdtempSync(join(tmpdir(), "devagent-bundle-smoke-"));
@@ -291,6 +293,30 @@ function installPublishDependencies(stagedDist: string, npmBin: string, nodeBin:
   if (install.status !== 0) {
     const output = `${install.stdout}${install.stderr}`.trim();
     throw new Error(`Failed to install publish-bundle dependencies in staged dist/: ${output}`);
+  }
+}
+
+function verifyInstalledUndici(stagedDist: string, nodeBin: string): void {
+  const script = `const undici = require("undici");
+const pkg = require("undici/package.json");
+const engine = pkg.engines?.node;
+const match = typeof engine === "string" ? />=\\s*(\\d+)/.exec(engine) : null;
+if (typeof undici.EnvHttpProxyAgent !== "function") throw new Error("Expected undici to expose EnvHttpProxyAgent.");
+if (!match) throw new Error("Unable to parse undici engines.node: " + String(engine));
+if (Number.parseInt(match[1], 10) > ${MINIMUM_NODE_MAJOR}) throw new Error("Installed undici requires Node " + engine + ", but DevAgent publishes node >=${MINIMUM_NODE_MAJOR}.");`;
+  const result = spawnSync(
+    nodeBin,
+    ["-e", script],
+    {
+      cwd: stagedDist,
+      env: buildNodePreferredEnv(nodeBin),
+      encoding: "utf-8",
+      stdio: "pipe",
+    },
+  );
+
+  if (result.status !== 0) {
+    throw new Error(`Installed undici publish dependency is incompatible: ${`${result.stdout}${result.stderr}`.trim()}`);
   }
 }
 
