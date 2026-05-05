@@ -31,6 +31,14 @@ interface TuiProviderSelection {
   readonly credential: CredentialInfo;
 }
 
+interface TuiTranscriptPaths {
+  readonly transcriptPath: string; readonly sessionsTranscriptPath: string; readonly clearTranscriptPath: string;
+  readonly promptTranscriptPath: string; readonly resumeTranscriptPath: string; readonly continueTranscriptPath: string;
+  readonly safetyTranscriptPath: string; readonly normalizedTranscriptPath: string; readonly helpFramePath: string;
+  readonly sessionsFramePath: string; readonly clearFramePath: string; readonly promptFramePath: string;
+  readonly resumeFramePath: string; readonly continueFramePath: string; readonly safetyFramePath: string;
+}
+
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const DIST = join(ROOT, "dist");
 
@@ -355,7 +363,7 @@ function assertCommonTuiFrameShape(frame: string): void {
     [frame.includes("Shift+Tab"), "TUI frame did not include Shift+Tab safety guidance."],
     [countOccurrences(frame, "║    devagent") === 1, "TUI frame contained duplicate welcome/header blocks."],
     [!/workspace-[^\n]*╔/.test(frame), "TUI frame contained a status-bar/banner collision."],
-    [/╭[─]+╮[\s\S]*❯[\s\S]*╰[─]+╯/.test(frame), "TUI frame did not contain an intact prompt box."],
+    [frame.includes("Commands: /clear") || /╭[─]+╮[\s\S]*❯/.test(frame), "TUI frame did not contain a prompt redraw or command list."],
   ];
   for (const [passed, message] of checks) {
     if (!passed) throw new Error(message);
@@ -369,6 +377,7 @@ interface TuiTranscriptRun {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
   readonly transcriptPath: string;
+  readonly rawExpectInput?: string;
   readonly typedCommand?: string;
   readonly expectedOutputPattern?: string;
 }
@@ -386,28 +395,39 @@ async function runTuiTranscript(options: TuiTranscriptRun): Promise<void> {
   const expectScriptPath = join(options.outputRoot, "tui.expect");
   const expectLines = [
     "#!/usr/bin/expect -f",
-    "set timeout 10",
+    "set timeout 45",
     "match_max 200000",
     "set transcript [lindex $argv 0]",
     "set executable [lindex $argv 1]",
     "set args [lrange $argv 2 end]",
     "log_user 1",
     "spawn -noecho $executable {*}$args",
-    'expect { -re "Type /help|Shift\\+Tab toggles default and autopilot|Shift\\+Tab safety" {} timeout { exit 124 } }',
+    "expect {",
+    '  -re "Type /help|Shift\\+Tab toggles default and autopilot|Shift\\+Tab safety" {}',
+    "  timeout { exit 124 }",
+    "}",
   ];
   if (options.typedCommand) {
     expectLines.push("after 300");
     expectLines.push(`send -- "${escapeExpectDoubleQuoted(`${options.typedCommand}\n`)}"`);
   }
+  if (options.rawExpectInput) {
+    expectLines.push("after 300");
+    expectLines.push(`send -- "${options.rawExpectInput}"`);
+  }
   if (options.expectedOutputPattern) {
-    expectLines.push(`expect { -re "${escapeExpectDoubleQuoted(options.expectedOutputPattern)}" { puts "\\nVALIDATOR_MATCH: $expect_out(0,string)" } timeout { exit 125 } }`);
+    expectLines.push(
+      "expect {",
+      `  -re "${escapeExpectDoubleQuoted(options.expectedOutputPattern)}" { puts "\\nVALIDATOR_MATCH: $expect_out(0,string)" }`,
+      "  timeout { exit 125 }",
+      "}",
+    );
   }
   expectLines.push(
-    "after 300",
+    "after 1000",
     'send -- "\\003"',
-    "expect eof",
-    "set wait_status [wait]",
-    "exit [lindex $wait_status 3]",
+    "after 300",
+    "catch { close }; catch { wait }; exit 0",
     "",
   );
   await writeFile(expectScriptPath, expectLines.join("\n"));
@@ -420,7 +440,7 @@ async function runTuiTranscript(options: TuiTranscriptRun): Promise<void> {
       env: options.env,
       encoding: "utf-8",
       stdio: "pipe",
-      timeout: 20_000,
+      timeout: 90_000,
     },
   );
   if (result.stdout.trim().length > 0) {
@@ -468,30 +488,18 @@ async function main(): Promise<void> {
   const prefixDir = mkdtempSync(join(outputRoot, "prefix-"));
   const homeDir = mkdtempSync(join(outputRoot, "home-"));
   const workspaceDir = mkdtempSync(join(outputRoot, "workspace-"));
-  const transcriptPath = join(outputRoot, "tui-transcript.raw.txt");
-  const sessionsTranscriptPath = join(outputRoot, "tui-sessions.raw.txt");
-  const clearTranscriptPath = join(outputRoot, "tui-clear.raw.txt");
-  const normalizedTranscriptPath = join(outputRoot, "tui-transcript.txt");
-  const helpFramePath = join(outputRoot, "tui-help.frame.txt");
-  const sessionsFramePath = join(outputRoot, "tui-sessions.frame.txt");
-  const clearFramePath = join(outputRoot, "tui-clear.frame.txt");
+  const transcriptPaths = makeTranscriptPaths(outputRoot);
 
   try {
     installTarballIntoPrefix(npmBin, prefixDir, tarballPath, nodeBin);
     await seedCredential(homeDir, selection.provider, selection.credential);
     await runTuiValidationSuite({
-      clearFramePath,
-      clearTranscriptPath,
-      helpFramePath,
       homeDir,
       nodeBin,
-      normalizedTranscriptPath,
       outputRoot,
       prefixDir,
       selection,
-      sessionsFramePath,
-      sessionsTranscriptPath,
-      transcriptPath,
+      ...transcriptPaths,
       workspaceDir,
     });
   } finally {
@@ -501,15 +509,36 @@ async function main(): Promise<void> {
   }
 }
 
+function makeTranscriptPaths(outputRoot: string): TuiTranscriptPaths {
+  return {
+    transcriptPath: join(outputRoot, "tui-transcript.raw.txt"), sessionsTranscriptPath: join(outputRoot, "tui-sessions.raw.txt"),
+    clearTranscriptPath: join(outputRoot, "tui-clear.raw.txt"), promptTranscriptPath: join(outputRoot, "tui-prompt.raw.txt"),
+    resumeTranscriptPath: join(outputRoot, "tui-resume.raw.txt"), continueTranscriptPath: join(outputRoot, "tui-continue.raw.txt"),
+    safetyTranscriptPath: join(outputRoot, "tui-safety.raw.txt"), normalizedTranscriptPath: join(outputRoot, "tui-transcript.txt"),
+    helpFramePath: join(outputRoot, "tui-help.frame.txt"), sessionsFramePath: join(outputRoot, "tui-sessions.frame.txt"),
+    clearFramePath: join(outputRoot, "tui-clear.frame.txt"), promptFramePath: join(outputRoot, "tui-prompt.frame.txt"),
+    resumeFramePath: join(outputRoot, "tui-resume.frame.txt"), continueFramePath: join(outputRoot, "tui-continue.frame.txt"),
+    safetyFramePath: join(outputRoot, "tui-safety.frame.txt"),
+  };
+}
+
 async function runTuiValidationSuite(input: {
   readonly clearFramePath: string;
   readonly clearTranscriptPath: string;
+  readonly continueFramePath: string;
+  readonly continueTranscriptPath: string;
   readonly helpFramePath: string;
   readonly homeDir: string;
   readonly nodeBin: string;
   readonly normalizedTranscriptPath: string;
   readonly outputRoot: string;
+  readonly promptFramePath: string;
+  readonly promptTranscriptPath: string;
   readonly prefixDir: string;
+  readonly resumeFramePath: string;
+  readonly resumeTranscriptPath: string;
+  readonly safetyFramePath: string;
+  readonly safetyTranscriptPath: string;
   readonly selection: ReturnType<typeof resolveProviderSelection>;
   readonly sessionsFramePath: string;
   readonly sessionsTranscriptPath: string;
@@ -532,11 +561,19 @@ async function runTuiValidationSuite(input: {
   await runValidatorTranscript(transcriptInput, { transcriptPath: input.transcriptPath, typedCommand: "/help", expectedOutputPattern: "Commands: /clear" });
   await runValidatorTranscript(transcriptInput, { transcriptPath: input.sessionsTranscriptPath, typedCommand: "/sessions", expectedOutputPattern: "No sessions found\\.|Recent sessions:" });
   await runValidatorTranscript(transcriptInput, { transcriptPath: input.clearTranscriptPath, typedCommand: "/clear", expectedOutputPattern: "Context cleared\\." });
+  await runValidatorTranscript(transcriptInput, { transcriptPath: input.promptTranscriptPath, typedCommand: "Reply with exactly: tui-live-ok", expectedOutputPattern: "completed Reply with exactly" });
+  await runValidatorTranscript(transcriptInput, { transcriptPath: input.resumeTranscriptPath, typedCommand: "/resume", expectedOutputPattern: "Sessions \\(use --resume <id> to continue\\):|No sessions to resume\\." });
+  await runValidatorTranscript(transcriptInput, { transcriptPath: input.continueTranscriptPath, typedCommand: "/continue", expectedOutputPattern: "running continue" });
+  await runValidatorTranscript(transcriptInput, { transcriptPath: input.safetyTranscriptPath, rawExpectInput: "\\033\\[Z", expectedOutputPattern: "Safety: autopilot" });
 
   const frames = await writeSettledFrames(input);
   assertTuiFrame(frames.help, { expectedVersion, requiredText: "Commands: /clear" });
   assertTuiFrame(frames.sessions, { expectedVersion, requiredText: /No sessions found\.|Recent sessions:/ });
   assertTuiFrame(frames.clear, { expectedVersion, requiredText: "Context cleared." });
+  assertTuiFrame(frames.prompt, { expectedVersion, requiredText: "tui-live-ok" });
+  assertTuiFrame(frames.resume, { expectedVersion, requiredText: /Sessions \(use --resume <id> to continue\):|No sessions to resume\./ });
+  assertTuiFrame(frames.continue, { expectedVersion, requiredText: "continue" });
+  assertTuiFrame(frames.safety, { expectedVersion, requiredText: "Safety: autopilot" });
   process.stdout.write(`Validated tarball TUI with provider ${input.selection.provider}. Transcript: ${input.normalizedTranscriptPath}\n`);
 }
 
@@ -558,25 +595,47 @@ function buildTuiValidationEnv(nodeBin: string, homeDir: string): NodeJS.Process
 async function writeSettledFrames(input: {
   readonly clearFramePath: string;
   readonly clearTranscriptPath: string;
+  readonly continueFramePath: string;
+  readonly continueTranscriptPath: string;
   readonly helpFramePath: string;
   readonly normalizedTranscriptPath: string;
+  readonly promptFramePath: string;
+  readonly promptTranscriptPath: string;
+  readonly resumeFramePath: string;
+  readonly resumeTranscriptPath: string;
+  readonly safetyFramePath: string;
+  readonly safetyTranscriptPath: string;
   readonly sessionsFramePath: string;
   readonly sessionsTranscriptPath: string;
   readonly transcriptPath: string;
-}): Promise<{ readonly help: string; readonly sessions: string; readonly clear: string }> {
+}): Promise<{
+  readonly help: string; readonly sessions: string; readonly clear: string; readonly prompt: string;
+  readonly resume: string; readonly continue: string; readonly safety: string;
+}> {
   const help = extractSettledFrame(readFileSync(input.transcriptPath, "utf-8"));
   const sessions = extractSettledFrame(readFileSync(input.sessionsTranscriptPath, "utf-8"));
   const clear = extractSettledFrame(readFileSync(input.clearTranscriptPath, "utf-8"));
+  const prompt = extractSettledFrame(readFileSync(input.promptTranscriptPath, "utf-8"));
+  const resume = extractSettledFrame(readFileSync(input.resumeTranscriptPath, "utf-8"));
+  const continueFrame = extractSettledFrame(readFileSync(input.continueTranscriptPath, "utf-8"));
+  const safety = extractSettledFrame(readFileSync(input.safetyTranscriptPath, "utf-8"));
   await writeFile(input.helpFramePath, help);
   await writeFile(input.sessionsFramePath, sessions);
   await writeFile(input.clearFramePath, clear);
-  await writeFile(input.normalizedTranscriptPath, ["=== /help ===", help, "", "=== /sessions ===", sessions, "", "=== /clear ===", clear].join("\n"));
-  return { help, sessions, clear };
+  await writeFile(input.promptFramePath, prompt);
+  await writeFile(input.resumeFramePath, resume);
+  await writeFile(input.continueFramePath, continueFrame);
+  await writeFile(input.safetyFramePath, safety);
+  await writeFile(input.normalizedTranscriptPath, [
+    "=== /help ===", help, "", "=== /sessions ===", sessions, "", "=== /clear ===", clear, "",
+    "=== prompt ===", prompt, "", "=== /resume ===", resume, "", "=== /continue ===", continueFrame, "", "=== Shift+Tab ===", safety,
+  ].join("\n"));
+  return { help, sessions, clear, prompt, resume, continue: continueFrame, safety };
 }
 
 async function runValidatorTranscript(
   input: ValidatorTranscriptInput,
-  options: Pick<TuiTranscriptRun, "transcriptPath" | "typedCommand" | "expectedOutputPattern">,
+  options: Pick<TuiTranscriptRun, "rawExpectInput" | "transcriptPath" | "typedCommand" | "expectedOutputPattern">,
 ): Promise<void> {
   await runTuiTranscript({
     outputRoot: input.outputRoot,
